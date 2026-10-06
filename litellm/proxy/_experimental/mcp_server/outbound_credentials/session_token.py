@@ -16,7 +16,7 @@ Claims are ``iss``/``iat``/``exp``
 plus ``jti`` (per-mint uniqueness, so two tokens minted in the same second never
 collide and the single-use record has a stable handle), ``kind``, ``user_id``,
 ``client_id``, and on a rotated refresh token ``family`` (the ``jti`` of the refresh token
-its chain started from, so a replay or a revocation can end every rotation that descends
+its chain started from, so a revocation can end every rotation that descends
 from one sign-in); ``client_id`` binds the refresh token
 to the DCR client it was issued to (RFC 6749 section 6) and is carried on the access
 token for parity and audit. There is no encrypted payload: nothing in a session token

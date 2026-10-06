@@ -2183,11 +2183,12 @@ async def test_introspect_refresh_token_goes_inactive_once_rotated():
 
 
 @pytest.mark.asyncio
-async def test_refresh_replay_ends_every_rotation_of_the_session_pair_chain():
-    """The identity-only MCP session pair rotates under the same chain rule as the proxy-API
-    credential: a replayed ancestor ends the live descendant (OAuth 2.0 Security BCP section
-    4.13.2), introspection reports that descendant inactive, and a token the gateway minted before
-    chains were stamped (no ``family`` claim) roots its own chain, so it keeps rotating."""
+async def test_refresh_replay_refuses_only_itself_and_leaves_the_session_pair_chain_renewing():
+    """A second terminal of the same sign-in presents the refresh token the first one already
+    rotated (Claude Code renews from its in-memory copy, then recovers from the shared credential
+    file), so a replay refuses only itself: the live descendant keeps renewing, introspection keeps
+    reporting it active, and a token the gateway minted before chains were stamped (no ``family``
+    claim) roots its own chain and rotates too."""
     keys, now, principal = _introspection_fixtures()
     client_id = (await _register([REDIRECT_URI]))["client_id"]
     cache = DualCache()
@@ -2210,14 +2211,16 @@ async def test_refresh_replay_ends_every_rotation_of_the_session_pair_chain():
     root_token = root.token.get_secret_value()
     rotated = json.loads((await _refresh(root_token)).body)["refresh_token"]
     twice_rotated = json.loads((await _refresh(rotated)).body)["refresh_token"]
-    assert json.loads((await _refresh(root_token)).body)["error"] == "invalid_grant"
+    replayed = await _refresh(root_token)
+    assert replayed.status_code == 400
+    assert json.loads(replayed.body)["error"] == "invalid_grant"
+    assert "already used" in json.loads(replayed.body)["error_description"]
 
-    refused = await _refresh(twice_rotated)
-    assert refused.status_code == 400
-    assert json.loads(refused.body)["error"] == "invalid_grant"
-    assert "revoked" in json.loads(refused.body)["error_description"]
-    status, body = await _introspect(twice_rotated, cache=cache)
-    assert (status, body) == (200, {"active": False})
+    renewed = await _refresh(twice_rotated)
+    assert renewed.status_code == 200
+    thrice_rotated = json.loads(renewed.body)["refresh_token"]
+    status, body = await _introspect(thrice_rotated, cache=cache)
+    assert (status, body["active"]) == (200, True)
 
     unrelated = mint_session_refresh_token(principal.model_copy(update={"client_id": client_id}), keys, now)
     assert (await _refresh(unrelated.token.get_secret_value())).status_code == 200

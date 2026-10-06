@@ -573,28 +573,27 @@ def test_refresh_grant_replay_is_refused_on_a_replica_that_did_not_serve_the_rot
     assert len(minter.calls) == 2
 
 
-def test_refresh_grant_replay_ends_every_rotation_of_the_same_sign_in():
-    """OAuth 2.0 Security BCP section 4.13.2: a refresh token presented a second time means two
-    holders have the chain, so the rotation that already succeeded on it dies with it instead of
-    staying alive for whoever renewed first; a new sign-in starts a chain of its own. The chain
-    check runs before the mint, so a dead chain never reaches the database."""
+def test_refresh_grant_replay_refuses_only_itself_so_a_second_terminal_recovers_into_a_live_chain():
+    """Claude Code renews from its in-memory copy of the credential, so a second terminal on the
+    same machine presents the refresh token the first one already rotated and then recovers from
+    the shared credential file. The replay is refused as already used and nothing else happens:
+    the rotation the first terminal saved keeps renewing, as does its own rotation after it, so
+    neither terminal is signed out. Only a sign-out ends the chain."""
     minter: Final = _Minter()
     with _gateway_env(minter=minter) as (client, cache):
         first = str(_signed_in(client, cache)["refresh_token"])
         rotated = str(_refresh(client, first).json()["refresh_token"])
-        assert _refresh(client, first).status_code == 400
-        assert len(minter.calls) == 2
+        replayed = _refresh(client, first)
+        assert replayed.status_code == 400
+        assert replayed.json()["error"] == "invalid_grant"
+        assert "already used" in replayed.json()["error_description"]
 
-        descendant = _refresh(client, rotated)
-        assert descendant.status_code == 400
-        assert descendant.json()["error"] == "invalid_grant"
-        assert "revoked" in descendant.json()["error_description"]
-        assert "access_token" not in descendant.json()
-        assert len(minter.calls) == 2
-
-        fresh_sign_in = str(_signed_in(client, cache)["refresh_token"])
-        assert _refresh(client, fresh_sign_in).status_code == 200
-    assert len(minter.calls) == 3
+        renewed = _refresh(client, rotated)
+        assert renewed.status_code == 200
+        assert "access_token" in renewed.json()
+        renewed_again = _refresh(client, str(renewed.json()["refresh_token"]))
+        assert renewed_again.status_code == 200
+        assert len(minter.calls) == 4
 
 
 @pytest.mark.parametrize(

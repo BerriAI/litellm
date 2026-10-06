@@ -1094,7 +1094,8 @@ class _SingleUseGuard:
         A backend fault is ``"unavailable"`` (fail closed) rather than a guess either way, which is why
         the read goes to the Redis client itself: the cache wrapper's ``async_get_cache`` turns a fault
         into ``None``, and ``None`` here would pass as unclaimed. The key is namespaced exactly as the
-        wrapper namespaces every write, or a configured ``redis_namespace`` would hide the marker."""
+        wrapper namespaces every write, or a ``namespace`` configured under ``coordination_redis`` or
+        ``cache_params`` would hide the marker."""
         from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # circular import at module load
 
         redis_cache: Final = redis_usage_cache or getattr(self._cache, "redis_cache", None)
@@ -1110,8 +1111,8 @@ class _SingleUseGuard:
 
 
 async def _family_refusal(guard: _SingleUseGuard, family: str | None) -> Response | None:
-    """A refresh token whose rotation chain was ended (a replay of one of its ancestors, or a
-    revocation) is refused before anything is minted; a backend that cannot say answers 503."""
+    """A refresh token whose rotation chain a revocation ended is refused before anything is
+    minted; a backend that cannot say answers 503."""
     if family is None:
         return None
     peeked: Final = await guard.peek(_refresh_family_key(family))
@@ -1124,20 +1125,6 @@ async def _family_refusal(guard: _SingleUseGuard, family: str | None) -> Respons
             return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
         case _:
             assert_never(peeked)
-
-
-async def _claim_ending_the_family_on_replay(
-    guard: _SingleUseGuard, claim_key: str, claim_ttl_seconds: int, replayed: str, family: str | None
-) -> Response | None:
-    """The single-use claim, plus OAuth 2.0 Security BCP section 4.13.2: a refresh token presented a
-    second time means two holders have the chain, so every rotation descending from the same sign-in
-    is ended with it and whoever holds the live descendant is back to signing in."""
-    outcome: Final = await guard.claim(claim_key, claim_ttl_seconds)
-    if outcome == "replayed" and family is not None:
-        ended: Final = await guard.claim(_refresh_family_key(family), _REFRESH_CLAIM_TTL_SECONDS)
-        if ended == "unavailable":
-            verbose_logger.warning("mcp gateway refresh replay: the chain revocation could not be recorded")
-    return _claim_refusal(outcome, replayed=_oauth_error(400, "invalid_grant", replayed))
 
 
 def _session_token_pair(
@@ -1355,8 +1342,9 @@ class _ProxyCredentialIssuer:
         minted: Final = await self._mint_proxy_credential(principal.user_id, principal.team_id)
         if not isinstance(minted, MintedProxyCredential):
             return _mint_failure_response(minted)
-        refusal: Final = await _claim_ending_the_family_on_replay(
-            self._guard, claim_key, claim_ttl_seconds, replayed, family
+        refusal: Final = _claim_refusal(
+            await self._guard.claim(claim_key, claim_ttl_seconds),
+            replayed=_oauth_error(400, "invalid_grant", replayed),
         )
         if refusal is not None:
             return refusal
@@ -1411,8 +1399,9 @@ class _GrantIssuer:
         failure: Final = await self._reload_user(principal.user_id)
         if failure is not None:
             return _reload_failure_response(failure)
-        refusal: Final = await _claim_ending_the_family_on_replay(
-            self._guard, claim_key, claim_ttl_seconds, replayed, family
+        refusal: Final = _claim_refusal(
+            await self._guard.claim(claim_key, claim_ttl_seconds),
+            replayed=_oauth_error(400, "invalid_grant", replayed),
         )
         if refusal is not None:
             return refusal
@@ -1519,7 +1508,10 @@ async def _refresh_token_grant(
         return _oauth_error(400, "invalid_target", "resource does not match the scope this token was issued for")
     # Refresh-token rotation (OAuth 2.0 Security BCP section 4.13): the presented refresh token is
     # single-use, so a captured or replayed refresh token cannot mint a second pair after the
-    # legitimate holder rotated, and a replay ends every rotation of the same chain (4.13.2).
+    # legitimate holder rotated. A replay refuses only itself, never the chain (section 4.13.2's
+    # chain ending): Claude Code renews from its in-memory copy, so a second terminal on the same
+    # machine presents the token the first one already rotated, then recovers from the shared
+    # credential file, and the chain it recovers into has to be alive. Only a revocation ends it.
     return await issue(
         opened.principal,
         claim_key=_refresh_claim_key(opened.jti),
@@ -1542,7 +1534,7 @@ async def refresh_proxy_credential(
     presented token rotates under the same single-use record the DCR flow burns, so one
     revocation covers both front doors. The identity-only session pair is never issued here:
     a token of that audience answers invalid_grant even when its client binding matches."""
-    signing: Final = resolve_session_signing(master_key, f"{client_id} token grant")
+    signing: Final = resolve_session_signing(master_key, "mcp_gateway refresh grant")
     if isinstance(signing, Response):
         return signing
     opened: Final = _open_presented_refresh_token(refresh_token, client_id, signing)
@@ -1609,7 +1601,7 @@ async def revoke_session_refresh_token(
     chain when it was issued to ``client_id``, answer 200 for anything else (an access token,
     a dead or foreign token, garbage), and 503 when a burn could not be recorded in the shared
     backend."""
-    signing: Final = resolve_session_signing(master_key, f"{client_id} revoke")
+    signing: Final = resolve_session_signing(master_key, "mcp_gateway revoke")
     if isinstance(signing, Response):
         return signing
     opened: Final = open_session_refresh_bearer(token, signing.keys, signing.now, expected_client_id=client_id)
