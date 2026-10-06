@@ -16,7 +16,6 @@ from tests._vcr_redis_persister import (  # noqa: E402
     _cache_health,
     reset_cassette_cache_health,
 )
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 class _FakeTerminalReporter:
@@ -376,12 +375,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture(scope="session", autouse=True)
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
 
 
 @pytest.fixture(scope="function", autouse=True)

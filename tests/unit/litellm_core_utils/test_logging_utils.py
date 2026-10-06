@@ -2,22 +2,12 @@
 Tests for litellm.litellm_core_utils.logging_utils — base64 truncation helpers.
 """
 
-import asyncio
-import datetime
-import importlib
-import os
+import asyncio, datetime, importlib, litellm, os, pytest_asyncio
 import threading
-from collections.abc import AsyncIterator
-from datetime import datetime as datetime_assemble_streaming
-from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
-import pytest_asyncio
 
-import litellm
-from litellm import Choices, ModelResponse, ModelResponseStream, TextChoices, TextCompletionResponse
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.logging_utils import (
     assemble_complete_response_from_streaming_chunks,
@@ -27,8 +17,19 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
 )
+from collections.abc import AsyncIterator
+from datetime import datetime as datetime_assemble_streaming
+from litellm import(
+    Choices,
+    ModelResponse,
+    ModelResponseStream,
+    TextChoices,
+    TextCompletionResponse,
+)
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from typing import Final
 
 
 class TestSetDurationInModelCallDetails:
@@ -270,15 +271,12 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest_asyncio.fixture(loop_scope="function")
 async def drain_logging_worker(isolate_litellm_state: None) -> AsyncIterator[None]:
     yield
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
 
-
 LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
-
 
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
@@ -317,7 +315,6 @@ def isolate_litellm_state():
         if attr in _DEFAULTS:
             setattr(litellm, attr, _DEFAULTS[attr])
 
-
 _LIST_ATTRS = (
     "callbacks",
     "success_callback",
@@ -345,7 +342,6 @@ _SCALAR_ATTRS = (
 
 _DEFAULTS: dict = {}
 
-
 @pytest.fixture(scope="module")
 def setup_and_teardown():
     """
@@ -367,7 +363,6 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("is_async", [True, False])
@@ -463,7 +458,6 @@ def testassemble_complete_response_from_streaming_chunks_1(is_async):
     assert isinstance(complete_streaming_response.choices[0], Choices)
 
     pass
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("is_async", [True, False])
@@ -567,7 +561,6 @@ def testassemble_complete_response_from_streaming_chunks_2(is_async):
 
     pass
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("is_async", [True, False])
 def testassemble_complete_response_from_streaming_chunks_3(is_async):
@@ -636,9 +629,6 @@ def testassemble_complete_response_from_streaming_chunks_3(is_async):
     assert len(list_streaming_chunks_2) == 1
     assert list_streaming_chunks_2[0] == chunk
     assert len(list_streaming_chunks_1) == 1
-
-    # now add a chunk to the 1st list
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("is_async", [True, False])

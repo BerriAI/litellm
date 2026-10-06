@@ -17,7 +17,6 @@ from tests._vcr_conftest_common import (
     restore_vcr_patch_points,
     rewound_new_episodes_cassette,
 )
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 _ORIGINAL_MOCK_HANDLE_ASYNC_REQUEST: Final = httpx.MockTransport.handle_async_request
 _ORIGINAL_HTTPX2_MOCK_HANDLE_ASYNC_REQUEST: Final = httpx2.MockTransport.handle_async_request
@@ -91,12 +90,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture(scope="session", autouse=True)
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
 
 
 @pytest.fixture(scope="function", autouse=True)

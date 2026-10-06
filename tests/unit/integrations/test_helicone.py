@@ -1,21 +1,13 @@
-import asyncio
-import copy
-import importlib
-import logging
-import os
-import sys
-import time
+import asyncio, copy, importlib, litellm, logging, os, pytest, sys, time
 import types
-from unittest.mock import MagicMock
 
-import pytest
 
-import litellm
 from litellm.integrations.helicone import HeliconeLogger
+from collections.abc import Iterator
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
+from unittest.mock import MagicMock
 
 
 def _claude_mapping(messages, response_obj):
@@ -70,13 +62,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
-@pytest.fixture(scope="session")
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
-
-
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -129,7 +114,6 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -149,7 +133,6 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
-
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -173,15 +156,17 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
-
-logging.basicConfig(level=logging.DEBUG)
-
-
-litellm.num_retries = 3
-litellm.success_callback = ["helicone"]
-os.environ["HELICONE_DEBUG"] = "True"
-os.environ["LITELLM_LOG"] = "DEBUG"
-
+@pytest.fixture
+def helicone_global_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    root_logger = logging.getLogger()
+    monkeypatch.setattr(root_logger, "handlers", list(root_logger.handlers))
+    monkeypatch.setattr(root_logger, "level", root_logger.level)
+    logging.basicConfig(level=logging.DEBUG)
+    monkeypatch.setattr(litellm, "num_retries", 3)
+    monkeypatch.setattr(litellm, "success_callback", ["helicone"])
+    monkeypatch.setenv("HELICONE_DEBUG", "True")
+    monkeypatch.setenv("LITELLM_LOG", "DEBUG")
+    yield
 
 def pre_helicone_setup():
     """
@@ -197,8 +182,7 @@ def pre_helicone_setup():
     logger.addHandler(file_handler)
     return
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown", "helicone_global_state")
 def test_helicone_logging_async():
     try:
         pre_helicone_setup()
@@ -221,7 +205,6 @@ def test_helicone_logging_async():
     except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
 
-
 async def make_async_calls(metadata=None, **completion_kwargs):
     tasks = []
     for _ in range(5):
@@ -238,7 +221,6 @@ async def make_async_calls(metadata=None, **completion_kwargs):
 
     return total_time
 
-
 def create_async_task(**completion_kwargs):
     completion_args = {
         "model": "azure/gpt-4.1-mini",
@@ -253,8 +235,7 @@ def create_async_task(**completion_kwargs):
     completion_args.update(completion_kwargs)
     return asyncio.create_task(litellm.acompletion(**completion_args))
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown", "helicone_global_state")
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     condition=not os.environ.get("OPENAI_API_KEY", False),
@@ -288,8 +269,7 @@ async def test_helicone_logging_metadata():
 
     time.sleep(3)
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown", "helicone_global_state")
 def test_helicone_removes_otel_span_from_metadata():
     """
     Test that HeliconeLogger removes litellm_parent_otel_span from metadata

@@ -37,7 +37,6 @@ from litellm.types.utils import (
 )
 from litellm.utils import ModelResponseIterator, _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 class CustomModelResponseIterator:
@@ -678,12 +677,6 @@ def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
 
 
 @pytest.fixture(scope="function", autouse=True)

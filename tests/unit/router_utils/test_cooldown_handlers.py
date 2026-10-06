@@ -1,19 +1,10 @@
-import asyncio
-import importlib
-import time
 from unittest.mock import MagicMock, patch
 
-import pytest
-from dotenv import load_dotenv
-
-import litellm
-from litellm import Router
+import asyncio, importlib, litellm, pytest, time
 from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
-from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
-from litellm.router_utils.cooldown_handlers import (
+from litellm.router_utils.cooldown_handlers import(
     _get_deployment_cooldown_policy,
     _has_explicit_allowed_fails_policy_for_exception,
     _increment_allowed_fails,
@@ -26,8 +17,13 @@ from litellm.router_utils.cooldown_handlers import (
     mark_advisor_orchestration_failure,
     should_cooldown_based_on_allowed_fails_policy,
 )
-from litellm.router_utils.fallback_event_handlers import _trigger_cooldown_for_failed_deployment
-from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+from litellm import Router
+from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
+from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.router_utils.fallback_event_handlers import(
+    _trigger_cooldown_for_failed_deployment,
+)
+from litellm.router_utils.router_callbacks.track_deployment_metrics import(
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
@@ -565,7 +561,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest.fixture(scope="function")
 def setup_and_teardown():
     """
@@ -586,10 +581,8 @@ def setup_and_teardown():
     loop.close()
     asyncio.set_event_loop(None)
 
-
 def _make_router(model_list: list, **kwargs) -> Router:
     return Router(model_list=model_list, **kwargs)
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestDeploymentLevelAllowedFails:
@@ -662,7 +655,6 @@ class TestDeploymentLevelAllowedFails:
         assert should_cooldown is False, (
             "secondary has no deployment-level policy; with allowed_fails=10 it should not cool down on first failure"
         )
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestDeploymentLevelAllowedFailsPolicyByExceptionType:
@@ -738,7 +730,6 @@ class TestDeploymentLevelAllowedFailsPolicyByExceptionType:
         )
         assert should_cooldown is True, "Should cooldown after exceeding InternalServerErrorAllowedFails=5"
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestExceptionTypeCountersTrackedIndependently:
     def test_cache_key_suffix_separates_exception_type_counters(self):
@@ -788,7 +779,6 @@ class TestExceptionTypeCountersTrackedIndependently:
 
         assert generic_counter_after == 1, "generic counter should now be 1"
         assert rl_counter_after == 3, "RateLimitError counter must remain unchanged after InternalServerError"
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestCooldownCacheTTLCorrection:
@@ -890,7 +880,6 @@ class TestCooldownCacheTTLCorrection:
 
         assert active == [], "Expired entry must not appear in async active cooldowns"
         assert cc.in_memory_cache.get_cache(key) is None
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestFallbackDeploymentCooldown:
@@ -1082,7 +1071,6 @@ class TestFallbackDeploymentCooldown:
             call_kwargs = mock_set_cooldown.call_args[1]
             assert call_kwargs["time_to_cooldown"] == 15.0, "model_info.cooldown_time must take priority"
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestSingleDeploymentModelGroupProtection:
     def test_generic_allowed_fails_does_not_bypass_single_deployment_protection(self):
@@ -1142,7 +1130,6 @@ class TestSingleDeploymentModelGroupProtection:
         )
         assert should_cooldown is True, "explicit per-exception-type policy must still cool down a solo deployment"
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestShouldCooldownBasedOnAllowedFailsPolicyFalsyZero:
     def test_router_level_policy_of_zero_is_not_swallowed_by_allowed_fails(self):
@@ -1171,7 +1158,6 @@ class TestShouldCooldownBasedOnAllowedFailsPolicyFalsyZero:
         )
         assert should_cooldown is True, "RateLimitErrorAllowedFails=0 must cool down after the first failure"
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestResolveAllowedFailsFromPolicyFallsThrough:
     def test_none_value_on_first_match_falls_through_to_next_type(self):
@@ -1188,7 +1174,6 @@ class TestResolveAllowedFailsFromPolicyFallsThrough:
         exc = litellm.ContentPolicyViolationError("flagged", "openai", "gpt-4")
         result = _resolve_allowed_fails_from_policy(policy=policy, exception=exc)
         assert result == 3, "must fall through to BadRequestErrorAllowedFails when the more specific field is unset"
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestDeploymentCallbackOnFailureCooldownTimePrecedence:
@@ -1263,7 +1248,6 @@ class TestDeploymentCallbackOnFailureCooldownTimePrecedence:
             call_kwargs = mock_set_cooldown.call_args[1]
             assert call_kwargs["time_to_cooldown"] == 20.0, "litellm_params.cooldown_time must still be honored"
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestNewAllowedFailsPolicyFields:
     def test_service_unavailable_error_matched_by_policy(self):
@@ -1315,7 +1299,6 @@ class TestNewAllowedFailsPolicyFields:
         assert policy.BadGatewayErrorAllowedFails == 2
         assert policy.NotFoundErrorAllowedFails == 1
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestRouterLevelGetAllowedFailsFromPolicy:
     """Router.get_allowed_fails_from_policy must handle all AllowedFailsPolicy fields."""
@@ -1351,10 +1334,6 @@ class TestRouterLevelGetAllowedFailsFromPolicy:
         exc = litellm.RateLimitError("429", "openai", "gpt-4")
         assert router.get_allowed_fails_from_policy(exc) is None
 
-
-load_dotenv()
-
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_router_cooldown_event_callback_no_deployment():
@@ -1379,7 +1358,6 @@ async def test_router_cooldown_event_callback_no_deployment():
     # Assert that the router's get_deployment method was called
     mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
 
-
 @pytest.fixture
 def testing_litellm_router():
     return Router(
@@ -1402,7 +1380,6 @@ def testing_litellm_router():
         ]
     )
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_run_cooldown_logic(testing_litellm_router):
     testing_litellm_router.disable_cooldowns = True
@@ -1416,7 +1393,6 @@ def test_should_run_cooldown_logic(testing_litellm_router):
     # don't cooldown if it's a provider default deployment
     testing_litellm_router.provider_default_deployment_ids = ["test_deployment"]
     assert _should_run_cooldown_logic(testing_litellm_router, "test_deployment", 500, Exception("Test")) is False
-
 
 @pytest.fixture
 def single_deployment_router():
@@ -1434,7 +1410,6 @@ def single_deployment_router():
         ]
     )
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_run_cooldown_logic_generic_bad_request_excluded_by_default(
     single_deployment_router,
@@ -1445,7 +1420,6 @@ def test_should_run_cooldown_logic_generic_bad_request_excluded_by_default(
     default: a client error is usually not the deployment's fault."""
     exc = litellm.BadRequestError("bad request", "openai", "gpt-5-mini")
     assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is False
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_run_cooldown_logic_router_level_policy_does_not_override_bad_request_exclusion(
@@ -1460,7 +1434,6 @@ def test_should_run_cooldown_logic_router_level_policy_does_not_override_bad_req
     single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(BadRequestErrorAllowedFails=5)
     assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is False
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_run_cooldown_logic_explicit_deployment_level_policy_overrides_content_policy_exclusion(
     single_deployment_router,
@@ -1471,7 +1444,6 @@ def test_should_run_cooldown_logic_explicit_deployment_level_policy_overrides_co
     deployment_dict = single_deployment_router.get_model_info(id="dep-1")
     deployment_dict["model_info"]["allowed_fails_policy"] = {"ContentPolicyViolationErrorAllowedFails": 0}
     assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is True
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestHasExplicitAllowedFailsPolicyForException:
@@ -1503,7 +1475,6 @@ class TestHasExplicitAllowedFailsPolicyForException:
         single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(RateLimitErrorAllowedFails=3)
         assert _has_explicit_allowed_fails_policy_for_exception(single_deployment_router, None, exc) is False
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_cooldown_deployment_rate_limit_error(testing_litellm_router):
     """
@@ -1513,7 +1484,6 @@ def test_should_cooldown_deployment_rate_limit_error(testing_litellm_router):
     _exception = litellm.exceptions.RateLimitError("Rate limit", "openai", "gpt-5-mini")
     assert _should_cooldown_deployment(testing_litellm_router, "test_deployment", 429, _exception) is True
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_cooldown_deployment_auth_limit_error(testing_litellm_router):
     """
@@ -1522,7 +1492,6 @@ def test_should_cooldown_deployment_auth_limit_error(testing_litellm_router):
     # Test 401 error (auth limit) -> always cooldown a deployment returning 401s
     _exception = litellm.exceptions.AuthenticationError("Unauthorized", "openai", "gpt-5-mini")
     assert _should_cooldown_deployment(testing_litellm_router, "test_deployment", 401, _exception) is True
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1574,7 +1543,6 @@ async def test_should_cooldown_deployment(testing_litellm_router):
     # expect this to fail since it's now 51% of requests are failing
     assert _should_cooldown_deployment(testing_litellm_router, deployment_id, 500, Exception("Test")) is True
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_should_cooldown_deployment_allowed_fails_set_on_router():
@@ -1600,7 +1568,6 @@ async def test_should_cooldown_deployment_allowed_fails_set_on_router():
         assert _should_cooldown_deployment(router, "test_deployment", 500, Exception("Test")) is False
 
     assert _should_cooldown_deployment(router, "test_deployment", 500, Exception("Test")) is True
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_increment_deployment_successes_for_current_minute_does_not_write_to_redis(
@@ -1643,13 +1610,11 @@ def test_increment_deployment_successes_for_current_minute_does_not_write_to_red
     )
     assert testing_litellm_router.cache.in_memory_cache.get_cache("test_deployment:successes") is not None
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_cast_exception_status_to_int():
     assert cast_exception_status_to_int(200) == 200
     assert cast_exception_status_to_int("404") == 404
     assert cast_exception_status_to_int("invalid") == 500
-
 
 @pytest.fixture
 def router():
@@ -1664,7 +1629,6 @@ def router():
             }
         ]
     )
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @patch("litellm.router_utils.cooldown_handlers.get_deployment_successes_for_current_minute")
@@ -1685,7 +1649,6 @@ def test_should_cooldown_high_traffic_all_fails(mock_failures, mock_successes, r
 
     assert should_cooldown is True, "Should cooldown when all requests fail with sufficient traffic"
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @patch("litellm.router_utils.cooldown_handlers.get_deployment_successes_for_current_minute")
 @patch("litellm.router_utils.cooldown_handlers.get_deployment_failures_for_current_minute")
@@ -1702,7 +1665,6 @@ def test_no_cooldown_low_traffic(mock_failures, mock_successes, router):
     )
 
     assert should_cooldown is False, "Should not cooldown when traffic is below threshold"
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @patch("litellm.router_utils.cooldown_handlers.get_deployment_successes_for_current_minute")
@@ -1723,7 +1685,6 @@ def test_cooldown_rate_limit(mock_failures, mock_successes, router):
 
     assert should_cooldown is False, "Should not cooldown on rate limit error for single deployment models"
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @patch("litellm.router_utils.cooldown_handlers.get_deployment_successes_for_current_minute")
 @patch("litellm.router_utils.cooldown_handlers.get_deployment_failures_for_current_minute")
@@ -1741,7 +1702,6 @@ def test_mixed_success_failure(mock_failures, mock_successes, router):
 
     assert should_cooldown is False, "Should not cooldown when failure rate is below threshold"
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_is_cooldown_required_empty_string_exception_status(testing_litellm_router):
     """
@@ -1754,7 +1714,6 @@ def test_is_cooldown_required_empty_string_exception_status(testing_litellm_rout
     )
 
     assert result is False, "Should not require cooldown when exception_status is empty string"
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_cooldown_deployment_minimum_request_threshold(testing_litellm_router):

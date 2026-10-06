@@ -3,7 +3,7 @@ import importlib
 import json
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Final
 from unittest.mock import AsyncMock
 
@@ -15,12 +15,18 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.integrations.gcs_pubsub.pub_sub import *
+from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import StandardLoggingPayload
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
-verbose_logger.setLevel(logging.DEBUG)
-from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+
+@pytest.fixture(autouse=True)
+def set_verbose_logger_level() -> Iterator[None]:
+    original_level = verbose_logger.level
+    verbose_logger.setLevel(logging.DEBUG)
+    yield
+    verbose_logger.setLevel(original_level)
 
 
 @pytest.mark.asyncio

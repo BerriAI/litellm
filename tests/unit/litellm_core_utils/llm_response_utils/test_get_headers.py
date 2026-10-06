@@ -10,7 +10,6 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_provider_request_id,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 def test_get_response_headers_empty():
@@ -105,12 +104,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture(scope="session", autouse=True)
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
 
 
 @pytest.fixture(scope="function", autouse=True)

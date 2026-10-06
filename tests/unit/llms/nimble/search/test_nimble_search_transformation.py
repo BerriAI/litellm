@@ -1,9 +1,8 @@
-import json
+import json, litellm
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-import litellm
 from litellm.llms.nimble.search.transformation import NimbleSearchConfig
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -225,7 +224,7 @@ def test_get_error_class_attributes_the_provider():
 def test_get_error_class_unwraps_nimble_detail_envelope():
     """Verbatim body from a live 422; the raw JSON envelope should not reach the user."""
     error = _config().get_error_class(
-        error_message="{\"detail\":\"search_depth='fast' is only supported with focus='general'.\"}",
+        error_message='{"detail":"search_depth=\'fast\' is only supported with focus=\'general\'."}',
         status_code=422,
         headers={},
     )
@@ -259,7 +258,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 MOCK_NIMBLE_RESPONSE = {
     "request_id": "0f8b3a1c-1d2e-4f5a-9b0c-6d7e8f9a0b1c",
     "total_results": 2,
@@ -284,14 +282,12 @@ MOCK_NIMBLE_RESPONSE = {
     "serp_data": None,
 }
 
-
 def _mock_response():
     response = Mock()
     response.status_code = 200
     response.headers = {}
     response.content = json.dumps(MOCK_NIMBLE_RESPONSE).encode()
     return response
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate")
 class TestNimbleSearchTransformation:

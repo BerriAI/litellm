@@ -1,20 +1,14 @@
-import asyncio
-import copy
-import importlib
-import os
-import time
+import asyncio, copy, importlib, os, time
 from datetime import datetime
 
 import pytest
-from dotenv import load_dotenv
 
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 DEPLOYMENT_ID = "9876"
 COST_KEY = "cost_map:gpt-5.5-pool"
@@ -118,13 +112,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
-@pytest.fixture(scope="session")
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
-
-
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -177,7 +164,6 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -197,7 +183,6 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
-
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -221,18 +206,7 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
-
-#### What this tests ####
-#    This tests the router's ability to pick deployment with lowest cost
-
-
-load_dotenv()
-
-
-### UNIT TESTS FOR cost ROUTING ###
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_get_available_deployments():
     test_cache = DualCache()
@@ -261,8 +235,7 @@ async def test_get_available_deployments():
 
     assert selected_model["model_info"]["id"] == "groq-llama"
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_get_available_deployments_custom_price():
     import logging
@@ -313,7 +286,6 @@ async def test_get_available_deployments_custom_price():
 
     assert selected_model["model_info"]["id"] == "chatgpt-v-1"
 
-
 async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):
     kwargs = {
         "litellm_params": {
@@ -335,8 +307,7 @@ async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):
         end_time=end_time,
     )
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("ans_rpm", [1, 5])  # 1 should produce nothing, 10 should select first
 @pytest.mark.asyncio
 async def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):

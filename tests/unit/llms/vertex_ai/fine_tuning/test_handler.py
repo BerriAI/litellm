@@ -1,15 +1,12 @@
+import asyncio
 import json
+from typing import Optional
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
-import litellm as litellm_fine_tuning
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-
-litellm.num_retries = 0
-import asyncio
-from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.fine_tuning.handler import (
@@ -18,6 +15,12 @@ from litellm.llms.vertex_ai.fine_tuning.handler import (
 )
 from litellm.types.llms.openai import Hyperparameters
 from litellm.types.utils import StandardLoggingPayload
+
+
+@pytest.fixture(autouse=True)
+def isolate_fine_tuning_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "num_retries", 0)
+
 
 vertex_finetune_api = VertexFineTuningAPI()
 
@@ -514,12 +517,12 @@ def setup_and_teardown(event_loop):
 def _copy_litellm_state():
     state = {}
     for attr in _CALLBACK_ATTRS:
-        if hasattr(litellm_fine_tuning, attr):
-            value = getattr(litellm_fine_tuning, attr)
+        if hasattr(litellm, attr):
+            value = getattr(litellm, attr)
             state[attr] = value.copy() if isinstance(value, list) else value
     for attr in _SCALAR_ATTRS:
-        if hasattr(litellm_fine_tuning, attr):
-            state[attr] = getattr(litellm_fine_tuning, attr)
+        if hasattr(litellm, attr):
+            state[attr] = getattr(litellm, attr)
     return state
 
 
@@ -557,9 +560,9 @@ def _clear_logging_queue(loop=None) -> None:
 
 def _reset_litellm_callbacks() -> None:
     for attr in _CALLBACK_ATTRS:
-        if hasattr(litellm_fine_tuning, attr):
-            setattr(litellm_fine_tuning, attr, [])
-    manager = getattr(litellm_fine_tuning, "logging_callback_manager", None)
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
+    manager = getattr(litellm, "logging_callback_manager", None)
     reset = getattr(manager, "_reset_all_callbacks", None)
     if callable(reset):
         reset()
@@ -567,5 +570,5 @@ def _reset_litellm_callbacks() -> None:
 
 def _restore_litellm_state(state) -> None:
     for attr, value in state.items():
-        if hasattr(litellm_fine_tuning, attr):
-            setattr(litellm_fine_tuning, attr, value)
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, value)

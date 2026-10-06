@@ -2,22 +2,27 @@ import asyncio
 import importlib
 import logging
 import os
+import time
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 import litellm
-import litellm as litellm_opik_2
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
-verbose_logger.setLevel(logging.DEBUG)
 
-litellm.set_verbose = True
-import time
+@pytest.fixture(autouse=True)
+def isolate_opik_logging_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    original_level = verbose_logger.level
+    verbose_logger.setLevel(logging.DEBUG)
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    yield
+    verbose_logger.setLevel(original_level)
+
 
 INTERVAL_TOO_LONG_TO_FIRE_DURING_THIS_TEST = 3600
 
@@ -270,12 +275,6 @@ def _vcr_outcome_gate(request, vcr):
     record_vcr_outcome(request, vcr)
 
 
-@pytest.fixture(scope="session", autouse=True)
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
-
-
 @pytest.fixture(scope="function", autouse=True)
 def isolate_litellm_state():
     """
@@ -293,18 +292,18 @@ def isolate_litellm_state():
         "_async_success_callback",
         "_async_failure_callback",
     ):
-        if hasattr(litellm_opik_2, attr):
-            val = getattr(litellm_opik_2, attr)
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
             original_state[attr] = val.copy() if val else []
     for attr in ("pre_call_rules", "post_call_rules"):
-        if hasattr(litellm_opik_2, attr):
-            val = getattr(litellm_opik_2, attr)
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
             original_state[attr] = val.copy() if val else []
     for attr in _SCALAR_DEFAULTS:
-        if hasattr(litellm_opik_2, attr):
-            original_state[attr] = getattr(litellm_opik_2, attr)
-    if hasattr(litellm_opik_2, "in_memory_llm_clients_cache"):
-        litellm_opik_2.in_memory_llm_clients_cache.flush_cache()
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
     for attr in (
         "callbacks",
         "success_callback",
@@ -314,39 +313,39 @@ def isolate_litellm_state():
         "pre_call_rules",
         "post_call_rules",
     ):
-        if hasattr(litellm_opik_2, attr):
-            setattr(litellm_opik_2, attr, [])
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
     for attr, default_val in _SCALAR_DEFAULTS.items():
-        if hasattr(litellm_opik_2, attr):
-            setattr(litellm_opik_2, attr, default_val)
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, default_val)
     yield
     asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
-    if hasattr(litellm_opik_2, "in_memory_llm_clients_cache"):
-        litellm_opik_2.in_memory_llm_clients_cache.flush_cache()
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
     for attr, original_value in original_state.items():
-        if hasattr(litellm_opik_2, attr):
-            setattr(litellm_opik_2, attr, original_value)
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
 
 _SCALAR_DEFAULTS = {
-    "num_retries": getattr(litellm_opik_2, "num_retries", None),
-    "num_retries_per_request": getattr(litellm_opik_2, "num_retries_per_request", None),
-    "request_timeout": getattr(litellm_opik_2, "request_timeout", None),
-    "set_verbose": getattr(litellm_opik_2, "set_verbose", False),
-    "cache": getattr(litellm_opik_2, "cache", None),
-    "allowed_fails": getattr(litellm_opik_2, "allowed_fails", 3),
-    "default_fallbacks": getattr(litellm_opik_2, "default_fallbacks", None),
-    "enable_azure_ad_token_refresh": getattr(litellm_opik_2, "enable_azure_ad_token_refresh", None),
-    "tag_budget_config": getattr(litellm_opik_2, "tag_budget_config", None),
-    "model_cost": getattr(litellm_opik_2, "model_cost", None),
-    "token_counter": getattr(litellm_opik_2, "token_counter", None),
-    "disable_aiohttp_transport": getattr(litellm_opik_2, "disable_aiohttp_transport", False),
-    "force_ipv4": getattr(litellm_opik_2, "force_ipv4", False),
-    "drop_params": getattr(litellm_opik_2, "drop_params", None),
-    "modify_params": getattr(litellm_opik_2, "modify_params", False),
-    "api_base": getattr(litellm_opik_2, "api_base", None),
-    "api_key": getattr(litellm_opik_2, "api_key", None),
+    "num_retries": getattr(litellm, "num_retries", None),
+    "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
+    "request_timeout": getattr(litellm, "request_timeout", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "default_fallbacks": getattr(litellm, "default_fallbacks", None),
+    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
+    "tag_budget_config": getattr(litellm, "tag_budget_config", None),
+    "model_cost": getattr(litellm, "model_cost", None),
+    "token_counter": getattr(litellm, "token_counter", None),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
 }
 
 
@@ -358,14 +357,14 @@ def setup_and_teardown():
     """
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
     if worker_id is None:
-        importlib.reload(litellm_opik_2)
+        importlib.reload(litellm)
         try:
-            if hasattr(litellm_opik_2, "proxy") and hasattr(litellm_opik_2.proxy, "proxy_server"):
-                import litellm.proxy.proxy_server
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server as proxy_server
 
-                importlib.reload(litellm_opik_2.proxy.proxy_server)
+                importlib.reload(proxy_server)
         except Exception as e:
             print(f"Error reloading litellm.proxy.proxy_server: {e}")
-        if hasattr(litellm_opik_2, "in_memory_llm_clients_cache"):
-            litellm_opik_2.in_memory_llm_clients_cache.flush_cache()
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
     yield

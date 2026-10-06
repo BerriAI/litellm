@@ -1,15 +1,11 @@
-import asyncio
+import asyncio, boto3, importlib, logging, os, pytest_asyncio
 import copy
-import importlib
 import json
-import logging
-import os
 import re
 import sys
 import textwrap
 import time
 import uuid
-from collections import defaultdict
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -17,23 +13,21 @@ from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
-import boto3
 import httpx
 import pytest
-import pytest_asyncio
 import respx
 
 import litellm
-import litellm as litellm_amazing_s3
-from litellm._logging import verbose_logger
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.s3_v2 import S3BatchUploadError, S3Logger
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 from litellm.types.utils import StandardLoggingPayload
+from collections import defaultdict
+from litellm._logging import verbose_logger
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 _real_sleep: Final = asyncio.sleep
@@ -5135,7 +5129,9 @@ async def test_repeated_failure_notifications_upload_once(
     )
 
     if concurrent:
-        await asyncio.gather(*(logging_obj.async_failure_handler(error, "synthetic traceback") for _ in range(3)))
+        await asyncio.gather(
+            *(logging_obj.async_failure_handler(error, "synthetic traceback") for _ in range(3))
+        )
     else:
         for _ in range(3):
             await logging_obj.async_failure_handler(error, "synthetic traceback")
@@ -5153,17 +5149,14 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest_asyncio.fixture(loop_scope="function")
 async def drain_logging_worker(isolate_litellm_state: None) -> AsyncIterator[None]:
     yield
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
 
-
 LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
 
-
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="function", autouse=True)
 def isolate_litellm_state():
     """
     Per-function isolation fixture.
@@ -5200,7 +5193,6 @@ def isolate_litellm_state():
         if attr in _DEFAULTS:
             setattr(litellm, attr, _DEFAULTS[attr])
 
-
 _LIST_ATTRS = (
     "callbacks",
     "success_callback",
@@ -5226,8 +5218,11 @@ _SCALAR_ATTRS = (
     "vector_store_registry",
 )
 
-_DEFAULTS: dict = {}
-
+_DEFAULTS: Final = {
+    attr: getattr(litellm, attr).copy() if isinstance(getattr(litellm, attr), list) else getattr(litellm, attr)
+    for attr in (*_LIST_ATTRS, *_SCALAR_ATTRS)
+    if hasattr(litellm, attr)
+}
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -5251,9 +5246,9 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
-
-litellm_amazing_s3.num_retries = 3
-
+@pytest.fixture
+def amazing_s3_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "num_retries", 3)
 
 class _FakeS3Paginator:
     def __init__(self, objects):
@@ -5264,7 +5259,6 @@ class _FakeS3Paginator:
         if not keys:
             return [{}]
         return [{"Contents": [{"Key": key} for key in keys]}]
-
 
 class _FakeS3Client:
     def __init__(self):
@@ -5289,9 +5283,7 @@ class _FakeS3Client:
         keys = sorted(self.objects[Bucket])
         return {"Contents": [{"Key": key, "LastModified": 0} for key in keys]}
 
-
 _FAKE_S3_CLIENT = _FakeS3Client()
-
 
 @pytest.fixture
 def fake_s3_client(monkeypatch):
@@ -5302,32 +5294,36 @@ def fake_s3_client(monkeypatch):
         return _FAKE_S3_CLIENT
 
     monkeypatch.setattr(boto3, "client", fake_boto3_client)
-    litellm_amazing_s3.success_callback = []
-    litellm_amazing_s3.callbacks = []
+    litellm.success_callback = []
+    litellm.callbacks = []
     yield _FAKE_S3_CLIENT
-    litellm_amazing_s3.success_callback = []
-    litellm_amazing_s3.callbacks = []
-
+    litellm.success_callback = []
+    litellm.callbacks = []
 
 @pytest.mark.usefixtures(
-    "fake_s3_client", "_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown"
+    "fake_s3_client",
+    "_vcr_outcome_gate",
+    "drain_logging_worker",
+    "isolate_litellm_state",
+    "setup_and_teardown",
+    "amazing_s3_retries",
 )
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode,streaming", [(True, True), (True, False), (False, True), (False, False)])
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_basic_s3_logging(sync_mode, streaming):
     verbose_logger.setLevel(level=logging.DEBUG)
-    litellm_amazing_s3.success_callback = ["s3"]
-    litellm_amazing_s3.s3_callback_params = {
+    litellm.success_callback = ["s3"]
+    litellm.s3_callback_params = {
         "s3_bucket_name": "load-testing-oct",
         "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
         "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
         "s3_region_name": "us-west-2",
     }
-    litellm_amazing_s3.set_verbose = True
+    litellm.set_verbose = True
     response_id = None
     if sync_mode is True:
-        response = litellm_amazing_s3.completion(
+        response = litellm.completion(
             model="gpt-5-mini",
             messages=[{"role": "user", "content": "This is a test"}],
             mock_response="It's simple to use and easy to get started",
@@ -5340,7 +5336,7 @@ async def test_basic_s3_logging(sync_mode, streaming):
             response_id = response.id
         time.sleep(2)
     else:
-        response = await litellm_amazing_s3.acompletion(
+        response = await litellm.acompletion(
             model="gpt-5-mini",
             messages=[{"role": "user", "content": "This is a test"}],
             mock_response="It's simple to use and easy to get started",
@@ -5360,9 +5356,13 @@ async def test_basic_s3_logging(sync_mode, streaming):
     for key in all_s3_keys:
         s3.delete_object(Bucket="load-testing-oct", Key=key)
 
-
 @pytest.mark.usefixtures(
-    "fake_s3_client", "_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown"
+    "fake_s3_client",
+    "_vcr_outcome_gate",
+    "drain_logging_worker",
+    "isolate_litellm_state",
+    "setup_and_teardown",
+    "amazing_s3_retries",
 )
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [True])
@@ -5370,7 +5370,7 @@ async def test_basic_s3_logging(sync_mode, streaming):
 async def test_basic_s3_v2_logging(streaming):
     from litellm.integrations.s3_v2 import S3Logger
 
-    litellm_amazing_s3.s3_callback_params = {
+    litellm.s3_callback_params = {
         "s3_bucket_name": "load-testing-oct",
         "s3_aws_secret_access_key": "test-secret",
         "s3_aws_access_key_id": "test-key",
@@ -5378,7 +5378,7 @@ async def test_basic_s3_v2_logging(streaming):
     }
 
     s3_v2_logger = S3Logger(s3_flush_interval=1)
-    litellm_amazing_s3.callbacks = [s3_v2_logger]
+    litellm.callbacks = [s3_v2_logger]
 
     uploaded_keys: list = []
 
@@ -5387,9 +5387,9 @@ async def test_basic_s3_v2_logging(streaming):
 
     s3_v2_logger.async_upload_data_to_s3 = mock_upload
 
-    litellm_amazing_s3.set_verbose = True
+    litellm.set_verbose = True
     response_id = None
-    response = await litellm_amazing_s3.acompletion(
+    response = await litellm.acompletion(
         model="gpt-5-mini",
         messages=[{"role": "user", "content": "This is a test"}],
         mock_response="It's simple to use and easy to get started",
@@ -5408,9 +5408,13 @@ async def test_basic_s3_v2_logging(streaming):
         f"Expected response_id={response_id} in one of the uploaded S3 keys: {uploaded_keys}"
     )
 
-
 @pytest.mark.usefixtures(
-    "fake_s3_client", "_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown"
+    "fake_s3_client",
+    "_vcr_outcome_gate",
+    "drain_logging_worker",
+    "isolate_litellm_state",
+    "setup_and_teardown",
+    "amazing_s3_retries",
 )
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
@@ -5442,17 +5446,17 @@ async def test_basic_s3_v2_logging_failure():
 
     s3_v2_logger.async_upload_data_to_s3 = mock_upload
 
-    litellm_amazing_s3.callbacks = [s3_v2_logger]
-    litellm_amazing_s3.s3_callback_params = {
+    litellm.callbacks = [s3_v2_logger]
+    litellm.s3_callback_params = {
         "s3_bucket_name": "test-bucket",
         "s3_aws_secret_access_key": "test-secret",
         "s3_aws_access_key_id": "test-key",
         "s3_region_name": "us-west-2",
     }
-    litellm_amazing_s3.set_verbose = True
+    litellm.set_verbose = True
 
     try:
-        await litellm_amazing_s3.acompletion(
+        await litellm.acompletion(
             model="gpt-5-mini",
             api_key="invalid-api-key",
             messages=[{"role": "user", "content": "This is a test"}],
@@ -5480,7 +5484,6 @@ async def test_basic_s3_v2_logging_failure():
     assert data is not None
     assert '"model": "gpt-5-mini"' in data
 
-
 def list_all_s3_objects(bucket_name):
     s3 = boto3.client("s3")
 
@@ -5495,7 +5498,6 @@ def list_all_s3_objects(bucket_name):
             all_s3_keys.extend([obj["Key"] for obj in page["Contents"]])
 
     return total_objects, all_s3_keys
-
 
 class TestS3Logger(S3Logger):
     def __init__(self, *args, **kwargs):

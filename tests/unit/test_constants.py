@@ -1,21 +1,20 @@
-import ast
-import asyncio
-import importlib
+import ast, asyncio, os
 import inspect
 import json
-import os
 from unittest import mock
-from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
 
+
+import importlib
+
 import litellm
-from litellm import MorphChatConfig, constants, get_llm_provider
+from litellm import constants, get_llm_provider, MorphChatConfig
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
+from unittest.mock import patch
 
 
 def _build_constant_env_var_map() -> dict[str, str]:
@@ -112,7 +111,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -121,13 +119,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture(scope="session")
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
-
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -162,7 +153,6 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -178,11 +168,25 @@ _SCALAR_DEFAULTS = {
 }
 
 
-# Force model loading
-litellm.add_known_models()
+@pytest.fixture
+def _populate_known_models_for_morph_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    for attr, value in vars(litellm).items():
+        if attr.endswith("_models") and isinstance(value, set):
+            monkeypatch.setattr(litellm, attr, value.copy())
+    monkeypatch.setattr(
+        litellm,
+        "models_by_provider",
+        {
+            provider: models.copy()
+            for provider, models in litellm.models_by_provider.items()
+        },
+    )
+    litellm.add_known_models()
 
 
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures(
+    "_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests"
+)
 def test_morph_config_get_provider_info():
     """Test that MorphChatConfig returns correct provider info."""
     config = MorphChatConfig()
@@ -203,8 +207,9 @@ def test_morph_config_get_provider_info():
     assert api_base == "https://custom.morph.com"
     assert api_key == "key"
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures(
+    "_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests"
+)
 def test_morph_get_llm_provider():
     """Test that get_llm_provider correctly identifies morph models."""
     # Test with morph/model format
@@ -214,8 +219,9 @@ def test_morph_get_llm_provider():
     _, custom_llm_provider, _, _ = get_llm_provider("morph/morph-v3-fast")
     assert custom_llm_provider == "morph"
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures(
+    "_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests"
+)
 def test_morph_in_provider_lists():
     """Test that morph is included in all necessary provider lists."""
     import litellm
@@ -236,8 +242,9 @@ def test_morph_in_provider_lists():
     # Check models are in model_list after initialization
     assert all(model in litellm.model_list for model in ["morph/morph-v3-large", "morph/morph-v3-fast"])
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures(
+    "_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests"
+)
 def test_morph_supported_params():
     """Test that MorphChatConfig returns correct supported parameters."""
     config = MorphChatConfig()
@@ -251,8 +258,9 @@ def test_morph_supported_params():
 
     assert all(param in supported_params for param in expected_params)
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures(
+    "_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests"
+)
 def test_morph_custom_llm_provider():
     """Test that morph models are correctly identified."""
     config = MorphChatConfig()

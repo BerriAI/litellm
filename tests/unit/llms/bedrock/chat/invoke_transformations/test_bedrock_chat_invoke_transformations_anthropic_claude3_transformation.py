@@ -1,7 +1,5 @@
-import asyncio
-import base64
+import asyncio, base64, importlib
 import copy
-import importlib
 import json
 import uuid
 from types import SimpleNamespace
@@ -19,7 +17,6 @@ from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transfor
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 ONE_PIXEL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -1148,7 +1145,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -1157,13 +1153,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture(scope="session")
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
-
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -1198,7 +1187,6 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -1213,8 +1201,6 @@ _SCALAR_DEFAULTS = {
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
 
-
-# Large document for caching tests (needs 1024+ tokens for Claude models)
 LARGE_DOCUMENT_FOR_CACHING = (
     """
 This is a comprehensive legal agreement between Party A and Party B.
@@ -1272,8 +1258,7 @@ IN WITNESS WHEREOF, the parties have executed this Agreement.
     * 8
 )  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropicPromptCachingRegression:
     """
     Regression tests for prompt caching support across bedrock/invoke and bedrock/converse.
@@ -1435,8 +1420,7 @@ class TestBedrockAnthropicPromptCachingRegression:
             if "anthropic_beta" in additional_fields:
                 assert "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropic1MContextRegression:
     """
     Regression tests for 1M context window support across bedrock/invoke and bedrock/converse.
@@ -1621,8 +1605,7 @@ class TestBedrockAnthropic1MContextRegression:
         assert "context-1m-2025-08-07" in beta_headers
         assert "computer-use-2024-10-22" in beta_headers
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropicCombinedRegressions:
     """
     Tests that combine multiple features to ensure they work together.

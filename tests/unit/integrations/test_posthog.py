@@ -15,9 +15,11 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import StandardLoggingPayload
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
-# Set env vars for tests
-os.environ["POSTHOG_API_KEY"] = "test_key"
-os.environ["POSTHOG_API_URL"] = "https://app.posthog.com"
+
+@pytest.fixture(autouse=True)
+def posthog_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("POSTHOG_API_KEY", "test_key")
+    monkeypatch.setenv("POSTHOG_API_URL", "https://app.posthog.com")
 
 
 def create_standard_logging_payload() -> StandardLoggingPayload:

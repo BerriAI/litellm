@@ -4,12 +4,8 @@ from typing import List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from dotenv import load_dotenv
-
 import litellm
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-
-load_dotenv()
 
 
 @pytest.mark.asyncio

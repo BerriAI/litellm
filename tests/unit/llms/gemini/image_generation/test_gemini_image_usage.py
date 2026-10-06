@@ -16,7 +16,6 @@ import litellm
 from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
 from litellm.types.utils import ImageObject, ImageResponse
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 @pytest.mark.parametrize(
@@ -275,12 +274,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture(scope="session", autouse=True)
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
 
 
 @pytest.fixture(scope="function", autouse=True)

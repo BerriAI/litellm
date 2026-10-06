@@ -8,13 +8,14 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
     PassthroughEndpointRouter,
 )
-from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.utils import CredentialItem
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from unittest.mock import patch
 
 
 @pytest.fixture(autouse=True)
@@ -54,7 +55,10 @@ def test_credential_loaded_after_deployment_registration_still_resolves():
 
     CredentialAccessor.upsert_credentials([_credential("cred_openai", "sk-loaded-after-boot")])
 
-    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-loaded-after-boot"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None)
+        == "sk-loaded-after-boot"
+    )
 
 
 def test_credential_rotation_is_reflected_without_deployment_update():
@@ -64,11 +68,17 @@ def test_credential_rotation_is_reflected_without_deployment_update():
     )
     passthrough_router = _passthrough_router(llm_router)
 
-    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-before-rotation"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None)
+        == "sk-before-rotation"
+    )
 
     CredentialAccessor.upsert_credentials([_credential("cred_openai", "sk-after-rotation")])
 
-    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-after-rotation"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None)
+        == "sk-after-rotation"
+    )
 
 
 def test_deleted_deployment_stops_serving_its_key(monkeypatch):
@@ -80,7 +90,9 @@ def test_deleted_deployment_stops_serving_its_key(monkeypatch):
     llm_router.set_model_list([])
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
 
-    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-from-env"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-from-env"
+    )
 
 
 def test_inline_api_key_resolves_without_credential_name():
@@ -89,7 +101,10 @@ def test_inline_api_key_resolves_without_credential_name():
     )
     passthrough_router = _passthrough_router(llm_router)
 
-    assert passthrough_router.get_credentials(custom_llm_provider="anthropic", region_name=None) == "sk-ant-inline"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="anthropic", region_name=None)
+        == "sk-ant-inline"
+    )
 
 
 def test_missing_credential_and_no_inline_key_falls_back_to_env(monkeypatch):
@@ -99,7 +114,9 @@ def test_missing_credential_and_no_inline_key_falls_back_to_env(monkeypatch):
     passthrough_router = _passthrough_router(llm_router)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
 
-    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-from-env"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-from-env"
+    )
 
 
 def test_deployment_for_other_provider_does_not_match():
@@ -140,7 +157,9 @@ def test_first_matching_deployment_wins():
 def test_assemblyai_region_matching():
     llm_router = litellm.Router(
         model_list=[
-            _flagged_deployment("assemblyai/best", api_key="sk-eu", api_base="https://api.eu.assemblyai.com"),
+            _flagged_deployment(
+                "assemblyai/best", api_key="sk-eu", api_base="https://api.eu.assemblyai.com"
+            ),
             _flagged_deployment("assemblyai/best", api_key="sk-us", api_base="https://api.assemblyai.com"),
         ]
     )
@@ -170,7 +189,9 @@ def test_env_fallback_when_no_router(monkeypatch):
     passthrough_router = _passthrough_router(None)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
 
-    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-from-env"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-from-env"
+    )
 
 
 def test_returns_none_when_no_router_and_no_env():
@@ -205,7 +226,9 @@ def test_vertex_deployment_resolves_via_named_credential():
     )
     llm_router = litellm.Router(
         model_list=[
-            _vertex_deployment("gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_gcp")
+            _vertex_deployment(
+                "gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_gcp"
+            )
         ]
     )
     passthrough_router = _passthrough_router(llm_router)
@@ -263,7 +286,9 @@ def test_vertex_model_hint_prefers_matching_deployment():
     passthrough_router = _passthrough_router(_two_vertex_deployments_router())
 
     by_alias = passthrough_router.get_vertex_credentials_from_router_deployments(model="gemini-live")
-    by_upstream_id = passthrough_router.get_vertex_credentials_from_router_deployments(model="gemini-live-2.5-flash")
+    by_upstream_id = passthrough_router.get_vertex_credentials_from_router_deployments(
+        model="gemini-live-2.5-flash"
+    )
 
     assert by_alias is not None and by_alias.vertex_project == "proj-live"
     assert by_upstream_id is not None and by_upstream_id.vertex_project == "proj-live"
@@ -373,7 +398,9 @@ def test_vertex_deployment_with_deleted_credential_is_skipped(monkeypatch):
     )
     llm_router = litellm.Router(
         model_list=[
-            _vertex_deployment("gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_gone")
+            _vertex_deployment(
+                "gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_gone"
+            )
         ]
     )
     passthrough_router = _passthrough_router(llm_router)
@@ -486,13 +513,11 @@ async def _drain_logging_worker():
     await GLOBAL_LOGGING_WORKER.stop()
     yield
 
-
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
-
 
 passthrough_endpoint_router = PassthroughEndpointRouter()
 
@@ -508,7 +533,6 @@ passthrough_endpoint_router = PassthroughEndpointRouter()
 
 3. Unit test for _get_default_env_variable_name_passthrough_endpoint
 """
-
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestPassthroughEndpointRouter(unittest.TestCase):

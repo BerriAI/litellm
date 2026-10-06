@@ -4,18 +4,13 @@ count actual model entries, not reserved meta keys) and the extraction of the
 ``fallback_generalizations`` block out of the raw map.
 """
 
-import asyncio
-import importlib
-import importlib.resources as importlib_get_model
-import json
+import asyncio, importlib, importlib.resources as importlib_get_model, json, litellm
 import os
 import sys
 import threading
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-import litellm
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
     match_capability_generalizations,
@@ -30,10 +25,6 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     get_model_cost_map_provenance,
     git_blob_id,
 )
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
-from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 def _load_root_cost_map() -> dict:
@@ -529,6 +520,10 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     get_model_cost_map,
     get_model_cost_map_source_info,
 )
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.utils import _invalidate_model_cost_lowercase_map
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from unittest.mock import MagicMock, patch
 
 
 class _SyncSleepRecorder:
@@ -751,7 +746,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -760,13 +754,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture(scope="session")
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
-
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -801,7 +788,6 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -816,8 +802,7 @@ _SCALAR_DEFAULTS = {
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestCheckIsValidDict:
     """Unit tests for _check_is_valid_dict."""
 
@@ -841,8 +826,7 @@ class TestCheckIsValidDict:
         """Non-empty dict should pass."""
         assert GetModelCostMap._check_is_valid_dict({"model": {}}) is True
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestCheckModelCountNotReduced:
     """Unit tests for _check_model_count_not_reduced."""
 
@@ -896,8 +880,7 @@ class TestCheckModelCountNotReduced:
             is True
         )
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestValidateModelCostMap:
     """Unit tests for validate_model_cost_map (combines both checks)."""
 
@@ -933,8 +916,7 @@ class TestValidateModelCostMap:
             is True
         )
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestGetModelCostMapFallback:
     """Tests for get_model_cost_map fallback behavior with bad upstream."""
 
@@ -1001,8 +983,7 @@ class TestGetModelCostMapFallback:
         assert isinstance(result, dict)
         assert len(result) > 0
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBackupModelCostMapExists:
     """Validates the local backup file is always present and valid."""
 
@@ -1017,8 +998,7 @@ class TestBackupModelCostMapExists:
         backup = GetModelCostMap.load_local_model_cost_map()
         assert len(backup) > 100, f"Backup has only {len(backup)} models, expected > 100"
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBadHostedModelCostMap:
     """
     Simulates the hosted model cost map being bad (invalid JSON / corrupted).
@@ -1082,19 +1062,11 @@ class TestBadHostedModelCostMap:
         finally:
             litellm.model_cost = original
 
-
 @pytest.fixture()
 def _vcr_outcome_gate_local_testing(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
-
-
-@pytest.fixture(scope="session")
-def fake_openai_endpoint_local_testing():
-    ensure_fake_openai_endpoint()
-    yield
-
 
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
@@ -1148,7 +1120,6 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
-
 _SCALAR_DEFAULTS_local_testing = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -1168,7 +1139,6 @@ _SCALAR_DEFAULTS_local_testing = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
-
 
 @pytest.fixture(scope="module")
 def setup_and_teardown_local_testing():
@@ -1192,10 +1162,8 @@ def setup_and_teardown_local_testing():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
-
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
-    "fake_openai_endpoint_local_testing",
     "isolate_litellm_state",
     "setup_and_teardown_local_testing",
 )
@@ -1205,10 +1173,8 @@ def test_get_model_cost_map():
     except Exception as e:
         pytest.fail(f"An exception occurred: {e}")
 
-
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
-    "fake_openai_endpoint_local_testing",
     "isolate_litellm_state",
     "setup_and_teardown_local_testing",
 )

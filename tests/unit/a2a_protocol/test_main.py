@@ -1,8 +1,6 @@
 """Tests for litellm/a2a_protocol/main.py non-streaming send behavior."""
 
 import asyncio
-from types import SimpleNamespace
-from uuid import uuid4
 
 import httpx
 import pytest
@@ -17,6 +15,7 @@ from a2a.compat.v0_3.types import (
 )
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.a2a_protocol.main import (
     _send_message,
     _stream_messages,
@@ -26,12 +25,13 @@ from litellm.a2a_protocol.main import (
 )
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from types import SimpleNamespace
+from uuid import uuid4
 
 
 def _request() -> SendMessageRequest:
@@ -560,12 +560,10 @@ class MockA2AResponse:
     def model_dump(self, mode="json", exclude_none=True):
         return self._payload
 
-
 class MockA2AStreamingChunk(MockA2AResponse):
     def __init__(self, text: str, state: str):
         super().__init__(text=text)
         self._payload["result"]["status"] = {"state": state}
-
 
 class MockA2AClient:
     def __init__(self):
@@ -582,7 +580,6 @@ class MockA2AClient:
             message.parts.add().text = text
             yield event
 
-
 @pytest.fixture
 def mock_a2a_client(monkeypatch):
     import litellm.a2a_protocol.main as a2a_main
@@ -593,7 +590,6 @@ def mock_a2a_client(monkeypatch):
         return MockA2AClient()
 
     monkeypatch.setattr(a2a_main, "create_a2a_client", _fake_create_a2a_client)
-
 
 @pytest.mark.asyncio
 async def test_a2a_non_streaming(mock_a2a_client):
@@ -620,7 +616,6 @@ async def test_a2a_non_streaming(mock_a2a_client):
 
     assert response is not None
     print(f"\nNon-streaming response: {response}")
-
 
 @pytest.mark.asyncio
 async def test_a2a_streaming(mock_a2a_client):

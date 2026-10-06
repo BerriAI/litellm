@@ -30,7 +30,6 @@ from tests._ws_vcr import (  # noqa: E402
     text_frames_match,
     ws_redis_key_for,
 )
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 def _server(text: str, client_frames_before: int) -> WsFrame:
@@ -288,12 +287,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture(scope="session", autouse=True)
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
 
 
 @pytest.fixture(scope="function", autouse=True)

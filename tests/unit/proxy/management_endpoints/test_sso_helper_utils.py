@@ -7,16 +7,10 @@ import importlib
 import os
 
 import pytest
-from dotenv import load_dotenv
-
 import litellm
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
-
-load_dotenv()
-
 
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.management_endpoints.sso_helper_utils import (
@@ -41,12 +35,6 @@ def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
 
 
 @pytest.fixture(scope="function", autouse=True)

@@ -1,17 +1,13 @@
-import asyncio
+import asyncio, importlib, json, time
 import gc
-import importlib
 import io
-import json
 import os
 import pathlib
 import ssl
 import threading
-import time
 import weakref
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -21,8 +17,6 @@ import pytest
 from aiohttp import ClientSession, TCPConnector
 
 import litellm
-from litellm.exceptions import Timeout as LitellmTimeout
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
@@ -33,9 +27,11 @@ from litellm.llms.custom_httpx.http_handler import (
     get_ssl_configuration,
 )
 from litellm.types.llms.custom_http import VerifyTypes
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from litellm.exceptions import Timeout as LitellmTimeout
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 @pytest.mark.asyncio
@@ -377,10 +373,8 @@ async def test_async_handler_with_shared_session():
 async def test_get_async_httpx_client_with_shared_session():
     """Test get_async_httpx_client with shared session"""
     from litellm.llms.custom_httpx.http_handler import (
-        AsyncHTTPHandler as AsyncHTTPHandlerReload,
-    )
-    from litellm.llms.custom_httpx.http_handler import (
         get_async_httpx_client,
+        AsyncHTTPHandler as AsyncHTTPHandlerReload,
     )
     from litellm.types.utils import LlmProviders
 
@@ -403,10 +397,8 @@ async def test_get_async_httpx_client_with_shared_session():
 async def test_get_async_httpx_client_without_shared_session():
     """Test get_async_httpx_client without shared session (backward compatibility)"""
     from litellm.llms.custom_httpx.http_handler import (
-        AsyncHTTPHandler as AsyncHTTPHandlerReload,
-    )
-    from litellm.llms.custom_httpx.http_handler import (
         get_async_httpx_client,
+        AsyncHTTPHandler as AsyncHTTPHandlerReload,
     )
     from litellm.types.utils import LlmProviders
 
@@ -443,7 +435,6 @@ async def test_session_reuse_chain():
 def test_shared_session_parameter_in_acompletion():
     """Test that acompletion function accepts shared_session parameter"""
     import inspect
-
     from litellm.main import acompletion
 
     # Get the function signature
@@ -461,7 +452,6 @@ def test_shared_session_parameter_in_acompletion():
 def test_shared_session_parameter_in_completion():
     """Test that completion function accepts shared_session parameter"""
     import inspect
-
     from litellm.main import completion
 
     # Get the function signature
@@ -480,10 +470,8 @@ def test_shared_session_parameter_in_completion():
 async def test_session_reuse_integration():
     """Integration test for session reuse functionality"""
     from litellm.llms.custom_httpx.http_handler import (
-        AsyncHTTPHandler as AsyncHTTPHandlerReload,
-    )
-    from litellm.llms.custom_httpx.http_handler import (
         get_async_httpx_client,
+        AsyncHTTPHandler as AsyncHTTPHandlerReload,
     )
     from litellm.types.utils import LlmProviders
 
@@ -1505,6 +1493,7 @@ async def test_connection_error_retry_forwards_content(method: str):
         await handler.close()
 
 
+
 @pytest.fixture
 def forward_proxy_server():
     """Plain HTTP forward proxy that records the absolute URIs it is asked to fetch."""
@@ -1635,7 +1624,9 @@ def private_ca_tls_upstream(tmp_path: pathlib.Path):
     ca_pem.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     key_pem = tmp_path / "key.pem"
     key_pem.write_bytes(
-        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
     )
 
     class OkTlsHandler(BaseHTTPRequestHandler):
@@ -1810,11 +1801,8 @@ async def test_bounded_get_preserves_sdk_redirect_auth_and_query_handling(respx_
     handler = AsyncHTTPHandler()
     try:
         response = await handler.get(
-            "https://example.com/spec.json?original=1",
-            max_response_bytes=100,
-            follow_redirects=True,
-            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"},
-            timeout=2.0,
+            "https://example.com/spec.json?original=1", max_response_bytes=100, follow_redirects=True,
+            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"}, timeout=2.0,
         )
     finally:
         await handler.close()
@@ -1900,13 +1888,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
-@pytest.fixture(scope="session")
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
-
-
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -1959,7 +1940,6 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -1979,7 +1959,6 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
-
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -2003,11 +1982,11 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
-
 _SERVER_DELAY_S = 5
-_PER_REQUEST_TIMEOUT_S = 1.0
-_CLIENT_DEFAULT_TIMEOUT_S = 60.0
 
+_PER_REQUEST_TIMEOUT_S = 1.0
+
+_CLIENT_DEFAULT_TIMEOUT_S = 60.0
 
 class _SlowHandler(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -2022,8 +2001,7 @@ class _SlowHandler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_post_delay_exceeds_per_request_timeout_raises():
     server = ThreadingHTTPServer(("127.0.0.1", 0), _SlowHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()

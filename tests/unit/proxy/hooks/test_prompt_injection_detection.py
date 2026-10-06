@@ -1,27 +1,24 @@
-import asyncio
+import asyncio, os
 import importlib
-import os
 import time
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from dotenv import load_dotenv
 from fastapi import HTTPException
 
 import litellm
-from litellm import Router as Router_prompt_injection
 from litellm.caching.caching import DualCache
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
 from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm import Router as Router_prompt_injection
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 def _moderation_detector(verdict: str) -> _OPTIONAL_PromptInjectionDetection:
@@ -45,7 +42,6 @@ def _moderation_detector(verdict: str) -> _OPTIONAL_PromptInjectionDetection:
         )
     )
     return detector
-
 
 LONG_SAFE_PROMPT = "Summarize the quarterly revenue report for the finance team. " * 3
 
@@ -233,13 +229,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
-@pytest.fixture(scope="session")
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
-
-
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -292,7 +281,6 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -312,7 +300,6 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
-
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -336,15 +323,7 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
-
-# What is this
-## Unit tests for the Prompt Injection Detection logic
-
-
-load_dotenv()
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_prompt_injection_attack_valid_attack():
     """
@@ -374,8 +353,7 @@ async def test_prompt_injection_attack_valid_attack():
     except Exception as e:
         pass
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_prompt_injection_attack_invalid_attack():
     """
@@ -405,8 +383,7 @@ async def test_prompt_injection_attack_invalid_attack():
     except Exception as e:
         pytest.fail(f"Expected the call to pass")
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_prompt_injection_llm_eval():
     """

@@ -1,28 +1,27 @@
-import asyncio
-import importlib
-import json
-import os
-from datetime import datetime
+import asyncio, httpx, importlib, json, os
+import sys
 from typing import Final
-from unittest.mock import AsyncMock
 
-import httpx
 import pytest
-from dotenv import load_dotenv
-from openai.types.chat import ChatCompletionMessage
-from openai.types.chat.chat_completion import ChatCompletion, Choice
 from pydantic import TypeAdapter
-from respx import MockRouter
+
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
+)
 
 import litellm
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
-from litellm.router import Router
 from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_params
+from datetime import datetime
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.router import Router
+from openai.types.chat import ChatCompletionMessage
+from openai.types.chat.chat_completion import ChatCompletion, Choice
+from respx import MockRouter
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
+from unittest.mock import AsyncMock
 
 _MAPPED_PARAMS: Final = TypeAdapter(dict[str, object])
 _SUPPORTED_PARAMS: Final = TypeAdapter(list[str])
@@ -71,7 +70,9 @@ def test_map_openai_params_with_preview_api_version():
     model = "azure/gpt-4-1"
     drop_params = False
     api_version = "preview"
-    assert config.map_openai_params(non_default_params, optional_params, model, drop_params, api_version)
+    assert config.map_openai_params(
+        non_default_params, optional_params, model, drop_params, api_version
+    )
 
 
 def test_transform_request_hoists_tool_message_image():
@@ -505,13 +506,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
-@pytest.fixture(scope="session")
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
-
-
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -564,7 +558,6 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -584,7 +577,6 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
-
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -608,8 +600,7 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
-
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def _pr4_azure_openai_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "pr4-test-azure-openai-key")
     monkeypatch.setenv("AZURE_AI_API_BASE", "https://azure-openai.example.invalid")
@@ -617,11 +608,12 @@ def _pr4_azure_openai_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AZURE_CLIENT_ID", "pr4-test-client-id")
     monkeypatch.setenv("AZURE_CLIENT_SECRET", "pr4-test-client-secret")
 
-
-load_dotenv()
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures(
+    "_pr4_azure_openai_env",
+    "_vcr_outcome_gate",
+    "isolate_litellm_state",
+    "setup_and_teardown",
+)
 @pytest.mark.asyncio()
 @pytest.mark.respx()
 async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):

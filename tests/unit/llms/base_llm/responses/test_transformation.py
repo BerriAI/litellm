@@ -1,23 +1,20 @@
 """The shared Responses API config contract."""
 
-import asyncio
-import importlib
-import json
-from typing import Any, AsyncIterator, List
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+import asyncio, importlib, json
 
 import httpx
 import pytest
 
 import litellm
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.types.router import GenericLiteLLMParams
 from litellm import Router
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.openai import (
+from litellm.types.llms.openai import(
     OutputTextDeltaEvent,
     ResponseAPIUsage,
     ResponseCompletedEvent,
@@ -26,8 +23,9 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.router import GenericLiteLLMParams
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from typing import Any, AsyncIterator, List
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 
 @pytest.mark.asyncio
@@ -94,7 +92,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest.fixture(scope="function")
 def setup_and_teardown():
     """
@@ -111,7 +108,6 @@ def setup_and_teardown():
     yield
     loop.close()
     asyncio.set_event_loop(None)
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBaseResponsesAPIStreamingIterator:
@@ -750,13 +746,11 @@ class TestBaseResponsesAPIStreamingIterator:
             mock_logging_obj.async_failure_handler.assert_not_called()
             mock_logging_obj.failure_handler.assert_not_called()
 
-
 @pytest.fixture()
 def _vcr_outcome_gate_router_unit(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
-
 
 @pytest.fixture(scope="function")
 def setup_and_teardown_router_unit():
@@ -778,7 +772,6 @@ def setup_and_teardown_router_unit():
     loop.close()
     asyncio.set_event_loop(None)
 
-
 def _make_router() -> Router:
     return Router(
         model_list=[
@@ -799,7 +792,6 @@ def _make_router() -> Router:
         ]
     )
 
-
 def _make_completed_event(input_tokens: int, output_tokens: int, total_tokens: int) -> ResponseCompletedEvent:
     response = ResponsesAPIResponse.model_construct(
         usage=ResponseAPIUsage(
@@ -812,10 +804,6 @@ def _make_completed_event(input_tokens: int, output_tokens: int, total_tokens: i
         type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
         response=response,
     )
-
-
-# -------- _extract_partial_responses_usage --------
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_extract_partial_responses_usage_native_completed():
@@ -830,7 +818,6 @@ def test_extract_partial_responses_usage_native_completed():
     assert usage.output_tokens == 7
     assert usage.total_tokens == 18
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_extract_partial_responses_usage_no_completed_response():
     """Native path: no completed_response → returns None."""
@@ -839,7 +826,6 @@ def test_extract_partial_responses_usage_no_completed_response():
 
     usage = Router._extract_partial_responses_usage(source)
     assert usage is None
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_extract_partial_responses_usage_bridge_iterator_no_completed_response():
@@ -870,10 +856,6 @@ def test_extract_partial_responses_usage_bridge_iterator_no_completed_response()
     # None instead of raising AttributeError.
     assert Router._extract_partial_responses_usage(iterator) is None
 
-
-# -------- _combine_responses_fallback_usage --------
-
-
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_combine_responses_fallback_usage_sums_completed_event():
     """Partial-stream usage is summed into the fallback event's usage."""
@@ -888,18 +870,12 @@ def test_combine_responses_fallback_usage_sums_completed_event():
     assert combined.output_tokens == 10
     assert combined.total_tokens == 26
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_combine_responses_fallback_usage_passthrough_for_unknown_event():
     """Events that are not completed/failed/incomplete are not mutated."""
     other = MagicMock()  # not a ResponseCompletedEvent etc. → isinstance false
     partial = ResponseAPIUsage(input_tokens=1, output_tokens=1, total_tokens=2)
     Router._combine_responses_fallback_usage(other, partial)
-    # No mutation expected on the unknown event — call is a no-op.
-
-
-# -------- _build_responses_continuation_input --------
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_build_responses_continuation_input_from_string():
@@ -910,7 +886,6 @@ def test_build_responses_continuation_input_from_string():
     assert out[1]["role"] == "developer"
     assert out[2]["role"] == "assistant"
     assert out[2]["content"][0]["text"] == "partial assistant text"
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_build_responses_continuation_input_from_list_preserves_items():
@@ -927,17 +902,12 @@ def test_build_responses_continuation_input_from_list_preserves_items():
     assert out[1]["role"] == "developer"
     assert out[2]["role"] == "assistant"
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 def test_build_responses_continuation_input_from_none():
     out = Router._build_responses_continuation_input(None, "partial")
     assert len(out) == 2
     assert out[0]["role"] == "developer"
     assert out[1]["role"] == "assistant"
-
-
-# -------- _aresponses_streaming_iterator (passthrough smoke test) --------
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
@@ -993,10 +963,6 @@ async def test_aresponses_streaming_iterator_passthrough():
     assert len(collected) == 1
     assert collected[0].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
 
-
-# -------- _aresponses_with_streaming_fallbacks --------
-
-
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
 async def test_aresponses_with_streaming_fallbacks_non_streaming_passthrough():
@@ -1018,7 +984,6 @@ async def test_aresponses_with_streaming_fallbacks_non_streaming_passthrough():
             stream=False,
         )
     assert out is plain_response
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
@@ -1055,10 +1020,6 @@ async def test_aresponses_with_streaming_fallbacks_wraps_streaming_iterator():
     assert out is wrapped
     mock_wrap.assert_awaited_once()
 
-
-# -------- every fallback entry stays reachable across hops --------
-
-
 def _make_three_tier_router(**router_kwargs) -> Router:
     return Router(
         model_list=[
@@ -1069,7 +1030,6 @@ def _make_three_tier_router(**router_kwargs) -> Router:
         num_retries=0,
         **router_kwargs,
     )
-
 
 def _mid_stream_failure(model: str):
     import litellm
@@ -1082,7 +1042,6 @@ def _mid_stream_failure(model: str):
         original_exception=litellm.InternalServerError(message="stream dropped", llm_provider="openai", model=model),
         is_pre_first_chunk=True,
     )
-
 
 def _scripted_responses_stream(events: list, error: Exception | None = None):
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -1108,7 +1067,6 @@ def _scripted_responses_stream(events: list, error: Exception | None = None):
 
     return _ScriptedStream()
 
-
 def _three_tier_original(calls: list, primary_fails_pre_stream: bool):
     import litellm
 
@@ -1126,7 +1084,6 @@ def _three_tier_original(calls: list, primary_fails_pre_stream: bool):
         return _scripted_responses_stream([completed_event])
 
     return fake_original, completed_event
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
@@ -1147,7 +1104,6 @@ async def test_aresponses_pre_stream_primary_failure_then_hop_stream_failure_rea
     assert calls == ["openai/primary-model", "openai/fb1-model", "openai/fb2-model"]
     assert collected == [completed_event]
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
 async def test_aresponses_two_consecutive_mid_stream_failures_reach_second_entry():
@@ -1163,7 +1119,6 @@ async def test_aresponses_two_consecutive_mid_stream_failures_reach_second_entry
 
     assert calls == ["openai/primary-model", "openai/fb1-model", "openai/fb2-model"]
     assert collected == [completed_event]
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
@@ -1186,7 +1141,6 @@ async def test_aresponses_per_request_fallbacks_survive_into_hop_streams():
 
     assert calls == ["openai/primary-model", "openai/fb1-model", "openai/fb2-model"]
     assert collected == [completed_event]
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
@@ -1225,7 +1179,6 @@ async def test_aresponses_attempt_strips_the_controls_carrier_and_wraps_every_ho
     assert "fallbacks" not in seen
     assert stream is not hop_stream
     assert collected == [completed_event]
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
@@ -1309,7 +1262,6 @@ async def test_aresponses_fallback_on_in_stream_error_event():
     assert isinstance(raised.original_exception, litellm.RateLimitError)
     assert raised.original_exception.status_code == 429
     assert mock_fallback.await_args.kwargs["kwargs"]["input"] == "original question"
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
@@ -1404,7 +1356,6 @@ async def test_aresponses_fallback_uses_continuation_input_after_partial_content
     assert continuation[-2]["role"] == "developer"
     assert continuation[-1]["role"] == "assistant"
     assert continuation[-1]["content"][0]["text"] == "partial answer"
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio

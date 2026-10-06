@@ -1,26 +1,23 @@
-# Adds the grandparent directory to sys.path to allow importing project modules
-import asyncio
-import datetime
-import importlib
-import json
-import logging
-import os
-from collections.abc import Callable
+import importlib, json, logging, os
 from typing import Optional
 from unittest.mock import MagicMock, Mock, patch
 
+# Adds the grandparent directory to sys.path to allow importing project modules
+
+import asyncio
+import datetime
+from collections.abc import Callable
+
 import pytest
-from dotenv import load_dotenv
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import litellm
-from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.integrations.arize.arize import ArizeConfig, ArizeLogger
 from litellm.integrations.opentelemetry import OpenTelemetryConfig
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 @pytest.mark.asyncio
@@ -70,6 +67,7 @@ async def test_arize_dynamic_params():
     await asyncio.sleep(5)
 
     # Assertions
+    print(f"Tracer calls: {len(tracer_calls)}")
 
     # We should have captured calls for both requests
     assert len(tracer_calls) >= 2, f"Expected at least 2 tracer calls, got {len(tracer_calls)}"
@@ -298,13 +296,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
-@pytest.fixture(scope="session")
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
-
-
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -357,7 +348,6 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -377,7 +367,6 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
-
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -401,11 +390,7 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
-
-load_dotenv()
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio()
 async def test_async_otel_callback():
     litellm.set_verbose = True
@@ -424,14 +409,12 @@ async def test_async_otel_callback():
 
     await asyncio.sleep(2)
 
-
 @pytest.fixture
 def mock_env_vars(monkeypatch):
     monkeypatch.setenv("ARIZE_SPACE_KEY", "test_space_key")
     monkeypatch.setenv("ARIZE_API_KEY", "test_api_key")
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_arize_config(mock_env_vars):
     """
     Use Arize default endpoint when no endpoints are provided
@@ -444,8 +427,7 @@ def test_get_arize_config(mock_env_vars):
     assert config.protocol == "otlp_grpc"
     assert config.project_name is None
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_arize_config_with_endpoints(mock_env_vars, monkeypatch):
     """
     Use provided endpoints when they are set

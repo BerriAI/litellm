@@ -1,24 +1,19 @@
-import asyncio
-import gzip
-import importlib
+import asyncio, gzip, importlib, os
 import io
 import json
-import os
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, Literal, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
-from fastapi import Request as Request_http_parsing
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
 from starlette.requests import Request
-from starlette.types import Message
+
 
 import litellm
 import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import (
     _is_form_content_type,
@@ -35,9 +30,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     populate_request_with_path_params,
     read_raw_json_body,
 )
+from fastapi import Request as Request_http_parsing
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
+from starlette.types import Message
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 def _starlette_request(
@@ -1433,13 +1430,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
-@pytest.fixture(scope="session")
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
-
-
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -1492,7 +1482,6 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -1512,7 +1501,6 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
-
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -1536,7 +1524,6 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
-
 def _request(receive: Callable[[], Awaitable[Message]]) -> Request_http_parsing:
     return Request_http_parsing(
         {
@@ -1548,44 +1535,38 @@ def _request(receive: Callable[[], Awaitable[Message]]) -> Request_http_parsing:
         receive,
     )
 
-
 def _request_with_body(body: bytes) -> Request_http_parsing:
     async def receive() -> Message:
         return {"type": "http.request", "body": body, "more_body": False}
 
     return _request(receive)
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_read_request_body_valid_json():
     result = await _read_request_body(_request_with_body(b'{"key": "value"}'))
     assert result == {"key": "value"}
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_read_request_body_empty_body():
     result = await _read_request_body(_request_with_body(b""))
     assert result == {}
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_read_request_body_invalid_json():
     with pytest.raises(ProxyException):
         await _read_request_body(_request_with_body(b'{"key": value}'))
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_read_request_body_large_payload():
     large_payload = '{"key":' + '"a"' * 10**6 + "}"
     with pytest.raises(ProxyException):
         await _read_request_body(_request_with_body(large_payload.encode()))
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_read_request_body_unexpected_error():
     async def receive() -> Message:

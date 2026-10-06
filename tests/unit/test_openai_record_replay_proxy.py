@@ -14,7 +14,6 @@ from tests._openai_record_replay_proxy import (  # noqa: E402
     _resolve_upstream,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 _OK_BODY = b'{"data":[{"b64_json":"aW1n"}],"usage":{"total_tokens":42}}'
 
@@ -415,12 +414,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture(scope="session", autouse=True)
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
 
 
 @pytest.fixture(scope="function", autouse=True)

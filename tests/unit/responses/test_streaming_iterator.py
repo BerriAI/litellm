@@ -3,13 +3,10 @@ completion_start_time on the first chunk so downstream TTFT consumers
 (Prometheus, OTEL, SpendLogs completionStartTime) do not fall back to
 completion_start_time = end_time."""
 
-import asyncio
-import importlib
+import asyncio, importlib
 import json
 from collections.abc import Callable
-from contextlib import suppress
 from datetime import datetime
-from types import SimpleNamespace
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -22,8 +19,7 @@ from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.responses import streaming_iterator as streaming_module
-from litellm.responses.streaming_iterator import (
+from litellm.responses.streaming_iterator import(
     CachedResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
@@ -36,8 +32,11 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
+from contextlib import suppress
+from litellm.responses import streaming_iterator as streaming_module
 from litellm.types.utils import CallTypes
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from types import SimpleNamespace
 
 
 def _sse_event(payload: dict) -> bytes:
@@ -831,7 +830,6 @@ def _unvalidated_response_with_dict_usage(usage: dict) -> ResponsesAPIResponse:
 
 def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
     from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
-
     response = _unvalidated_response_with_dict_usage(
         {
             "input_tokens": 29,
@@ -853,7 +851,6 @@ def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
 
 def test_stamp_responses_usage_cost_computes_cost_for_dict_usage_without_cost():
     from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
-
     response = _unvalidated_response_with_dict_usage({"input_tokens": 29, "output_tokens": 120, "total_tokens": 149})
     logging_obj = Mock(spec=LiteLLMLoggingObj)
     logging_obj.response_cost_calculator.return_value = 0.000704
@@ -1325,7 +1322,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest.fixture(scope="function")
 def setup_and_teardown():
     """
@@ -1342,7 +1338,6 @@ def setup_and_teardown():
     yield
     loop.close()
     asyncio.set_event_loop(None)
-
 
 class _FakeLoggingObj:
     def __init__(self):
@@ -1380,7 +1375,6 @@ class _FakeLoggingObj:
         self.completion_start_time = completion_start_time
         self.model_call_details["completion_start_time"] = completion_start_time
 
-
 def _make_completed_response(response_id: str = "resp_test") -> ResponseCompletedEvent:
     return ResponseCompletedEvent(
         type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
@@ -1408,7 +1402,6 @@ def _make_completed_response(response_id: str = "resp_test") -> ResponseComplete
         ),
     )
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_log_background_task_failure_logs_task_exceptions(monkeypatch):
@@ -1431,7 +1424,6 @@ async def test_log_background_task_failure_logs_task_exceptions(monkeypatch):
         task.exception(),
     )
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_log_background_task_failure_ignores_cancelled_tasks(monkeypatch):
@@ -1446,7 +1438,6 @@ async def test_log_background_task_failure_ignores_cancelled_tasks(monkeypatch):
     streaming_module._log_background_task_failure(task, task_name="cache write")
 
     error_logger.assert_not_called()
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_content_part_done_event_supports_refusal_and_reasoning_text():
@@ -1475,7 +1466,6 @@ def test_content_part_done_event_supports_refusal_and_reasoning_text():
     assert reasoning_event.part.reasoning == "because"
     assert unsupported_event is None
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_dump_response_object_handles_model_and_unknown_values():
     response = ResponsesAPIResponse(
@@ -1490,7 +1480,6 @@ def test_dump_response_object_handles_model_and_unknown_values():
     assert streaming_module._dump_response_object(response)["id"] == "resp_dump"
     assert streaming_module._dump_response_object({"type": "message"}) == {"type": "message"}
     assert streaming_module._dump_response_object(object()) == {}
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1547,7 +1536,6 @@ async def test_responses_streaming_triggers_hooks(monkeypatch):
     assert seen["request_data"].get("litellm_params") is not None
     assert seen["call_type"] == CallTypes.responses
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_responses_streaming_calls_post_streaming_deployment_hook(monkeypatch):
@@ -1588,7 +1576,6 @@ async def test_responses_streaming_calls_post_streaming_deployment_hook(monkeypa
     # reset callbacks
     litellm.callbacks = original_callbacks
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_responses_streaming_failure_triggers_failure_handlers():
@@ -1619,7 +1606,6 @@ async def test_responses_streaming_failure_triggers_failure_handlers():
     assert logging_obj.failure_calls >= 1
     assert logging_obj.async_failure_calls >= 1
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_process_chunk_requires_provider_config():
     iterator = ResponsesAPIStreamingIterator(
@@ -1633,7 +1619,6 @@ def test_process_chunk_requires_provider_config():
 
     with pytest.raises(ValueError, match="responses_api_provider_config is required"):
         iterator._process_chunk(json.dumps({"type": "response.completed"}))
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_process_chunk_wraps_encrypted_content_with_model_id():
@@ -1668,7 +1653,6 @@ def test_process_chunk_wraps_encrypted_content_with_model_id():
 
     assert event.item.encrypted_content.startswith("litellm_enc:")
     assert event.item.encrypted_content.endswith(";ciphertext")
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_process_chunk_completed_response_updates_id_and_usage_cost(monkeypatch):
@@ -1723,7 +1707,6 @@ def test_process_chunk_completed_response_updates_id_and_usage_cost(monkeypatch)
     assert event.response.usage.cost == 1.23
     completion_handler.assert_called_once()
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_process_chunk_failed_response_triggers_failure_logging(monkeypatch):
     openai_types = streaming_module._get_openai_response_types()
@@ -1759,7 +1742,6 @@ def test_process_chunk_failed_response_triggers_failure_logging(monkeypatch):
     assert iterator.completed_response is event
     failure_handler.assert_called_once()
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_handle_logging_failed_response_uses_response_error_message():
@@ -1792,7 +1774,6 @@ async def test_handle_logging_failed_response_uses_response_error_message():
     assert logging_obj.failure_calls == 1
     assert logging_obj.async_failure_calls == 1
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_process_chunk_returns_none_for_invalid_json_and_non_dict_payload():
     class _NoopConfig:
@@ -1810,7 +1791,6 @@ def test_process_chunk_returns_none_for_invalid_json_and_non_dict_payload():
 
     assert iterator._process_chunk("not-json") is None
     assert iterator._process_chunk(json.dumps(["not", "a", "dict"])) is None
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_process_chunk_cost_annotation_failure_is_nonfatal(monkeypatch):
@@ -1859,7 +1839,6 @@ def test_process_chunk_cost_annotation_failure_is_nonfatal(monkeypatch):
     assert event.response.usage.cost is None
     completion_handler.assert_called_once()
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_get_completed_response_object_accepts_direct_response():
     logging_obj = _FakeLoggingObj()
@@ -1875,7 +1854,6 @@ def test_get_completed_response_object_accepts_direct_response():
     iterator.completed_response = direct_response
 
     assert iterator._get_completed_response_object() is direct_response
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1924,7 +1902,6 @@ async def test_responses_streaming_completed_event_persists_async_cache():
     assert json.loads(litellm.cache.async_add_cache.call_args.args[0])["id"] == iterator.completed_response.response.id
     litellm.cache = original_cache
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_responses_streaming_completed_event_persists_sync_cache():
     logging_obj = _FakeLoggingObj()
@@ -1970,7 +1947,6 @@ def test_responses_streaming_completed_event_persists_sync_cache():
     assert json.loads(litellm.cache.add_cache.call_args.args[0])["id"] == iterator.completed_response.response.id
     litellm.cache = original_cache
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_log_completed_response_sync_direct_path(monkeypatch):
     hook_calls = {"post_call": 0, "metadata": 0}
@@ -2012,7 +1988,6 @@ def test_log_completed_response_sync_direct_path(monkeypatch):
     assert hook_calls["post_call"] == 1
     assert hook_calls["metadata"] == 1
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_log_completed_response_falls_back_when_model_validate_fails(monkeypatch):
     class _BadSerializableResponse:
@@ -2041,7 +2016,6 @@ def test_log_completed_response_falls_back_when_model_validate_fails(monkeypatch
 
     assert logging_obj.success_calls == 1
     assert logging_obj.async_success_calls == 1
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize(
@@ -2107,7 +2081,6 @@ def test_persist_completed_response_to_cache_guard_branches(monkeypatch, scenari
     expected_cached_flag = scenario == "already_cached"
     assert iterator._completed_response_cached is expected_cached_flag
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_build_synthetic_response_events_covers_annotations_function_calls_and_refusals():
     original_include_cost = litellm.include_cost_in_streaming_usage
@@ -2166,7 +2139,6 @@ def test_build_synthetic_response_events_covers_annotations_function_calls_and_r
     assert "response.function_call_arguments.done" in event_types
     assert event_types[-1] == "response.completed"
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_mock_responses_streaming_iterator_async_iteration_logs_completion(
@@ -2216,7 +2188,6 @@ async def test_mock_responses_streaming_iterator_async_iteration_logs_completion
     assert hook_calls["post_call"] == 1
     assert hook_calls["metadata"] == 1
 
-
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_mock_responses_streaming_iterator_sync_iteration_logs_completion(monkeypatch):
     hook_calls = {"post_call": 0, "metadata": 0}
@@ -2261,7 +2232,6 @@ def test_mock_responses_streaming_iterator_sync_iteration_logs_completion(monkey
     assert logging_obj.async_success_calls == 1
     assert hook_calls["post_call"] == 1
     assert hook_calls["metadata"] == 1
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -2320,7 +2290,6 @@ async def test_cached_responses_stream_async_hit_triggers_success_callbacks(
     litellm.cache.async_add_cache.assert_not_called()
     litellm.cache.add_cache.assert_not_called()
     litellm.cache = original_cache
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_cached_responses_stream_sync_hit_triggers_success_callbacks(monkeypatch):

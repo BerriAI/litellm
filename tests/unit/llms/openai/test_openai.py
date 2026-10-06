@@ -1,37 +1,31 @@
-import asyncio
-import importlib
+import asyncio, importlib, os
 import json
-import os
 from typing import Final
 from unittest.mock import Mock
 
 import httpx
 import pytest
-from dotenv import load_dotenv
 from openai import AsyncOpenAI, OpenAI
-from openai.types.beta.assistant import Assistant
-from openai.types.beta.assistant_deleted import AssistantDeleted
 
 import litellm
-from litellm import create_thread, get_thread
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.openai.openai import (
+from litellm.llms.openai.openai import(
     AssistantEventHandler,
     AsyncAssistantEventHandler,
     AsyncCursorPage,
     MessageData,
     OpenAIChatCompletion,
+    OpenAIMessage as Message,
     Run,
     SyncCursorPage,
     Thread,
 )
-from litellm.llms.openai.openai import (
-    OpenAIMessage as Message,
-)
 from litellm.types.utils import ImageResponse
+from litellm import create_thread, get_thread
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
+from openai.types.beta.assistant import Assistant
+from openai.types.beta.assistant_deleted import AssistantDeleted
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 @pytest.mark.parametrize(
@@ -380,13 +374,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
-@pytest.fixture(scope="session")
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
-
-
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -439,7 +426,6 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -459,7 +445,6 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
-
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -483,18 +468,17 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
-
-load_dotenv()
-
-
 ASSISTANT_INSTRUCTIONS = (
     "You are a personal math tutor. When asked a question, write and run Python code to answer the question."
 )
-ASSISTANT_ID = "asst_test"
-THREAD_ID = "thread_test"
-MESSAGE_ID = "msg_test"
-RUN_ID = "run_test"
 
+ASSISTANT_ID = "asst_test"
+
+THREAD_ID = "thread_test"
+
+MESSAGE_ID = "msg_test"
+
+RUN_ID = "run_test"
 
 def _assistant(**overrides):
     data = {
@@ -514,10 +498,8 @@ def _assistant(**overrides):
     data.update(overrides)
     return Assistant(**data)
 
-
 def _thread(thread_id=THREAD_ID):
     return Thread(id=thread_id, object="thread", created_at=1, metadata={})
-
 
 def _message(thread_id=THREAD_ID):
     return Message(
@@ -538,7 +520,6 @@ def _message(thread_id=THREAD_ID):
         metadata={},
         status="completed",
     )
-
 
 def _run(thread_id=THREAD_ID, assistant_id=ASSISTANT_ID):
     return Run(
@@ -571,7 +552,6 @@ def _run(thread_id=THREAD_ID, assistant_id=ASSISTANT_ID):
         parallel_tool_calls=True,
     )
 
-
 def _sync_page(data):
     first_id = data[0].id if data else None
     return SyncCursorPage(
@@ -581,7 +561,6 @@ def _sync_page(data):
         last_id=first_id,
         has_more=False,
     )
-
 
 def _async_page(data):
     first_id = data[0].id if data else None
@@ -593,16 +572,13 @@ def _async_page(data):
         has_more=False,
     )
 
-
 class _FakeAssistantEventHandler(AssistantEventHandler):
     def until_done(self):
         return None
 
-
 class _FakeAsyncAssistantEventHandler(AsyncAssistantEventHandler):
     async def until_done(self):
         return None
-
 
 class _FakeAssistantStream:
     def __enter__(self):
@@ -611,14 +587,12 @@ class _FakeAssistantStream:
     def __exit__(self, exc_type, exc, tb):
         return False
 
-
 class _FakeAsyncAssistantStream:
     async def __aenter__(self):
         return _FakeAsyncAssistantEventHandler()
 
     async def __aexit__(self, exc_type, exc, tb):
         return False
-
 
 class _SyncAssistants:
     def list(self, **_kwargs):
@@ -630,7 +604,6 @@ class _SyncAssistants:
     def delete(self, assistant_id):
         return AssistantDeleted(id=assistant_id, object="assistant.deleted", deleted=True)
 
-
 class _AsyncAssistants:
     async def list(self, **_kwargs):
         return _async_page([_assistant()])
@@ -641,14 +614,12 @@ class _AsyncAssistants:
     async def delete(self, assistant_id):
         return AssistantDeleted(id=assistant_id, object="assistant.deleted", deleted=True)
 
-
 class _SyncMessages:
     def create(self, thread_id, **_kwargs):
         return _message(thread_id)
 
     def list(self, thread_id):
         return _sync_page([_message(thread_id)])
-
 
 class _AsyncMessages:
     async def create(self, thread_id, **_kwargs):
@@ -657,7 +628,6 @@ class _AsyncMessages:
     async def list(self, thread_id):
         return _async_page([_message(thread_id)])
 
-
 class _SyncRuns:
     def create_and_poll(self, thread_id, assistant_id, **_kwargs):
         return _run(thread_id=thread_id, assistant_id=assistant_id)
@@ -665,14 +635,12 @@ class _SyncRuns:
     def stream(self, **_kwargs):
         return _FakeAssistantStream()
 
-
 class _AsyncRuns:
     async def create_and_poll(self, thread_id, assistant_id, **_kwargs):
         return _run(thread_id=thread_id, assistant_id=assistant_id)
 
     def stream(self, **_kwargs):
         return _FakeAsyncAssistantStream()
-
 
 class _SyncThreads:
     def __init__(self):
@@ -685,7 +653,6 @@ class _SyncThreads:
     def retrieve(self, thread_id):
         return _thread(thread_id)
 
-
 class _AsyncThreads:
     def __init__(self):
         self.messages = _AsyncMessages()
@@ -697,22 +664,18 @@ class _AsyncThreads:
     async def retrieve(self, thread_id):
         return _thread(thread_id)
 
-
 class _FakeBeta:
     def __init__(self, *, async_mode):
         self.assistants = _AsyncAssistants() if async_mode else _SyncAssistants()
         self.threads = _AsyncThreads() if async_mode else _SyncThreads()
 
-
 class _FakeAssistantClient:
     def __init__(self, *, async_mode):
         self.beta = _FakeBeta(async_mode=async_mode)
 
-
 @pytest.fixture
 def assistant_client(sync_mode):
     return _FakeAssistantClient(async_mode=not sync_mode)
-
 
 def _request_data(provider, assistant_client, **kwargs):
     data = {"custom_llm_provider": provider, "client": assistant_client, **kwargs}
@@ -726,8 +689,7 @@ def _request_data(provider, assistant_client, **kwargs):
         )
     return data
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
@@ -741,8 +703,7 @@ async def test_get_assistants(provider, sync_mode, assistant_client):
         assistants = await litellm.aget_assistants(**data)
         assert isinstance(assistants, AsyncCursorPage)
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("provider", ["azure", "openai"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio()
@@ -785,7 +746,6 @@ async def test_create_delete_assistants(provider, sync_mode, assistant_client):
         )
         assert response.id == assistant.id
 
-
 async def _create_thread_litellm(sync_mode, provider, assistant_client) -> Thread:
     message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
     data = _request_data(provider, assistant_client, message=[message])
@@ -798,16 +758,14 @@ async def _create_thread_litellm(sync_mode, provider, assistant_client) -> Threa
     assert isinstance(new_thread, Thread)
     return new_thread
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_create_thread_litellm(sync_mode, provider, assistant_client):
     await _create_thread_litellm(sync_mode, provider, assistant_client)
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
@@ -822,8 +780,7 @@ async def test_get_thread_litellm(provider, sync_mode, assistant_client):
 
     assert isinstance(received_thread, Thread)
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
@@ -839,8 +796,7 @@ async def test_add_message_litellm(sync_mode, provider, assistant_client):
 
     assert isinstance(added_message, Message)
 
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("provider", ["azure", "openai"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("is_streaming", [True, False])

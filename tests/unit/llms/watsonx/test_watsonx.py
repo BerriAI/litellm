@@ -1,7 +1,4 @@
-import asyncio
-import importlib
-import json
-from typing import Optional
+import asyncio, importlib, json
 from unittest.mock import Mock, patch
 
 import pytest
@@ -10,7 +7,7 @@ import litellm
 from litellm import completion, embedding
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
+from typing import Optional
 
 
 @pytest.mark.parametrize("tokenizer_config_cached", [False, True], ids=["tokenizer_config", "cached_config_jinja"])
@@ -45,9 +42,7 @@ async def test_watsonx_text_gpt_oss_async_completion_fetches_hf_template_off_the
         return httpx.Response(200, json={"chat_template": chat_template, "bos_token": None, "eos_token": None})
 
     monkeypatch.setattr(huggingface_template_handler, "_get_httpx_client", forbid_sync_client)
-    monkeypatch.setattr(
-        huggingface_template_handler, "get_async_httpx_client", lambda **kwargs: Mock(get=serve_hf_file)
-    )
+    monkeypatch.setattr(huggingface_template_handler, "get_async_httpx_client", lambda **kwargs: Mock(get=serve_hf_file))
 
     def handle(request):
         captured["body"] = json.loads(request.content)
@@ -89,7 +84,6 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
-
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -98,13 +92,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture(scope="session")
-def fake_openai_endpoint():
-    ensure_fake_openai_endpoint()
-    yield
-
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -139,7 +126,6 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -154,8 +140,7 @@ _SCALAR_DEFAULTS = {
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
 
-
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def watsonx_env_vars(monkeypatch):
     """Set required WatsonX env vars so the provider passes validation.
     Also clear WATSONX_ZENAPIKEY/WATSONX_TOKEN so they don't bypass the IAM token mock.
@@ -164,7 +149,6 @@ def watsonx_env_vars(monkeypatch):
     monkeypatch.setenv("WATSONX_PROJECT_ID", "test-project-id")
     monkeypatch.delenv("WATSONX_ZENAPIKEY", raising=False)
     monkeypatch.delenv("WATSONX_TOKEN", raising=False)
-
 
 @pytest.fixture
 def watsonx_chat_completion_call():
@@ -224,7 +208,6 @@ def watsonx_chat_completion_call():
 
     return _call
 
-
 @pytest.fixture
 def watsonx_embedding_call():
     def _call(
@@ -283,8 +266,7 @@ def watsonx_embedding_call():
 
     return _call
 
-
-@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("with_custom_auth_header", [True, False])
 def test_watsonx_custom_auth_header(with_custom_auth_header, watsonx_chat_completion_call):
     headers = {"Authorization": "Bearer my-custom-auth-header"} if with_custom_auth_header else {}
@@ -297,8 +279,7 @@ def test_watsonx_custom_auth_header(with_custom_auth_header, watsonx_chat_comple
     else:
         assert mock_post.call_args[1]["headers"]["Authorization"] == "Bearer mock_access_token"
 
-
-@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("env_var_key", ["WATSONX_ZENAPIKEY", "WATSONX_TOKEN"])
 def test_watsonx_token_in_env_var(monkeypatch, watsonx_chat_completion_call, env_var_key):
     monkeypatch.setenv(env_var_key, "my-custom-token")
@@ -311,8 +292,7 @@ def test_watsonx_token_in_env_var(monkeypatch, watsonx_chat_completion_call, env
     else:
         assert mock_post.call_args[1]["headers"]["Authorization"] == "Bearer my-custom-token"
 
-
-@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 def test_watsonx_chat_completions_endpoint(watsonx_chat_completion_call):
     model = "watsonx/another-model"
     messages = [{"role": "user", "content": "Test message"}]
@@ -322,8 +302,7 @@ def test_watsonx_chat_completions_endpoint(watsonx_chat_completion_call):
     assert mock_post.call_count == 1
     assert "deployment" not in mock_post.call_args.kwargs["url"]
 
-
-@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 def test_watsonx_chat_completions_endpoint_space_id(monkeypatch, watsonx_chat_completion_call):
     my_fake_space_id = "xxx-xxx-xxx-xxx-xxx"
     monkeypatch.setenv("WATSONX_SPACE_ID", my_fake_space_id)
@@ -342,8 +321,7 @@ def test_watsonx_chat_completions_endpoint_space_id(monkeypatch, watsonx_chat_co
     assert my_fake_space_id == json_data["space_id"]
     assert not json_data.get("project_id")
 
-
-@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize(
     "model",
     [
@@ -364,8 +342,7 @@ def test_watsonx_deployment_space_id(monkeypatch, watsonx_chat_completion_call, 
     json_data = json.loads(mock_post.call_args.kwargs["data"])
     assert my_fake_space_id not in json_data
 
-
-@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize(
     "model",
     [
@@ -386,8 +363,7 @@ def test_watsonx_deployment(watsonx_chat_completion_call, model):
     # nor space_id or project_id is required by wx.ai API when inferencing deployment
     assert "project_id" not in json_data and "space_id" not in json_data
 
-
-@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+@pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 def test_watsonx_deployment_space_id_embedding(monkeypatch, watsonx_embedding_call):
     my_fake_space_id = "xxx-xxx-xxx-xxx-xxx"
     monkeypatch.setenv("WATSONX_SPACE_ID", my_fake_space_id)
