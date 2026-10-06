@@ -417,9 +417,7 @@ class BedrockEmbedding(BaseAWSLLM):
 
         owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
         if owned_names or metadata_headers:
-            extra_headers = merge_bedrock_invoke_headers(
-                dict(extra_headers or {}), (), metadata_headers, owned_names
-            )
+            extra_headers = merge_bedrock_invoke_headers(dict(extra_headers or {}), (), metadata_headers, owned_names)
 
         ### TRANSFORMATION ###
         unencoded_model_id: Final = optional_params.pop("model_id", None) or model  # default to model if not passed
