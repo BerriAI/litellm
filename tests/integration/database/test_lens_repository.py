@@ -364,8 +364,8 @@ async def test_review_checkpoints_survive_new_jobs_and_only_relevant_settings_in
 
 @pytest.mark.asyncio
 async def test_legacy_finding_run_provenance_is_recovered_from_archived_and_current_jobs(lens_db: Prisma) -> None:
-    from tests.unit.proxy.lens.test_state import NOW, finding, lens
     from litellm.proxy.lens.state import merge_finding
+    from tests.unit.proxy.lens.test_state import NOW, finding, lens
 
     repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
     saved: Final = merge_finding(lens(), finding("trace"), 1, NOW)
@@ -381,3 +381,51 @@ async def test_legacy_finding_run_provenance_is_recovered_from_archived_and_curr
         assert await repo.finding_runs(stored.id, ("unrelated",)) == ()
     finally:
         await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', stored.id)
+
+
+def test_review_migration_preserves_existing_lens_history_credentials_and_spend() -> None:
+    from tests.unit.proxy.lens.test_state import NOW, lens, worker
+
+    migrations: Final = (
+        Path(__file__).resolve().parents[3] / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
+    )
+    schema: Final = f"lens_reviews_{uuid4().hex}"
+    legacy: Final = lens().model_dump_json(exclude={"criteria_updated_at", "reservations"})
+    job: Final = queue_job(lens(), NOW, "archived").jobs[0].model_dump_json(
+        exclude={"review_versions": True, "coverage": {"reused"}}
+    )
+    with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
+        try:
+            connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+            connection.execute(sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(schema)))
+            for name in (
+                "20260930000000_agent_engine",
+                "20261001000000_lens_run_history",
+                "20261001100000_rename_lens",
+            ):
+                connection.execute(sql.SQL((migrations / name / "migration.sql").read_text()))
+            connection.execute('INSERT INTO "LiteLLM_Lens" VALUES (%s, 0, %s)', ("lens", legacy))
+            connection.execute(
+                'INSERT INTO "LiteLLM_LensRun" VALUES (%s, %s, %s, %s)', ("archived", "lens", NOW, job)
+            )
+            connection.execute(
+                'INSERT INTO "LiteLLM_LensWorker" VALUES (%s, %s, %s)',
+                ("worker", "existing-token", worker().model_dump_json()),
+            )
+            before: Final = tuple(
+                connection.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table))).fetchall()
+                for table in ("LiteLLM_Lens", "LiteLLM_LensRun", "LiteLLM_LensWorker")
+            )
+            connection.execute(
+                sql.SQL((migrations / "20261006000000_lens_review_checkpoints" / "migration.sql").read_text())
+            )
+            after: Final = tuple(
+                connection.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table))).fetchall()
+                for table in ("LiteLLM_Lens", "LiteLLM_LensRun", "LiteLLM_LensWorker")
+            )
+            assert after == before
+            assert Lens.model_validate(after[0][0][-1]) == lens()
+            assert Job.model_validate(after[1][0][-1]) == queue_job(lens(), NOW, "archived").jobs[0]
+            assert connection.execute('SELECT count(*) FROM "LiteLLM_LensReview"').fetchone() == (0,)
+        finally:
+            connection.rollback()

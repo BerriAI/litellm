@@ -635,7 +635,7 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
     lens: Final = await get_lens(lens_id, worker.scope)
     old: Final = next((j for j in lens.jobs if j.id == job_id), None)
     if old and old.status in ("completed", "failed") and old.worker_id == worker.id:
-        if old.review_versions and old.status == "completed" and not old.error:
+        if old.review_versions and old.status == "completed":
             await repository().complete_reviews(lens_id, old, old.review_versions)
         return lens
     _, job = await assigned(lens_id, job_id, worker)
@@ -717,7 +717,8 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
                                 )
                             )
                             for finding in merged
-                            if allowed.intersection(finding.occurrences)
+                            if finding not in restored.findings
+                            and any(quote.execution_id in allowed for quote in finding.evidence)
                         ),
                     }
                 )
@@ -733,11 +734,7 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
         )
 
     finished: Final = required(await repository().update(lens_id, finish))
-    if (
-        body.review_versions
-        and not body.error
-        and any(j.id == job_id and j.status == "completed" for j in finished.jobs)
-    ):
+    if body.review_versions and any(j.id == job_id and j.status == "completed" for j in finished.jobs):
         await repository().complete_reviews(lens_id, job, body.review_versions)
     return finished
 

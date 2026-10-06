@@ -591,3 +591,26 @@ def test_explicit_cluster_match_does_not_absorb_a_same_title_issue_with_differen
     assert updated.occurrences == ("trace-a", "trace-c")
     assert updated.status == "open"
     assert "other" not in updated.merged_finding_ids
+
+
+def test_feedback_changed_during_analysis_survives_a_stale_merge_decision() -> None:
+    from litellm.proxy.lens.endpoints import merge_results
+    from litellm.proxy.lens.models import Result
+
+    first: Final = merge_finding(lens(), finding("trace-a"), 1, NOW, "first-run")
+    later: Final = merge_finding(lens(), finding("trace-b"), 1, NOW + timedelta(minutes=1), "second-run")
+    feedback: Final = later.model_copy(update={"status": "resolved", "reason": "Fixed in the latest release"})
+    stored: Final = lens().model_copy(update={"findings": (first, feedback)})
+    stale: Final = finding("trace-c").model_copy(
+        update={"existing_finding_id": first.id, "merged_finding_ids": (later.id,)}
+    )
+
+    updated: Final = merge_results(
+        stored, Result(coverage=Coverage(), findings=(stale,)), 1, NOW + timedelta(hours=1), "new-run"
+    )
+
+    assert len(updated.findings) == 2
+    assert feedback in updated.findings
+    extended: Final = next(item for item in updated.findings if item.id == first.id)
+    assert extended.status == "open" and extended.occurrences == ("trace-a", "trace-c")
+    assert feedback.id not in extended.merged_finding_ids

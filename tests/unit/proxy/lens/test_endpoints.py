@@ -45,6 +45,7 @@ from tests.unit.proxy.lens.test_state import NOW, lens, worker
 class ResultDatabase:
     def __init__(self, stored: Lens) -> None:
         self.stored = stored
+        self.completed: tuple[ReviewVersion, ...] = ()
 
     async def query_raw(self, query: str, *args: object) -> tuple[Row, ...]:
         if query.startswith("SELECT data FROM"):
@@ -53,6 +54,71 @@ class ResultDatabase:
         assert isinstance(payload, str)
         self.stored = Lens.model_validate_json(payload)
         return (Row(data=1),)
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        from pydantic import TypeAdapter
+
+        payload: Final = args[2]
+        assert isinstance(payload, str)
+        self.completed = TypeAdapter(tuple[ReviewVersion, ...]).validate_json(payload)
+        return len(self.completed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected", ("old-trace", "selected-without-quote"))
+async def test_unchanged_rerun_does_not_rediscover_old_or_quoteless_occurrences(
+    monkeypatch: pytest.MonkeyPatch, selected: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.state import merge_finding
+    from tests.unit.proxy.lens.test_state import finding
+
+    saved_finding: Final = merge_finding(lens(), finding("old-trace"), 1, NOW, "original-run").model_copy(
+        update={"occurrences": ("old-trace", "selected-without-quote")}
+    )
+    stored: Final = lens().model_copy(update={"findings": (saved_finding,)})
+    claimed: Final = claim_job(queue_job(stored, NOW, "job"), worker(), NOW)
+    active: Final = claimed.jobs[0].model_copy(
+        update={
+            "lease_until": datetime.max.replace(tzinfo=timezone.utc),
+            "sample": Sample(executions=(execution(selected),), eligible=1),
+        }
+    )
+    db: Final = ResultDatabase(replace_job(claimed, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    body: Final = Result(coverage=Coverage(reused=1), assessments=(RunAssessment(execution_id=selected),))
+    completed: Final = await result("lens", "job", body, worker(), None)
+    assert completed.jobs[0].findings == ()
+    assert completed.findings == (saved_finding,)
+    assert Lens.model_validate_json(completed.model_dump_json()) == completed
+    assert await result("lens", "job", body, worker(), None) == completed
+
+
+@pytest.mark.asyncio
+async def test_completed_checkpoints_are_sealed_despite_an_unrelated_trace_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = claimed.jobs[0].model_copy(
+        update={
+            "lease_until": datetime.max.replace(tzinfo=timezone.utc),
+            "sample": Sample(executions=(execution("valid"), execution("failed")), eligible=2),
+        }
+    )
+    db: Final = ResultDatabase(replace_job(claimed, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    versions: Final = (ReviewVersion(execution_id="valid", content_version="v1"),)
+    body: Final = Result(
+        coverage=Coverage(failed_tasks=1),
+        assessments=(RunAssessment(execution_id="valid"), RunAssessment(execution_id="failed", cannot_assess=True)),
+        review_versions=versions,
+        error="Another trace failed",
+    )
+    completed: Final = await result("lens", "job", body, worker(), None)
+    assert completed.jobs[0].status == "completed"
+    assert db.completed == versions
+    assert await result("lens", "job", body, worker(), None) == completed
+    assert db.completed == versions
 
 
 @pytest.mark.parametrize(

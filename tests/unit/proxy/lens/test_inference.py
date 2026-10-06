@@ -454,3 +454,19 @@ def test_expired_reservations_do_not_hold_budget_and_late_settlement_still_charg
     settled: Final = settle_amount(admitted, "stale", 0.25, None)
     assert settled.spent == 0.25
     assert settled.reservations == (incoming,)
+
+
+def test_abandoned_reservations_are_pruned_after_late_settlement_retention() -> None:
+    from datetime import timedelta
+    from litellm.proxy.lens.inference import reserve_amount
+    from litellm.proxy.lens.models import BudgetReservation
+    from tests.unit.proxy.lens.test_state import NOW, lens
+
+    stale: Final = BudgetReservation(
+        id="stale", job_id="run", amount=90, month=lens().budget_month, expires_at=NOW - timedelta(days=1)
+    )
+    recent: Final = stale.model_copy(update={"id": "recent", "expires_at": NOW})
+    incoming: Final = stale.model_copy(update={"id": "active", "expires_at": NOW + timedelta(minutes=5)})
+    admitted: Final = reserve_amount(lens().model_copy(update={"reservations": (stale, recent)}), incoming, NOW)
+    assert admitted.reservations == (recent, incoming)
+    assert admitted.spent == 0

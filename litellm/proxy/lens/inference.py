@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
@@ -249,7 +249,12 @@ def reserve_amount(lens: Lens, reservation: BudgetReservation, now: datetime | N
     )
     if held + reservation.amount > available:
         return lens
-    return lens.model_copy(update=MappingProxyType({"reservations": (*lens.reservations, reservation)}))
+    retained: Final = tuple(
+        item
+        for item in lens.reservations
+        if now is None or item.expires_at is None or item.expires_at > now - timedelta(days=1)
+    )
+    return lens.model_copy(update=MappingProxyType({"reservations": (*retained, reservation)}))
 
 
 def settle_amount(lens: Lens, reservation_id: str, cost: float, step: Step | None) -> Lens:
@@ -269,6 +274,18 @@ def settle_amount(lens: Lens, reservation_id: str, cost: float, step: Step | Non
         return settled
     charged: Final = job.model_copy(update=MappingProxyType({"cost": job.cost + cost}))
     return replace_job(settled, add_step(charged, step) if step is not None else charged)
+
+
+async def wait_for_reservation(
+    repo: LensRepository, lens_id: str, reservation_id: str, reserve: Callable[[Lens], Lens]
+) -> None:
+    while True:
+        reserved: Final = await repo.update(lens_id, reserve)
+        if reserved is None:
+            raise HTTPException(409, "Could not reserve analysis budget")
+        if any(held.id == reservation_id for held in reserved.reservations):
+            return
+        await asyncio.sleep(0.25)
 
 
 async def analyze(
@@ -323,18 +340,14 @@ async def analyze(
 
     @asynccontextmanager
     async def reserve_budget() -> AsyncIterator[None]:
-        while True:
-            reserved: Lens | None = await repo.update(lens.id, reserve)
-            if reserved is None:
-                raise HTTPException(409, "Could not reserve analysis budget")
-            if any(held.id == reservation_id for held in reserved.reservations):
-                break
-            await asyncio.sleep(0.25)
         try:
             async with asyncio.timeout(request_timeout):
+                await wait_for_reservation(repo, lens.id, reservation_id, reserve)
                 yield
-        except BaseException:
+        except BaseException as error:
             await repo.update(lens.id, lambda e: settle(e, 0, None))
+            if isinstance(error, TimeoutError):
+                raise HTTPException(504, "Analysis request timed out waiting for budget or model output") from error
             raise
 
     data: Final[dict[str, object]] = {  # mutable-ok: proxy processing enriches request data

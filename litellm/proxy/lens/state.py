@@ -198,7 +198,7 @@ def merge_finding(
     match_titles: bool = True,
 ) -> Finding:
     identities: Final = frozenset((draft.existing_finding_id, *draft.merged_finding_ids))
-    previous: Final = tuple(
+    matches: Final = tuple(
         sorted(
             (
                 finding
@@ -217,6 +217,9 @@ def merge_finding(
             ),
             key=lambda finding: (finding.first_seen, finding.id),
         )
+    )
+    previous: Final = tuple(
+        finding for finding in matches if (finding.status, finding.reason) == (matches[0].status, matches[0].reason)
     )
     occurrences: Final = frozenset(quote.execution_id for quote in draft.evidence if quote.role == "support")
     prior_occurrences: Final = frozenset(chain.from_iterable(finding.occurrences for finding in previous))

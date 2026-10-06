@@ -1,11 +1,13 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
 import pytest
 
+from litellm.proxy.lens.release import PROTOCOL_VERSION
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import owned_proxy
@@ -18,6 +20,65 @@ def delete_lens(lens_id: str) -> None:
     write_rows('DELETE FROM "LiteLLM_LensRun" WHERE lens_id=%s', (lens_id,))
     write_rows('DELETE FROM "LiteLLM_Lens" WHERE id=%s', (lens_id,))
     assert read_rows('SELECT id FROM "LiteLLM_Lens" WHERE id=%s', (lens_id,)) == []
+
+
+def test_budget_admission_times_out_without_model_charges(gateway: Gateway, tmp_path: Path) -> None:
+    config: Final = tmp_path / "admission-timeout.json"
+    config.write_text(
+        json.dumps(
+            {
+                "model_list": [],
+                "litellm_settings": {"request_timeout": 0.3},
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "database_url": "os.environ/DATABASE_URL",
+                    "store_model_in_db": True,
+                },
+            }
+        )
+    )
+    with (
+        owned_proxy(gateway, tmp_path, {"LITELLM_RELEASE_TAG": RELEASE_TAG}, config=config) as isolated,
+        isolated.scenario() as scenario,
+    ):
+        model: Final = scenario.model(input_cost_per_token=0.000001, output_cost_per_token=0.000002)
+        key: Final = scenario.key(models=[model])
+        worker: Final = isolated.post("/lens/workers/register", {"analysis_key_id": sha256(key.encode()).hexdigest()})
+        worker_id: Final = string_value(object_value(worker["worker"])["id"])
+        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_LensWorker" WHERE id=%s', (worker_id,))
+        lens: Final = isolated.post(
+            "/lens", {"name": "Admission timeout", "model": model, "enabled": False, "context": "Find problems"}
+        )
+        lens_id: Final = string_value(lens["id"])
+        scenario.cleanups.callback(delete_lens, lens_id)
+        token: Final = string_value(worker["token"])
+        claimed: Final = isolated.post(
+            f"/lens/worker/claim?protocol_version={PROTOCOL_VERSION}&worker_release={RELEASE_TAG}", {}, key=token
+        )
+        job_id: Final = string_value(object_value(claimed["job"])["id"])
+        now: Final = datetime.now(timezone.utc)
+        holds: Final = [
+            {
+                "id": "other-request",
+                "job_id": job_id,
+                "amount": object_value(lens["settings"])["monthly_budget"],
+                "month": now.strftime("%Y-%m"),
+                "expires_at": (now + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+            }
+        ]
+        write_rows(
+            'UPDATE "LiteLLM_Lens" SET data=jsonb_set(data, \'{reservations}\', %s::jsonb) WHERE id=%s',
+            (json.dumps(holds), lens_id),
+        )
+        response: Final = isolated.request(
+            "POST", f"/lens/worker/{lens_id}/{job_id}/model", {"prompt": "Review", "purpose": "extract"}, key=token
+        )
+        assert response.status_code == 504, response.text
+        assert "timed out waiting for budget" in response.text
+        saved: Final = isolated.get(f"/lens/{lens_id}")
+        assert saved["spent"] == 0
+        assert saved["reservations"] == holds
+        isolated.post(f"/lens/{lens_id}/cancel", {})
 
 
 @pytest.mark.parametrize("off_peak", (False, True))
@@ -71,7 +132,7 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(
                 pool.map(
                     lambda _: isolated.request(
                         "POST",
-                        "/lens/worker/claim?protocol_version=4&worker_release=" + RELEASE_TAG,
+                        f"/lens/worker/claim?protocol_version={PROTOCOL_VERSION}&worker_release=" + RELEASE_TAG,
                         {},
                         key=worker_key,
                     ),
@@ -206,7 +267,7 @@ def test_worker_spend_logs_do_not_expose_investigation_content(
         scenario.cleanups.callback(delete_lens, lens_id)
         worker_token: Final = string_value(worker["token"])
         claim: Final = isolated.post(
-            "/lens/worker/claim?protocol_version=4&worker_release=" + RELEASE_TAG, {}, key=worker_token
+            f"/lens/worker/claim?protocol_version={PROTOCOL_VERSION}&worker_release=" + RELEASE_TAG, {}, key=worker_token
         )
         job_id: Final = string_value(object_value(claim["job"])["id"])
         result: Final = isolated.post(

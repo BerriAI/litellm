@@ -450,10 +450,17 @@ async def analyze_context(
     consolidated: Final = await consolidate_findings(
         tuple(chain.from_iterable(item.findings for item in ordered)), claim, limited
     )
+    unfinished: Final = frozenset(
+        chain.from_iterable(
+            candidate.execution_ids
+            for candidate, outcome in zip(clusters.candidates, ordered)
+            if outcome.error or consolidated.error
+        )
+    ) | (workspace.partial_sessions if workspace.read_errors else frozenset())
     return Result(
         findings=consolidated.findings,
         assessments=assessments,
-        review_versions=versions,
+        review_versions=tuple(version for version in versions if version.execution_id not in unfinished),
         error="\n\n".join(
             dict.fromkeys(
                 (

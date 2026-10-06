@@ -660,6 +660,7 @@ async def test_investigator_only_injects_candidate_sessions_for_full_access(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("checkpointed", (False, True))
 @pytest.mark.parametrize(
     ("failure", "supported_finding"),
     (
@@ -675,7 +676,7 @@ async def test_investigator_only_injects_candidate_sessions_for_full_access(
     ),
 )
 async def test_failed_session_review_preserves_other_results_and_reports_its_error(
-    failure: str, supported_finding: bool
+    failure: str, supported_finding: bool, checkpointed: bool
 ) -> None:
     runs: Final = tuple(
         execution(identity).model_copy(update=MappingProxyType({"root_seen": True})) for identity in ("failed", "valid")
@@ -809,7 +810,9 @@ async def test_failed_session_review_preserves_other_results_and_reports_its_err
         if review is not None:
             reviews.put(review)
 
-    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(
+        lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=(), reviews=() if checkpointed else None
+    )
     result: Final = await analyze_sample(claim, Sample(executions=runs, eligible=2), read, model, progress)
     assert tuple(finding.evidence[0].execution_id for finding in result.findings) == (
         ("valid",) if supported_finding else ()
@@ -824,6 +827,7 @@ async def test_failed_session_review_preserves_other_results_and_reports_its_err
     assert result.coverage.investigated == int(supported_finding)
     assert result.error
     assert "raw-private-response-sentinel" not in result.error
+    assert tuple(version.execution_id for version in result.review_versions) == (("valid",) if checkpointed else ())
     assert ("context window" in result.error) is (failure == "context")
     if failure == "citations":
         assert rejected.qsize() == 4
@@ -900,8 +904,9 @@ async def test_exhausted_candidate_retries_preserve_a_sibling_that_recovers_on_i
             cost=0,
         )
 
-    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=(), reviews=())
     result: Final = await analyze_sample(claim, Sample(executions=(run,), eligible=1), read, model, ignore_progress)
+    assert result.review_versions == ()
     assert tuple(finding.title for finding in result.findings) == ("valid",)
     assert result.findings[0].evidence == (Evidence(execution_id=run.id, span_id="child", quote="timeout"),)
     assert result.coverage.investigated == result.coverage.candidates == 2
