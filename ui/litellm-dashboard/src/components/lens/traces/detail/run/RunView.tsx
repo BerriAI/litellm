@@ -116,9 +116,10 @@ function LoadedRun({
   };
   const refreshRun = () =>
     readManually(async () => {
-      await traceQuery.refetch();
+      const refreshed = await traceQuery.refetch();
+      const contentRef = refreshed.data?.pages[0].summary.trace_ref ?? traceRef;
       await queryClient.invalidateQueries({
-        queryKey: ["agentTraceSpan", traceId, traceRef],
+        queryKey: ["agentTraceSpan", traceId, contentRef],
         predicate: (query) => query.queryKey.at(-1) === accessToken,
       });
     });
