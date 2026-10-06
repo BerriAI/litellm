@@ -1005,6 +1005,51 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["name"] == "get_weather"
             assert output_data[0]["arguments"] == {}
 
+    def test_set_observation_output_responses_content_variations(self):
+        """Test that Responses API messages safely handle empty content, preserve refusal text, and join multiple text chunks."""
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        class RecordingSpan:
+            def __init__(self):
+                self.attributes = {}
+            def set_attribute(self, span, key, value=None):
+                if value is None:
+                    # Called as set_attribute(key, value)
+                    self.attributes[span] = key
+                else:
+                    self.attributes[key] = value
+
+        def get_output(content_list):
+            response = ResponsesAPIResponse(
+                id="resp_test",
+                created_at=1700000000,
+                model="gpt-5",
+                object="response",
+                status="completed",
+                output=[{"type": "message", "id": "msg_1", "status": "completed", "role": "assistant", "content": content_list}],
+            )
+            span = RecordingSpan()
+            with patch("litellm.integrations.arize._utils.safe_set_attribute", side_effect=span.set_attribute):
+                LangfuseOtelLogger._set_observation_output(span=span, response_obj=response)
+            raw = span.attributes.get(LangfuseSpanAttributes.OBSERVATION_OUTPUT.value)
+            return json.loads(raw) if raw else None
+
+        # 1. Refusal content preserved
+        res_refusal = get_output([{"type": "refusal", "refusal": "I cannot help with that."}])
+        assert res_refusal == [{"role": "assistant", "content": "I cannot help with that."}]
+
+        # 2. Multiple text chunks joined
+        res_multi = get_output([
+            {"type": "output_text", "text": "Hello ", "annotations": []},
+            {"type": "output_text", "text": "world!", "annotations": []},
+        ])
+        assert res_multi == [{"role": "assistant", "content": "Hello world!"}]
+
+        # 3. Empty content list does not raise IndexError
+        res_empty = get_output([])
+        assert res_empty == [{"role": "assistant", "content": ""}]
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

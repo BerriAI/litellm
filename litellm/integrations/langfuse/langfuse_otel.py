@@ -190,10 +190,32 @@ class LangfuseOtelLogger(OpenTelemetry):
                                     }
                                 )
                     elif item_type == "message":
+                        message_content_parts = getattr(item, "content", []) or []
+                        text_chunks = []
+                        refusal_chunks = []
+                        for part in message_content_parts:
+                            part_type = getattr(part, "type", None) if not isinstance(part, dict) else part.get("type")
+                            if part_type == "output_text":
+                                part_text = getattr(part, "text", "") if not isinstance(part, dict) else part.get("text", "")
+                                if part_text:
+                                    text_chunks.append(part_text)
+                            elif part_type == "refusal":
+                                part_refusal = getattr(part, "refusal", "") if not isinstance(part, dict) else part.get("refusal", "")
+                                if part_refusal:
+                                    refusal_chunks.append(part_refusal)
+                            else:
+                                part_text = getattr(part, "text", None) if not isinstance(part, dict) else part.get("text")
+                                if part_text:
+                                    text_chunks.append(part_text)
+
+                        content_val = "".join(text_chunks)
+                        if not content_val and refusal_chunks:
+                            content_val = "".join(refusal_chunks)
+
                         output_items_data.append(
                             {
-                                "role": getattr(item, "role", "assistant"),
-                                "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
+                                "role": getattr(item, "role", "assistant") if not isinstance(item, dict) else item.get("role", "assistant"),
+                                "content": content_val,
                             }
                         )
                     elif item_type == "function_call":
