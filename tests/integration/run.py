@@ -15,7 +15,7 @@ GROUPS: Final = MappingProxyType(
         "management": ("management", "authorization", "configuration"),
         "accounting": ("pricing", "spend"),
         "database": ("database",),
-        "providers": ("providers", "routing", "streaming", "messages_endpoint", "translation", "caching"),
+        "providers": ("providers", "routing", "streaming", "messages_endpoint", "translation"),
         "extensions": ("observability", "compatibility"),
         "mcp": ("mcp",),
         "sdk": ("sdk",),
