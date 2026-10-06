@@ -405,22 +405,22 @@ def test_multi_chunk_reasoning_and_content(
 def test_strip_sse_data_from_chunk():
     """Test the static method that strips 'data: ' prefix from SSE chunks"""
     # Test with string inputs
-    assert CustomStreamWrapper._strip_sse_data_from_chunk("data: content") == "content"
+    assert CustomStreamWrapper.strip_sse_data_from_chunk("data: content") == "content"
     assert (
-        CustomStreamWrapper._strip_sse_data_from_chunk("data:  spaced content")
+        CustomStreamWrapper.strip_sse_data_from_chunk("data:  spaced content")
         == " spaced content"
     )
     assert (
-        CustomStreamWrapper._strip_sse_data_from_chunk("regular content")
+        CustomStreamWrapper.strip_sse_data_from_chunk("regular content")
         == "regular content"
     )
     assert (
-        CustomStreamWrapper._strip_sse_data_from_chunk("regular content with data:")
+        CustomStreamWrapper.strip_sse_data_from_chunk("regular content with data:")
         == "regular content with data:"
     )
 
     # Test with None input
-    assert CustomStreamWrapper._strip_sse_data_from_chunk(None) is None
+    assert CustomStreamWrapper.strip_sse_data_from_chunk(None) is None
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -2751,7 +2751,7 @@ def test_dispatch_custom_provider_returns_chunk_early(
 ):
     """A registered custom provider passes its already-OpenAI-shaped chunk
     straight through as an early return rather than re-parsing it."""
-    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    monkeypatch.setattr(litellm, "custom_providers", ["my-custom-llm"])
     initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-llm"
     chunk = ModelResponseStream(
         choices=[
@@ -2771,7 +2771,7 @@ def test_dispatch_custom_provider_finish_only_returns_none_early(
 ):
     """A custom-provider chunk that carries only a finish_reason (no content)
     records the reason and returns None so no empty delta is emitted."""
-    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    monkeypatch.setattr(litellm, "custom_providers", ["my-custom-llm"])
     initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-llm"
     chunk = ModelResponseStream(
         choices=[
@@ -3270,7 +3270,7 @@ def test_chunk_creator_passes_through_model_response_stream(
     Regression test for issue #27389.
     """
     initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
-    litellm._custom_providers.append("my-custom-provider")
+    litellm.custom_providers.append("my-custom-provider")
 
     chunk = ModelResponseStream(
         id="test-id",
@@ -3285,7 +3285,7 @@ def test_chunk_creator_passes_through_model_response_stream(
 
     result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
 
-    litellm._custom_providers.remove("my-custom-provider")
+    litellm.custom_providers.remove("my-custom-provider")
 
     assert result is not None
     assert initialized_custom_stream_wrapper.received_finish_reason == finish_reason
@@ -3300,7 +3300,7 @@ def test_chunk_creator_drops_empty_finish_chunk(
     behaviour via is_chunk_non_empty.
     """
     initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
-    litellm._custom_providers.append("my-custom-provider")
+    litellm.custom_providers.append("my-custom-provider")
 
     chunk = ModelResponseStream(
         id="test-id",
@@ -3315,7 +3315,7 @@ def test_chunk_creator_drops_empty_finish_chunk(
 
     result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
 
-    litellm._custom_providers.remove("my-custom-provider")
+    litellm.custom_providers.remove("my-custom-provider")
 
     assert result is None
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
@@ -3330,7 +3330,7 @@ def test_chunk_creator_stops_iteration_on_trailing_chunk(
     """
     initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
     initialized_custom_stream_wrapper.received_finish_reason = "stop"
-    litellm._custom_providers.append("my-custom-provider")
+    litellm.custom_providers.append("my-custom-provider")
 
     trailing_chunk = ModelResponseStream(
         id="test-id",
@@ -3346,7 +3346,7 @@ def test_chunk_creator_stops_iteration_on_trailing_chunk(
     with pytest.raises(StopIteration):
         initialized_custom_stream_wrapper.chunk_creator(chunk=trailing_chunk)
 
-    litellm._custom_providers.remove("my-custom-provider")
+    litellm.custom_providers.remove("my-custom-provider")
 
 
 def test_chunk_creator_strips_finish_reason_from_content_chunk(
@@ -3358,7 +3358,7 @@ def test_chunk_creator_strips_finish_reason_from_content_chunk(
     preventing two terminal chunks (double finish_reason bug).
     """
     initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
-    litellm._custom_providers.append("my-custom-provider")
+    litellm.custom_providers.append("my-custom-provider")
 
     chunk = ModelResponseStream(
         id="test-id",
@@ -3373,7 +3373,7 @@ def test_chunk_creator_strips_finish_reason_from_content_chunk(
 
     result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
 
-    litellm._custom_providers.remove("my-custom-provider")
+    litellm.custom_providers.remove("my-custom-provider")
 
     assert result is not None
     assert (
@@ -3393,7 +3393,7 @@ def test_chunk_creator_tool_calls_not_dropped_on_finish(
     from litellm.types.utils import ChatCompletionDeltaToolCall, Function
 
     initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
-    litellm._custom_providers.append("my-custom-provider")
+    litellm.custom_providers.append("my-custom-provider")
 
     chunk = ModelResponseStream(
         id="test-id",
@@ -3420,7 +3420,7 @@ def test_chunk_creator_tool_calls_not_dropped_on_finish(
 
     result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
 
-    litellm._custom_providers.remove("my-custom-provider")
+    litellm.custom_providers.remove("my-custom-provider")
 
     assert result is not None, "tool_calls chunk must not be dropped"
     assert result.choices[0].delta.tool_calls is not None

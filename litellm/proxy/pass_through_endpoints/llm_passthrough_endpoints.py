@@ -1864,13 +1864,22 @@ def _resolve_vertex_model_from_router(
         if not deployment:
             return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
-        litellm_params: Final = deployment.get("litellm_params", {})
+        litellm_params_value: Final = deployment.get("litellm_params", {})
+        if not isinstance(litellm_params_value, Mapping):
+            return encoded_endpoint, endpoint, vertex_project, vertex_location, None
+        litellm_params: Final[Mapping[str, object]] = litellm_params_value
         model_info: Final = deployment.get("model_info")
         deployment_model_info: Final = model_info if isinstance(model_info, Mapping) else None
 
         # Always override with router config values (they take precedence over URL values)
-        config_vertex_project: Final = litellm_params.get("vertex_project")
-        config_vertex_location: Final = litellm_params.get("vertex_location")
+        config_vertex_project_value: Final = litellm_params.get("vertex_project")
+        config_vertex_project: Final[str | None] = (
+            config_vertex_project_value if isinstance(config_vertex_project_value, str) else None
+        )
+        config_vertex_location_value: Final = litellm_params.get("vertex_location")
+        config_vertex_location: Final[str | None] = (
+            config_vertex_location_value if isinstance(config_vertex_location_value, str) else None
+        )
         if config_vertex_project:
             vertex_project = config_vertex_project
         if config_vertex_location:
@@ -1878,7 +1887,10 @@ def _resolve_vertex_model_from_router(
 
         # Get the actual Vertex AI model name by stripping the provider prefix
         # e.g., "vertex_ai/gemini-2.0-flash-exp" -> "gemini-2.0-flash-exp"
-        model_from_config: Final = litellm_params.get("model", "")
+        model_from_config_value: Final = litellm_params.get("model", "")
+        model_from_config: Final[str] = (
+            model_from_config_value if isinstance(model_from_config_value, str) else ""
+        )
         if model_from_config:
             # get_llm_provider returns (model, custom_llm_provider, dynamic_api_key, api_base)
             # For "vertex_ai/gemini-2.0-flash-exp" it returns:

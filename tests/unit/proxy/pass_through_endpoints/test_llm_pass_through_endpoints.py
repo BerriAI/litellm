@@ -1139,7 +1139,7 @@ class TestVertexAIPassThroughHandler:
                     end_time=end_time,
                     cache_hit=False,
                 )
-            recomputed: Final = logging_obj._response_cost_calculator(result=result["result"])
+            recomputed: Final = logging_obj.response_cost_calculator(result=result["result"])
             return result["kwargs"]["response_cost"], recomputed
 
         global_handler_cost, global_recomputed_cost = costs_for("global")

@@ -324,7 +324,7 @@ def test_bedrock_validate_format_image_or_video():
     # Test valid image formats
     valid_image_formats = ["png", "jpeg", "gif", "webp"]
     for format in valid_image_formats:
-        result = BedrockImageProcessor._validate_format(f"image/{format}", format)
+        result = BedrockImageProcessor.validate_format(f"image/{format}", format)
         assert result == format, f"Expected {format}, got {result}"
 
     # Test valid video formats
@@ -340,7 +340,7 @@ def test_bedrock_validate_format_image_or_video():
         "3gp",
     ]
     for format in valid_video_formats:
-        result = BedrockImageProcessor._validate_format(f"video/{format}", format)
+        result = BedrockImageProcessor.validate_format(f"video/{format}", format)
         assert result == format, f"Expected {format}, got {result}"
 
     # Test valid document formats
@@ -352,7 +352,7 @@ def test_bedrock_validate_format_image_or_video():
     }
     for mime, expected in valid_document_formats.items():
         print("testing mime", mime, "expected", expected)
-        result = BedrockImageProcessor._validate_format(mime, mime.split("/")[1])
+        result = BedrockImageProcessor.validate_format(mime, mime.split("/")[1])
         assert result == expected, f"Expected {expected}, got {result}"
 
 

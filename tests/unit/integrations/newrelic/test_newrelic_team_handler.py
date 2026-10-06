@@ -139,13 +139,13 @@ class TestNewRelicHandler:
         assert result_us.metric_api_url == US_ENDPOINT
         assert result_eu.metric_api_url == EU_ENDPOINT
 
-    def test_request_blocked_callback_params_includes_newrelic(self):
+    def test_team_callback_params_are_blocked_for_requests(self):
         from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
-            _request_blocked_callback_params,
+            request_blocked_callback_params,
         )
 
-        assert "newrelic_api_key" in _request_blocked_callback_params
-        assert "newrelic_region" in _request_blocked_callback_params
+        assert "newrelic_api_key" in request_blocked_callback_params
+        assert "newrelic_region" in request_blocked_callback_params
 
 
 class TestDynamicCredentialDetection:

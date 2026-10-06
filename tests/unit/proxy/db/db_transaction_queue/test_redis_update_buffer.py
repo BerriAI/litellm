@@ -477,7 +477,7 @@ def test_get_transaction_buffer_redis_cache_none_without_redis_env():
     When use_redis_transaction_buffer=true but no REDIS_* env vars are set,
     no standalone cache is built (startup validation then raises the config error).
     """
-    with patch("litellm._redis._redis_kwargs_from_environment", return_value={}):
+    with patch("litellm._redis.redis_kwargs_from_environment", return_value={}):
         result = ProxyStartupEvent._get_transaction_buffer_redis_cache(
             general_settings={"use_redis_transaction_buffer": True},
         )
@@ -491,7 +491,7 @@ def test_get_transaction_buffer_redis_cache_none_without_host_or_url():
     let startup validation surface the config error instead of crashing.
     """
     with patch(
-        "litellm._redis._redis_kwargs_from_environment",
+        "litellm._redis.redis_kwargs_from_environment",
         return_value={"socket_timeout": 5.0},
     ):
         result = ProxyStartupEvent._get_transaction_buffer_redis_cache(

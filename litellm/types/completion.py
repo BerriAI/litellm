@@ -204,7 +204,7 @@ class CompletionRequest(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class _CompletionDispatchContext:
+class CompletionDispatchContext:
     _azure_detection_model: str
     acompletion: bool
     api_base: str | None
@@ -238,8 +238,12 @@ class _CompletionDispatchContext:
     top_p: float | None
 
 
-_CompletionDispatchResult = Union[
+_CompletionDispatchContext = CompletionDispatchContext
+
+
+CompletionDispatchResult = Union[
     Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
     "ModelResponse",
     "CustomStreamWrapper",
 ]
+_CompletionDispatchResult = CompletionDispatchResult

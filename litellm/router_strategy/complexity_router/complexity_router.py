@@ -44,8 +44,8 @@ from litellm.constants import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.classifier_logging import masked_originating_request
 from litellm.litellm_core_utils.core_helpers import (
-    _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
+    get_parent_otel_span_from_kwargs,
     is_codex_user_agent,
 )
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
@@ -3744,7 +3744,7 @@ class ComplexityRouter(CustomLogger):
                 request_kwargs=probe_kwargs,
                 messages=messages,
                 input=input,
-                parent_otel_span=_get_parent_otel_span_from_kwargs(request_kwargs),
+                parent_otel_span=get_parent_otel_span_from_kwargs(request_kwargs),
                 health_check_probe=True,
             )
         except (RouterRateLimitError, RouterRateLimitErrorBasic, BadRequestError) as exc:

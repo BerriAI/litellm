@@ -285,7 +285,7 @@ async def test_embedding_cache_skips_write_when_one_input_yields_many_embeddings
     scorer = ScoreEveryDocument()
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "score-every-doc", "custom_handler": scorer}])
     monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "score-every-doc"])
-    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "score-every-doc"])
+    monkeypatch.setattr(litellm, "custom_providers", [*litellm.custom_providers, "score-every-doc"])
     monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
 
     batch = '{"query": "q", "documents": ["a", "b", "c", "d", "e"]}'
@@ -318,7 +318,7 @@ async def test_embedding_cache_refetches_entries_written_without_format_version(
     embedder = EmbedLength()
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "embed-length", "custom_handler": embedder}])
     monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "embed-length"])
-    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "embed-length"])
+    monkeypatch.setattr(litellm, "custom_providers", [*litellm.custom_providers, "embed-length"])
     monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
 
     await litellm.aembedding(model="embed-length/m", input=["abcd"])
@@ -365,7 +365,7 @@ async def test_embedding_cache_serves_base64_string_embeddings_on_repeat(monkeyp
     embedder = Base64Embedder()
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "embed-b64", "custom_handler": embedder}])
     monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "embed-b64"])
-    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "embed-b64"])
+    monkeypatch.setattr(litellm, "custom_providers", [*litellm.custom_providers, "embed-b64"])
     monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
 
     first = await litellm.aembedding(model="embed-b64/m", input=["abcd"])

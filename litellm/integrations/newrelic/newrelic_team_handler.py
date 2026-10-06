@@ -39,7 +39,7 @@ class NewRelicHandler:
         Note: This handler is only called when a team-scoped newrelic_api_key is
         present. The trace logger for the ``newrelic`` callback (OTel v2 / legacy
         agent) is managed separately by _init_custom_logger_compatible_class via
-        _in_memory_loggers.
+        in_memory_loggers.
         """
         _credentials: Final = NewRelicHandler.get_dynamic_newrelic_logging_config(
             standard_callback_dynamic_params=standard_callback_dynamic_params,

@@ -1,9 +1,9 @@
 from functools import lru_cache
 
-from litellm.constants import _REALTIME_BODY_CACHE_SIZE
+from litellm.constants import REALTIME_BODY_CACHE_SIZE
 
 
-@lru_cache(maxsize=_REALTIME_BODY_CACHE_SIZE)
+@lru_cache(maxsize=REALTIME_BODY_CACHE_SIZE)
 def _realtime_request_body(model: str | None) -> bytes:
     """
     Generate the realtime websocket request body. Cached with LRU semantics to avoid repeated

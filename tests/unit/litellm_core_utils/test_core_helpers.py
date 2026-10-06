@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
-    _FINISH_REASON_MAP,
+    FINISH_REASON_MAP,
     RESPONSE_COST_HEADER,
     bind_budget_reservation_to_callbacks,
     budget_reservation_from_metadata,
@@ -265,7 +265,7 @@ class TestMapFinishReasonOpenAIPassthrough:
 
 class TestMapFinishReasonGenericError:
     def test_lowercase_error_is_explicitly_mapped(self):
-        assert "error" in _FINISH_REASON_MAP
+        assert "error" in FINISH_REASON_MAP
         assert map_finish_reason("error") == "stop"
 
     def test_lowercase_error_does_not_warn(self, mocker):
@@ -286,8 +286,8 @@ class TestMapFinishReasonUnknown:
 
 class TestFinishReasonMapOutputsAreValid:
     def test_all_mapped_values_are_valid_openai_reasons(self):
-        """Every value in _FINISH_REASON_MAP must be a valid OpenAI finish reason."""
-        for provider_reason, openai_reason in _FINISH_REASON_MAP.items():
+        """Every value in FINISH_REASON_MAP must be a valid OpenAI finish reason."""
+        for provider_reason, openai_reason in FINISH_REASON_MAP.items():
             assert openai_reason in VALID_OPENAI_FINISH_REASONS, (
                 f"Mapped value '{openai_reason}' (from '{provider_reason}') "
                 f"is not a valid OpenAI finish reason"

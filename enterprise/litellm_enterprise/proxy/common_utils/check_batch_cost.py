@@ -704,7 +704,7 @@ class CheckBatchCost:
         """
         from litellm.batches.batch_utils import (
             count_error_file_failed_requests,
-            _get_file_content_as_dictionary,
+            get_file_content_as_dictionary,
             calculate_batch_cost_and_usage,
         )
         from litellm.files.main import afile_content
@@ -760,7 +760,7 @@ class CheckBatchCost:
         else:
             content_bytes = _file_content  # type: ignore[assignment]
 
-        file_content_as_dict = _get_file_content_as_dictionary(
+        file_content_as_dict = get_file_content_as_dictionary(
             content_bytes  # type: ignore[arg-type]
         )
 

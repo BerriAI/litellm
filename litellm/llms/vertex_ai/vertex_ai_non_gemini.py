@@ -9,7 +9,7 @@ import httpx
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.bedrock.common_utils import ModelResponseIterator
-from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+from litellm.llms.custom_httpx.http_handler import DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
@@ -68,7 +68,7 @@ def _set_client_in_cache(client_cache_key: str, vertex_llm_model: object):
     litellm.in_memory_llm_clients_cache.set_cache(
         key=client_cache_key,
         value=vertex_llm_model,
-        ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+        ttl=DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     )
 
 

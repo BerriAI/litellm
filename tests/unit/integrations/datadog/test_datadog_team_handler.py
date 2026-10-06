@@ -221,16 +221,16 @@ class TestDataDogHandler:
         assert result.DD_API_KEY == "team_key"
         assert "eu1.datadoghq.com" in result.intake_url
 
-    def test_request_blocked_callback_params_includes_dd(self):
+    def test_team_callback_params_are_blocked_for_requests(self):
         """DD params should be blocked from request-level metadata (security)."""
         from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
-            _request_blocked_callback_params,
+            request_blocked_callback_params,
         )
 
-        assert "dd_api_key" in _request_blocked_callback_params
-        assert "dd_site" in _request_blocked_callback_params
-        assert "dd_agent_host" in _request_blocked_callback_params
-        assert "dd_agent_port" in _request_blocked_callback_params
+        assert "dd_api_key" in request_blocked_callback_params
+        assert "dd_site" in request_blocked_callback_params
+        assert "dd_agent_host" in request_blocked_callback_params
+        assert "dd_agent_port" in request_blocked_callback_params
 
 
 class TestDynamicCredentialDetection:
@@ -290,7 +290,7 @@ class TestTeamCallbackFlowPassesDDCredentials:
     dd_* credentials reach DataDogHandler only from the proxy-stamped trusted field.
 
     Team callback_vars are admin-configured, so they must survive
-    _request_blocked_callback_params; anything the caller put in the request body
+    request_blocked_callback_params; anything the caller put in the request body
     must not, or a caller could pair its own dd_site with the team's dd_api_key.
     """
 

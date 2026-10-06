@@ -178,7 +178,7 @@ class BaseRealtimeTest(ABC):
         2. Initial event is received
         3. Messages are properly forwarded
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         if self.should_skip():
             pytest.skip(self.get_skip_reason())
 
@@ -192,7 +192,7 @@ class BaseRealtimeTest(ABC):
         print(f"{'='*80}\n")
 
         try:
-            await litellm._arealtime(
+            await litellm.arealtime(
                 model=self.get_model(),
                 websocket=websocket_client,
                 api_key=os.environ.get(self.get_api_key_env_var()),
@@ -241,7 +241,7 @@ class BaseRealtimeTest(ABC):
         Test realtime connection with explicit query parameters.
         Verifies that query params are properly passed to the backend.
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         if self.should_skip():
             pytest.skip(self.get_skip_reason())
 
@@ -258,7 +258,7 @@ class BaseRealtimeTest(ABC):
         query_params: RealtimeQueryParams = {"model": model_name}
 
         try:
-            await litellm._arealtime(
+            await litellm.arealtime(
                 model=self.get_model(),
                 websocket=websocket_client,
                 api_key=os.environ.get(self.get_api_key_env_var()),
@@ -303,7 +303,7 @@ class BaseRealtimeTest(ABC):
         if self.should_skip():
             pytest.skip(self.get_skip_reason())
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         # Create a custom websocket client that sends a message
         class InteractiveWebSocketClient(RealTimeWebSocketClient):
@@ -403,7 +403,7 @@ class BaseRealtimeTest(ABC):
         print(f"{'='*80}\n")
 
         try:
-            await litellm._arealtime(
+            await litellm.arealtime(
                 model=self.get_model(),
                 websocket=websocket_client,
                 api_key=os.environ.get(self.get_api_key_env_var()),

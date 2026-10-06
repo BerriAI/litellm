@@ -2709,7 +2709,7 @@ def test_ProxyConfig__load_alerting_settings_does_not_log_general_settings_dict(
     import litellm._logging as _logging_module
     from litellm._logging import verbose_proxy_logger
 
-    monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
+    monkeypatch.setattr(_logging_module, "ENABLE_SECRET_REDACTION", False)
 
     class LogRecordHandler(logging.Handler):
         def __init__(self) -> None:
@@ -2941,7 +2941,7 @@ def test_ProxyConfig__add_deployment_pinned_row_follows_the_cost_map_across_relo
     assert ProxyConfig()._add_deployment(db_models=[pinned, typed]) == 2
 
     monkeypatch.setitem(litellm.model_cost["gpt-5.6"], "input_cost_per_token", 1e-06)
-    router._replay_model_cost_registrations()
+    router.replay_model_cost_registrations()
 
     assert litellm.model_cost.get("pinned-row", {}).get("input_cost_per_token") is None
     assert router.get_deployment(model_id="pinned-row").model_info.input_cost_per_token is None
@@ -2973,7 +2973,7 @@ def test_ProxyConfig__add_deployment_ptu_row_with_a_cost_map_copy_still_bills_ze
     )
 
     assert ProxyConfig()._add_deployment(db_models=[ptu]) == 1
-    router._replay_model_cost_registrations()
+    router.replay_model_cost_registrations()
 
     assert litellm.model_cost["ptu-row"]["input_cost_per_token"] == 0.0
     assert litellm.model_cost["ptu-row"]["output_cost_per_token"] == 0.0
@@ -4707,7 +4707,7 @@ async def test_ProxyConfig__update_config_from_db_does_not_log_general_settings_
     for ``general_settings`` that value is the whole dict, leaking ``master_key``
     and ``database_url`` the same way the startup config load did. The value now
     routes through the recursive redactor. Asserted with the module regex
-    scrubber (``_ENABLE_SECRET_REDACTION``) disabled so the caller itself must
+    scrubber (``ENABLE_SECRET_REDACTION``) disabled so the caller itself must
     not build the leaky string. The merge into the returned config must still
     carry the raw values, proving only the log record is redacted.
     """
@@ -4716,7 +4716,7 @@ async def test_ProxyConfig__update_config_from_db_does_not_log_general_settings_
     import litellm._logging as _logging_module
     from litellm._logging import verbose_proxy_logger
 
-    monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
+    monkeypatch.setattr(_logging_module, "ENABLE_SECRET_REDACTION", False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
     def _fake_decrypt_value_helper(value, key, **_kwargs):
@@ -4799,14 +4799,14 @@ async def test_ProxyConfig_load_config_redacts_secret_litellm_setting_keeps_plai
     redaction must be surgical: a secret-named key is masked, but a plain
     operational setting like ``num_retries`` must still log its real value, so
     the debug line keeps its signal. Asserted with the module regex scrubber
-    (``_ENABLE_SECRET_REDACTION``) disabled.
+    (``ENABLE_SECRET_REDACTION``) disabled.
     """
     import logging
 
     import litellm._logging as _logging_module
     from litellm._logging import verbose_proxy_logger
 
-    monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
+    monkeypatch.setattr(_logging_module, "ENABLE_SECRET_REDACTION", False)
 
     api_key_secret = "sk-lit4152-litellm-settings-secret-abcdef1234567890"
     f = tmp_path / "c.yaml"

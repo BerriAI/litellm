@@ -26,7 +26,7 @@ from litellm._redis_credential_provider import (
     AzureADCredentialProvider,
     ElastiCacheIAMCredentialProvider,
     GCPIAMCredentialProvider,
-    _generate_gcp_iam_access_token,
+    generate_gcp_iam_access_token,
 )
 from litellm.constants import (
     REDIS_CLUSTER_HEALTH_CHECK_INTERVAL,
@@ -36,6 +36,8 @@ from litellm.constants import (
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 from ._logging import verbose_logger
+
+_generate_gcp_iam_access_token = generate_gcp_iam_access_token
 
 AZURE_REDIS_SCOPE: Final = "https://redis.azure.com/.default"
 
@@ -269,15 +271,18 @@ def _coerce_redis_kwargs_types(
     return result
 
 
-def _redis_kwargs_from_environment():
+def redis_kwargs_from_environment() -> dict[str, str]:
     mapping: Final = _get_redis_env_kwarg_mapping()
 
-    return_dict: Final = {}
+    return_dict: Final[dict[str, str]] = {}
     for k, v in mapping.items():
         value = get_secret(k, default_value=None)
-        if value is not None:
+        if isinstance(value, str):
             return_dict[v] = value
     return return_dict
+
+
+_redis_kwargs_from_environment = redis_kwargs_from_environment
 
 
 def _coerces_to_true(value: object | None) -> bool:
@@ -341,7 +346,7 @@ def create_gcp_iam_redis_connect_func(
 
         self._parser.on_connect(self)
 
-        auth_args: Final = (_generate_gcp_iam_access_token(service_account),)
+        auth_args: Final = (generate_gcp_iam_access_token(service_account),)
         self.send_command("AUTH", *auth_args, check_health=False)
 
         try:
@@ -517,7 +522,7 @@ def _get_redis_client_logic(**env_overrides):
             value = get_secret(v)
             env_overrides[k] = value
 
-    environment_kwargs: Final = _redis_kwargs_from_environment()
+    environment_kwargs: Final = redis_kwargs_from_environment()
 
     # An explicitly configured connection target outranks REDIS_URL from the
     # environment. Without this, the url branch below strips the caller's

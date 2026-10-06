@@ -1023,7 +1023,7 @@ class LangFuseLogger:
                 _cache_key = _hidden_params.get("cache_key", None)
                 if _cache_key is None and litellm.cache is not None:
                     # fallback to using "preset_cache_key"
-                    _preset_cache_key: Final = litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)  # pyright: ignore[reportPrivateUsage]  # kwargs-ok: no public preset-cache-key accessor
+                    _preset_cache_key: Final = litellm.cache.get_preset_cache_key_from_kwargs(**kwargs)  # pyright: ignore[reportPrivateUsage]  # no public preset-cache-key accessor
                     _cache_key = _preset_cache_key
                 tags.append(f"cache_key:{_cache_key}")
         return tags

@@ -1895,9 +1895,9 @@ class TestFileAccessCredentialsCarryFederation:
     has to inherit the federation fields or it cannot authenticate and the batch is never billed."""
 
     def test_federation_fields_survive_extraction(self):
-        from litellm.batches.batch_utils import _extract_file_access_credentials
+        from litellm.batches.batch_utils import extract_file_access_credentials
 
-        credentials = _extract_file_access_credentials(
+        credentials = extract_file_access_credentials(
             {
                 "model": "anthropic/claude-sonnet-4-5",
                 "anthropic_federation_rule_id": "fdrl_x",
@@ -1914,12 +1914,12 @@ class TestFileAccessCredentialsCarryFederation:
 
     def test_every_federation_field_is_carried(self):
         """Derived from the kwargs set, so a new federation field is carried without an edit here."""
-        from litellm.batches.batch_utils import _extract_file_access_credentials
+        from litellm.batches.batch_utils import extract_file_access_credentials
         from litellm.litellm_core_utils.get_litellm_params import ANTHROPIC_WIF_KWARGS_KEYS
 
         params = {name: f"value-{name}" for name in ANTHROPIC_WIF_KWARGS_KEYS}
 
-        credentials = _extract_file_access_credentials(params)
+        credentials = extract_file_access_credentials(params)
 
         assert set(credentials) == set(ANTHROPIC_WIF_KWARGS_KEYS)
 

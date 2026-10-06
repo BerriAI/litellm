@@ -93,7 +93,7 @@ async def test_openai_realtime_direct_call_no_intent():
     caught_exception = None
 
     try:
-        await litellm._arealtime(
+        await litellm.arealtime(
             # OpenAI shut down the gpt-4o-realtime-preview family (incl. the
             # undated alias) on 2026-05-07; gpt-realtime is the GA successor.
             model="openai/gpt-realtime",
@@ -195,7 +195,7 @@ async def test_realtime_query_params_use_normalized_model_name(monkeypatch):
         "intent": "chat",
     }
 
-    await realtime_main._arealtime(
+    await realtime_main.arealtime(
         model="openai/gpt-4o-realtime-preview",
         websocket=MagicMock(),
         api_key="sk-test",
@@ -231,7 +231,7 @@ async def test_realtime_query_params_preserve_missing_model(monkeypatch):
 
     query_params: RealtimeQueryParams = {"intent": "transcription"}
 
-    await realtime_main._arealtime(
+    await realtime_main.arealtime(
         model="gpt-realtime-whisper",
         websocket=MagicMock(),
         api_key="sk-test",

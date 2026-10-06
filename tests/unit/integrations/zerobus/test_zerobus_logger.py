@@ -376,7 +376,7 @@ def test_callbacks_zerobus_builds_one_logger_and_reuses_it(monkeypatch):
     monkeypatch.setenv("ZEROBUS_CLIENT_SECRET", "sp-secret")
     monkeypatch.setenv("ZEROBUS_TABLE_NAME", "main.litellm.traces")
     monkeypatch.setattr(litellm, "zerobus_params", None)
-    monkeypatch.setattr(logging_module, "_in_memory_loggers", [])
+    monkeypatch.setattr(logging_module, "in_memory_loggers", [])
 
     assert logging_module.get_custom_logger_compatible_class("zerobus") is None
 

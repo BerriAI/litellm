@@ -451,7 +451,7 @@ async def test_arealtime_transcription_intent_defaults_to_ga(monkeypatch):
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
 
-    await realtime_main._arealtime(
+    await realtime_main.arealtime(
         model="azure/gpt-realtime-whisper",
         websocket=MagicMock(),
         api_key="test-key",
@@ -622,7 +622,7 @@ async def test_arealtime_resolves_azure_ad_token_when_no_api_key(monkeypatch):
 
     monkeypatch.setattr(realtime_main, "get_azure_ad_token", fake_get_azure_ad_token)
 
-    await realtime_main._arealtime(
+    await realtime_main.arealtime(
         model="azure/gpt-realtime-whisper",
         websocket=MagicMock(),
         api_version="2024-10-01-preview",
@@ -658,7 +658,7 @@ async def test_arealtime_does_not_resolve_azure_ad_token_when_api_key_present(mo
 
     monkeypatch.setattr(realtime_main, "get_azure_ad_token", fail_get_azure_ad_token)
 
-    await realtime_main._arealtime(
+    await realtime_main.arealtime(
         model="azure/gpt-realtime-whisper",
         websocket=MagicMock(),
         api_key="test-key",
@@ -731,7 +731,7 @@ async def test_arealtime_forwards_deployment_azure_ad_token(monkeypatch, no_ambi
     monkeypatch.delenv("AZURE_API_KEY", raising=False)
     monkeypatch.setattr(realtime_main.litellm, "api_key", None)
 
-    await realtime_main._arealtime(
+    await realtime_main.arealtime(
         model="azure/gpt-realtime-whisper",
         websocket=MagicMock(),
         api_version="2024-10-01-preview",

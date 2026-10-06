@@ -208,7 +208,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         Subclasses whose upstream rejects the role opt in by calling this from
         their ``transform_anthropic_messages_request``; the first-party Anthropic
         path forwards ``messages`` untouched and never calls it."""
-        from litellm.utils import _supports_factory
+        from litellm.utils import supports_factory
 
         messages: Final = anthropic_messages_request.get("messages")
         if not isinstance(messages, list):
@@ -220,7 +220,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         hoisted: Final = messages[:leading_count]
         remaining: Final = (
             messages[leading_count:]
-            if _supports_factory(
+            if supports_factory(
                 model=model,
                 custom_llm_provider=self.custom_llm_provider,
                 key="supports_mid_conversation_system",

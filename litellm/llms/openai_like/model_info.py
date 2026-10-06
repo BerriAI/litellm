@@ -10,7 +10,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.utils import _add_path_to_api_base  # pyright: ignore[reportPrivateUsage]  # shared provider URL helper
+from litellm.utils import add_path_to_api_base  # pyright: ignore[reportPrivateUsage]  # shared provider URL helper
 
 MODEL_INFO_REFRESH_SECONDS: Final = 300
 MODEL_INFO_REFRESH_CONCURRENCY: Final = 8
@@ -65,7 +65,7 @@ async def get_openai_compatible_model_info(
     client: AsyncHTTPHandler,
     cache: InMemoryCache,
 ) -> Mapping[str, int]:
-    url: Final = _add_path_to_api_base(api_base, "/v1/models")
+    url: Final = add_path_to_api_base(api_base, "/v1/models")
     cache_key: Final = (
         "upstream_model_info:" + hashlib.sha256(json.dumps((url, sorted(headers.items()))).encode()).hexdigest()
     )

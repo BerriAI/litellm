@@ -727,7 +727,7 @@ def test_custom_pricing_cost_calc_uses_router_model_id_from_litellm_metadata():
     This tests the full chain that was broken for /messages and /responses
     endpoints. Regression test for #23185.
     """
-    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.cost_calculator import select_model_name_for_cost_calc
     from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 
     custom_model_id = "claude-sonnet-4-custom-pricing-test"
@@ -754,7 +754,7 @@ def test_custom_pricing_cost_calc_uses_router_model_id_from_litellm_metadata():
 
     # _select_model_name_for_cost_calc appends provider prefix to the
     # selected router_model_id, so the result is "anthropic/<model_id>"
-    selected_model = _select_model_name_for_cost_calc(
+    selected_model = select_model_name_for_cost_calc(
         model="anthropic/claude-sonnet-4-20250514",
         completion_response=None,
         custom_pricing=custom_pricing,
@@ -765,7 +765,7 @@ def test_custom_pricing_cost_calc_uses_router_model_id_from_litellm_metadata():
     assert custom_model_id in selected_model
 
     # Without custom_pricing, the router_model_id is NOT selected
-    selected_model_no_custom = _select_model_name_for_cost_calc(
+    selected_model_no_custom = select_model_name_for_cost_calc(
         model="anthropic/claude-sonnet-4-20250514",
         completion_response=None,
         custom_pricing=False,
@@ -785,7 +785,7 @@ def test_per_request_custom_pricing_with_router():
     returned 0.0 for per-request custom pricing via Router.
     """
     from litellm import Router
-    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.cost_calculator import select_model_name_for_cost_calc
 
     router = Router(
         model_list=[
@@ -822,7 +822,7 @@ def test_per_request_custom_pricing_with_router():
 
     # _select_model_name_for_cost_calc should pick the model name (which has pricing),
     # NOT the router_model_id (which has no pricing)
-    selected = _select_model_name_for_cost_calc(
+    selected = select_model_name_for_cost_calc(
         model="openai/gpt-3.5-turbo",
         completion_response=None,
         custom_pricing=True,
@@ -842,7 +842,7 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
     (e.g. dashscope/qwen3.7-plus) being billed as free.
     """
     from litellm import Router
-    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.cost_calculator import select_model_name_for_cost_calc
 
     router = Router(
         model_list=[
@@ -872,7 +872,7 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
     # The stripped shared alias must not carry tiered pricing.
     assert litellm.model_cost["dashscope/qwen-tier-only-test"].get("tiered_pricing") is None
 
-    selected = _select_model_name_for_cost_calc(
+    selected = select_model_name_for_cost_calc(
         model="dashscope/qwen-tier-only-test",
         completion_response=None,
         custom_pricing=True,
@@ -2249,7 +2249,7 @@ def test_completion_cost_anthropic_auto_tier_uses_served_priority_rate(_local_mo
 
     Priority is opted into with ``service_tier="auto"``; Anthropic then serves
     "priority" and reports it on the response usage. The proxy forwards the
-    request-level "auto" into ``completion_cost`` (via ``_response_cost_calculator``),
+    request-level "auto" into ``completion_cost`` (via ``response_cost_calculator``),
     and that preference must not shadow the served tier, otherwise priority
     requests are silently billed at the standard rate.
     """
@@ -2341,7 +2341,7 @@ def test_completion_cost_non_string_service_tier_defers_to_served_tier(_local_mo
     ``allowed_openai_params``/``drop_params``) must not crash cost tracking.
 
     Before the fix, ``completion_cost`` called ``service_tier.lower()`` on the
-    request-level value, so a dict raised ``AttributeError``. ``_response_cost_calculator``
+    request-level value, so a dict raised ``AttributeError``. ``response_cost_calculator``
     swallowed it and reported ``response_cost=None``, silently dropping the cost.
     The non-string preference must be ignored so pricing defers to the tier the
     provider actually served on the response usage.
@@ -3748,7 +3748,7 @@ def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_ma
     silently pricing every streamed request at $0.
     """
 
-    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.cost_calculator import select_model_name_for_cost_calc
 
     response = litellm.ModelResponse(
         id="x",
@@ -3763,7 +3763,7 @@ def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_ma
     )
     response._hidden_params = {}
 
-    selected = _select_model_name_for_cost_calc(
+    selected = select_model_name_for_cost_calc(
         model=None,
         completion_response=response,
         custom_llm_provider="vertex_ai",
@@ -3776,7 +3776,7 @@ def test_select_model_name_strips_duplicated_region_segment(_local_model_cost_ma
     """A "region/model" alias whose leading segment repeats the request's region must
     resolve to the region-priced cost key instead of keeping the region segment twice."""
 
-    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.cost_calculator import select_model_name_for_cost_calc
 
     response = litellm.ModelResponse(
         id="x",
@@ -3791,7 +3791,7 @@ def test_select_model_name_strips_duplicated_region_segment(_local_model_cost_ma
     )
     response._hidden_params = {"region_name": "us-east-1"}
 
-    selected = _select_model_name_for_cost_calc(
+    selected = select_model_name_for_cost_calc(
         model=None,
         completion_response=response,
         custom_llm_provider="bedrock",
@@ -3820,9 +3820,9 @@ def test_select_model_name_applies_region_to_private_provider_response_model(_lo
     """A Bedrock stream carries its requested model as the private provider model and must keep the
     request's region in the cost key, exactly as the same request does without streaming."""
 
-    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.cost_calculator import select_model_name_for_cost_calc
 
-    selected = _select_model_name_for_cost_calc(
+    selected = select_model_name_for_cost_calc(
         model=None,
         completion_response=_bedrock_response_with_private_model("anthropic.claude-v2:1", "us-east-1"),
         custom_llm_provider="bedrock",
@@ -4047,9 +4047,9 @@ def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map
     """An explicit base_model keeps pricing on that model's own key even when the request carries a
     region with different regional rates, so the private provider model never widens region pricing."""
 
-    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.cost_calculator import select_model_name_for_cost_calc
 
-    selected = _select_model_name_for_cost_calc(
+    selected = select_model_name_for_cost_calc(
         model="my-bedrock-deployment",
         completion_response=_bedrock_response_with_private_model("moonshotai.kimi-k2.5", "ap-northeast-1"),
         base_model="moonshotai.kimi-k2.5",
@@ -4085,7 +4085,7 @@ def test_completion_cost_base_model_ignores_regional_row(_local_model_cost_map):
 def test_select_model_name_unresolvable_alias_unchanged(_local_model_cost_map):
     """An alias that resolves to no known cost key keeps the legacy double-prefixed name."""
 
-    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.cost_calculator import select_model_name_for_cost_calc
 
     response = litellm.ModelResponse(
         id="x",
@@ -4100,7 +4100,7 @@ def test_select_model_name_unresolvable_alias_unchanged(_local_model_cost_map):
     )
     response._hidden_params = {}
 
-    selected = _select_model_name_for_cost_calc(
+    selected = select_model_name_for_cost_calc(
         model=None,
         completion_response=response,
         custom_llm_provider="vertex_ai",
@@ -4113,7 +4113,7 @@ def test_completion_cost_keeps_custom_priced_slash_router_id(_local_model_cost_m
     """A custom-priced router id containing "/" keeps its custom pricing instead of being
     rewritten to the built-in key its suffix happens to match."""
 
-    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.cost_calculator import select_model_name_for_cost_calc
 
     litellm.register_model(
         model_cost={
@@ -4125,7 +4125,7 @@ def test_completion_cost_keeps_custom_priced_slash_router_id(_local_model_cost_m
         }
     )
 
-    selected = _select_model_name_for_cost_calc(
+    selected = select_model_name_for_cost_calc(
         model="vertex_ai/claude-opus-5",
         completion_response=None,
         custom_pricing=True,
@@ -4279,7 +4279,7 @@ def test_explicit_pricing_precedes_private_provider_response_model(
     custom_pricing: bool,
     expected: str,
 ) -> None:
-    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.cost_calculator import select_model_name_for_cost_calc
 
     response = litellm.ModelResponse(
         id="x",
@@ -4294,7 +4294,7 @@ def test_explicit_pricing_precedes_private_provider_response_model(
     )
     response._hidden_params = {"provider_response_model": "selected-cost-model"}
 
-    selected = _select_model_name_for_cost_calc(
+    selected = select_model_name_for_cost_calc(
         model="requested-route",
         completion_response=response,
         base_model=base_model,

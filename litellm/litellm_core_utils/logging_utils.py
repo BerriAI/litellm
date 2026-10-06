@@ -7,6 +7,8 @@ from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
+from opentelemetry.trace import Span
+
 from litellm._logging import format_base64_size, verbose_logger
 from litellm.constants import (
     BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS,
@@ -20,19 +22,15 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
     from litellm import ModelResponse as _ModelResponse
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObject,
     )
 
     LiteLLMModelResponse = _ModelResponse
-    Span = _Span | Any
 else:
     LiteLLMModelResponse = Any
     LiteLLMLoggingObject = Any
-    Span = Any
 
 
 import litellm
@@ -199,10 +197,10 @@ def _get_parent_otel_span_from_logging_obj(
 
         # Reuse existing function by passing model_call_details as kwargs
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
 
-        return _get_parent_otel_span_from_kwargs(logging_obj.model_call_details)
+        return get_parent_otel_span_from_kwargs(logging_obj.model_call_details)
 
     except Exception as e:
         verbose_logger.exception("Error in _get_parent_otel_span_from_logging_obj: %s", e)
@@ -227,14 +225,14 @@ def convert_litellm_response_object_to_str(
     return None
 
 
-def _assemble_complete_response_from_streaming_chunks(
+def assemble_complete_response_from_streaming_chunks(
     result: ModelResponse | TextCompletionResponse | ModelResponseStream,
     start_time: datetime,
     end_time: datetime,
-    request_kwargs: dict,
-    streaming_chunks: list[Any],
+    request_kwargs: Mapping[str, object],
+    streaming_chunks: list[object],
     is_async: bool,
-):
+) -> ModelResponse | TextCompletionResponse | None:
     """
     Assemble a complete response from a streaming chunks
 
@@ -262,9 +260,11 @@ def _assemble_complete_response_from_streaming_chunks(
     if result.choices[0].finish_reason is not None:  # if it's the last chunk
         streaming_chunks.append(result)
         try:
+            messages: Final = request_kwargs.get("messages")
+            stream_messages: Final = messages if isinstance(messages, Sequence) else None
             complete_streaming_response = litellm.stream_chunk_builder(
                 chunks=streaming_chunks,
-                messages=request_kwargs.get("messages", None),
+                messages=stream_messages,
                 start_time=start_time,
                 end_time=end_time,
             )
@@ -277,6 +277,9 @@ def _assemble_complete_response_from_streaming_chunks(
     else:
         streaming_chunks.append(result)
     return complete_streaming_response
+
+
+_assemble_complete_response_from_streaming_chunks = assemble_complete_response_from_streaming_chunks
 
 
 def _set_duration_in_model_call_details(

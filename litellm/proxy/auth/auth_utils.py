@@ -351,13 +351,13 @@ def _build_banned_observability_params() -> frozenset[str]:
     failure mode.
     """
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
-        _request_blocked_callback_params,
-        _supported_callback_params,
+        request_blocked_callback_params,
+        supported_callback_params,
     )
 
     return (
-        (frozenset(_supported_callback_params) - _SAFE_CLIENT_CALLBACK_PARAMS)
-        | frozenset(_request_blocked_callback_params)
+        (frozenset(supported_callback_params) - _SAFE_CLIENT_CALLBACK_PARAMS)
+        | frozenset(request_blocked_callback_params)
         | _EXTRA_BANNED_OBSERVABILITY_PARAMS
     )
 

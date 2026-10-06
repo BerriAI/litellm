@@ -10,9 +10,9 @@ from urllib.parse import unquote
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import (
-    _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX,
     AZURE_STORAGE_MSFT_VERSION,
+    DEFAULT_TTL_FOR_HTTPX_CLIENTS,
 )
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -356,7 +356,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 account_url=self.azure_storage_dfs_endpoint,
                 credential=self.azure_storage_account_key,
             )
-            self._service_client_timeout = self._clock() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+            self._service_client_timeout = self._clock() + DEFAULT_TTL_FOR_HTTPX_CLIENTS
         return self._service_client
 
     async def upload_to_azure_data_lake_with_azure_account_key(self, payload: StandardLoggingPayload):

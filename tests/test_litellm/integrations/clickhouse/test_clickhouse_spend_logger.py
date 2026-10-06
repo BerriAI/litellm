@@ -384,7 +384,7 @@ async def test_trace_ingest_requests_are_not_logged_as_spend():
 @pytest.mark.asyncio
 async def test_clickhouse_callback_resolves_via_factory(monkeypatch):
     monkeypatch.setenv("CLICKHOUSE_URL", "http://localhost:8123")
-    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    monkeypatch.setattr(litellm_logging, "in_memory_loggers", [])
 
     created = litellm_logging._init_custom_logger_compatible_class("clickhouse", None, None)
     assert isinstance(created, ClickHouseSpendLogger)

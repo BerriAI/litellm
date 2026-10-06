@@ -801,14 +801,14 @@ def test_update_dictionary_merges_nested_dicts_without_aliasing():
     object stays untouched, and the caller's incoming nested dict is never
     inserted by reference into the merged result.
     """
-    from litellm.utils import _update_dictionary
+    from litellm.utils import update_dictionary
 
     existing_nested = {"hours_utc": "01:00-02:00"}
     existing = {"off_peak_pricing": existing_nested}
     incoming_nested = {"windows": [{"hours_utc": "16:00-19:00", "weekdays": [2]}]}
     incoming = {"off_peak_pricing": incoming_nested}
 
-    merged = _update_dictionary(existing, incoming)
+    merged = update_dictionary(existing, incoming)
 
     assert merged["off_peak_pricing"] == {
         "hours_utc": "01:00-02:00",
@@ -817,7 +817,7 @@ def test_update_dictionary_merges_nested_dicts_without_aliasing():
     assert existing_nested == {"hours_utc": "01:00-02:00"}
     assert merged["off_peak_pricing"] is not incoming_nested
 
-    fresh = _update_dictionary({}, incoming)
+    fresh = update_dictionary({}, incoming)
     assert fresh["off_peak_pricing"] == incoming_nested
     assert fresh["off_peak_pricing"] is not incoming_nested
 

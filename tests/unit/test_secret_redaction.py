@@ -12,7 +12,7 @@ import pytest
 
 from litellm._logging import (
     JsonFormatter,
-    _redact_string,
+    redact_string,
     _secret_filter,
     redact_internal_details_from_client_message,
     verbose_logger,
@@ -21,7 +21,6 @@ from litellm._logging import (
 )
 from litellm.litellm_core_utils.secret_redaction import (
     redact_internal_details,
-    redact_string,
     redact_structured_value,
 )
 
@@ -31,7 +30,7 @@ SECRET = "sk-proj-abc123def456ghi789jklmnopqrst"
 @pytest.fixture(autouse=True)
 def _enable_redaction():
     """Ensure secret redaction is on (the default) for all tests in this module."""
-    with patch("litellm._logging._ENABLE_SECRET_REDACTION", True):
+    with patch("litellm._logging.ENABLE_SECRET_REDACTION", True):
         yield
 
 
@@ -277,7 +276,7 @@ def test_filter_redacts_secrets_substituted_into_color_message():
 
 def test_disable_redaction_passes_secrets_through():
     """When LITELLM_DISABLE_REDACT_SECRETS=true, secrets pass through."""
-    with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):
+    with patch("litellm._logging.ENABLE_SECRET_REDACTION", False):
         record = logging.LogRecord(
             name="test",
             level=logging.DEBUG,
@@ -474,7 +473,7 @@ def test_vertex_error_message_no_credential_leak():
         "Ensure the JSON is valid (check for unescaped newlines in private_key). "
         "Parse error: JSONDecodeError"
     )
-    result = _redact_string(new_msg)
+    result = redact_string(new_msg)
     assert result == new_msg  # nothing to redact
 
 
@@ -754,6 +753,6 @@ def test_redact_internal_details_drops_embedded_traceback():
 
 
 def test_redact_internal_details_from_client_message_respects_disable_flag():
-    with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):  # test-quality-ok: the opt-out flag is the SUT
+    with patch("litellm._logging.ENABLE_SECRET_REDACTION", False):  # test-quality-ok: the opt-out flag is the SUT
         text = "config file /etc/litellm/secrets/db.yaml"
         assert redact_internal_details_from_client_message(text) == text

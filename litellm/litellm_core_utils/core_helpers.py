@@ -5,25 +5,24 @@ import logging
 import re
 from collections.abc import Collection, Iterable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 import httpx
+from opentelemetry.trace import Span
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
     from litellm.types.utils import ModelResponseStream
-
-    Span = _Span | Any
-else:
-    Span = Any
 
 
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
+
+
+def _as_otel_span(value: object) -> Span | None:
+    return cast(Span | None, value)  # cast-ok: OpenTelemetry spans enter through untyped request metadata
 
 
 def is_codex_user_agent(user_agent: str) -> bool:
@@ -194,7 +193,7 @@ def coerce_token_limit(value: object) -> int | None:
     return None
 
 
-_FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
+FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     # Anthropic
     "stop_sequence": "stop",
     "end_turn": "stop",
@@ -248,10 +247,11 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     # emit lowercase "error" when a provider fails mid-stream)
     "error": "stop",
 }
+_FINISH_REASON_MAP = FINISH_REASON_MAP
 
 
 def map_finish_reason(finish_reason: str) -> OpenAIChatCompletionFinishReason:
-    mapped: Final = _FINISH_REASON_MAP.get(finish_reason)
+    mapped: Final = FINISH_REASON_MAP.get(finish_reason)
     if mapped is None:
         verbose_logger.warning("Unmapped finish_reason '%s', defaulting to 'stop'", finish_reason)
         return "stop"
@@ -426,28 +426,27 @@ def reconstruct_model_name(
 
 
 # Helper functions used for OTEL logging
-def _get_parent_otel_span_from_kwargs(
-    kwargs: dict | None = None,
+def get_parent_otel_span_from_kwargs(
+    kwargs: dict[str, object] | None = None,
 ) -> Span | None:
     try:
         if kwargs is None:
             return None
+        metadata: Final = kwargs.get("metadata")
+        if isinstance(metadata, Mapping) and "litellm_parent_otel_span" in metadata:
+            return _as_otel_span(metadata["litellm_parent_otel_span"])
         litellm_params: Final = kwargs.get("litellm_params")
-        _metadata: Final = kwargs.get("metadata") or {}
-        if "litellm_parent_otel_span" in _metadata:
-            return _metadata["litellm_parent_otel_span"]
-        elif (
-            litellm_params is not None
-            and litellm_params.get("metadata") is not None
-            and "litellm_parent_otel_span" in litellm_params.get("metadata", {})
-        ):
-            return litellm_params["metadata"]["litellm_parent_otel_span"]
-        elif "litellm_parent_otel_span" in kwargs:
-            return kwargs["litellm_parent_otel_span"]
-        return None
+        if isinstance(litellm_params, Mapping):
+            litellm_metadata: Final = litellm_params.get("metadata")
+            if isinstance(litellm_metadata, Mapping) and "litellm_parent_otel_span" in litellm_metadata:
+                return _as_otel_span(litellm_metadata["litellm_parent_otel_span"])
+        return _as_otel_span(kwargs.get("litellm_parent_otel_span"))
     except Exception as e:
-        verbose_logger.exception("Error in _get_parent_otel_span_from_kwargs: " + str(e))
+        verbose_logger.exception("Error in get_parent_otel_span_from_kwargs: " + str(e))
         return None
+
+
+_get_parent_otel_span_from_kwargs = get_parent_otel_span_from_kwargs
 
 
 def process_response_headers(

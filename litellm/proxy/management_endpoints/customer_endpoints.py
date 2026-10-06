@@ -230,7 +230,7 @@ async def unblock_user(data: BlockUsers):
     """
     try:
         from enterprise.enterprise_hooks.blocked_user_list import (
-            _ENTERPRISE_BlockedUserList,
+            ENTERPRISE_BlockedUserList,
         )
     except ImportError:
         raise HTTPException(
@@ -242,7 +242,7 @@ async def unblock_user(data: BlockUsers):
         )
 
     if (
-        not any(isinstance(x, _ENTERPRISE_BlockedUserList) for x in litellm.callbacks)
+        not any(isinstance(x, ENTERPRISE_BlockedUserList) for x in litellm.callbacks)
         or litellm.blocked_user_list is None
     ):
         raise HTTPException(

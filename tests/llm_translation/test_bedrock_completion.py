@@ -505,7 +505,7 @@ def test_bedrock_system_prompt(system, model):
 def test_bedrock_claude_3_tool_calling():
     try:
         litellm.set_verbose = True
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         tools = [
             {
                 "type": "function",
@@ -626,7 +626,7 @@ def test_completion_bedrock_mistral_completion_auth():
 
     import os
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     # aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
@@ -2360,7 +2360,7 @@ async def test_bedrock_image_url_sync_client():
 
     verbose_logger.setLevel(level=logging.DEBUG)
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = AsyncHTTPHandler()
 
     messages = [
@@ -2461,7 +2461,7 @@ def test_bedrock_custom_deepseek():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     import json
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = HTTPHandler()
 
     with patch.object(client, "post") as mock_post:
@@ -2688,7 +2688,7 @@ def test_bedrock_description_param():
 )
 @pytest.mark.asyncio
 async def test_bedrock_thinking_in_assistant_message(sync_mode):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
     if sync_mode:
@@ -2994,7 +2994,7 @@ async def test_bedrock_passthrough_router():
     import litellm
     from litellm import Router
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     router = Router(
         model_list=[
@@ -3054,7 +3054,7 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
     mock_custom_logger = MockCustomLogger()
     monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     data = {
         "messages": [
@@ -3104,7 +3104,7 @@ async def test_bedrock_streaming_passthrough_test2(monkeypatch):
     mock_custom_logger = MockCustomLogger()
     monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     data = {
         "max_tokens": 512,

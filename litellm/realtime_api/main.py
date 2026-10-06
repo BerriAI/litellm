@@ -357,9 +357,9 @@ async def _arealtime(
     timeout: float | None = None,
     query_params: RealtimeQueryParams | None = None,
     **kwargs,
-):
+) -> None:
     """
-    Private function to handle the realtime API call.
+    Handle the realtime API call.
 
     For PROXY use only.
     """
@@ -587,6 +587,8 @@ async def _arealtime(
         raise ValueError(f"Unsupported model: {model}")
 
 
+
+
 def _is_transcription_only_realtime_model(model: str, custom_llm_provider: str) -> bool:
     try:
         model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
@@ -628,15 +630,15 @@ def _realtime_health_check_auth_headers(
     return MappingProxyType({"Authorization": f"Bearer {api_key}"})
 
 
-async def _realtime_health_check(
+async def realtime_health_check(
     model: str,
     custom_llm_provider: str,
     api_key: str | None,
     api_base: str | None = None,
     api_version: str | None = None,
     realtime_protocol: str | None = None,
-    model_params: dict | None = None,
-):
+    model_params: Mapping[str, object] | None = None,
+) -> bool:
     """
     Health check for realtime API - tries connection to the realtime API websocket
 
@@ -740,3 +742,6 @@ async def _realtime_health_check(
         ssl=ssl_context,
     ):
         return True
+
+
+_realtime_health_check = realtime_health_check

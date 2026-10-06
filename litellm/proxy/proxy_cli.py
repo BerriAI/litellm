@@ -289,7 +289,7 @@ class ProxyInitializationHelpers:
         log_config: str | None = None,
         keepalive_timeout: int | None = None,
         timeout_worker_healthcheck: int | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Get the arguments for `uvicorn` worker
         """
@@ -298,9 +298,9 @@ class ProxyInitializationHelpers:
         import uvicorn
 
         import litellm
-        from litellm._logging import _get_uvicorn_json_log_config, resolve_log_level
+        from litellm._logging import get_uvicorn_json_log_config, resolve_log_level
 
-        uvicorn_args: Final = {
+        uvicorn_args: Final[dict[str, object]] = {
             "app": "litellm.proxy.proxy_server:app",
             "host": host,
             "port": port,
@@ -311,7 +311,7 @@ class ProxyInitializationHelpers:
             uvicorn_args["log_config"] = log_config
         elif litellm.json_logs:
             # Use JSON log config for uvicorn to ensure all logs (including exceptions) are JSON
-            uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
+            uvicorn_args["log_config"] = get_uvicorn_json_log_config()
         elif litellm_log := os.environ.get("LITELLM_LOG"):
             uvicorn_args["log_level"] = resolve_log_level(litellm_log)
         if keepalive_timeout is not None:
@@ -329,7 +329,7 @@ class ProxyInitializationHelpers:
 
     @staticmethod
     def _apply_uvicorn_max_requests_jitter(
-        uvicorn_args: dict,
+        uvicorn_args: dict[str, object],
         max_requests_before_restart: int | None,
         jitter: int,
     ) -> None:
@@ -418,7 +418,7 @@ class ProxyInitializationHelpers:
         return True
 
     @staticmethod
-    def _configure_dev_reload(uvicorn_args: dict, config_path: str | None) -> None:
+    def _configure_dev_reload(uvicorn_args: dict[str, object], config_path: str | None) -> None:
         """Wire up --reload (dev only): watch *.py, the --config YAML, and .env,
         and signal reloaded workers to re-read .env with override so edits to
         existing keys actually take effect rather than staying masked by the
@@ -1228,7 +1228,7 @@ def run_server(
 
                 litellm.json_logs = True
 
-                litellm._turn_on_json()
+                litellm.turn_on_json()
             ### GENERAL SETTINGS ###
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
@@ -1498,7 +1498,7 @@ def run_server(
         import litellm
 
         if detailed_debug is True:
-            litellm._turn_on_debug()
+            litellm.turn_on_debug()
 
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app

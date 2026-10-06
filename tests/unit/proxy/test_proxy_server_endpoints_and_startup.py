@@ -3599,7 +3599,7 @@ async def test_startup_initializes_string_callbacks_after_all_litellm_settings_l
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
     monkeypatch.setattr(litellm, "callbacks", [])
     monkeypatch.setattr(litellm, "s3_callback_params", None)
-    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    monkeypatch.setattr(litellm_logging, "in_memory_loggers", [])
 
     await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
     ProxyLogging(user_api_key_cache=MagicMock())._init_litellm_callbacks(llm_router=None)
@@ -12033,7 +12033,7 @@ async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(mon
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
     monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    monkeypatch.setattr(litellm_logging, "in_memory_loggers", [])
 
     db_row = {
         "success_callback": ["datadog"],
@@ -12056,7 +12056,7 @@ def _reset_runtime_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
     for list_name in ("success_callback", "_async_success_callback", "failure_callback", "_async_failure_callback"):
         monkeypatch.setattr(litellm, list_name, [])
     monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    monkeypatch.setattr(litellm_logging, "in_memory_loggers", [])
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
     monkeypatch.setenv("HUMANLOOP_API_KEY", "test-key")
@@ -12064,7 +12064,7 @@ def _reset_runtime_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _runtime_callback_names() -> frozenset[str]:
     manager = litellm.logging_callback_manager
-    return frozenset(manager._get_callback_string(callback) for callback in manager._get_all_callbacks())
+    return frozenset(manager._get_callback_string(callback) for callback in manager.get_all_callbacks())
 
 
 @pytest.mark.parametrize("setting_key", ["success_callback", "failure_callback", "callbacks"])
@@ -12087,10 +12087,10 @@ def test_db_config_sync_unregisters_a_callback_the_stored_config_no_longer_lists
 
 def test_db_config_sync_keeps_callbacks_it_did_not_register(monkeypatch: pytest.MonkeyPatch):
     import litellm.proxy.proxy_server as ps
-    from litellm.utils import _add_custom_logger_callback_to_specific_event
+    from litellm.utils import add_custom_logger_callback_to_specific_event
 
     _reset_runtime_callbacks(monkeypatch)
-    _add_custom_logger_callback_to_specific_event("langfuse_otel", "success")
+    add_custom_logger_callback_to_specific_event("langfuse_otel", "success")
     litellm.logging_callback_manager.add_litellm_success_callback("helicone")
     pc = ps.ProxyConfig()
 
@@ -12133,7 +12133,7 @@ def test_db_config_sync_registers_otel_v2_arize_next_to_otel(
     import litellm.proxy.proxy_server as ps
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
-    from litellm.utils import _add_custom_logger_callback_to_specific_event
+    from litellm.utils import add_custom_logger_callback_to_specific_event
 
     _reset_runtime_callbacks(monkeypatch)
     for extra_list in ("input_callback", "service_callback"):
@@ -12147,7 +12147,7 @@ def test_db_config_sync_registers_otel_v2_arize_next_to_otel(
     is_otel_v2_enabled.cache_clear()
     try:
         getattr(litellm.logging_callback_manager, f"add_litellm_{event}_callback")("helicone")
-        _add_custom_logger_callback_to_specific_event("otel", event)
+        add_custom_logger_callback_to_specific_event("otel", event)
         pc = ps.ProxyConfig()
         for _ in range(2):
             pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: ["arize"]}})
@@ -13308,7 +13308,7 @@ def _run_init_cache_with_backend(cache_backend, redis_env_kwargs):
     with (
         _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
         patch(
-            "litellm._redis._redis_kwargs_from_environment",
+            "litellm._redis.redis_kwargs_from_environment",
             return_value=redis_env_kwargs,
         ),
         patch("litellm.Cache", return_value=mock_litellm_cache),
@@ -13501,7 +13501,7 @@ async def _run_init_coordination_redis_env_fallback(
             spend_cache=fresh_spend_cache, config_cache=fresh_config_cache, redis_cache_class=redis_cache_class
         ),
         patch(
-            "litellm._redis._redis_kwargs_from_environment",
+            "litellm._redis.redis_kwargs_from_environment",
             return_value=redis_env_kwargs,
         ),
     ):
@@ -13584,7 +13584,7 @@ def test_env_fallback_builds_cluster_client_from_cluster_nodes_env():
     with (
         patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
         patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
-        patch("litellm._redis._redis_kwargs_from_environment", return_value={}),
+        patch("litellm._redis.redis_kwargs_from_environment", return_value={}),
         mock.patch.dict(os.environ, {"REDIS_CLUSTER_NODES": nodes}, clear=False),
     ):
         result = proxy_server_module._build_redis_usage_cache_from_environment()
@@ -13599,7 +13599,7 @@ def test_env_fallback_builds_client_from_sentinel_nodes_env():
     with (
         patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
         patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
-        patch("litellm._redis._redis_kwargs_from_environment", return_value={}),
+        patch("litellm._redis.redis_kwargs_from_environment", return_value={}),
         mock.patch.dict(os.environ, {"REDIS_SENTINEL_NODES": '[["s1", 26379]]'}, clear=False),
     ):
         result = proxy_server_module._build_redis_usage_cache_from_environment()
@@ -15335,7 +15335,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
     from litellm import Router
     from tests.unit.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
 
-    claude_tokenizer: Final = litellm.utils._select_tokenizer("claude-fable-5")["tokenizer"]
+    claude_tokenizer: Final = litellm.utils.select_tokenizer("claude-fable-5")["tokenizer"]
 
     class SlowHubTokenizer:
         @staticmethod
@@ -15376,7 +15376,7 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
     from litellm import Router
     from litellm.types.router import DeploymentTypedDict
 
-    claude_tokenizer: Final[Tokenizer] = litellm.utils._select_tokenizer("claude-fable-5")["tokenizer"]
+    claude_tokenizer: Final[Tokenizer] = litellm.utils.select_tokenizer("claude-fable-5")["tokenizer"]
     from_pretrained: Final = MagicMock(return_value=claude_tokenizer)
 
     def deployment(model_name: str, revision: str, auth_token: str | None) -> DeploymentTypedDict:

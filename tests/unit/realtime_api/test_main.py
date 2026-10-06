@@ -179,7 +179,7 @@ async def test_meta_realtime_dispatches_to_base_handler_with_meta_config(monkeyp
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
     monkeypatch.setattr(realtime_main.base_llm_http_handler, "async_realtime", mock_async_realtime)
 
-    await realtime_main._arealtime.__wrapped__(
+    await realtime_main.arealtime.__wrapped__(
         model="meta/muse-voice-transcribe-1.0",
         websocket=MagicMock(),
         litellm_logging_obj=FakeLogging(),
@@ -209,7 +209,7 @@ async def test_arealtime_vertex_branch_resolves_credentials_under_a_bound(monkey
 
     start = time.monotonic()
     with pytest.raises(ValueError, match="timed out fetching Google OAuth access token"):
-        await realtime_main._arealtime.__wrapped__(
+        await realtime_main.arealtime.__wrapped__(
             model="gemini-live-2.5-flash",
             websocket=MagicMock(),
             litellm_logging_obj=FakeLogging(),
@@ -447,7 +447,7 @@ class _ConnectThatStopsAfterCapturingTheUrl:
 async def test_arealtime_azure_ai_on_a_foundry_host_connects_to_the_azure_openai_realtime_route():
     connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
     with patch("websockets.connect", connect):
-        await realtime_main._arealtime.__wrapped__(
+        await realtime_main.arealtime.__wrapped__(
             model="azure_ai/gpt-realtime-mini",
             websocket=MagicMock(),
             api_base="https://my-project.services.ai.azure.com",
@@ -469,7 +469,7 @@ _BETA_CLIENT: Final = _ClientWebSocketWithHeaders(headers=((b"openai-beta", b"re
 async def _azure_backend_url_dialed_for(websocket: _ClientWebSocketWithHeaders, **kwargs: object) -> str | None:
     connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
     with patch("websockets.connect", connect):
-        await realtime_main._arealtime.__wrapped__(
+        await realtime_main.arealtime.__wrapped__(
             model="azure/gpt-realtime",
             websocket=websocket,
             api_base="https://my-endpoint.openai.azure.com",
@@ -533,7 +533,7 @@ async def _vertex_provider_config_for(monkeypatch, model: str, vertex_location: 
     monkeypatch.setattr(realtime_main.base_llm_http_handler, "async_realtime", mock_async_realtime)
     monkeypatch.setattr(litellm, "vertex_location", None)
     monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
-    await realtime_main._arealtime.__wrapped__(
+    await realtime_main.arealtime.__wrapped__(
         model=model,
         websocket=MagicMock(),
         litellm_logging_obj=FakeLogging(),
@@ -591,7 +591,7 @@ class _ClosableGaClientWebSocket:
 async def test_arealtime_openai_forwards_the_intent_query_param_to_the_upstream_url():
     connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
     with patch("websockets.connect", connect):
-        await realtime_main._arealtime.__wrapped__(
+        await realtime_main.arealtime.__wrapped__(
             model="openai/gpt-realtime",
             websocket=_ClosableGaClientWebSocket(),
             api_key="fake-key",
@@ -642,7 +642,7 @@ async def test_arealtime_drops_model_from_the_upstream_url_only_for_transcriptio
 ):
     connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
     with patch("websockets.connect", connect):
-        await realtime_main._arealtime.__wrapped__(
+        await realtime_main.arealtime.__wrapped__(
             model=model,
             websocket=_ClosableGaClientWebSocket(),
             api_base=api_base,

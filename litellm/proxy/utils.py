@@ -49,7 +49,7 @@ from typing import (
 
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm import _custom_logger_compatible_callbacks_literal
+from litellm import custom_logger_compatible_callbacks_literal
 from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     FILE_USAGE_MAX_TRACKED_COUNTERS,
@@ -122,7 +122,7 @@ from litellm import (
     Router,
 )
 from litellm._internal_context import service_target
-from litellm._logging import _redact_string, verbose_proxy_logger
+from litellm._logging import redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
@@ -139,7 +139,7 @@ from litellm.integrations.custom_guardrail import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
-from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
@@ -254,7 +254,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointT
 from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionResult
 from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 from litellm.utils import (
-    _add_custom_logger_callback_to_specific_event,  # pyright: ignore[reportPrivateUsage]  # only string-to-logger helper
+    add_custom_logger_callback_to_specific_event,  # pyright: ignore[reportPrivateUsage]  # only string-to-logger helper
 )
 
 if TYPE_CHECKING:
@@ -350,7 +350,7 @@ def print_verbose(print_statement: object):
 
     verbose_proxy_logger.debug("%s\n%s", print_statement, traceback.format_exc())
     if litellm.set_verbose:
-        print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa: T201
+        print(f"LiteLLM Proxy: {redact_string(str(print_statement))}")  # noqa: T201
 
 
 def _get_email_logger_class():
@@ -601,7 +601,7 @@ def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple
     resolved: Final = tuple(
         litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
             cast(  # cast-ok: the resolver returns None for unknown names, filtered below
-                _custom_logger_compatible_callbacks_literal, callback
+                custom_logger_compatible_callbacks_literal, callback
             )
         )
         if isinstance(callback, str)
@@ -1405,7 +1405,7 @@ class ProxyLogging:
         for idx, callback in enumerate(litellm.callbacks):
             if isinstance(callback, str):
                 initialized_callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
-                    cast(_custom_logger_compatible_callbacks_literal, callback),
+                    cast(custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
@@ -1437,9 +1437,9 @@ class ProxyLogging:
         success_callbacks: Final = tuple(cb for cb in litellm.success_callback if isinstance(cb, str))
         failure_callbacks: Final = tuple(cb for cb in litellm.failure_callback if isinstance(cb, str))
         for callback in success_callbacks:
-            _add_custom_logger_callback_to_specific_event(callback, "success")
+            add_custom_logger_callback_to_specific_event(callback, "success")
         for callback in failure_callbacks:
-            _add_custom_logger_callback_to_specific_event(callback, "failure")
+            add_custom_logger_callback_to_specific_event(callback, "failure")
 
     async def update_request_status(self, litellm_call_id: str, status: Literal["success", "fail"]):
         # only use this if slack alerting is being used
@@ -2843,7 +2843,7 @@ class ProxyLogging:
         for callback in callbacks:
             if isinstance(callback, str):
                 resolved = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                    cast(_custom_logger_compatible_callbacks_literal, callback)
+                    cast(custom_logger_compatible_callbacks_literal, callback)
                 )
             else:
                 resolved = callback
@@ -3164,7 +3164,7 @@ class ProxyLogging:
         extra_kwargs: Final = {}
         alerting_metadata = {}
         if request_data is not None:
-            _url: Final = await _add_langfuse_trace_id_to_alert(request_data=request_data)
+            _url: Final = await add_langfuse_trace_id_to_alert(request_data=request_data)
 
             if _url is not None:
                 extra_kwargs["🪢 Langfuse Trace"] = _url
@@ -3211,7 +3211,7 @@ class ProxyLogging:
             error_message = str(original_exception)
         if isinstance(traceback_str, str):
             error_message += traceback_str[:1000]
-        error_message = _redact_string(error_message)
+        error_message = redact_string(error_message)
         asyncio.create_task(
             self.alerting_handler(
                 message=f"DB read/write call failed: {error_message}",
@@ -3285,7 +3285,7 @@ class ProxyLogging:
 
             asyncio.create_task(
                 self.alerting_handler(
-                    message=_redact_string(f"LLM API call failed: `{exception_str}`"),
+                    message=redact_string(f"LLM API call failed: `{exception_str}`"),
                     level="High",
                     alert_type=AlertType.llm_exceptions,
                     request_data=request_data,
@@ -3315,7 +3315,7 @@ class ProxyLogging:
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
 
-        redacted_traceback_str: Final = _redact_string(traceback_str) if traceback_str is not None else None
+        redacted_traceback_str: Final = redact_string(traceback_str) if traceback_str is not None else None
 
         # Track the first HTTPException returned or raised by any callback
         transformed_exception: HTTPException | None = None
@@ -3325,7 +3325,7 @@ class ProxyLogging:
                 _callback: CustomLogger | None = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        cast(_custom_logger_compatible_callbacks_literal, callback)
+                        cast(custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback
@@ -3787,7 +3787,7 @@ class ProxyLogging:
                 _callback: CustomLogger | None = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        cast(_custom_logger_compatible_callbacks_literal, callback)
+                        cast(custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback
@@ -3921,7 +3921,7 @@ class ProxyLogging:
                             continue
                     if isinstance(callback, str):
                         _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                            cast(_custom_logger_compatible_callbacks_literal, callback)
+                            cast(custom_logger_compatible_callbacks_literal, callback)
                         )
                     else:
                         _callback = callback

@@ -95,7 +95,7 @@ class AnthropicMessagesStreamCacheWriter:
             return
         self.persisted = True
 
-        if not self.caching_handler._should_store_result_in_cache(
+        if not self.caching_handler.should_store_result_in_cache(
             original_function=self.caching_handler.original_function,
             kwargs=self.caching_handler.request_kwargs,
         ):

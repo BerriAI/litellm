@@ -514,13 +514,13 @@ async def test_aresponses_strips_responses_routing_prefix_from_openai_model(mode
 async def test_aresponses_websocket_strips_responses_routing_prefix_from_openai_model():
     from unittest.mock import MagicMock
 
-    from litellm.responses.main import _aresponses_websocket
+    from litellm.responses.main import aresponses_websocket
 
     with patch.object(
         import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
         new_callable=AsyncMock,
     ) as mock_ws:
-        await _aresponses_websocket(
+        await aresponses_websocket(
             model="openai/responses/gpt-5.6",
             websocket=MagicMock(),
             api_key="sk-test",
@@ -536,13 +536,13 @@ async def test_aresponses_websocket_strips_responses_routing_prefix_from_openai_
 async def test_aresponses_websocket_keeps_routing_hints_out_of_the_relay_kwargs():  # test-quality-ok: the relay kwargs are the only place a dropped key is observable; the provider socket behind them is the boundary
     from unittest.mock import MagicMock
 
-    from litellm.responses.main import _aresponses_websocket
+    from litellm.responses.main import aresponses_websocket
 
     with patch.object(
         import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
         new_callable=AsyncMock,
     ) as mock_ws:
-        await _aresponses_websocket(
+        await aresponses_websocket(
             model="openai/gpt-5.6",
             websocket=MagicMock(),
             api_key="sk-test",
@@ -568,7 +568,7 @@ _ORIGINAL_WS_INPUT = [
 async def test_aresponses_websocket_forwards_the_routed_input_in_the_first_frame(nested: bool):  # test-quality-ok: the first frame handed to the relay is the only place the routed input is observable before the provider socket
     from unittest.mock import MagicMock
 
-    from litellm.responses.main import _aresponses_websocket
+    from litellm.responses.main import aresponses_websocket
 
     body = {"model": "gpt-5.6", "input": _ORIGINAL_WS_INPUT, "store": False}
     first_message = json.dumps(
@@ -579,7 +579,7 @@ async def test_aresponses_websocket_forwards_the_routed_input_in_the_first_frame
         import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
         new_callable=AsyncMock,
     ) as mock_ws:
-        await _aresponses_websocket(
+        await aresponses_websocket(
             model="openai/gpt-5.6",
             websocket=MagicMock(),
             api_key="sk-test",
@@ -600,7 +600,7 @@ async def test_aresponses_websocket_forwards_the_routed_input_in_the_first_frame
 async def test_aresponses_websocket_forwards_the_first_frame_verbatim_when_routing_left_the_input_alone():  # test-quality-ok: the relay kwargs are the boundary; byte-identical passthrough is only observable there
     from unittest.mock import MagicMock
 
-    from litellm.responses.main import _aresponses_websocket
+    from litellm.responses.main import aresponses_websocket
 
     first_message = '{"type": "response.create", "model": "gpt-5.6",  "input": [{"role": "user", "content": "hi"}]}'
 
@@ -608,7 +608,7 @@ async def test_aresponses_websocket_forwards_the_first_frame_verbatim_when_routi
         import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
         new_callable=AsyncMock,
     ) as mock_ws:
-        await _aresponses_websocket(
+        await aresponses_websocket(
             model="openai/gpt-5.6",
             websocket=MagicMock(),
             api_key="sk-test",

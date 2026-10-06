@@ -389,11 +389,11 @@ async def responses_api(
         if data.get("background") and isinstance(response, ResponsesAPIResponse):
             if response.status in ["queued", "in_progress"]:
                 from litellm_enterprise.proxy.hooks.managed_files import (
-                    _PROXY_LiteLLMManagedFiles,
+                    PROXY_LiteLLMManagedFiles,
                 )
 
                 managed_files_obj: Final = cast(
-                    _PROXY_LiteLLMManagedFiles | None,
+                    PROXY_LiteLLMManagedFiles | None,
                     proxy_logging_obj.get_proxy_hook("managed_files"),
                 )
 

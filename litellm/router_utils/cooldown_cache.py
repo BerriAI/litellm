@@ -5,7 +5,9 @@ Wrapper around router cache. Meant to handle model cooldown logic
 import functools
 import time
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import Any, Final
+
+from opentelemetry.trace import Span
 
 from typing_extensions import TypedDict
 
@@ -15,14 +17,6 @@ from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-
-if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
-    Span = _Span | Any
-else:
-    Span = Any
-
 
 class CooldownCacheValue(TypedDict):
     exception_received: str
@@ -84,7 +78,7 @@ class CooldownCache:
 
             # Store the cooldown information for the deployment separately
             cooldown_data: Final = CooldownCacheValue(
-                exception_received=self.exception_masker._mask_value(str(original_exception)),
+                exception_received=self.exception_masker.mask_value(str(original_exception)),
                 status_code=str(exception_status),
                 timestamp=current_time,
                 cooldown_time=cooldown_time,

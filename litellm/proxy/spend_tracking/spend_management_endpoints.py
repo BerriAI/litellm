@@ -4353,7 +4353,7 @@ async def provider_budgets() -> ProviderBudgetResponse:
                 "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
             )
 
-        router_budget_logger: Final = llm_router._get_router_deployment_budget_limiter()
+        router_budget_logger: Final = llm_router.get_router_deployment_budget_limiter()
         if router_budget_logger is None:
             raise ValueError("No router budget logger found")
 

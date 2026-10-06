@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
-from litellm._redis import _redis_kwargs_from_environment
+from litellm._redis import redis_kwargs_from_environment
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import (
@@ -122,7 +122,7 @@ def _overlay_environment(stored: Mapping[str, object]) -> dict[str, object]:
     Stored values win; the environment only fills what the stored config omits.
     """
     env_kwargs: Final = {
-        key: value for key, value in _redis_kwargs_from_environment().items() if key in _CACHE_SETTINGS_FIELD_NAMES
+        key: value for key, value in redis_kwargs_from_environment().items() if key in _CACHE_SETTINGS_FIELD_NAMES
     }
     if not env_kwargs:
         return dict(stored)

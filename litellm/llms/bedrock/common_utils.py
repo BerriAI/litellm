@@ -246,9 +246,9 @@ def convert_bedrock_invoke_output_format_to_inline_schema(
 
 
 def _bedrock_model_supports(model: str, key: str) -> bool:
-    from litellm.utils import _supports_factory
+    from litellm.utils import supports_factory
 
-    return _supports_factory(model=model, custom_llm_provider="bedrock", key=key)
+    return supports_factory(model=model, custom_llm_provider="bedrock", key=key)
 
 
 def apply_bedrock_invoke_structured_output(

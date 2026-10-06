@@ -392,10 +392,10 @@ class TestS3AuditCallbackParamsDecoupling:
             litellm, "s3_audit_callback_params", getattr(litellm, "s3_audit_callback_params", None)
         )
         ll_audit_logs._audit_log_callback_cache.clear()
-        ll_logging._in_memory_loggers.clear()
+        ll_logging.in_memory_loggers.clear()
         yield
         ll_audit_logs._audit_log_callback_cache.clear()
-        ll_logging._in_memory_loggers.clear()
+        ll_logging.in_memory_loggers.clear()
 
     def test_opt_in_constructs_separate_instance_with_audit_config(self, monkeypatch: pytest.MonkeyPatch):
         """Audit config set → audit resolver returns a fresh S3Logger pointing

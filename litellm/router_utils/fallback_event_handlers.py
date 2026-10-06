@@ -17,13 +17,13 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     get_fallback_error_info,
 )
-from litellm.router_utils.batch_utils import _get_router_metadata_variable_name
+from litellm.router_utils.batch_utils import get_router_metadata_variable_name
 from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
-    _set_cooldown_deployments,  # pyright: ignore[reportPrivateUsage] - shared helper, used across router_utils
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
     is_caller_timeout_408,
+    set_cooldown_deployments,  # pyright: ignore[reportPrivateUsage] - shared helper, used across router_utils
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -141,7 +141,7 @@ def _trigger_cooldown_for_failed_deployment(
             litellm_router_instance=litellm_router,
             deployment_id=deployment_id,
         )
-        _set_cooldown_deployments(
+        set_cooldown_deployments(
             litellm_router_instance=litellm_router,
             exception_status=exception_status,
             original_exception=exception,
@@ -696,7 +696,7 @@ async def run_async_fallback(
 
     error_from_fallbacks = original_exception
     fallback_errors = (get_fallback_error_info(original_exception),)
-    metadata_variable_name: Final = _get_router_metadata_variable_name(
+    metadata_variable_name: Final = get_router_metadata_variable_name(
         function_name=getattr(kwargs.get("original_function"), "__name__", None)
     )
     same_model_group_only: Final = references_provider_scoped_resource(kwargs) or creates_provider_scoped_resource(
@@ -855,7 +855,7 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict, or
             verbose_router_logger.error("Error in log_failure_fallback_event: %s", e)
 
 
-def _check_non_standard_fallback_format(fallbacks: Sequence[object] | None) -> bool:
+def check_non_standard_fallback_format(fallbacks: Sequence[object] | None) -> bool:
     """
     Checks if the fallbacks list is a list of strings or a list of dictionaries.
 
@@ -880,6 +880,9 @@ def _check_non_standard_fallback_format(fallbacks: Sequence[object] | None) -> b
                         return True
 
     return False
+
+
+_check_non_standard_fallback_format = check_non_standard_fallback_format
 
 
 def run_non_standard_fallback_format(fallbacks: Sequence[str] | Sequence[Mapping[str, object]], model_group: str):

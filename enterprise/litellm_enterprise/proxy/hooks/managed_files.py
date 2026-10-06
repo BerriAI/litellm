@@ -233,7 +233,7 @@ def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, s
 _MANAGED_FILES_TARGET: Final = "managed_files"
 
 
-class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
+class PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     # Class variables or attributes
     def __init__(self, internal_usage_cache: InternalUsageCache, prisma_client: PrismaClient):
         self.internal_usage_cache = internal_usage_cache
@@ -1282,7 +1282,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             target_model_names_list=target_model_names_list,
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
-        response = await _PROXY_LiteLLMManagedFiles.return_unified_file_id(
+        response = await PROXY_LiteLLMManagedFiles.return_unified_file_id(
             file_objects=responses,
             create_file_request=create_file_request,
             internal_usage_cache=self.internal_usage_cache,
@@ -2068,3 +2068,4 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                 verbose_logger.debug(
                                     f"Converted file {file_id} from storage backend to base64 with format {content_type}"
                                 )
+_PROXY_LiteLLMManagedFiles = PROXY_LiteLLMManagedFiles

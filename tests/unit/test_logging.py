@@ -29,12 +29,12 @@ from litellm._logging import (
     LevelRoutingStreamHandler,
     SecretRedactionFilter,
     StdoutLogTruncationFilter,
-    _get_uvicorn_json_log_config,
+    get_uvicorn_json_log_config,
     _initialize_loggers_with_handler,
     _parse_json_logs_env,
     _plain_log_format,
     _stdout_truncation_marker,
-    _turn_on_json,
+    turn_on_json,
     format_base64_size,
     session_id_var,
     set_session_id,
@@ -63,7 +63,7 @@ class CacheHitCustomLogger(CustomLogger):
 
 def test_json_mode_emits_one_record_per_logger(capfd):
     # Turn on JSON logging
-    _turn_on_json()
+    turn_on_json()
     # Make sure our loggers will emit INFO-level records
     for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
         lg.setLevel(logging.INFO)
@@ -832,7 +832,7 @@ def test_diagnostic_redaction_precedes_a_credential_cut(monkeypatch, native):
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
     monkeypatch.setenv("MAX_BASE64_LENGTH_STDOUT_LOG", "0")
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     secret = "sk-" + "q" * 48
     record = _make_record(logging.INFO, "%s", ("é" * 110 + secret + "界" * 1000,))
 
@@ -843,7 +843,7 @@ def test_diagnostic_redaction_precedes_a_credential_cut(monkeypatch, native):
 
 
 def test_correlation_id_redacts_before_its_length_bound(monkeypatch):
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     secret = "sk-" + "q" * 48
     token = set_trace_id("x" * 250 + secret)
     try:
@@ -858,7 +858,7 @@ def test_malformed_interpolation_still_scrubs_a_record(monkeypatch, native):
     if native:
         pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.WARNING, "bad % api_key=secret123", ("value",))
     record.color_message = "bad % api_key=secret123"
 
@@ -873,7 +873,7 @@ def test_key_pattern_template_keeps_the_rendered_redacted_line(monkeypatch, nati
     if native:
         pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.INFO, "password=%s ok", ("hunter2",))
     record.color_message = "password=%s ok"
 
@@ -896,7 +896,7 @@ def test_disabled_diagnostic_call_does_not_render_arguments(caplog):
 
 def test_truncation_filter_survives_json_reconfiguration():
     """The cap lives on the loggers, so swapping handlers (JSON mode) can't drop it."""
-    _turn_on_json()
+    turn_on_json()
 
     for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
         assert any(isinstance(f, StdoutLogTruncationFilter) for f in lg.filters), f"{lg.name} lost stdout truncation"
@@ -1058,7 +1058,7 @@ def test_scrubbed_record_scans_the_large_rendered_value_once(monkeypatch, format
     counting = _CountingPattern(secret_redaction._SECRET_RE)
     monkeypatch.setenv("LITELLM_RUST", "0")
     monkeypatch.setattr(secret_redaction, "_SECRET_RE", counting)
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.DEBUG, "receiving data: %s", (_REQUEST_DUMP,))
 
     assert StdoutLogTruncationFilter().filter(record) is True
@@ -1077,7 +1077,7 @@ def test_stamped_record_is_not_scanned_again(monkeypatch):
     counting = _CountingPattern(secret_redaction._SECRET_RE)
     monkeypatch.setenv("LITELLM_RUST", "0")
     monkeypatch.setattr(secret_redaction, "_SECRET_RE", counting)
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.DEBUG, "receiving data: %s", (_REQUEST_DUMP,))
 
     assert SecretRedactionFilter().filter(record) is True
@@ -1092,7 +1092,7 @@ def test_caller_supplied_stamp_never_skips_the_scrub(monkeypatch):
     counting = _CountingPattern(secret_redaction._SECRET_RE)
     monkeypatch.setenv("LITELLM_RUST", "0")
     monkeypatch.setattr(secret_redaction, "_SECRET_RE", counting)
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.DEBUG, "api_key=sk-1234567890abcdefghij")
     record.litellm_redacted = True
 
@@ -1105,7 +1105,7 @@ def test_caller_supplied_stamp_never_skips_the_scrub(monkeypatch):
 
 
 def test_stack_info_is_scrubbed_before_the_plain_formatter(monkeypatch):
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.INFO, "call failed")
     record.stack_info = "Stack (most recent call last):\n  api_key=sk-1234567890abcdefghij"
 
@@ -1133,7 +1133,7 @@ class _BrokenModel(BaseModel):
 def test_unserializable_extra_never_breaks_the_filter(monkeypatch, extra):
     """A pydantic computed field that raises escapes model_dump() and str() alike, and a
     logging filter that lets it through raises into the caller's own log call."""
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.WARNING, "request sent")
     record.payload = extra
 
@@ -1169,7 +1169,7 @@ def _nest(value: object, levels: int) -> object:
 def test_secret_free_extra_keeps_its_original_object(monkeypatch, extra):
     """A host application's own handler on a litellm logger reads extras by type, so a
     container that carried no secret must reach it untouched, not as its JSON shape."""
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.WARNING, "request sent")
     record.payload = extra
 
@@ -1189,7 +1189,7 @@ def test_secret_free_extra_keeps_its_original_object(monkeypatch, extra):
     ids=("tuple", "set", "dict"),
 )
 def test_extra_that_carried_a_secret_comes_back_scrubbed(monkeypatch, extra, scrubbed):
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.WARNING, "request sent")
     record.payload = extra
 
@@ -1218,7 +1218,7 @@ class _AmbiguousArray:
 def test_extra_whose_equality_raises_still_comes_back_scrubbed(monkeypatch, extra, scrubbed):
     """numpy arrays and torch tensors raise when compared for truth, so the keep-or-scrub
     decision must fall on the scrubbed copy instead of breaking the caller's log call."""
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.WARNING, "request sent")
     record.payload = extra
 
@@ -1242,7 +1242,7 @@ def test_extra_whose_equality_raises_still_comes_back_scrubbed(monkeypatch, extr
 def test_extra_the_filter_cannot_fully_inspect_never_keeps_its_secret(monkeypatch, extra):
     """Whatever safe_dumps would skip (non-string keys, anything past its depth limit,
     fields a repr hides) must not ride the original object past the redacted stamp."""
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.WARNING, "request sent")
     record.payload = extra
 
@@ -1255,7 +1255,7 @@ def test_extra_the_filter_cannot_fully_inspect_never_keeps_its_secret(monkeypatc
 
 
 def test_secret_free_set_comes_back_as_its_json_shape(monkeypatch):
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.WARNING, "request sent")
     record.payload = {"gpt-4o", "gpt-4o-mini"}
 
@@ -1268,7 +1268,7 @@ def test_secret_free_set_comes_back_as_its_json_shape(monkeypatch):
 def test_unscrubbed_record_is_still_redacted_by_the_formatter(monkeypatch):
     """Records that never met SecretRedactionFilter (uvicorn's, in JSON mode) keep
     their formatter-side redaction."""
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.INFO, "key sk-1234567890abcdefghij")
 
     assert "sk-1234567890abcdefghij" not in JsonFormatter().format(record)
@@ -1615,7 +1615,7 @@ def test_access_redaction_survives_the_uvicorn_json_log_config():
     names = ("uvicorn", "uvicorn.error", "uvicorn.access")
     saved = tuple((logging.getLogger(n), logging.getLogger(n).handlers[:], logging.getLogger(n).level) for n in names)
     try:
-        logging.config.dictConfig(_get_uvicorn_json_log_config())
+        logging.config.dictConfig(get_uvicorn_json_log_config())
         emitted = _emit_access_line(f"/key/info?key={_LEAKED_KEY}")
 
         assert _LEAKED_KEY not in emitted
@@ -1670,7 +1670,7 @@ def test_access_log_path_filter_survives_the_uvicorn_json_log_config(monkeypatch
     names = ("uvicorn", "uvicorn.error", "uvicorn.access")
     saved = tuple((logging.getLogger(n), logging.getLogger(n).handlers[:], logging.getLogger(n).level) for n in names)
     try:
-        logging.config.dictConfig(_get_uvicorn_json_log_config())
+        logging.config.dictConfig(get_uvicorn_json_log_config())
 
         assert _emit_access_line("/health/liveliness?x=1") == ""
         assert '"GET /v1/models HTTP/1.1" 200' in _emit_access_line("/v1/models")
@@ -1701,7 +1701,7 @@ def test_diagnostic_filter_scrubs_exc_stack_and_nested_extras(monkeypatch, nativ
     if native:
         pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     secret = "sk-" + "q" * 48
     try:
         raise ValueError(f"upstream rejected {secret}")
@@ -1729,7 +1729,7 @@ def test_diagnostic_filter_stamps_records_so_a_second_pass_is_free(monkeypatch, 
     if native:
         pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.WARNING, "api_key=secret123")
     diagnostic_filter = DiagnosticProcessingFilter()
 
@@ -1743,7 +1743,7 @@ def test_json_formatter_scrubs_unfiltered_extras(monkeypatch, native):
     if native:
         pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     secret = "sk-" + "q" * 48
     record = _make_record(logging.INFO, "response complete")
     record.payload = {"api_key": secret, "nested": {"list": [secret]}}
@@ -1759,7 +1759,7 @@ def test_diagnostic_filter_redacts_a_non_string_message_object(monkeypatch, nati
     if native:
         pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
-    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    monkeypatch.setattr("litellm._logging.ENABLE_SECRET_REDACTION", True)
     secret = "sk-" + "q" * 48
     record = _make_record(logging.ERROR, {"api_key": secret})
 

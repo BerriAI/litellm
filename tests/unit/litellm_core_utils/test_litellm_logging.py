@@ -430,7 +430,7 @@ def test_use_custom_pricing_not_detected_litellm_metadata_no_pricing():
 
 
 def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
-    """_response_cost_calculator should extract router_model_id from
+    """response_cost_calculator should extract router_model_id from
     litellm_params.litellm_metadata.model_info.id when the result object
     does not carry _hidden_params (e.g. ResponsesAPIResponse from /v1/responses
     streaming). Regression test for custom pricing on streaming responses."""
@@ -494,7 +494,7 @@ def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
             },
         )
 
-        cost = logging_obj._response_cost_calculator(result=response_obj)
+        cost = logging_obj.response_cost_calculator(result=response_obj)
 
         assert cost is not None, "Cost should not be None"
         expected_cost = (10 * custom_input_cost) + (5 * custom_output_cost)
@@ -597,8 +597,8 @@ class TestZeroCostDiagnostic:
         logging_obj: Final = self._logging_obj(deployment_pricing)
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-            first_cost: Final = logging_obj._response_cost_calculator(result=self._response(usage))
-            second_cost: Final = logging_obj._response_cost_calculator(result=self._response(usage))
+            first_cost: Final = logging_obj.response_cost_calculator(result=self._response(usage))
+            second_cost: Final = logging_obj.response_cost_calculator(result=self._response(usage))
 
         assert first_cost == 0.0
         assert second_cost == 0.0
@@ -615,8 +615,8 @@ class TestZeroCostDiagnostic:
         logging_obj: Final = self._logging_obj(deployment_pricing, stream=True)
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-            logging_obj._response_cost_calculator(result=self._response(usage=None))
-            logging_obj._response_cost_calculator(result=self._response(usage))
+            logging_obj.response_cost_calculator(result=self._response(usage=None))
+            logging_obj.response_cost_calculator(result=self._response(usage))
 
         if deployment_pricing is self.FREE_PRICING:
             assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
@@ -642,7 +642,7 @@ class TestZeroCostDiagnostic:
         )
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-            cost: Final = logging_obj._response_cost_calculator(result=event)
+            cost: Final = logging_obj.response_cost_calculator(result=event)
 
         assert cost == 0.0
         if deployment_pricing is self.FREE_PRICING:
@@ -709,7 +709,7 @@ class TestZeroCostDiagnostic:
         )
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-            cost: Final = logging_obj._response_cost_calculator(
+            cost: Final = logging_obj.response_cost_calculator(
                 result=self._response(usage, model="lit7898-unmapped-model")
             )
 
@@ -724,7 +724,7 @@ class TestZeroCostDiagnostic:
         logging_obj: Final = self._logging_obj(deployment_pricing)
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-            cost: Final = logging_obj._response_cost_calculator(
+            cost: Final = logging_obj.response_cost_calculator(
                 result={"model": "gpt-5.4-nano", "usage": {"prompt_tokens": "n/a", "completion_tokens": 3}}
             )
 
@@ -739,10 +739,10 @@ class TestZeroCostDiagnostic:
         logging_obj: Final = self._logging_obj(deployment_pricing, stream=True, call_type="anthropic_messages")
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-            logging_obj._response_cost_calculator(result=self._response(usage=None))
-            logging_obj._response_cost_calculator(result=self._response(usage))
-            logging_obj._response_cost_calculator(result=self._response(usage=None))
-            logging_obj._response_cost_calculator(result=self._response(usage))
+            logging_obj.response_cost_calculator(result=self._response(usage=None))
+            logging_obj.response_cost_calculator(result=self._response(usage))
+            logging_obj.response_cost_calculator(result=self._response(usage=None))
+            logging_obj.response_cost_calculator(result=self._response(usage))
 
         if deployment_pricing is self.FREE_PRICING:
             assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
@@ -763,15 +763,15 @@ class TestZeroCostDiagnostic:
         try:
             logging_obj: Final = self._logging_obj(self.QUERY_ONLY_PRICING)
             with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-                assert logging_obj._response_cost_calculator(result=self._response(usage)) == 0.0
+                assert logging_obj.response_cost_calculator(result=self._response(usage)) == 0.0
                 self._assert_flagged(logging_obj, caplog)
 
                 self._route_to_deployment(logging_obj, priced_pricing, deployment_id=priced_id)
-                assert logging_obj._response_cost_calculator(result=self._response(usage)) == pytest.approx(5e-05)
+                assert logging_obj.response_cost_calculator(result=self._response(usage)) == pytest.approx(5e-05)
                 assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
 
                 self._route_to_deployment(logging_obj, self.QUERY_ONLY_PRICING)
-                assert logging_obj._response_cost_calculator(result=self._response(usage)) == 0.0
+                assert logging_obj.response_cost_calculator(result=self._response(usage)) == 0.0
 
             assert logging_obj.model_call_details["zero_cost_diagnostic"]["reason"] == "missing_pricing_key"
             assert len(self._zero_cost_warnings(caplog)) == 1
@@ -794,8 +794,8 @@ class TestZeroCostDiagnostic:
                 {}, model=f"openai/{requested_model}", deployment_id="lit7898-cost-map-deployment"
             )
             with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-                assert logging_obj._response_cost_calculator(result=self._response(usage, model=dated_model)) == 0.0
-                assert logging_obj._response_cost_calculator(result=self._response(usage, model=requested_model)) == 0.0
+                assert logging_obj.response_cost_calculator(result=self._response(usage, model=dated_model)) == 0.0
+                assert logging_obj.response_cost_calculator(result=self._response(usage, model=requested_model)) == 0.0
 
             assert logging_obj.model_call_details["zero_cost_diagnostic"]["pricing_model"] == requested_model
             warnings: Final = self._zero_cost_warnings(caplog)
@@ -841,7 +841,7 @@ class TestZeroCostDiagnostic:
         logging_obj.model_call_details["cache_hit"] = True
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-            assert logging_obj._response_cost_calculator(result=self._response(usage), cache_hit=False) == 0.0
+            assert logging_obj.response_cost_calculator(result=self._response(usage), cache_hit=False) == 0.0
 
         assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
         assert self._zero_cost_warnings(caplog) == []
@@ -857,7 +857,7 @@ class TestZeroCostDiagnostic:
             response: Final = self._response(usage)
             response._response_ms = 1000.0
             with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-                assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.00042)
+                assert logging_obj.response_cost_calculator(result=response) == pytest.approx(0.00042)
 
             assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
             assert self._zero_cost_warnings(caplog) == []
@@ -895,7 +895,7 @@ class TestZeroCostDiagnostic:
                 usage, model=served_model, custom_llm_provider="azure", additional_headers=spillover_headers
             )
             with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-                assert logging_obj._response_cost_calculator(result=response) == 0.0
+                assert logging_obj.response_cost_calculator(result=response) == 0.0
 
             warnings: Final = self._zero_cost_warnings(caplog)
             if not spilled_over:
@@ -1209,7 +1209,7 @@ class TestRetrieveBatchCostPassesModelIdentity:
                 failed_requests=0,
             )
 
-        monkeypatch.setattr(logging_module, "_handle_completed_batch", fake_handle_completed_batch)
+        monkeypatch.setattr(logging_module, "handle_completed_batch", fake_handle_completed_batch)
 
         obj = LitellmLogging(
             model="bedrock/global.anthropic.claude-sonnet-4-6",
@@ -1240,7 +1240,7 @@ class TestRetrieveBatchCostPassesModelIdentity:
         finally:
             litellm.model_cost.pop(deployment_id, None)
 
-        assert captured, "_handle_completed_batch was never called"
+        assert captured, "handle_completed_batch was never called"
         assert captured["model_name"] == "bedrock/global.anthropic.claude-sonnet-4-6"
         assert captured["model_info"] is not None
         assert captured["model_info"]["input_cost_per_token"] == 0.0
@@ -1292,7 +1292,7 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         from litellm.litellm_core_utils import litellm_logging as logging_module
 
         handle_completed_batch = AsyncMock()
-        monkeypatch.setattr(logging_module, "_handle_completed_batch", handle_completed_batch)
+        monkeypatch.setattr(logging_module, "handle_completed_batch", handle_completed_batch)
         batch = self._batch(status, output_file_id)
 
         await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
@@ -1315,7 +1315,7 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
                 failed_requests=0,
             )
         )
-        monkeypatch.setattr(logging_module, "_handle_completed_batch", handle_completed_batch)
+        monkeypatch.setattr(logging_module, "handle_completed_batch", handle_completed_batch)
         batch = self._batch("completed", "file-out")
 
         await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
@@ -1709,12 +1709,12 @@ async def test_datadog_logger_not_shadowed_by_llm_obs(monkeypatch):
     from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module._in_memory_loggers.clear()
+    logging_module.in_memory_loggers.clear()
 
     try:
         # Cache an LLM Obs logger first to mirror callbacks=["datadog_llm_observability", ...]
         obs_logger = DataDogLLMObsLogger()
-        logging_module._in_memory_loggers.append(obs_logger)
+        logging_module.in_memory_loggers.append(obs_logger)
 
         datadog_logger = logging_module._init_custom_logger_compatible_class(
             logging_integration="datadog",
@@ -1725,10 +1725,10 @@ async def test_datadog_logger_not_shadowed_by_llm_obs(monkeypatch):
 
         # Regression check: we expect a distinct DataDogLogger, not the LLM Obs logger
         assert type(datadog_logger) is DataDogLogger
-        assert any(isinstance(cb, DataDogLLMObsLogger) for cb in logging_module._in_memory_loggers)
-        assert any(type(cb) is DataDogLogger for cb in logging_module._in_memory_loggers)
+        assert any(isinstance(cb, DataDogLLMObsLogger) for cb in logging_module.in_memory_loggers)
+        assert any(type(cb) is DataDogLogger for cb in logging_module.in_memory_loggers)
     finally:
-        logging_module._in_memory_loggers.clear()
+        logging_module.in_memory_loggers.clear()
 
 
 @pytest.mark.asyncio
@@ -1743,7 +1743,7 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
     from litellm.integrations.opentelemetry import OpenTelemetry  # logger class
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module._in_memory_loggers.clear()
+    logging_module.in_memory_loggers.clear()
 
     try:
         # Instantiate via the same mechanism LiteLLM uses for callbacks=["logfire"]
@@ -1756,7 +1756,7 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
 
         # Sanity: we got the right logger type and it is cached
         assert type(logger) is OpenTelemetry
-        assert any(type(cb) is OpenTelemetry for cb in logging_module._in_memory_loggers)
+        assert any(type(cb) is OpenTelemetry for cb in logging_module.in_memory_loggers)
 
         # Core regression check: base URL env var should influence the exporter endpoint.
         #
@@ -1775,7 +1775,7 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
         assert endpoint == "https://logfire-api-custom.pydantic.dev/v1/traces"
 
     finally:
-        logging_module._in_memory_loggers.clear()
+        logging_module.in_memory_loggers.clear()
 
 
 @pytest.mark.parametrize(
@@ -1802,7 +1802,7 @@ def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", raising=False)
     if api_host is not None:
         monkeypatch.setenv("LANGTRACE_API_HOST", api_host)
-    logging_module._in_memory_loggers.clear()
+    logging_module.in_memory_loggers.clear()
     try:
         logger: Final = logging_module._init_custom_logger_compatible_class(
             logging_integration="langtrace",
@@ -1817,7 +1817,7 @@ def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
         assert exporter._headers == {"x-api-key": api_key}
         assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
     finally:
-        logging_module._in_memory_loggers.clear()
+        logging_module.in_memory_loggers.clear()
 
 
 @pytest.mark.asyncio
@@ -1878,7 +1878,7 @@ async def test_anthropic_messages_marks_litellm_params_async():
         await asyncio.wait_for(logged.wait(), timeout=10)
 
         assert captured["litellm_params"].get("aanthropic_messages") is True
-        assert LitellmLogging._is_sync_litellm_request(captured["litellm_params"]) is False
+        assert LitellmLogging.is_sync_litellm_request(captured["litellm_params"]) is False
         logger.log_success_event.assert_not_called()
     finally:
         litellm.callbacks = original_callbacks
@@ -1906,11 +1906,11 @@ async def test_arealtime_marks_litellm_params_async(monkeypatch):
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     with pytest.raises(ValueError, match="Unsupported model"):
-        await litellm._arealtime(model="anthropic/claude-x", websocket=MagicMock())
+        await litellm.arealtime(model="anthropic/claude-x", websocket=MagicMock())
     await asyncio.wait_for(async_logged.wait(), timeout=10)
     logger.log_failure_event.assert_not_called()
     assert captured["litellm_params"].get("_arealtime") is True
-    assert LitellmLogging._is_sync_litellm_request(captured["litellm_params"]) is False
+    assert LitellmLogging.is_sync_litellm_request(captured["litellm_params"]) is False
 
 
 @pytest.mark.asyncio
@@ -1935,7 +1935,7 @@ async def test_aresponses_websocket_hands_back_the_provider_failure_without_a_su
     with patch.object(  # test-quality-ok: the provider socket is the seam; how the wrapper treats the relay's outcome is under test
         base_llm_http_handler, "async_responses_websocket", AsyncMock(return_value=failure)
     ):
-        outcome = await litellm._aresponses_websocket(model="openai/gpt-4o", websocket=MagicMock(), api_key="sk-test")
+        outcome = await litellm.aresponses_websocket(model="openai/gpt-4o", websocket=MagicMock(), api_key="sk-test")
     await asyncio.sleep(0)
     with contextlib.suppress(asyncio.TimeoutError):
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
@@ -1975,7 +1975,7 @@ async def test_agenerate_content_marks_litellm_params_async():
 
     litellm_params = logging_obj.model_call_details.get("litellm_params", {})
     assert litellm_params.get("agenerate_content") is True
-    assert LitellmLogging._is_sync_litellm_request(litellm_params) is False
+    assert LitellmLogging.is_sync_litellm_request(litellm_params) is False
 
 
 @pytest.mark.asyncio
@@ -2232,14 +2232,14 @@ async def test_async_success_handler_runs_async_callbacks_in_the_post_response_p
 
 
 def test_is_sync_litellm_request():
-    assert LitellmLogging._is_sync_litellm_request({}) is True
-    assert LitellmLogging._is_sync_litellm_request({"acompletion": True}) is False
-    assert LitellmLogging._is_sync_litellm_request({"allm_passthrough_route": True}) is False
-    assert LitellmLogging._is_sync_litellm_request({"_arealtime": True}) is False
-    assert LitellmLogging._is_sync_litellm_request({"aanthropic_messages": True}) is False
-    assert LitellmLogging._is_sync_litellm_request({"agenerate_content": True}) is False
-    assert LitellmLogging._is_sync_litellm_request({"agenerate_content_stream": True}) is False
-    assert LitellmLogging._is_sync_litellm_request({"aanthropic_messages": False}) is True
+    assert LitellmLogging.is_sync_litellm_request({}) is True
+    assert LitellmLogging.is_sync_litellm_request({"acompletion": True}) is False
+    assert LitellmLogging.is_sync_litellm_request({"allm_passthrough_route": True}) is False
+    assert LitellmLogging.is_sync_litellm_request({"_arealtime": True}) is False
+    assert LitellmLogging.is_sync_litellm_request({"aanthropic_messages": True}) is False
+    assert LitellmLogging.is_sync_litellm_request({"agenerate_content": True}) is False
+    assert LitellmLogging.is_sync_litellm_request({"agenerate_content_stream": True}) is False
+    assert LitellmLogging.is_sync_litellm_request({"aanthropic_messages": False}) is True
 
 
 def test_get_litellm_params_propagates_allm_passthrough_route():
@@ -2250,7 +2250,7 @@ def test_get_litellm_params_propagates_allm_passthrough_route():
 
     params = get_litellm_params(allm_passthrough_route=True)
     assert params.get("allm_passthrough_route") is True
-    assert LitellmLogging._is_sync_litellm_request(params) is False
+    assert LitellmLogging.is_sync_litellm_request(params) is False
 
 
 @pytest.mark.asyncio
@@ -2875,7 +2875,7 @@ def test_get_user_agent_tags():
 def test_get_request_tags():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
-    tags = StandardLoggingPayloadSetup._get_request_tags(
+    tags = StandardLoggingPayloadSetup.get_request_tags(
         litellm_params={"metadata": {"tags": ["test-tag"]}},
         proxy_server_request={
             "headers": {
@@ -2903,7 +2903,7 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
     # Test case 1: Tags in metadata only
-    tags = StandardLoggingPayloadSetup._get_request_tags(
+    tags = StandardLoggingPayloadSetup.get_request_tags(
         litellm_params={"metadata": {"tags": ["metadata-tag-1", "metadata-tag-2"]}},
         proxy_server_request={},
     )
@@ -2912,7 +2912,7 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     assert len([t for t in tags if not t.startswith("User-Agent:")]) == 2
 
     # Test case 2: Tags in litellm_metadata only
-    tags = StandardLoggingPayloadSetup._get_request_tags(
+    tags = StandardLoggingPayloadSetup.get_request_tags(
         litellm_params={"litellm_metadata": {"tags": ["litellm-metadata-tag-1", "litellm-metadata-tag-2"]}},
         proxy_server_request={},
     )
@@ -2921,7 +2921,7 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     assert len([t for t in tags if not t.startswith("User-Agent:")]) == 2
 
     # Test case 3: Tags in both - metadata should take priority
-    tags = StandardLoggingPayloadSetup._get_request_tags(
+    tags = StandardLoggingPayloadSetup.get_request_tags(
         litellm_params={
             "metadata": {"tags": ["metadata-tag"]},
             "litellm_metadata": {"tags": ["litellm-metadata-tag"]},
@@ -2933,14 +2933,14 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     assert len([t for t in tags if not t.startswith("User-Agent:")]) == 1
 
     # Test case 4: No tags in either
-    tags = StandardLoggingPayloadSetup._get_request_tags(
+    tags = StandardLoggingPayloadSetup.get_request_tags(
         litellm_params={"metadata": {}, "litellm_metadata": {}},
         proxy_server_request={},
     )
     assert len([t for t in tags if not t.startswith("User-Agent:")]) == 0
 
     # Test case 5: None values for metadata/litellm_metadata
-    tags = StandardLoggingPayloadSetup._get_request_tags(
+    tags = StandardLoggingPayloadSetup.get_request_tags(
         litellm_params={"metadata": None, "litellm_metadata": None},
         proxy_server_request={},
     )
@@ -2948,7 +2948,7 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     assert len([t for t in tags if not t.startswith("User-Agent:")]) == 0
 
     # Test case 6: Empty litellm_params
-    tags = StandardLoggingPayloadSetup._get_request_tags(
+    tags = StandardLoggingPayloadSetup.get_request_tags(
         litellm_params={},
         proxy_server_request={},
     )
@@ -2956,7 +2956,7 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     assert len([t for t in tags if not t.startswith("User-Agent:")]) == 0
 
     # Test case 7: Metadata tags combined with user-agent tags
-    tags = StandardLoggingPayloadSetup._get_request_tags(
+    tags = StandardLoggingPayloadSetup.get_request_tags(
         litellm_params={"metadata": {"tags": ["custom-tag"]}},
         proxy_server_request={
             "headers": {
@@ -2990,15 +2990,15 @@ def test_get_request_tags_does_not_mutate_original_tags():
     }
 
     # Call _get_request_tags multiple times (simulating multiple callbacks)
-    tags1 = StandardLoggingPayloadSetup._get_request_tags(
+    tags1 = StandardLoggingPayloadSetup.get_request_tags(
         litellm_params=litellm_params,
         proxy_server_request=proxy_server_request,
     )
-    tags2 = StandardLoggingPayloadSetup._get_request_tags(
+    tags2 = StandardLoggingPayloadSetup.get_request_tags(
         litellm_params=litellm_params,
         proxy_server_request=proxy_server_request,
     )
-    tags3 = StandardLoggingPayloadSetup._get_request_tags(
+    tags3 = StandardLoggingPayloadSetup.get_request_tags(
         litellm_params=litellm_params,
         proxy_server_request=proxy_server_request,
     )
@@ -3148,7 +3148,7 @@ def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_ob
         mock_response="Hello, world!",
     )
 
-    response_cost = logging_obj._response_cost_calculator(
+    response_cost = logging_obj.response_cost_calculator(
         result=mock_response,
     )
 
@@ -3197,7 +3197,7 @@ def test_response_cost_calculator_native_generate_content_body_uses_usage_metada
     )
     assert expected_cost > 0
 
-    cost = logging_obj._response_cost_calculator(result=native_body)
+    cost = logging_obj.response_cost_calculator(result=native_body)
     assert cost == pytest.approx(expected_cost)
 
 
@@ -3215,7 +3215,7 @@ def test_response_cost_calculator_does_not_transform_non_generate_content_dict()
     )
     logging_obj.optional_params = {}
 
-    cost = logging_obj._response_cost_calculator(
+    cost = logging_obj.response_cost_calculator(
         result={"usageMetadata": {"promptTokenCount": 1000, "candidatesTokenCount": 500}}
     )
     assert not cost
@@ -3246,7 +3246,7 @@ def test_file_content_call_is_not_billed(call_type):
     """
     result = HttpxBinaryResponseContent(httpx.Response(status_code=200, content=b"file contents"))
 
-    cost = _file_content_logging_obj(call_type)._response_cost_calculator(result=result)
+    cost = _file_content_logging_obj(call_type).response_cost_calculator(result=result)
 
     assert cost == 0.0
 
@@ -3269,7 +3269,7 @@ def test_speech_call_is_still_priced_from_input_characters(call_type):
 
     result = HttpxBinaryResponseContent(httpx.Response(status_code=200, content=b"audio bytes"))
 
-    cost = logging_obj._response_cost_calculator(result=result)
+    cost = logging_obj.response_cost_calculator(result=result)
 
     assert cost is not None
     assert cost > 0
@@ -3307,7 +3307,7 @@ def test_sentry_send_default_pii_opt_in(monkeypatch):
 
 
 def test_get_masked_values():
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
 
     sensitive_object = {
         "mode": "pre_call",
@@ -3351,7 +3351,7 @@ def test_get_masked_values():
         "presidio_anonymizer_api_base": None,
         "vertex_credentials": "{sensitive_api_key}",
     }
-    masked_values = _get_masked_values(sensitive_object, unmasked_length=4, number_of_asterisks=4)
+    masked_values = get_masked_values(sensitive_object, unmasked_length=4, number_of_asterisks=4)
     assert masked_values["presidio_anonymizer_api_base"] is None
     assert masked_values["vertex_credentials"] == "{s****y}"
 
@@ -5284,7 +5284,7 @@ def test_success_handler_computes_cost_for_dict_response():
     with (
         patch.object(
             logging_obj,
-            "_response_cost_calculator",
+            "response_cost_calculator",
             return_value=expected_cost,
         ) as mock_calc,
         patch.object(
@@ -5321,7 +5321,7 @@ def test_success_handler_preserves_precomputed_cost_for_dict_response():
     with (
         patch.object(
             logging_obj,
-            "_response_cost_calculator",
+            "response_cost_calculator",
             return_value=9.99,
         ) as mock_calc,
         patch.object(
@@ -5360,7 +5360,7 @@ def test_success_handler_unified_helper_runs_for_typed_results():
     with (
         patch.object(
             logging_obj,
-            "_response_cost_calculator",
+            "response_cost_calculator",
             return_value=expected_cost,
         ) as mock_calc,
         patch.object(
@@ -6673,7 +6673,7 @@ class TestNonInferenceCallTypesAreNotBilled:
 
     def test_creating_a_response_is_still_priced(self):
         """Guards the tests below: the same response object must cost money on the create path."""
-        cost = self._logging_obj("aresponses")._response_cost_calculator(result=self._retrieved_response())
+        cost = self._logging_obj("aresponses").response_cost_calculator(result=self._retrieved_response())
         assert cost is not None and cost > 0
 
     @pytest.mark.parametrize(
@@ -6689,7 +6689,7 @@ class TestNonInferenceCallTypesAreNotBilled:
         ],
     )
     def test_read_and_management_calls_cost_nothing(self, call_type):
-        cost = self._logging_obj(call_type)._response_cost_calculator(result=self._retrieved_response())
+        cost = self._logging_obj(call_type).response_cost_calculator(result=self._retrieved_response())
         assert cost == 0.0
 
     def test_retrieved_usage_is_not_re_reported_in_standard_logging_payload(self):
@@ -6726,7 +6726,7 @@ class TestNonInferenceCallTypesAreNotBilled:
         only billable usage. Zeroing it there means background jobs are never billed."""
         cost = self._logging_obj(
             "aget_responses", litellm_metadata=self.BACKGROUND_POLL_METADATA
-        )._response_cost_calculator(result=self._retrieved_response())
+        ).response_cost_calculator(result=self._retrieved_response())
         assert cost is not None and cost > 0
 
     def test_background_cost_poll_reports_usage_in_standard_logging_payload(self):
@@ -6757,7 +6757,7 @@ class TestNonInferenceCallTypesAreNotBilled:
     def test_reading_a_background_response_is_still_priced(self):
         """A background create answers queued with no usage at all, so whoever reads the finished
         job is the first and only caller to see its tokens. Zeroing that read bills the job nothing."""
-        cost = self._logging_obj("aget_responses")._response_cost_calculator(
+        cost = self._logging_obj("aget_responses").response_cost_calculator(
             result=self._retrieved_response(background=True)
         )
         assert cost is not None and cost > 0
@@ -6790,7 +6790,7 @@ class TestNonInferenceCallTypesAreNotBilled:
     def test_reading_a_foreground_response_is_still_free(self):
         """Guards the test above against a blanket exemption: an explicit background=false read was
         already billed by its create and must stay at zero."""
-        cost = self._logging_obj("aget_responses")._response_cost_calculator(
+        cost = self._logging_obj("aget_responses").response_cost_calculator(
             result=self._retrieved_response(background=False)
         )
         assert cost == 0.0
@@ -7052,7 +7052,7 @@ async def test_streaming_success_callbacks_survive_cost_calculation_failure():
     releasing.async_log_success_event = AsyncMock()
 
     patcher, logging_obj = _streaming_logging_obj_with_callbacks([releasing])
-    with patcher, patch.object(logging_obj, "_response_cost_calculator", side_effect=ValueError("bad usage block")):
+    with patcher, patch.object(logging_obj, "response_cost_calculator", side_effect=ValueError("bad usage block")):
         await logging_obj.async_success_handler(result=_assembled_stream_result())
 
     assert logging_obj.model_call_details["response_cost"] is None
@@ -7216,7 +7216,7 @@ def test_response_cost_calculator_prices_mantle_calls_on_the_served_region(monke
             choices=[{"message": {"role": "assistant", "content": "hello"}, "index": 0, "finish_reason": "stop"}],
             usage={"prompt_tokens": 38, "completion_tokens": 20, "total_tokens": 58},
         )
-        return logging_obj._response_cost_calculator(result=response)
+        return logging_obj.response_cost_calculator(result=response)
 
     commercial = litellm.model_cost["bedrock_mantle/xai.grok-4.3"]
     gov = litellm.model_cost["bedrock_mantle/us-gov-west-1/xai.grok-4.3"]
@@ -7270,7 +7270,7 @@ def test_response_cost_calculator_prices_proxy_vertex_calls_on_the_configured_lo
             choices=[{"message": {"role": "assistant", "content": "hello"}, "index": 0, "finish_reason": "stop"}],
             usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         )
-        return logging_obj._response_cost_calculator(result=response)
+        return logging_obj.response_cost_calculator(result=response)
 
     info = litellm.model_cost["vertex_ai/gemini-3.5-flash"]
     expected_global = 10 * info["input_cost_per_token"] + 5 * info["output_cost_per_token"]
@@ -7329,7 +7329,7 @@ def test_response_cost_calculator_prices_proxy_vertex_image_calls_on_the_configu
                 total_tokens=1220,
             ),
         )
-        return logging_obj._response_cost_calculator(result=response)
+        return logging_obj.response_cost_calculator(result=response)
 
     expected_global = 100 * 5e-07 + 1120 * 6e-05
 
@@ -7484,7 +7484,7 @@ def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module._in_memory_loggers.clear()
+    logging_module.in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     monkeypatch.setenv("NEW_RELIC_LICENSE_KEY", "test-license-key")
     is_otel_v2_enabled.cache_clear()
@@ -7506,7 +7506,7 @@ def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
         )
         assert again is v2_logger
     finally:
-        logging_module._in_memory_loggers.clear()
+        logging_module.in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
 
@@ -7516,7 +7516,7 @@ def test_newrelic_dispatch_keeps_legacy_agent_when_flag_off(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module._in_memory_loggers.clear()
+    logging_module.in_memory_loggers.clear()
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
     is_otel_v2_enabled.cache_clear()
     try:
@@ -7528,7 +7528,7 @@ def test_newrelic_dispatch_keeps_legacy_agent_when_flag_off(monkeypatch):
         )
         assert isinstance(legacy, NewRelicLogger)
     finally:
-        logging_module._in_memory_loggers.clear()
+        logging_module.in_memory_loggers.clear()
         is_otel_v2_enabled.cache_clear()
 
 
@@ -7539,7 +7539,7 @@ def test_get_custom_logger_compatible_class_finds_v2_newrelic(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module._in_memory_loggers.clear()
+    logging_module.in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     monkeypatch.setenv("NEW_RELIC_LICENSE_KEY", "test-license-key")
     is_otel_v2_enabled.cache_clear()
@@ -7553,7 +7553,7 @@ def test_get_custom_logger_compatible_class_finds_v2_newrelic(monkeypatch):
         found = logging_module.get_custom_logger_compatible_class("newrelic")
         assert found is created
     finally:
-        logging_module._in_memory_loggers.clear()
+        logging_module.in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
 
@@ -8792,7 +8792,7 @@ class TestAzurePTUSpilloverCost:
             response = self._response()
             response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
 
-            assert obj._response_cost_calculator(result=response) == pytest.approx(self.EXPECTED_SPILL_COST)
+            assert obj.response_cost_calculator(result=response) == pytest.approx(self.EXPECTED_SPILL_COST)
         finally:
             self._unregister_models()
 
@@ -8805,7 +8805,7 @@ class TestAzurePTUSpilloverCost:
                 "x-ms-spillover-from-deployment": "ptu-dep",
             }
 
-            assert obj._response_cost_calculator(result=self._response()) == pytest.approx(self.EXPECTED_SPILL_COST)
+            assert obj.response_cost_calculator(result=self._response()) == pytest.approx(self.EXPECTED_SPILL_COST)
         finally:
             self._unregister_models()
 
@@ -8814,7 +8814,7 @@ class TestAzurePTUSpilloverCost:
         try:
             obj = self._logging_obj(dict(self.PTU_MODEL_INFO), flag="True", litellm_rate=0.0, monkeypatch=monkeypatch)
 
-            assert obj._response_cost_calculator(result=self._response()) == 0.0
+            assert obj.response_cost_calculator(result=self._response()) == 0.0
         finally:
             self._unregister_models()
 
@@ -8825,7 +8825,7 @@ class TestAzurePTUSpilloverCost:
             response = self._response()
             response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
 
-            assert obj._response_cost_calculator(result=response) == 0.0
+            assert obj.response_cost_calculator(result=response) == 0.0
         finally:
             self._unregister_models()
 
@@ -8844,7 +8844,7 @@ class TestAzurePTUSpilloverCost:
             response = self._response()
             response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
 
-            assert obj._response_cost_calculator(result=response) == pytest.approx(150 * 1e-6)
+            assert obj.response_cost_calculator(result=response) == pytest.approx(150 * 1e-6)
         finally:
             litellm.model_cost.pop(custom_model_id, None)
             self._unregister_models()
@@ -8890,7 +8890,7 @@ def test_get_assembled_streaming_response_bills_a_provider_reported_usage_cost()
     )
 
     assert assembled._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.0042
-    assert logging_obj._response_cost_calculator(result=assembled) == 0.0042
+    assert logging_obj.response_cost_calculator(result=assembled) == 0.0042
 
 
 
@@ -8908,8 +8908,8 @@ def test_response_cost_calculator_prices_terminal_responses_event_from_its_respo
     )
     event: Final = ResponseCompletedEvent(type="response.completed", response=inner_response)
 
-    event_cost: Final = logging_obj._response_cost_calculator(result=event)
-    inner_cost: Final = logging_obj._response_cost_calculator(result=inner_response)
+    event_cost: Final = logging_obj.response_cost_calculator(result=event)
+    inner_cost: Final = logging_obj.response_cost_calculator(result=inner_response)
 
     assert event_cost is not None and event_cost > 0
     assert event_cost == inner_cost
@@ -9135,7 +9135,7 @@ def test_responses_completed_event_bills_the_served_service_tier():
     )
     event: Final = ResponseCompletedEvent(type="response.completed", response=inner)
 
-    cost: Final = logging_obj._response_cost_calculator(result=event)  # pyright: ignore[reportPrivateUsage]  # parity with the suite's own direct calls
+    cost: Final = logging_obj.response_cost_calculator(result=event)
 
     billed_response: Final = ModelResponse(
         model="gpt-5.1",
@@ -9283,7 +9283,7 @@ def test_signoz_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
     from litellm.integrations.otel.model.config import ExporterOwner, is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module._in_memory_loggers.clear()
+    logging_module.in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "https://ingest.eu.signoz.cloud:443")
     monkeypatch.setenv("SIGNOZ_INGESTION_KEY", "test-key")
@@ -9308,7 +9308,7 @@ def test_signoz_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
         )
         assert again is v2_logger
     finally:
-        logging_module._in_memory_loggers.clear()
+        logging_module.in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
 
@@ -9318,7 +9318,7 @@ def test_signoz_dispatch_keeps_legacy_otel_when_flag_off(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module._in_memory_loggers.clear()
+    logging_module.in_memory_loggers.clear()
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
     monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "http://signoz-collector.internal:4318")
     monkeypatch.setenv("SIGNOZ_INGESTION_KEY", "legacy-key")
@@ -9345,7 +9345,7 @@ def test_signoz_dispatch_keeps_legacy_otel_when_flag_off(monkeypatch):
         )
         assert again is legacy
     finally:
-        logging_module._in_memory_loggers.clear()
+        logging_module.in_memory_loggers.clear()
         is_otel_v2_enabled.cache_clear()
 
 
@@ -9353,7 +9353,7 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module._in_memory_loggers.clear()
+    logging_module.in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     monkeypatch.delenv("SIGNOZ_INGESTION_ENDPOINT", raising=False)
     monkeypatch.delenv("SIGNOZ_INGESTION_KEY", raising=False)
@@ -9367,9 +9367,9 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         )
         assert created is None
         assert not [
-            cb for cb in logging_module._in_memory_loggers if getattr(cb, "callback_name", None) == "signoz"
+            cb for cb in logging_module.in_memory_loggers if getattr(cb, "callback_name", None) == "signoz"
         ]
     finally:
-        logging_module._in_memory_loggers.clear()
+        logging_module.in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Final
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
-from litellm.integrations.opentelemetry import _MAX_DYNAMIC_TRACER_PROVIDERS, OpenTelemetry, OpenTelemetryConfig
+from litellm.integrations.opentelemetry import MAX_DYNAMIC_TRACER_PROVIDERS, OpenTelemetry, OpenTelemetryConfig
 from litellm.types.integrations.arize import ArizeConfig
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import StandardCallbackDynamicParams
@@ -50,7 +50,7 @@ class ArizeLogger(OpenTelemetry):
         tracer_provider: object | None = None,
         logger_provider: object | None = None,
         meter_provider: object | None = None,
-        max_dynamic_tracer_providers: int = _MAX_DYNAMIC_TRACER_PROVIDERS,
+        max_dynamic_tracer_providers: int = MAX_DYNAMIC_TRACER_PROVIDERS,
         random_draw: Callable[[], float] | None = None,
     ) -> None:
         super().__init__(
