@@ -133,6 +133,7 @@ def test_blocked_end_user_is_refused_on_every_proxy_and_unblock_restores(
             key: Final = scenario.key(models=[model])
             served: Final = _chat(rig.first, model, key, end_user)
             assert served.status_code == 200, served.text
+            _observed(upstream)
 
             rig.first.request("POST", block_route, {"user_ids": [end_user]})
             assert eventually(
