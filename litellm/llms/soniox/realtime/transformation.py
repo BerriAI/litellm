@@ -137,10 +137,18 @@ def _session_created(session_id: str, start_request: SonioxStartRequest) -> Open
     return transcription_session_created_event(session)
 
 
+def _changes_started_rate(update: TranscriptionSessionUpdate, started: SonioxStartRequest) -> bool:
+    audio_format: Final = update.audio_format
+    if audio_format is None:
+        return False
+    requested_rate: Final = _sample_rate(update)
+    return audio_format.rate is not None and requested_rate != started.sample_rate
+
+
 def _changes_started_stream(update: TranscriptionSessionUpdate, started: SonioxStartRequest) -> bool:
     turn_detection_set: Final = update.turn_detection is not None or update.turn_detection_disabled
     return (
-        (update.audio_format is not None and _sample_rate(update) != started.sample_rate)
+        _changes_started_rate(update, started)
         or (
             update.language is not None
             and _language_hints(update.language, started.language_hints) != started.language_hints
