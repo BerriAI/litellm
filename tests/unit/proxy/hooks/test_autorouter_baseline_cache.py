@@ -23,6 +23,7 @@ from litellm.types.router import RetryPolicy
 from litellm.types.utils import CallTypes, StandardLoggingRoutingDecision
 
 pytestmark: Final = pytest.mark.asyncio
+_STARTED: Final = datetime(2026, 1, 1)
 
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -231,7 +232,7 @@ class _Rig:
             messages=_MESSAGES.validate_json(_MESSAGES_JSON),
             stream=stream,
             call_type=CallTypes.anthropic_messages.value,
-            start_time=datetime.now(),
+            start_time=_STARTED,
             litellm_call_id=self.call_id,
             function_id=self.call_id,
             kwargs={"litellm_session_id": "baseline-session"},
@@ -509,13 +510,15 @@ async def test_estimated_capture_defers_token_counting_until_completion_off_even
         threads.put(get_ident())
         return len(text)
 
-    collector: Final = AutoRouterBaselineCache(None, router=lambda: None, prefix_token_counter=count)
+    collector: Final = AutoRouterBaselineCache(
+        None, router=lambda: None, prefix_token_counter=count, clock=lambda: _STARTED.timestamp() + 1
+    )
     logging: Final = Logging(
         model="gpt-6.1-sol",
         messages=[{"role": "user", "content": "hello"}],
         stream=False,
         call_type=CallTypes.acompletion.value,
-        start_time=datetime.now(),
+        start_time=_STARTED,
         litellm_call_id=uuid4().hex,
         function_id=uuid4().hex,
     )
@@ -600,7 +603,9 @@ async def test_saturated_estimator_preserves_success_spend_payloads_before_loggi
         assert release.wait(timeout=5), "test did not release estimator"
         return len(text)
 
-    collector: Final = AutoRouterBaselineCache(None, router=lambda: None, prefix_token_counter=count)
+    collector: Final = AutoRouterBaselineCache(
+        None, router=lambda: None, prefix_token_counter=count, clock=lambda: _STARTED.timestamp() + 1
+    )
     worker: Final = LoggingWorker(timeout=1.0, concurrency=8)
     logs: Final = tuple(
         Logging(
@@ -608,7 +613,7 @@ async def test_saturated_estimator_preserves_success_spend_payloads_before_loggi
             messages=[{"role": "user", "content": "prompt"}],
             stream=stream,
             call_type=CallTypes.acompletion.value,
-            start_time=datetime.now(),
+            start_time=_STARTED,
             litellm_call_id=uuid4().hex,
             function_id=uuid4().hex,
         )
