@@ -36,6 +36,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
     bedrock_model_is_openai_gpt,
+    bedrock_reasoning_effort_disabled,
     split_bedrock_region_path,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
@@ -126,6 +127,20 @@ def non_string_reasoning_effort(params: Mapping[str, object]) -> frozenset[str]:
     """
     effort: Final = params.get("reasoning_effort")
     if effort is None or isinstance(effort, str):
+        return frozenset()
+    return frozenset(("reasoning_effort",))
+
+
+def disabled_reasoning_effort(model: str, params: Mapping[str, object]) -> frozenset[str]:
+    """``reasoning_effort`` when the model map sets ``supports_<effort>_reasoning_effort`` to false for this GPT model.
+
+    AWS answers such an effort (``"minimal"`` on GPT 5.4 and newer) with a 400, so the native config refuses it before
+    the call, or drops it under ``drop_params``, the same way Converse does.
+    """
+    effort: Final = params.get("reasoning_effort")
+    if not isinstance(effort, str) or not bedrock_model_is_openai_gpt(model):
+        return frozenset()
+    if not bedrock_reasoning_effort_disabled(model=model, effort=effort):
         return frozenset()
     return frozenset(("reasoning_effort",))
 
@@ -378,6 +393,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         )
         raw_params: Final = _PARAMS_DICT_ADAPTER.validate_python(non_default_params)
         malformed_effort: Final = non_string_reasoning_effort(raw_params)
+        disabled_effort: Final = disabled_reasoning_effort(model, raw_params)
         refused_while_reasoning: Final = chat_completions_params_refused_while_reasoning(model, raw_params)
         if malformed_effort and not (litellm.drop_params or drop_params):
             raise litellm.utils.UnsupportedParamsError(
@@ -385,6 +401,14 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
                     f"{model} takes reasoning_effort as a string on Bedrock's Chat Completions endpoint, not "
                     f"{type(raw_params['reasoning_effort']).__name__}. Send one of its named efforts, or "
                     "set `litellm.drop_params = True` to drop it"
+                ),
+                status_code=400,
+            )
+        if disabled_effort and not (litellm.drop_params or drop_params):
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support reasoning_effort={raw_params['reasoning_effort']}. "
+                    "To drop unsupported params, set `litellm.drop_params = True`."
                 ),
                 status_code=400,
             )
@@ -400,7 +424,9 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         return dict(
             without_refused_reasoning_effort(
                 model,
-                with_max_completion_tokens(_without_params(mapped, refused_while_reasoning | malformed_effort)),
+                with_max_completion_tokens(
+                    _without_params(mapped, refused_while_reasoning | malformed_effort | disabled_effort)
+                ),
             )
         )
 
