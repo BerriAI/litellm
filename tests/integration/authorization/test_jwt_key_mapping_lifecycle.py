@@ -155,6 +155,7 @@ def _proxy_config(
                     "master_key": "os.environ/LITELLM_MASTER_KEY",
                     "database_url": "os.environ/DATABASE_URL",
                     "store_model_in_db": True,
+                    "disable_model_info_refresh": True,
                     "proxy_batch_write_at": 1,
                     "proxy_batch_polling_interval": 1,
                     "enable_jwt_auth": True,
@@ -443,10 +444,7 @@ def jwt_lifecycle(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_JWTLife
             assert subscribers >= baseline + 2
             eventually(lambda: _model_is_available(first, model), bool, seconds=30)
             eventually(lambda: _model_is_available(second, model), bool, seconds=30)
-            _assert_upstream_requests(
-                upstream,
-                ((_EXPECTED_MODEL_DISCOVERY[0], _EXPECTED_MODEL_DISCOVERY[1], None),) * 2,
-            )
+            _assert_upstream_requests(upstream, ())
             yield _JWTLifecycleRuntime(
                 first=first,
                 second=second,
