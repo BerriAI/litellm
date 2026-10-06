@@ -19,8 +19,8 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     daily_activity_repository,
     daily_activity_scope,
     get_api_key_metadata,
-    get_user_api_key_filter,
     get_daily_activity,
+    get_user_api_key_filter,
     parse_canonical_date,
     parse_canonical_date_range,
     raise_public,
@@ -2543,6 +2543,7 @@ async def test_get_daily_activity_rejects_non_canonical_dates_before_querying(st
     assert error.value.detail == {"error": "start_date and end_date must be valid YYYY-MM-DD dates"}
     mock_table.count.assert_not_awaited()
     mock_table.find_many.assert_not_awaited()
+
 
 @pytest.mark.asyncio
 async def test_get_user_api_key_filter_scopes_to_active_and_deleted_user_keys():
