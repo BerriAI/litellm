@@ -9315,11 +9315,18 @@ def test_signoz_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
         is_otel_v2_enabled.cache_clear()
 
 
-def test_signoz_dispatch_keeps_legacy_otel_when_flag_off(monkeypatch):
+@pytest.mark.parametrize("settings_available", (True, False))
+def test_signoz_dispatch_keeps_legacy_otel_when_flag_off(settings_available: bool, monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.integrations.opentelemetry import OpenTelemetry
-    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.model.flags import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
+    if not settings_available:
+        monkeypatch.setitem(sys.modules, "pydantic_settings", None)
+        monkeypatch.setitem(sys.modules, "litellm.integrations.otel.model.config", None)
+        for name in tuple(sys.modules):
+            if name.startswith("litellm.integrations.otel.presets"):
+                monkeypatch.delitem(sys.modules, name)
     logging_module._in_memory_loggers.clear()
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
     monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "http://signoz-collector.internal:4318")
@@ -9561,6 +9568,7 @@ def test_optional_callback_dependency_is_not_silently_ignored(callback, monkeypa
     from litellm.litellm_core_utils.litellm_logging import _init_custom_logger_compatible_class
 
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "http://localhost:4318")
     monkeypatch.setitem(sys.modules, "pydantic_settings", None)
     monkeypatch.delitem(sys.modules, "litellm.integrations.otel.model.config", raising=False)
     for name in tuple(sys.modules):

@@ -4982,9 +4982,7 @@ def _init_custom_logger_compatible_class(
             return _otel_logger
 
         elif logging_integration == "signoz":
-            from litellm.integrations.otel.presets.signoz import (
-                SIGNOZ_INGESTION_ENDPOINT_ENV,
-            )
+            from litellm.constants import SIGNOZ_INGESTION_ENDPOINT_ENV
 
             _signoz_endpoint: Final = os.getenv(SIGNOZ_INGESTION_ENDPOINT_ENV)
             if not _signoz_endpoint:
