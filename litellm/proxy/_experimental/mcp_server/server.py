@@ -34,8 +34,8 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
-    _gateway_dcr_challenge,
     _is_mcp_admitted_user_subject,
+    gateway_dcr_challenge,
 )
 from litellm.proxy._experimental.mcp_server.client_allowlist import (
     MCPClientAllowlist,
@@ -1902,7 +1902,7 @@ if MCP_AVAILABLE:
                 if not isinstance(failure, HTTPException) or failure.status_code != 401:
                     raise failure
             if all(server.is_gateway_managed_oauth2 for server in eligible):
-                raise _gateway_dcr_challenge(
+                raise gateway_dcr_challenge(
                     StarletteRequest(scope), get_route_relative_request_path(scope), None, invalid_token=False
                 )
             raise failures[0][1]

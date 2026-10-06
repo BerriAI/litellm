@@ -277,7 +277,7 @@ def _is_gateway_dcr_challenge_scope(
     return _gateway_dcr_challenge_target(route, mcp_servers, client_ip) is not None
 
 
-def _gateway_dcr_challenge(
+def gateway_dcr_challenge(
     request: Request,
     route: str,
     mcp_servers: list[str] | None,
@@ -359,7 +359,7 @@ def _admission_failure_fallback(
         exc=exc,
         client_ip=IPAddressUtils.get_mcp_client_ip(request),
     ):
-        raise _gateway_dcr_challenge(request, request_route, mcp_servers, invalid_token=bearer_presented) from exc
+        raise gateway_dcr_challenge(request, request_route, mcp_servers, invalid_token=bearer_presented) from exc
     raise exc
 
 
@@ -1027,15 +1027,15 @@ class MCPRequestHandler:
                     # arm, instead of a bare 401 with no WWW-Authenticate. A 503 (DB outage) is a
                     # transient availability failure, not an auth failure, so it passes through.
                     if exc.status_code == 401:
-                        raise _gateway_dcr_challenge(request, route, mcp_servers, invalid_token=True) from exc
+                        raise gateway_dcr_challenge(request, route, mcp_servers, invalid_token=True) from exc
                     raise
                 return admitted
             case SessionBearerInvalid():
-                raise _gateway_dcr_challenge(request, route, mcp_servers, invalid_token=True)
+                raise gateway_dcr_challenge(request, route, mcp_servers, invalid_token=True)
             case NotSessionBearer():
                 # Unreachable: the arm is entered only for an is_session_bearer_shaped
                 # value. Kept for match exhaustiveness and fails closed regardless.
-                raise _gateway_dcr_challenge(request, route, mcp_servers, invalid_token=True)
+                raise gateway_dcr_challenge(request, route, mcp_servers, invalid_token=True)
             case _:
                 assert_never(result)
 
