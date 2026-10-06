@@ -710,6 +710,10 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_image_token_batches": {
+          "type": "number",
+          "minimum": 0
+        },
         "output_cost_per_pixel": {
           "type": "number",
           "minimum": 0
