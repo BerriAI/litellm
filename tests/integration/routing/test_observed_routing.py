@@ -237,6 +237,41 @@ def test_saved_deployment_target_update_changes_wire_and_preserves_control(gatew
             False,
         ),
         ("mock-server-error", None, "mock_testing_fallbacks", ("general-up",), "general-up", 200, "1", False, False),
+        ("ordered-context", "context", None, ("primary-up", "big-up"), "big-up", 200, "1", False, False),
+        (
+            "ordered-content-policy",
+            "content-policy",
+            None,
+            ("primary-up", "safe-up"),
+            "safe-up",
+            200,
+            "1",
+            False,
+            False,
+        ),
+        (
+            "ordered-server-error",
+            "server-error",
+            None,
+            ("primary-up", "primary-tier2-up"),
+            "primary-tier2-up",
+            200,
+            "1",
+            False,
+            False,
+        ),
+        ("body-context", "context", "body_fallbacks", ("primary-up", "big-up"), "big-up", 200, "1", False, False),
+        (
+            "body-content-policy",
+            "content-policy",
+            "body_fallbacks",
+            ("primary-up", "safe-up"),
+            "safe-up",
+            200,
+            "1",
+            False,
+            False,
+        ),
     ),
 )
 def test_health_routing_fallbacks_preserve_error_specific_targets_and_request_controls(
@@ -274,6 +309,9 @@ def test_health_routing_fallbacks_preserve_error_specific_targets_and_request_co
                 }
             ).encode()
         )
+
+    ordered: Final = case.startswith("ordered-")
+    body_fallbacks: Final = case.startswith("body-")
 
     def handler(model: str) -> Callable[[Request], Reply]:
         def handle(request: Request) -> Reply:
@@ -333,32 +371,73 @@ def test_health_routing_fallbacks_preserve_error_specific_targets_and_request_co
 
     with (
         wire_server(handler("primary-up")) as primary,
+        wire_server(handler("primary-tier2-up")) as primary_tier2,
         wire_server(handler("big-up")) as big,
         wire_server(handler("safe-up")) as safe,
         wire_server(handler("general-up")) as general,
     ):
         config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
         config["model_list"] = [
-            {
-                "model_name": alias,
-                "litellm_params": {
-                    "model": f"openai/{upstream_model}",
-                    "api_base": wire.url + "/v1",
-                    "api_key": "synthetic-health-routing-key",
-                },
-            }
-            for alias, upstream_model, wire in (
-                ("primary", "primary-up", primary),
-                ("big", "big-up", big),
-                ("safe", "safe-up", safe),
-                ("general", "general-up", general),
-            )
+            *(
+                (
+                    {
+                        "model_name": "primary",
+                        "litellm_params": {
+                            "model": "openai/primary-up",
+                            "api_base": primary.url + "/v1",
+                            "api_key": "synthetic-health-routing-key",
+                            "order": 1,
+                        },
+                    },
+                    {
+                        "model_name": "primary",
+                        "litellm_params": {
+                            "model": "openai/primary-tier2-up",
+                            "api_base": primary_tier2.url + "/v1",
+                            "api_key": "synthetic-health-routing-key",
+                            "order": 2,
+                        },
+                    },
+                )
+                if ordered
+                else (
+                    {
+                        "model_name": "primary",
+                        "litellm_params": {
+                            "model": "openai/primary-up",
+                            "api_base": primary.url + "/v1",
+                            "api_key": "synthetic-health-routing-key",
+                        },
+                    },
+                )
+            ),
+            *(
+                {
+                    "model_name": alias,
+                    "litellm_params": {
+                        "model": f"openai/{upstream_model}",
+                        "api_base": wire.url + "/v1",
+                        "api_key": "synthetic-health-routing-key",
+                    },
+                }
+                for alias, upstream_model, wire in (
+                    ("big", "big-up", big),
+                    ("safe", "safe-up", safe),
+                    ("general", "general-up", general),
+                )
+            ),
         ]
         config["router_settings"] = {
             "num_retries": 0,
             "disable_cooldowns": True,
-            "context_window_fallbacks": [{"primary": ["big"]}],
-            "content_policy_fallbacks": [{"primary": ["safe"]}],
+            **(
+                {}
+                if body_fallbacks
+                else {
+                    "context_window_fallbacks": [{"primary": ["big"]}],
+                    "content_policy_fallbacks": [{"primary": ["safe"]}],
+                }
+            ),
             "fallbacks": [{"primary": ["general"]}],
         }
         config["general_settings"] = {
@@ -373,7 +452,19 @@ def test_health_routing_fallbacks_preserve_error_specific_targets_and_request_co
                 "model": "primary",
                 "messages": [{"role": "user", "content": prompt}],
                 **({"stream": True} if stream_request else {}),
-                **({body_flag: True} if body_flag is not None else {}),
+                **(
+                    {body_flag: True}
+                    if body_flag in ("disable_fallbacks", "mock_testing_context_fallbacks", "mock_testing_content_policy_fallbacks", "mock_testing_fallbacks")
+                    else {}
+                ),
+                **(
+                    {
+                        "context_window_fallbacks": [{"primary": ["big"]}],
+                        "content_policy_fallbacks": [{"primary": ["safe"]}],
+                    }
+                    if body_fallbacks
+                    else {}
+                ),
             }
             if stream_request:
                 with candidate.client.stream(

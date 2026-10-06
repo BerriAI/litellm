@@ -33,10 +33,10 @@ def _plaintext_database_url(database_url: str) -> str:
 
 def _assert_liveness_and_readiness(gateway: Gateway, *, status_code: int, body: dict[str, str]) -> None:
     for path in ("/health/liveliness", "/health/liveness"):
-        response: Final = gateway.request("GET", path)
+        response: Final = gateway.client.get(path)
         assert response.status_code == status_code, response.text
         assert response.json() == ("I'm alive!" if status_code == 200 else body), response.text
-    readiness: Final = gateway.request("GET", "/health/readiness")
+    readiness: Final = gateway.client.get("/health/readiness")
     assert readiness.status_code == status_code, readiness.text
     assert readiness.json() == body, readiness.text
 
@@ -56,12 +56,12 @@ def test_public_readiness_reports_database_outage_and_allow_unavailable_setting(
                 },
                 workers=1,
             ) as candidate:
-                ready_before_outage: Final = candidate.request("GET", "/health/readiness")
+                ready_before_outage: Final = candidate.client.get("/health/readiness")
                 assert ready_before_outage.status_code == 200, ready_before_outage.text
                 assert ready_before_outage.json() == {"status": "healthy", "db": "connected"}, ready_before_outage.text
                 relay.arm()
                 disconnected_after_outage: Final = eventually(
-                    lambda: candidate.request("GET", "/health/readiness"),
+                    lambda: candidate.client.get("/health/readiness"),
                     lambda response: (
                         relay.tripped.is_set() and response.json() == {"status": "healthy", "db": "disconnected"}
                     ),
@@ -90,14 +90,14 @@ def test_public_readiness_reports_database_outage_and_allow_unavailable_setting(
                 config=allow_unavailable_config,
                 workers=1,
             ) as candidate:
-                ready_before_outage_with_allow: Final = candidate.request("GET", "/health/readiness")
+                ready_before_outage_with_allow: Final = candidate.client.get("/health/readiness")
                 assert ready_before_outage_with_allow.status_code == 200, ready_before_outage_with_allow.text
                 assert ready_before_outage_with_allow.json() == {"status": "healthy", "db": "connected"}, (
                     ready_before_outage_with_allow.text
                 )
                 relay.arm()
                 disconnected_with_allow: Final = eventually(
-                    lambda: candidate.request("GET", "/health/readiness"),
+                    lambda: candidate.client.get("/health/readiness"),
                     lambda response: (
                         relay.tripped.is_set() and response.json() == {"status": "healthy", "db": "disconnected"}
                     ),
@@ -179,7 +179,7 @@ def test_public_readiness_reports_stalled_database_lookups(gateway: Gateway, tmp
                         assert relay.held.wait(30), "unknown-key lookup did not reach the held statement relay"
                         expected_status = 200 if allow_unavailable else 503
                         stalled = eventually(
-                            lambda: candidate.request("GET", "/health/readiness"),
+                            lambda: candidate.client.get("/health/readiness"),
                             lambda response, expected_status=expected_status: (
                                 response.status_code == expected_status
                                 and response.json() == {"status": "healthy", "db": "stalled"}
@@ -192,7 +192,7 @@ def test_public_readiness_reports_stalled_database_lookups(gateway: Gateway, tmp
 
                         relay.release()
                         recovered = eventually(
-                            lambda: candidate.request("GET", "/health/readiness"),
+                            lambda: candidate.client.get("/health/readiness"),
                             lambda response: (
                                 response.status_code == 200
                                 and response.json() == {"status": "healthy", "db": "connected"}
@@ -213,7 +213,7 @@ def test_public_readiness_reports_stalled_database_lookups(gateway: Gateway, tmp
 def test_drain_endpoint_requires_token_and_changes_health_state_only_after_authorization(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    disabled: Final = gateway.request("GET", "/health/drain")
+    disabled: Final = gateway.client.get("/health/drain")
     assert disabled.status_code == 404, disabled.text
     assert disabled.json() == {"detail": "Not Found"}, disabled.text
 
@@ -232,11 +232,10 @@ def test_drain_endpoint_requires_token_and_changes_health_state_only_after_autho
             body={"status": "healthy", "db": "connected"},
         )
 
-        missing: Final = candidate.request("GET", "/health/drain")
+        missing: Final = candidate.client.get("/health/drain")
         assert missing.status_code == 401, missing.text
         assert missing.json() == {"detail": "Invalid or missing X-Drain-Token"}, missing.text
-        wrong: Final = candidate.request(
-            "GET",
+        wrong: Final = candidate.client.get(
             "/health/drain",
             headers={"X-Drain-Token": "synthetic-wrong-token"},
         )
@@ -248,14 +247,13 @@ def test_drain_endpoint_requires_token_and_changes_health_state_only_after_autho
             body={"status": "healthy", "db": "connected"},
         )
 
-        drained: Final = candidate.request(
-            "GET",
+        drained: Final = candidate.client.get(
             "/health/drain",
             headers={"X-Drain-Token": token},
         )
         assert drained.status_code == 200, drained.text
         assert drained.json() == {"status": "drained", "drained_requests": 0}, drained.text
         for path in ("/health/liveliness", "/health/liveness", "/health/readiness"):
-            response: Final = candidate.request("GET", path)
+            response: Final = candidate.client.get(path)
             assert response.status_code == 503, response.text
             assert response.json() == {"status": "shutting_down"}, response.text

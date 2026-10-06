@@ -477,6 +477,75 @@ def test_team_scoped_health_probes_access_group_targets_and_hides_routing_fields
         }, admin.text
         assert len(unhealthy.drain()) == 3
 
+        unrestricted_team: Final = scenario.team(models=[])
+        unrestricted_user: Final = scenario.member(unrestricted_team)
+        unrestricted_key: Final = scenario.key(
+            team_id=unrestricted_team,
+            user_id=unrestricted_user,
+            models=[],
+        )
+        shared_public_name: Final = f"team-shared-{uuid.uuid4().hex}"
+        unrestricted_deployment_id: Final = _create_team_health_deployment(
+            gateway,
+            scenario,
+            team_id=unrestricted_team,
+            public_model_name=shared_public_name,
+            upstream_url=healthy.url,
+            api_key="team-a-key",
+        )
+        _create_team_health_deployment(
+            gateway,
+            scenario,
+            team_id=team_b_id,
+            public_model_name=shared_public_name,
+            upstream_url=team_b_wire.url,
+            api_key="team-b-key",
+        )
+        refused_unrestricted: Final = gateway.request(
+            "GET",
+            "/health",
+            key=unrestricted_key,
+            params={"model_id": team_b_model_id},
+        )
+        assert refused_unrestricted.status_code == 403, refused_unrestricted.text
+        assert refused_unrestricted.json() == {
+            "detail": {"error": f"key not allowed to health-check model_id {team_b_model_id}"}
+        }, refused_unrestricted.text
+        assert team_b_wire.drain() == ()
+
+        unrestricted_report: Final = gateway.request(
+            "GET",
+            "/health",
+            key=unrestricted_key,
+            params={"model": shared_public_name},
+        )
+        assert unrestricted_report.status_code == 200, unrestricted_report.text
+        unrestricted_body: Final = unrestricted_report.json()
+        assert unrestricted_body == {
+            "healthy_endpoints": [
+                {
+                    "model": "openai/gpt-4o-mini",
+                    "model_id": unrestricted_deployment_id,
+                }
+            ],
+            "unhealthy_endpoints": [],
+            "healthy_count": 1,
+            "unhealthy_count": 0,
+        }, unrestricted_report.text
+        endpoint_ids: Final = tuple(
+            endpoint["model_id"]
+            for endpoint in (*unrestricted_body["healthy_endpoints"], *unrestricted_body["unhealthy_endpoints"])
+        )
+        assert team_b_model_id not in endpoint_ids, unrestricted_report.text
+        for endpoint in (*unrestricted_body["healthy_endpoints"], *unrestricted_body["unhealthy_endpoints"]):
+            assert {
+                "api_base",
+                "api_version",
+                "aws_bedrock_runtime_endpoint",
+            }.isdisjoint(endpoint), unrestricted_report.text
+        assert len(healthy.drain()) == 1
+        assert team_b_wire.drain() == ()
+
 
 def _delete_health_credential_if_present(gateway: Gateway, credential_name: str) -> None:
     response: Final = gateway.request("DELETE", f"/credentials/{credential_name}")
@@ -653,7 +722,6 @@ def test_health_test_connection_modes_use_stored_credentials_and_reject_environm
                             "api_base": base,
                             "litellm_credential_name": mode_credential_name,
                         },
-                        "model_info": {"mode": mode},
                         "mode": mode,
                     },
                 )
@@ -768,7 +836,10 @@ def test_health_test_connection_modes_use_stored_credentials_and_reject_environm
 def test_health_test_connection_non_chat_modes_do_not_receive_chat_max_tokens(
     gateway: Gateway, mode: str, expected_path: str
 ) -> None:
-    pytest.skip(f"BUG: /health/test_connection sends chat max_tokens to {mode} probes")
+    pytest.skip(
+        "BUG: /health/test_connection sends chat max_tokens 16 to embedding, "
+        "image_generation and audio_transcription probes"
+    )
     with gateway.scenario() as scenario:
         provider_model: Final = f"health-{mode}-{uuid.uuid4().hex[:8]}"
         model: Final = f"openai/{provider_model}"
