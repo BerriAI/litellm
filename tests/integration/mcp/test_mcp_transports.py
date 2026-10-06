@@ -244,6 +244,78 @@ def test_standard_per_server_path_scopes_the_session_to_the_named_servers(gatewa
 
 
 @pytest.mark.parametrize("client", ("raw-jsonrpc", "official-sdk"))
+def test_standard_comma_path_with_a_trailing_segment_scopes_a_proxy_admin_session(
+    gateway: Gateway, client: str
+) -> None:
+    open_before: Final = _open_aliases()
+    with mcp_peer() as peer_a, mcp_peer() as peer_b, mcp_peer() as peer_c, gateway.scenario() as scenario:
+        alias_a: Final = "rt1pa" + uuid.uuid4().hex[:10]
+        alias_b: Final = "rt1pb" + uuid.uuid4().hex[:10]
+        alias_c: Final = "rt1pc" + uuid.uuid4().hex[:10]
+        register_mcp(scenario, peer_a, alias_a)
+        register_mcp(scenario, peer_b, alias_b)
+        register_mcp(scenario, peer_c, alias_c)
+        open_aliases: Final = open_before | _open_aliases()
+        path: Final = f"/mcp/{alias_a},{alias_c}/tools"
+
+        listed, called = _list_and_call(gateway, client, path, gateway.key, f"{alias_c}-add", {"a": 20, "b": 22})
+        assert listed.ok, listed.raw
+        assert _without_foreign_open_servers(listed.tools, open_aliases) == {
+            f"{alias_a}-add",
+            f"{alias_a}-multiply",
+            f"{alias_a}-fail",
+            f"{alias_c}-add",
+            f"{alias_c}-multiply",
+            f"{alias_c}-fail",
+        }, listed.tools
+        assert called.ok and called.text == "42", called.raw
+        _refused_call(gateway, client, path, gateway.key, f"{alias_b}-add", {"a": 20, "b": 22})
+        assert tool_calls(peer_a.drain()) == ()
+        assert tool_calls(peer_b.drain()) == ()
+        calls_c: Final = tool_calls(peer_c.drain())
+        assert len(calls_c) == 1, calls_c
+        _assert_upstream_call(calls_c[0], "add", {"a": 20, "b": 22})
+
+
+@pytest.mark.parametrize("client", ("raw-jsonrpc", "official-sdk"))
+def test_standard_comma_path_with_a_trailing_segment_admits_a_scoped_key(gateway: Gateway, client: str) -> None:
+    pytest.skip(
+        "BUG: a non-admin key gets 401 'Only proxy admin can be used...' on /mcp/{a},{b}/tools because "
+        "mcp_inference_routes only admits the single-segment /mcp/{subpath}, while "
+        "_get_mcp_servers_in_path parses the trailing path"
+    )
+    open_before: Final = _open_aliases()
+    with mcp_peer() as peer_a, mcp_peer() as peer_b, mcp_peer() as peer_c, gateway.scenario() as scenario:
+        alias_a: Final = "rt1sa" + uuid.uuid4().hex[:10]
+        alias_b: Final = "rt1sb" + uuid.uuid4().hex[:10]
+        alias_c: Final = "rt1sc" + uuid.uuid4().hex[:10]
+        server_a: Final = register_mcp(scenario, peer_a, alias_a)
+        server_b: Final = register_mcp(scenario, peer_b, alias_b)
+        server_c: Final = register_mcp(scenario, peer_c, alias_c)
+        key: Final = scenario.key(object_permission={"mcp_servers": [server_a, server_b, server_c]})
+        open_aliases: Final = open_before | _open_aliases()
+        path: Final = f"/mcp/{alias_a},{alias_c}/tools"
+
+        listed, called = _list_and_call(gateway, client, path, key, f"{alias_c}-add", {"a": 20, "b": 22})
+        assert listed.ok, listed.raw
+        assert _without_foreign_open_servers(listed.tools, open_aliases) == {
+            f"{alias_a}-add",
+            f"{alias_a}-multiply",
+            f"{alias_a}-fail",
+            f"{alias_c}-add",
+            f"{alias_c}-multiply",
+            f"{alias_c}-fail",
+        }, listed.tools
+        assert called.ok and called.text == "42", called.raw
+        _refused_call(gateway, client, path, key, f"{alias_b}-add", {"a": 20, "b": 22})
+        assert tool_calls(peer_a.drain()) == ()
+        assert tool_calls(peer_b.drain()) == ()
+        calls_c: Final = tool_calls(peer_c.drain())
+        assert len(calls_c) == 1, calls_c
+        _assert_upstream_call(calls_c[0], "add", {"a": 20, "b": 22})
+
+
+@pytest.mark.parametrize("client", ("raw-jsonrpc", "official-sdk"))
 def test_legacy_server_path_resolves_lists_groups_and_toolsets_and_fails_closed_on_unknown_names(
     gateway: Gateway, client: str
 ) -> None:
@@ -345,6 +417,29 @@ def test_legacy_server_path_resolves_lists_groups_and_toolsets_and_fails_closed_
         assert len(group_calls_b) == 1, group_calls_b
         _assert_upstream_call(group_calls_b[0], "multiply", {"a": 6, "b": 7})
         assert tool_calls(peer_c.drain()) == ()
+
+        mixed_group_path: Final = f"/{group},{alias_c}/mcp"
+        mixed_group_listed, mixed_group_called = _list_and_call(
+            gateway, client, mixed_group_path, key, f"{alias_c}-add", {"a": 20, "b": 22}
+        )
+        assert mixed_group_listed.ok, mixed_group_listed.raw
+        assert _without_foreign_open_servers(mixed_group_listed.tools, open_aliases) == {
+            f"{alias_a}-add",
+            f"{alias_a}-multiply",
+            f"{alias_a}-fail",
+            f"{alias_b}-add",
+            f"{alias_b}-multiply",
+            f"{alias_b}-fail",
+            f"{alias_c}-add",
+            f"{alias_c}-multiply",
+            f"{alias_c}-fail",
+        }, mixed_group_listed.tools
+        assert mixed_group_called.ok and mixed_group_called.text == "42", mixed_group_called.raw
+        assert tool_calls(peer_a.drain()) == ()
+        assert tool_calls(peer_b.drain()) == ()
+        mixed_group_calls_c: Final = tool_calls(peer_c.drain())
+        assert len(mixed_group_calls_c) == 1, mixed_group_calls_c
+        _assert_upstream_call(mixed_group_calls_c[0], "add", {"a": 20, "b": 22})
 
         toolset_path: Final = f"/{toolset_name}/mcp"
         toolset_listed, toolset_called = _list_and_call(

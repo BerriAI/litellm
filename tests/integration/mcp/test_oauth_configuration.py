@@ -27,7 +27,13 @@ def _response_object(response: httpx.Response) -> dict[str, object]:
     return TypeAdapter(dict[str, object]).validate_python(response.json())
 
 
-def _start_callback_flow(gateway: Gateway, alias: str, key: str, client_id: str) -> tuple[str, str, str]:
+def _start_callback_flow(
+    gateway: Gateway,
+    alias: str,
+    key: str,
+    client_id: str,
+    expected_authorization_url: str | None = None,
+) -> tuple[str, str, str]:
     started: Final = gateway.client.get(
         f"/{alias}/authorize",
         params={
@@ -41,7 +47,10 @@ def _start_callback_flow(gateway: Gateway, alias: str, key: str, client_id: str)
         headers={"x-litellm-api-key": key},
     )
     assert started.status_code in (302, 307), started.text
-    relay_state: Final = parse_qs(urlsplit(started.headers["location"]).query)["state"][0]
+    location: Final = urlsplit(started.headers["location"])
+    if expected_authorization_url is not None:
+        assert location.scheme + "://" + location.netloc + location.path == expected_authorization_url, started.text
+    relay_state: Final = parse_qs(location.query)["state"][0]
     cookie_name: Final = f"mcp_oauth_state_{relay_state}"
     assert cookie_name in started.cookies, started.headers
     return relay_state, cookie_name, started.cookies[cookie_name]
@@ -130,6 +139,29 @@ def test_callback_forwards_the_code_only_for_the_sealed_issuer_and_relays_idp_er
         }, error.headers["location"]
         _assert_cleared_oauth_state_cookie(error, error_cookie)
 
+        error_issuer_relay, error_issuer_cookie, error_issuer_cookie_value = _start_callback_flow(
+            gateway, alias, key, client_id
+        )
+        error_issuer: Final = gateway.client.get(
+            "/callback",
+            params={
+                "error": "access_denied",
+                "error_description": "x",
+                "state": error_issuer_relay,
+                "iss": "http://127.0.0.1:1/other",
+            },
+            cookies={error_issuer_cookie: error_issuer_cookie_value},
+        )
+        assert error_issuer.status_code == 400, error_issuer.text
+        assert error_issuer.headers["content-type"] == "text/html; charset=utf-8", error_issuer.headers
+        assert error_issuer.text == (
+            "<html><body><h2>Authentication failed</h2><p><strong>Error:</strong> invalid_issuer</p>"
+            "<p>Unexpected authorization issuer</p>"
+            "<p>You can close this window and try again.</p></body></html>"
+        ), error_issuer.text
+        assert "location" not in error_issuer.headers, error_issuer.headers
+        _assert_cleared_oauth_state_cookie(error_issuer, error_issuer_cookie)
+
         missing: Final = gateway.client.get("/callback")
         assert missing.status_code == 400, missing.text
         assert missing.headers["content-type"] == "text/html; charset=utf-8", missing.headers
@@ -138,6 +170,96 @@ def test_callback_forwards_the_code_only_for_the_sealed_issuer_and_relays_idp_er
             "<p>Missing authorization &#x27;code&#x27; and &#x27;state&#x27; parameter(s).</p>"
             "<p>You can close this window and try again.</p></body></html>"
         ), missing.text
+
+
+def test_callback_refuses_a_response_without_iss_when_the_authorization_server_advertises_iss_support(
+    gateway: Gateway,
+) -> None:
+    wire_holder: Final[list[Wire]] = []
+
+    def respond(request: Request) -> Reply:
+        path: Final = urlsplit(request.target).path
+        if request.method == "GET" and path in (
+            "/.well-known/oauth-authorization-server",
+            "/.well-known/openid-configuration",
+        ):
+            issuer: Final = wire_holder[0].url
+            return Reply(
+                body=json.dumps(
+                    {
+                        "issuer": issuer,
+                        "authorization_endpoint": issuer + "/authorize",
+                        "token_endpoint": issuer + "/token",
+                        "registration_endpoint": issuer + "/register",
+                        "response_types_supported": ["code"],
+                        "grant_types_supported": ["authorization_code", "refresh_token"],
+                        "code_challenge_methods_supported": ["S256"],
+                        "token_endpoint_auth_methods_supported": ["client_secret_post"],
+                        "authorization_response_iss_parameter_supported": True,
+                    }
+                ).encode()
+            )
+        return Reply(status=404, body=json.dumps({"error": "not_found"}).encode())
+
+    with wire_server(respond) as wire, mcp_peer() as peer, gateway.scenario() as scenario:
+        wire_holder.append(wire)
+        alias: Final = "rt5" + uuid.uuid4().hex[:10]
+        identity: Final = register_mcp(
+            scenario,
+            peer,
+            alias,
+            issuer=wire.url,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={"client_id": "ac-client", "client_secret": "ac-secret", "scopes": ["tools.call"]},
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+
+        relay, cookie, cookie_value = _start_callback_flow(
+            gateway, alias, key, "ac-client", expected_authorization_url=wire.url + "/authorize"
+        )
+        code: Final = "callback-code-" + uuid.uuid4().hex
+        missing_issuer: Final = gateway.client.get(
+            "/callback",
+            params={"code": code, "state": relay},
+            cookies={cookie: cookie_value},
+        )
+        assert missing_issuer.status_code == 400, missing_issuer.text
+        assert missing_issuer.headers["content-type"] == "text/html; charset=utf-8", missing_issuer.headers
+        assert missing_issuer.text == (
+            "<html><body><h2>Authentication failed</h2><p><strong>Error:</strong> invalid_issuer</p>"
+            "<p>This authorization response came from a different identity provider than the one this "
+            "MCP server is configured to use.</p>"
+            "<p>You can close this window and try again.</p></body></html>"
+        ), missing_issuer.text
+        assert "location" not in missing_issuer.headers, missing_issuer.headers
+        assert code not in missing_issuer.text, missing_issuer.text
+        _assert_cleared_oauth_state_cookie(missing_issuer, cookie)
+
+        trusted_relay, trusted_cookie, trusted_cookie_value = _start_callback_flow(
+            gateway, alias, key, "ac-client", expected_authorization_url=wire.url + "/authorize"
+        )
+        trusted_code: Final = "callback-code-" + uuid.uuid4().hex
+        trusted: Final = gateway.client.get(
+            "/callback",
+            params={"code": trusted_code, "state": trusted_relay, "iss": wire.url},
+            cookies={trusted_cookie: trusted_cookie_value},
+        )
+        assert trusted.status_code == 302, trusted.text
+        trusted_location: Final = urlsplit(trusted.headers["location"])
+        assert trusted_location.scheme + "://" + trusted_location.netloc + trusted_location.path == CLIENT_REDIRECT, (
+            trusted.headers["location"]
+        )
+        assert parse_qs(trusted_location.query) == {
+            "code": [trusted_code],
+            "state": ["client-state"],
+        }, trusted.headers["location"]
+        _assert_cleared_oauth_state_cookie(trusted, trusted_cookie)
+
+        wire_requests: Final = wire.drain()
+        wire_method_paths: Final = tuple((request.method, urlsplit(request.target).path) for request in wire_requests)
+        assert wire_method_paths == (("GET", "/.well-known/oauth-authorization-server"),), wire_method_paths
+        assert not any(method == "POST" and path == "/token" for method, path in wire_method_paths), wire_method_paths
 
 
 @pytest.mark.covers("other.mcp.oauth.discovery_cannot_erase_configured_authorization_endpoint")

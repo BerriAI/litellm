@@ -1081,6 +1081,34 @@ def test_idp_subject_token_exchange_mints_a_credential_for_the_mapped_user_and_r
         "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
         "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
     }
+    id_token_exchange: Final = idp_rig.gateway.client.post(
+        "/token",
+        data={
+            **exchange_form,
+            "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
+        },
+    )
+    assert id_token_exchange.status_code == 200, id_token_exchange.text
+    id_token_exchange_body: Final = _response_object(id_token_exchange)
+    assert set(id_token_exchange_body) == {
+        "access_token",
+        "token_type",
+        "expires_in",
+        "refresh_token",
+        "user_id",
+        "team_id",
+        "issued_token_type",
+    }, id_token_exchange.text
+    assert id_token_exchange_body["token_type"] == "Bearer", id_token_exchange.text
+    assert id_token_exchange_body["issued_token_type"] == "urn:ietf:params:oauth:token-type:access_token", (
+        id_token_exchange.text
+    )
+    assert id_token_exchange_body["user_id"] == subject, id_token_exchange.text
+    assert id_token_exchange_body["team_id"] is None, id_token_exchange.text
+    assert isinstance(id_token_exchange_body["expires_in"], int) and id_token_exchange_body["expires_in"] > 0, (
+        id_token_exchange.text
+    )
+    assert str(id_token_exchange_body["refresh_token"]).startswith("llm_srefresh_"), id_token_exchange.text
     exchanged: Final = idp_rig.gateway.client.post("/token", data=exchange_form)
     assert exchanged.status_code == 200, exchanged.text
     outage_form: Final = {
@@ -1114,6 +1142,7 @@ def test_idp_subject_token_exchange_mints_a_credential_for_the_mapped_user_and_r
     assert isinstance(exchanged_body["expires_in"], int) and exchanged_body["expires_in"] > 0, exchanged.text
     assert str(exchanged_body["refresh_token"]).startswith("llm_srefresh_"), exchanged.text
     access_token: Final = str(exchanged_body["access_token"])
+    id_token_access_token: Final = str(id_token_exchange_body["access_token"])
     with idp_rig.gateway.scenario() as scenario:
         model: Final = scenario.model()
         completion: Final = idp_rig.gateway.request(
@@ -1124,16 +1153,28 @@ def test_idp_subject_token_exchange_mints_a_credential_for_the_mapped_user_and_r
         )
         assert completion.status_code == 200, completion.text
         request_id: Final = str(_response_object(completion)["id"])
+        id_token_completion: Final = idp_rig.gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "mcp idp id token spend"}]},
+            key=id_token_access_token,
+        )
+        assert id_token_completion.status_code == 200, id_token_completion.text
+        id_token_request_id: Final = str(_response_object(id_token_completion)["id"])
+        request_ids: Final = tuple(sorted((request_id, id_token_request_id)))
         spend: Final = eventually(
             lambda: read_rows(
-                "SELECT metadata->>'user_api_key_user_id' AS user_api_key_user_id "
-                'FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
-                (request_id,),
+                "SELECT request_id, metadata->>'user_api_key_user_id' AS user_api_key_user_id "
+                'FROM "LiteLLM_SpendLogs" WHERE request_id IN (%s, %s) ORDER BY request_id',
+                request_ids,
             ),
-            lambda rows: len(rows) == 1,
+            lambda rows: len(rows) == 2,
             seconds=70,
         )
-        assert spend == [{"user_api_key_user_id": subject}], spend
+        assert spend == [
+            {"request_id": request_ids[0], "user_api_key_user_id": subject},
+            {"request_id": request_ids[1], "user_api_key_user_id": subject},
+        ], spend
     user: Final = eventually(
         lambda: read_rows('SELECT user_id, user_role, teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,)),
         lambda rows: len(rows) == 1,
