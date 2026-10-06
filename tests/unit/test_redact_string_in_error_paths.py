@@ -20,9 +20,9 @@ from litellm._logging import _ENABLE_SECRET_REDACTION, redact_string
 
 class TestRedactStringFunction:
     def test_redacts_bearer_token(self):
-        text = "Authorization: Bearer sk-1234567890abcdefghij"
+        text = "Authorization: Bearer sk-9876567890abcdefghij"
         result = redact_string(text)
-        assert "sk-1234567890abcdefghij" not in result
+        assert "sk-9876567890abcdefghij" not in result
         assert "REDACTED" in result
 
     def test_redacts_api_key_in_url(self):
@@ -43,9 +43,9 @@ class TestRedactStringFunction:
         not _ENABLE_SECRET_REDACTION, reason="redaction disabled via env var"
     )
     def test_redaction_enabled_by_default(self):
-        text = "Bearer sk-1234567890abcdefghij"
+        text = "Bearer sk-9876567890abcdefghij"
         result = redact_string(text)
-        assert "sk-1234567890abcdefghij" not in result
+        assert "sk-9876567890abcdefghij" not in result
 
 
 class TestOpenAIRealtimeRedaction:
@@ -78,7 +78,7 @@ class TestOpenAIRealtimeRedaction:
 
         handler = OpenAIRealtime()
         secret_error = RuntimeError(
-            "Connection failed for api_key=sk-1234567890abcdefghij"
+            "Connection failed for api_key=sk-9876567890abcdefghij"
         )
 
         kwargs = self._call_kwargs()
@@ -89,7 +89,7 @@ class TestOpenAIRealtimeRedaction:
 
         mock_ws.close.assert_called_once()
         assert mock_ws.close.call_args[1]["code"] == 1011
-        assert "sk-1234567890abcdefghij" not in mock_ws.close.call_args[1]["reason"]
+        assert "sk-9876567890abcdefghij" not in mock_ws.close.call_args[1]["reason"]
 
 
 class TestBedrockRealtimeRedaction:
@@ -121,14 +121,14 @@ class TestProxyStreamingDataGeneratorRedaction:
     def test_redact_traceback_format_exc(self):
         try:
             raise RuntimeError(
-                "Failed connecting to api_key=sk-1234567890abcdefghij at https://api.example.com"
+                "Failed connecting to api_key=sk-9876567890abcdefghij at https://api.example.com"
             )
         except RuntimeError:
             raw_tb = traceback.format_exc()
 
         redacted_tb = redact_string(raw_tb)
 
-        assert "sk-1234567890abcdefghij" not in redacted_tb
+        assert "sk-9876567890abcdefghij" not in redacted_tb
         assert "Traceback" in redacted_tb
         assert "RuntimeError" in redacted_tb
 

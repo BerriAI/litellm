@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use litellm_inference::test_support::{http_config, no_secrets, provider_http, resources};
+use litellm_inference_testing::{http_config, no_secrets, provider_http, resources};
 use serde_json::Value;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
 

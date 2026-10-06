@@ -33,8 +33,8 @@ async def test_openai_moderation_error_raising(monkeypatch):
 
     litellm.openai_moderations_model_name = "omni-moderation-latest"
     openai_mod = ENTERPRISE_OpenAI_Moderation()
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-98765"
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 

@@ -31,8 +31,8 @@ async def test_banned_keywords_check():
 
     banned_keywords_obj = ENTERPRISE_BannedKeywords()
 
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-98765"
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
