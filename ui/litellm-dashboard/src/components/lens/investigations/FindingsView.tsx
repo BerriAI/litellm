@@ -37,6 +37,15 @@ const PRIORITIES: { value: Priority | "all"; label: string }[] = [
   { value: "low", label: "Low" },
 ];
 
+function InvestigationCell({ sources }: Pick<InboxRow, "sources">) {
+  const names = [...new Set(sources.map(({ lens }) => lens.settings.name))].join(", ");
+  return (
+    <td className="hidden truncate px-3 text-muted-foreground lg:table-cell" title={names}>
+      {names}
+    </td>
+  );
+}
+
 function FilterSelect<T extends string>({
   label,
   value,
@@ -167,6 +176,7 @@ export function FindingsView({ readOnly = false }: { readOnly?: boolean }) {
               <tr className="h-8 border-b text-xs tracking-wider text-muted-foreground uppercase">
                 <th className="w-20 px-3 font-medium">Priority</th>
                 <th className="px-3 font-medium">Finding</th>
+                <th className="hidden w-48 px-3 font-medium lg:table-cell">Investigation</th>
                 <th className="hidden w-40 px-3 font-medium md:table-cell">Agent</th>
                 <th className="hidden w-16 px-3 text-right font-medium sm:table-cell">Runs</th>
                 <th className="hidden w-24 px-3 font-medium lg:table-cell">Last seen</th>
@@ -200,6 +210,7 @@ export function FindingsView({ readOnly = false }: { readOnly?: boolean }) {
                       {row.agents.join(", ")} · {row.runs} {row.runs === 1 ? "run" : "runs"}
                     </span>
                   </td>
+                  <InvestigationCell sources={row.sources} />
                   <td
                     className="hidden truncate px-3 text-muted-foreground md:table-cell"
                     title={row.agents.join(", ")}

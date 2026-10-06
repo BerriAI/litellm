@@ -49,7 +49,7 @@ class PythonRequest(Record):
 
 class CatalogEntry(Record):
     execution: Execution
-    spans: tuple[tuple[str, str, str, str, int | None], ...]
+    spans: tuple[tuple[str, str, str, str, int | None, str, str], ...]
     partial: bool
     characters: int | None
 
@@ -361,7 +361,7 @@ class EvidenceWorkspace:
         missing = frozenset(request.span_ids)  # rebind-ok: report unknown selectors after traversing selected sessions
         for session in sessions:
             if request.action == "catalog":
-                metadata: tuple[tuple[str, str, str, str, int | None], ...] = (
+                metadata: tuple[tuple[str, str, str, str, int | None, str, str], ...] = (
                     tuple(
                         [
                             (
@@ -370,6 +370,8 @@ class EvidenceWorkspace:
                                 source.part.name,
                                 source.part.kind,
                                 None if source.part.truncated else len(source.part.content),
+                                source.part.start_time,
+                                source.part.end_time,
                             )
                             async for source in self._sources(session)
                         ]
