@@ -106,6 +106,7 @@ def test_a_payload_the_parser_does_not_know_stays_the_legacy_function_named_span
         ),
         ('INSERT INTO "LiteLLM_DailyUserSpend" (id) VALUES ($1)', ("insert", "LiteLLM_DailyUserSpend")),
         ("SET LOCAL lock_timeout = 1000", ("set", "lock_timeout")),
+        ("SELECT set_config('lock_timeout', $1::text, true)", ("set", "lock_timeout")),
         ("SELECT COUNT(*) FROM pg_stat_activity", ("select", "pg_catalog")),
         ("SELECT 1", ("ping", None)),
         ("SELECT current_setting('transaction_read_only') AS transaction_read_only", ("select", "pg_catalog")),
