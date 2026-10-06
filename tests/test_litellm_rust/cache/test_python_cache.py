@@ -41,7 +41,7 @@ from tests.test_litellm_rust.support.cache import (
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
-from tests.test_litellm_rust.test_inference import RESPONSES_RESPONSE
+from tests.test_litellm_rust.test_inference import RESPONSES_MODEL, RESPONSES_RESPONSE
 
 pytestmark = pytest.mark.requires_rust_extension
 
