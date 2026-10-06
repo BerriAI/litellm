@@ -464,6 +464,46 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Agentic", "Prompt Injection", "Tool Misuse", "MCP", "Skills"],
     providerKey: "Straiker",
   },
+  {
+    id: "alice",
+    name: "Alice",
+    description:
+      "Policy-based guardrails for prompts and model responses, evaluated per application so one proxy can enforce a different policy set per team or product.",
+    category: "partner",
+    logo: guardrailLogoMap["Alice"],
+    tags: ["Content Moderation", "Prompt Injection", "PII", "Policy"],
+    providerKey: "Alice",
+  },
+  {
+    id: "agent_365",
+    name: "Microsoft Agent 365",
+    description:
+      "Microsoft Agent 365 tool-call governance: Defender threat evaluation and observability for MCP tool calls, acting on behalf of the signed-in user",
+    category: "partner",
+    logo: guardrailLogoMap["Microsoft Agent 365"],
+    tags: ["Agentic", "MCP", "Tool Misuse", "Observability"],
+    providerKey: "Agent365",
+  },
+  {
+    id: "llm_shield_proxy",
+    name: "LLM Shield Proxy",
+    description:
+      "Self-hosted PII redaction that puts the original values back into the model's response, so the provider never receives personal data while the end user still sees it.",
+    category: "partner",
+    logo: guardrailLogoMap["LLM Shield Proxy"],
+    tags: ["PII", "Data Privacy", "Compliance", "Streaming"],
+    providerKey: "LLM Shield Proxy",
+  },
+  {
+    id: "conduct",
+    name: "Conduct Guard",
+    description:
+      "Conduct Guard evaluates prompts against workspace rules before the model call: prompt injection, PII, and custom policies, with block, warning, and approval verdicts.",
+    category: "partner",
+    logo: guardrailLogoMap["Conduct Guard"],
+    tags: ["Security", "Prompt Injection", "PII", "Policy"],
+    providerKey: "Conduct",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];

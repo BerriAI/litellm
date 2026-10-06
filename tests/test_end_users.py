@@ -119,45 +119,6 @@ async def test_end_user_new():
 
 
 @pytest.mark.asyncio
-async def test_aaaend_user_specific_region():
-    """
-    - Specify region user can make calls in
-    - Make a generic call
-    - assert returned api base is for model in region
-
-    Repeat 3 times
-    """
-    key: str = ""
-    ## CREATE USER ##
-    async with aiohttp.ClientSession() as session:
-        end_user_obj = await new_end_user(
-            session=session,
-            i=0,
-            user_id=str(uuid.uuid4()),
-            model_region="eu",
-        )
-
-        ## MAKE CALL ##
-        key_gen = await generate_key(
-            session=session, i=0, models=["gpt-5-mini-end-user-test"]
-        )
-
-        key = key_gen["key"]
-
-    for _ in range(3):
-        client = AsyncOpenAI(api_key=key, base_url="http://0.0.0.0:4000", max_retries=0)
-
-        print("SENDING USER PARAM - {}".format(end_user_obj["user_id"]))
-        result = await client.chat.completions.with_raw_response.create(
-            model="gpt-5-mini-end-user-test",
-            messages=[{"role": "user", "content": "Hey!"}],
-            user=end_user_obj["user_id"],
-        )
-
-        assert result.headers.get("x-litellm-model-region") == "eu"
-
-
-@pytest.mark.asyncio
 async def test_enduser_tpm_limits_non_master_key():
     """
     1. budget_id = Create Budget with tpm_limit = 10

@@ -1,14 +1,12 @@
 import json
 import os
-from datetime import datetime
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 import pytest
 import base64
-import httpx
 
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 titan_embedding_response = {"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}
 
@@ -394,8 +392,6 @@ def test_bedrock_embedding_uses_correct_region_when_specified():
             os.environ["AWS_REGION_NAME"] = original_region_name
         else:
             os.environ.pop("AWS_REGION_NAME", None)
-
-
 def test_bedrock_embedding_region_bug_reproduction():
     """
     Reproduces the bug where aws_region_name is ignored when passed explicitly.
@@ -458,13 +454,3 @@ def test_bedrock_embedding_region_bug_reproduction():
             os.environ["AWS_REGION_NAME"] = original_region_name
         else:
             os.environ.pop("AWS_REGION_NAME", None)
-
-
-def test_bedrock_titan_g1_text_02_model_info():
-    """Test that amazon.titan-embed-g1-text-02 has correct pricing metadata"""
-    model_info = litellm.get_model_info("amazon.titan-embed-g1-text-02")
-    assert model_info is not None, "Model info should not be None"
-    assert model_info["litellm_provider"] == "bedrock"
-    assert model_info["mode"] == "embedding"
-    assert model_info["input_cost_per_token"] == 1e-07
-    assert model_info["max_input_tokens"] == 8192

@@ -7,9 +7,11 @@ Docs - https://jina.ai/embeddings/
 """
 
 import types
+from collections.abc import Mapping
 from typing import Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm import LlmProviders
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -22,6 +24,8 @@ from litellm.utils import is_base64_encoded
 
 from ..common_utils import JinaAIError
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
 
 class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
     """
@@ -31,7 +35,7 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
     def __init__(
         self,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[dict[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -139,7 +143,7 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
             additional_args={"complete_input_dict": request_data},
             original_response=response_json,
         )
-        return EmbeddingResponse(**response_json)
+        return EmbeddingResponse.model_validate(_JSON_OBJECT.validate_python(response_json))
 
     def validate_environment(
         self,

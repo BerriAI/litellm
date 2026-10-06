@@ -18,12 +18,21 @@ caller's identity metadata, minus two things that must never be forwarded as-is:
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, NON_INFERENCE_CALL_TYPES
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, InternalCallOrigin
 
 BUDGET_RESERVATION_METADATA_KEYS: Final = frozenset({"user_api_key_budget_reservation"})
+
+MODEL_ACCESS_GROUP_METADATA_KEY: Final = "user_api_key_matched_model_access_groups"
+"""Where auth records the model access groups that authorized the request, for the spend writer.
+
+The ``user_api_key`` prefix is load-bearing, not cosmetic: when a request carries both
+``metadata`` and ``litellm_metadata``, ``get_litellm_metadata_from_kwargs`` returns the latter and
+copies a key across only when ``user_api_key`` appears in its name."""
 
 _USER_API_KEY_AUTH_KEY: Final = "user_api_key_auth"
 
@@ -103,16 +112,16 @@ def sanitize_user_api_key_auth(auth: object) -> object:
     """Copy of the auth object with its budget reservation removed; the cost callback
     falls back to reading the reservation from inside the auth object."""
     if isinstance(auth, dict):
-        return {k: v for k, v in auth.items() if k != "budget_reservation"}  # mutable-ok: SDK metadata value
+        return {k: v for k, v in auth.items() if k != "budget_reservation"}
     reservation: Final[object] = getattr(auth, "budget_reservation", None)
     model_copy: Final[object] = getattr(auth, "model_copy", None)
     if reservation is not None and callable(model_copy):
-        return model_copy(update={"budget_reservation": None})  # mutable-ok: pydantic update payload
+        return model_copy(update={"budget_reservation": None})
     return auth
 
 
 def _sanitized(parent_metadata: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: SDK metadata kwarg
-    return {  # mutable-ok: SDK metadata kwarg
+    return {
         k: sanitize_user_api_key_auth(v) if k == _USER_API_KEY_AUTH_KEY else v
         for k, v in parent_metadata.items()
         if k not in BUDGET_RESERVATION_METADATA_KEYS
@@ -129,10 +138,21 @@ def forwarded_internal_call_metadata(
     parent's full context still describes the call being made.
     """
     if not parent_metadata:
-        return {}  # mutable-ok: SDK metadata kwarg
-    return _sanitized(parent_metadata) | {  # mutable-ok: SDK metadata kwarg
-        INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin
-    }
+        return {}
+    return _sanitized(parent_metadata) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}
+
+
+def parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mapping[str, str]:
+    kwargs: Final = request_kwargs or MappingProxyType({})
+    return MappingProxyType(
+        {k: v for k in ("litellm_session_id", "litellm_trace_id") if isinstance(v := kwargs.get(k), str)}
+    )
+
+
+def effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | None) -> bool | None:
+    return initialize_standard_callback_dynamic_params(dict(request_kwargs) if request_kwargs else None).get(
+        "turn_off_message_logging"
+    )
 
 
 def sanitized_forwardable_call_metadata(
@@ -145,4 +165,4 @@ def sanitized_forwardable_call_metadata(
     must not inherit per-request state such as its routing decision or logging payload.
     """
     identity: Final = {k: v for k, v in parent_metadata.items() if k in FORWARDABLE_IDENTITY_METADATA_KEYS}
-    return _sanitized(identity) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}  # mutable-ok: SDK metadata kwarg
+    return _sanitized(identity) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}

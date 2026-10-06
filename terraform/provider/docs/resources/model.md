@@ -126,6 +126,8 @@ The following arguments are supported:
 
 * `team_id` - (Optional) string. Associate the model with a specific team.
 
+* `display_name` - (Optional) string. Human-readable name stored in `model_info.display_name` and returned as `display_name` by `/v1/models`, so clients such as Claude Code and Claude Desktop show it in their model picker instead of `model_name`. When unset, clients fall back to `model_name`.
+
 * `mode` - (Optional) string. The intended use of the model. Valid values are:
   * `completion`
   * `embedding`

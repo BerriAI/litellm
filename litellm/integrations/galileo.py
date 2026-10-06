@@ -4,12 +4,13 @@ import json
 import os
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone, tzinfo
-from typing import Any, Final, TypedDict, cast
+from typing import Any, Final, Protocol, cast
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -33,6 +34,39 @@ GALILEO_CLOUD_API_BASE_URL: Final = "https://api.galileo.ai"
 # Cap the in-memory buffer so persistent flush failures (e.g. Galileo
 # unavailable, invalid credentials) cannot leak memory unboundedly.
 GALILEO_MAX_IN_MEMORY_RECORDS: Final = 1000
+
+_UNTYPED_VALUE: Final = TypeAdapter(object)
+_ZERO_ARGUMENT_CALLABLE: Final[TypeAdapter[Callable[[], object]]] = TypeAdapter(
+    Callable[[], object], config=ConfigDict(hide_input_in_errors=True)
+)
+
+
+class _GalileoLoginBody(TypedDict):
+    """Decoded body of the Galileo login response."""
+
+    access_token: ReadOnly[str]
+
+
+class _GalileoLoginResponse(Protocol):
+    """The login call's HTTP response, read for the access token it carries."""
+
+    def json(self) -> _GalileoLoginBody: ...
+
+
+class _JsonResponse(Protocol):
+    """An HTTP response read only for whatever JSON body it decodes to."""
+
+    def json(self) -> object: ...
+
+
+def _login_access_token(response: _GalileoLoginResponse) -> str:
+    """Read the bearer token out of a Galileo login response body."""
+    return response.json()["access_token"]
+
+
+def _decoded_body(response: _JsonResponse) -> object:
+    """Decode a response body without asserting anything about its shape."""
+    return response.json()
 
 
 class GalileoStandardLoggingFields(TypedDict, total=False):
@@ -156,7 +190,7 @@ class GalileoObserve(CustomLogger):
             },
         )
         galileo_login_response.raise_for_status()
-        access_token: Final = galileo_login_response.json()["access_token"]
+        access_token: Final = _login_access_token(galileo_login_response)
         self.headers = {
             "accept": "application/json",
             "Content-Type": "application/json",
@@ -367,12 +401,13 @@ class GalileoObserve(CustomLogger):
         )
 
     @staticmethod
-    def _log_v2_payload_validation(payload: dict[str, Any]) -> None:
+    def _log_v2_payload_validation(payload: dict[str, object]) -> None:
         missing_fields: Final[list[str]] = []
-        traces: Final[Sequence[object]] = payload.get("traces", [])
-        if not traces:
+        traces_value: Final = payload.get("traces", [])
+        if not traces_value:
             missing_fields.append("traces")
 
+        traces: Final[Sequence[object]] = traces_value if isinstance(traces_value, list) else []
         for trace_index, trace in enumerate(traces):
             if not isinstance(trace, dict):
                 continue
@@ -396,8 +431,8 @@ class GalileoObserve(CustomLogger):
                 missing_fields,
             )
 
-    def _log_flush_payload(self, url: str, payload: dict[str, Any]) -> None:
-        traces: Final[Sequence[object]] = payload.get("traces", [])
+    def _log_flush_payload(self, url: str, payload: dict[str, object]) -> None:
+        traces: Final = payload.get("traces")
         verbose_logger.debug(
             "Galileo Logger flush URL: %s trace_count=%s",
             url,
@@ -421,7 +456,7 @@ class GalileoObserve(CustomLogger):
         try:
             verbose_logger.debug(
                 "Galileo Logger HTTP error response json: %s",
-                response.json(),
+                _decoded_body(response),
             )
         except Exception:
             pass
@@ -443,9 +478,9 @@ class GalileoObserve(CustomLogger):
         if isinstance(value, str):
             return value
 
-        def _json_default(obj: Any) -> object:
+        def _json_default(obj: object) -> object:
             if hasattr(obj, "model_dump"):
-                return obj.model_dump()
+                return _ZERO_ARGUMENT_CALLABLE.validate_python(getattr(obj, "model_dump", None))()
             return str(obj)
 
         return json.dumps(value, default=_json_default)
@@ -462,11 +497,11 @@ class GalileoObserve(CustomLogger):
     @staticmethod
     def _get_chat_content_for_galileo(response_obj: litellm.ModelResponse) -> object:
         if response_obj.choices and len(response_obj.choices) > 0:
-            message: Final = response_obj["choices"][0]["message"]
+            message: Final = response_obj.choices[0].message
             if hasattr(message, "json"):
                 message_json: Final[object] = message.json()
                 if isinstance(message_json, str):
-                    return json.loads(message_json)
+                    return _UNTYPED_VALUE.validate_python(json.loads(message_json))
                 return message_json
             return message
         return None

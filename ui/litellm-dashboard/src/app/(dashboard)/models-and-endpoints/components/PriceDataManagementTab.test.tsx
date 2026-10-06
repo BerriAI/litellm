@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import PriceDataManagementTab from "./PriceDataManagementTab";
 
@@ -11,7 +11,7 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
 
 describe("PriceDataManagementTab", () => {
   it("renders its content standalone, without a tab-panel ancestor", () => {
-    const { getByText } = render(<PriceDataManagementTab />);
-    expect(getByText("Price Data Management")).toBeInTheDocument();
+    render(<PriceDataManagementTab />);
+    expect(screen.getByText("Price Data Management")).toBeInTheDocument();
   });
 });
