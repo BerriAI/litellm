@@ -1475,8 +1475,9 @@ export interface paths {
          *     eval spend, the shadow and judge calls' own cost, reaches max_budget dollars, the
          *     job's window ends, or the job is stopped, so one target running out of budget does
          *     not end sampling for the others; sampling changes propagate to pods within about 10
-         *     seconds. Shadow and judge calls bill to the sampled request's own identity but are
-         *     excluded from request counts and auto-router adoption metrics.
+         *     seconds. Shadow and judge calls run as the admin who started the job: their spend is
+         *     that admin's, the admin's total and per-model budgets withhold samples once exhausted,
+         *     and they are excluded from request counts and auto-router adoption metrics.
          */
         post: operations["start_shadow_eval_auto_router_shadow_eval_start_post"];
         delete?: never;

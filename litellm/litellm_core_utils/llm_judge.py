@@ -109,6 +109,19 @@ def judge_target(router: Router | None, model: str, team_id: str | None = None) 
     return JudgeTarget("sdk", frozenset({qualified})) if qualified is not None else JudgeTarget("nothing", frozenset())
 
 
+def _routable_group(router: Router | None, model: str, team_id: str | None) -> str:
+    """The model group the router serves `model` from for `team_id`, so a team-public judge
+    dispatches the same deployments it was validated against even when the call carries no
+    team. Unchanged unless the team's resolution is exactly one group."""
+    groups: Final = frozenset(
+        name
+        for deployment in (router.get_model_list(model_name=model, team_id=team_id) if router is not None else None)
+        or ()
+        if isinstance(name := deployment.get("model_name"), str)
+    )
+    return next(iter(groups)) if len(groups) == 1 else model
+
+
 async def judge_acompletion(
     router: Router | None,
     judge_model: str,
@@ -128,7 +141,7 @@ async def judge_acompletion(
     deployment and then dispatched as a public name the SDK has never heard of."""
     if judge_target(router, judge_model, team_id).via == "router":
         return await router.acompletion(  # pyright: ignore[reportOptionalMemberAccess]  # a router target implies router is not None
-            model=judge_model,
+            model=_routable_group(router, judge_model, team_id),
             messages=messages,
             num_retries=0,
             fallbacks=[],

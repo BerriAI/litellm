@@ -1,9 +1,9 @@
 """Metadata a request forwards to the internal LLM sub-calls it triggers.
 
-Internal features (the auto-router's classifier and embeddings, shadow eval's shadow and
-judge calls) bill real provider spend that nobody typed a prompt for. That spend must land
-on the same key/team/org/user as the request that caused it, so the sub-call carries the
-caller's identity metadata, minus two things that must never be forwarded as-is:
+Internal features (the auto-router's classifier, embeddings and context compaction) bill
+real provider spend that nobody typed a prompt for. That spend must land on the same
+key/team/org/user as the request that caused it, so the sub-call carries the caller's
+identity metadata, minus two things that must never be forwarded as-is:
 
 * ``user_api_key_budget_reservation`` (and the reservation nested inside
   ``user_api_key_auth``) belongs to the parent completion. If a sub-call's cost callback
@@ -161,8 +161,8 @@ def sanitized_forwardable_call_metadata(
 ) -> dict[str, object]:  # mutable-ok: SDK metadata kwarg
     """Just the caller's identity, stamped with the sub-call's origin.
 
-    For sub-calls detached from the parent request (shadow eval), which outlive it and
-    must not inherit per-request state such as its routing decision or logging payload.
+    For sub-calls that must not inherit the parent's per-request state, such as its
+    routing decision or logging payload.
     """
     identity: Final = {k: v for k, v in parent_metadata.items() if k in FORWARDABLE_IDENTITY_METADATA_KEYS}
     return _sanitized(identity) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}

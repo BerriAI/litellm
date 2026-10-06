@@ -90,6 +90,32 @@ async def test_judge_acompletion_prefers_router_and_disables_retries():
 
 
 @pytest.mark.asyncio
+async def test_a_team_public_judge_dispatches_the_teams_own_group_whoever_the_call_runs_as():
+    """Two teams publish the same judge name. Resolved for team-a it is one group, and the call
+    names that group, so it reaches team-a's deployments even when the caller's metadata carries
+    no team (the shadow eval judge runs as the job's admin creator, whose name lookup would see
+    both teams and refuse as ambiguous)."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": f"row_{team}",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+                "model_info": {"team_id": team, "team_public_model_name": "house-judge"},
+            }
+            for team in ("team-a", "team-b")
+        ]
+    )
+    router.acompletion = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]  # fake only the call, not the resolution
+        return_value={"choices": [{"message": {"content": "router answer"}}]}
+    )
+
+    await judge_acompletion(router, "house-judge", [{"role": "user", "content": "hi"}], team_id="team-a")
+    await judge_acompletion(router, "house-judge", [{"role": "user", "content": "hi"}], team_id="team-b")
+
+    assert [call.kwargs["model"] for call in router.acompletion.call_args_list] == ["row_team-a", "row_team-b"]
+
+
+@pytest.mark.asyncio
 async def test_judge_acompletion_falls_back_to_sdk_for_unconfigured_model(monkeypatch: pytest.MonkeyPatch):
     import litellm as litellm_module
 

@@ -2,8 +2,9 @@
 the detached pipeline's single attempt-row write, and the cache-first job lookup."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -16,6 +17,7 @@ from litellm.integrations.shadow_eval_logger import (
     _MAX_CONCURRENT_SHADOW_TASKS,
     _MAX_ERROR_CHARS,
     _MAX_JUDGE_PROMPT_CHARS,
+    _admit_creator,
     JUDGE_MAX_OUTPUT_TOKENS,
     PAIRWISE_JUDGE_RESPONSE_FORMAT,
     ActiveShadowEvalJob,
@@ -55,6 +57,7 @@ def _job(**overrides) -> ActiveShadowEvalJob:
         max_turns=200,
         ends_at=datetime.now(timezone.utc) + timedelta(days=1),
         attempts=0,
+        created_by="eval-admin",
     )
     return ActiveShadowEvalJob(**{**defaults, **overrides})
 
@@ -92,6 +95,7 @@ def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash
         judge_model=job.judge_model,
         max_turns=job.max_turns,
         max_budget=job.max_budget,
+        created_by=job.created_by,
         ends_at=job.ends_at,
     ).items():
         setattr(record, field, value)
@@ -230,10 +234,28 @@ def _spend_counter(store=None):
     return counter, read, write
 
 
-def _logger(router=None, prisma=None, jobs=(), counter_store=None, jobs_by_target=None) -> ShadowEvalLogger:
+CREATOR_METADATA: Final = MappingProxyType({"user_api_key_user_id": "eval-admin", "user_api_key_hash": None})
+
+
+def _creator_admission(admitted: bool = True):
+    """Stands in for the proxy's creator budget owners: answers with the creator's call
+    metadata, or None for a creator who cannot pay, and records what it was asked."""
+    asked: Final[list[tuple[str | None, tuple[str, ...]]]] = []
+
+    async def admit(creator_user_id: str | None, models: Sequence[str]) -> Mapping[str, object] | None:
+        asked.append((creator_user_id, tuple(models)))
+        return CREATOR_METADATA if admitted else None
+
+    return admit, asked
+
+
+def _logger(
+    router=None, prisma=None, jobs=(), counter_store=None, jobs_by_target=None, creator_admitted=True
+) -> ShadowEvalLogger:
     cache = InMemoryCache(max_size_in_memory=4, default_ttl=60)
     counter, read, write = _spend_counter(counter_store)
     funnel_events = []
+    admit, asked = _creator_admission(creator_admitted)
     logger = ShadowEvalLogger(
         router_provider=lambda: router,
         prisma_provider=lambda: prisma,
@@ -241,9 +263,11 @@ def _logger(router=None, prisma=None, jobs=(), counter_store=None, jobs_by_targe
         job_spend_reader=read,
         job_spend_writer=write,
         funnel_recorder=lambda job_id, stage: funnel_events.append((job_id, stage)),
+        creator_admission=admit,
     )
     logger._test_counter = counter
     logger._test_funnel = funnel_events
+    logger._test_admission_asks = asked
     seeded = jobs_by_target if jobs_by_target is not None else ({("key", "key-hash"): tuple(jobs)} if jobs else None)
     if seeded is not None:
         cache.set_cache("shadow_eval:active_jobs", seeded)
@@ -494,6 +518,16 @@ class TestSurfaceNormalization:
                 },
                 "anthropic/claude-fable-5",
             ),
+            (
+                "aresponses",
+                {"tools": [{"type": "mcp", "server_url": "litellm_proxy", "server_label": "gw", "require_approval": "never"}]},
+                "anthropic/claude-fable-5",
+            ),
+            (
+                "acompletion",
+                {"tools": [{"type": "mcp", "server_url": "https://proxy.example.com/mcp/github", "server_label": "gh"}]},
+                "anthropic/claude-fable-5",
+            ),
         ],
         ids=[
             "chat-empty-options",
@@ -509,9 +543,11 @@ class TestSurfaceNormalization:
             "responses-bedrock-erases-search",
             "responses-bedrock-erases-preview",
             "chat-mixed-client-and-hosted-tools",
+            "responses-gateway-mcp-runs-as-creator",
+            "chat-gateway-mcp-path-runs-as-creator",
         ],
     )
-    async def test_hosted_web_search_skips_shadow_calls_and_spend(
+    async def test_hosted_tools_skip_shadow_calls_and_spend(
         self, call_type: str, search_params: Mapping[str, object], model: str
     ) -> None:
         base_kwargs: Final = _success_kwargs(call_type=call_type, model=model)
@@ -1225,24 +1261,35 @@ class TestSuccessHookSkipChain:
 
         assert prisma.db.litellm_shadowevalattempt.create.await_count == 1
 
-    async def test_v1_messages_surface_forwards_identity_from_litellm_metadata(self):
-        """/v1/messages stores identity in litellm_params.litellm_metadata, so the hook
-        resolves the bucket through the shared helper; every surface forwards the same
-        identity to the shadow and judge calls."""
+    @pytest.mark.parametrize(
+        "call_type,bucket", [("acompletion", "metadata"), ("anthropic_messages", "litellm_metadata")]
+    )
+    async def test_eval_calls_run_as_the_creator_whatever_the_sampled_caller_was(self, call_type: str, bucket: str):
+        """Every surface's sampled request carries its caller's identity in a different bucket;
+        none of it reaches the shadow or judge call, which bill to the job's creator."""
         prisma = _prisma()
         router = _router()
         logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
 
-        hook_kwargs = _success_kwargs()
+        hook_kwargs = _success_kwargs(call_type=call_type)
         hook_kwargs["litellm_params"] = {
-            "litellm_metadata": {"user_api_key_hash": "key-hash", "user_api_key_team_id": "team-1"}
+            bucket: {
+                "user_api_key_hash": "key-hash",
+                "user_api_key_team_id": "team-1",
+                "user_api_key_user_id": "sampled-user",
+                "user_api_key_end_user_id": "sampled-end-user",
+            },
+            "proxy_server_request": {"body": {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 9}},
         }
         await logger.async_log_success_event(hook_kwargs, RESPONSE, None, None)
         await _drain(logger)
 
-        shadow_call = router.acompletion.call_args_list[0].kwargs
-        assert shadow_call["metadata"]["user_api_key_hash"] == "key-hash"
-        assert shadow_call["metadata"]["user_api_key_team_id"] == "team-1"
+        assert logger._test_admission_asks == [("eval-admin", ("my-router", "judge-model"))]
+        assert router.acompletion.call_count == 2
+        for call in router.acompletion.call_args_list:
+            metadata = call.kwargs["metadata"]
+            assert metadata["user_api_key_user_id"] == "eval-admin"
+            assert {k: v for k, v in metadata.items() if v in ("key-hash", "team-1", "sampled-user", "sampled-end-user")} == {}
 
     async def test_redacted_requests_are_never_shadowed(self):
         """Redaction rewrites the logged messages before callbacks run, so this hook only
@@ -1513,24 +1560,23 @@ class TestShadowPipeline:
         router.acompletion.assert_not_called()
         assert logger._test_funnel == [("job-1", "withheld")]
 
-    async def test_over_budget_key_skips_before_any_call(self, monkeypatch: pytest.MonkeyPatch):
-        """The gate delegates to the auth path's own budget owner, so an over-budget
-        verdict there (BudgetExceededError) skips the shadow before any provider call."""
-        from litellm.exceptions import BudgetExceededError
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.auth import auth_checks
-
-        monkeypatch.setattr(
-            auth_checks,
-            "_virtual_key_max_budget_check",
-            AsyncMock(side_effect=BudgetExceededError(current_cost=11.0, max_budget=10.0)),
-        )
+    @pytest.mark.parametrize(
+        "job",
+        [
+            _job(),
+            _job(router_names=("my-router", "router-b")),
+            _job(direction="reverse", baseline_model="baseline-model"),
+        ],
+    )
+    async def test_a_creator_who_cannot_pay_withholds_the_sample_before_any_call(self, job: ActiveShadowEvalJob):
+        """Admission is asked once per sample about every model the sample would call, each
+        arm's target plus the judge, and a creator over any of those budgets spends nothing."""
         router = _router()
         prisma = _prisma()
-        logger = _logger(router=router, prisma=prisma)
+        logger = _logger(router=router, prisma=prisma, creator_admitted=False)
 
         await logger._run_shadow_eval(
-            job=_job(),
+            job=job,
             request_id="req-1",
             messages=({"role": "user", "content": "hi"},),
             real_text="real answer",
@@ -1540,12 +1586,15 @@ class TestShadowPipeline:
             real_cache_hit=False,
             control_tier=None,
             shadow_params={},
-            parent_metadata={"user_api_key_auth": UserAPIKeyAuth(api_key="sk-abc", max_budget=10.0)},
+            parent_metadata={"user_api_key_hash": "key-hash"},
         )
 
+        assert logger._test_admission_asks == [
+            ("eval-admin", (*(job.arm_target(arm) for arm in job.arm_router_names), "judge-model"))
+        ]
         router.acompletion.assert_not_called()
         prisma.db.litellm_shadowevalattempt.create.assert_not_called()
-        assert logger._test_funnel == [("job-1", "withheld")]
+        assert logger._test_funnel == [(job.id, "withheld")]
 
     @pytest.mark.parametrize(
         "router_factory,expected_error,expected_cost,expected_shadow_cost",
@@ -1965,7 +2014,7 @@ class TestShadowPipeline:
         assert row["judge_cost"] == 0.0
         assert logger._test_counter["spend:shadow_eval:job-1"] == 0.007
 
-    async def test_sub_calls_carry_identity_and_origin_but_never_parent_request_state(self):
+    async def test_sub_calls_carry_the_creator_and_origin_but_never_parent_request_state(self):
         prisma = _prisma()
         router = _router()
         logger = _logger(router=router, prisma=prisma)
@@ -1995,8 +2044,9 @@ class TestShadowPipeline:
         for call in (shadow_call, judge_call):
             assert call["num_retries"] == 0
             assert call["fallbacks"] == []
-            assert call["metadata"]["user_api_key_hash"] == "key-hash"
-            assert call["metadata"]["user_api_key_team_id"] == "team-1"
+            assert call["metadata"]["user_api_key_user_id"] == "eval-admin"
+            assert call["metadata"]["user_api_key_hash"] is None
+            assert "user_api_key_team_id" not in call["metadata"]
             assert "user_api_key_budget_reservation" not in call["metadata"]
         assert shadow_call["metadata"][INTERNAL_CALL_ORIGIN_METADATA_KEY] == SHADOW_EVAL_ROUTER_CALL_ORIGIN
         assert judge_call["metadata"][INTERNAL_CALL_ORIGIN_METADATA_KEY] == SHADOW_EVAL_JUDGE_CALL_ORIGIN
@@ -2307,6 +2357,45 @@ def _failing_router():
     router.get_model_list = MagicMock(return_value=None)
     router.acompletion = AsyncMock(side_effect=RuntimeError("provider exploded"))
     return router
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "creator,can_pay,principal_error,admitted",
+    [
+        ("eval-admin", True, None, True),
+        ("eval-admin", False, None, False),
+        ("eval-admin", True, RuntimeError("db down"), False),
+        (None, True, None, False),
+    ],
+    ids=["creator-can-pay", "creator-over-budget", "creator-unreadable", "no-creator"],
+)
+async def test_admission_hands_back_the_creators_metadata_only_when_they_can_pay(
+    monkeypatch: pytest.MonkeyPatch,
+    creator: str | None,
+    can_pay: bool,
+    principal_error: Exception | None,
+    admitted: bool,
+) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth import evaluation_principal as owner
+
+    principal = UserAPIKeyAuth(user_id="eval-admin")
+    asked = []
+
+    async def can_pay_for(seen, models):
+        asked.append((seen, tuple(models)))
+        return can_pay
+
+    monkeypatch.setattr(owner, "evaluation_principal", AsyncMock(side_effect=principal_error, return_value=principal))
+    monkeypatch.setattr(owner, "principal_can_pay_for", can_pay_for)
+
+    metadata = await _admit_creator(creator, ("my-router", "judge-model"))
+
+    assert (metadata is not None) is admitted
+    if admitted:
+        assert metadata["user_api_key_user_id"] == "eval-admin"
+        assert asked == [(principal, ("my-router", "judge-model"))]
 
 
 @pytest.mark.asyncio

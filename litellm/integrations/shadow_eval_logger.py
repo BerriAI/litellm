@@ -30,7 +30,6 @@ from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.tools import is_web_search_tool_responses
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, independent_snapshot
-from litellm.litellm_core_utils.internal_call_metadata import sanitized_forwardable_call_metadata
 from litellm.litellm_core_utils.llm_judge import (
     default_router_provider,
     extract_text_from_content,
@@ -77,6 +76,7 @@ _EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _CHAT_REQUEST_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _CHAT_MESSAGES_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _MESSAGE_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+_TOOL_PARAMS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
 def _chat_messages(kwargs: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
@@ -398,6 +398,17 @@ def _forwards_nothing(value: object) -> bool:
     return value is None or (isinstance(value, list) and len(value) == 0)
 
 
+def _request_has_gateway_mcp_tools(request: Mapping[str, object]) -> bool:
+    """A gateway MCP tool would let the shadow call discover and run tools as the job's
+    creator rather than the sampled caller, so such a sample is never replayed."""
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import names_gateway_mcp_tool
+
+    tools: Final = request.get("tools")
+    return isinstance(tools, Sequence) and names_gateway_mcp_tool(
+        _TOOL_PARAMS_ADAPTER.validate_python([tool for tool in tools if isinstance(tool, Mapping)])
+    )
+
+
 def _request_has_hosted_web_search(request: Mapping[str, object]) -> bool:
     if request.get("web_search_options") is not None:
         return True
@@ -422,7 +433,7 @@ def _judgeable_sample(
         return None
     try:
         request: Final = ops.chat_request(kwargs, model_parameters)
-        if _request_has_hosted_web_search(request):
+        if _request_has_hosted_web_search(request) or _request_has_gateway_mcp_tools(request):
             return None
         items: Final = _MESSAGE_ITEMS_ADAPTER.validate_python(request.get("messages"))
         messages: Final = _CHAT_MESSAGES_ADAPTER.validate_python(
@@ -621,50 +632,30 @@ def _record_funnel_event(job_id: str, stage: "ShadowEvalFunnelStage") -> None:
         verbose_logger.debug("shadow_eval: funnel increment failed for %s: %s", job_id, e)
 
 
-async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
-    """Whether the shadowed key or its team is over budget, decided by the same owners
-    the request path uses, so counter keys and thresholds can never drift from auth's.
-
-    Advisory and fail-open: real traffic on an over-budget key is already rejected at
-    auth (so nothing reaches the success hook), and this gate only closes the race
-    where the key crosses its budget while a request is in flight.
-    """
+async def _admit_creator(creator_user_id: str | None, models: Sequence[str]) -> Mapping[str, object] | None:
+    """The call metadata the job's creator pays under, or None when the creator cannot pay
+    for ``models`` or that cannot be verified, so the sample is withheld before any spend."""
+    if creator_user_id is None:
+        return None
     try:
-        from litellm.exceptions import BudgetExceededError
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.auth.auth_checks import (
-            _team_max_budget_check,
-            _virtual_key_max_budget_check,
-            get_team_object,
+        from litellm.proxy.auth.evaluation_principal import (
+            evaluation_principal,
+            principal_call_metadata,
+            principal_can_pay_for,
         )
-        from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
-    except ImportError:
-        return False
 
-    auth: Final = metadata.get("user_api_key_auth")
-    if not isinstance(auth, UserAPIKeyAuth):
-        return False
-    try:
-        await _virtual_key_max_budget_check(valid_token=auth, proxy_logging_obj=proxy_logging_obj)
-        if auth.team_id:
-            team: Final = await get_team_object(
-                team_id=auth.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                check_cache_only=True,
-            )
-            await _team_max_budget_check(team_object=team, valid_token=auth, proxy_logging_obj=proxy_logging_obj)
-    except BudgetExceededError:
-        return True
-    except Exception as e:  # noqa: BLE001  # advisory gate: a failed read must not block sampling
-        verbose_logger.debug("shadow_eval: budget read failed: %s", e)
-    return False
+        principal: Final = await evaluation_principal(creator_user_id)
+        if not await principal_can_pay_for(principal, models):
+            return None
+        return principal_call_metadata(principal)
+    except Exception as e:  # noqa: BLE001  # an unverifiable creator budget withholds the sample rather than spending
+        verbose_logger.warning("shadow_eval: creator %s budget unverifiable, sample withheld: %s", creator_user_id, e)
+        return None
 
 
 def _forwarded_team_id(metadata: Mapping[str, object]) -> str | None:
-    """The shadowed key's team, the identity the judge call already carries in its metadata
-    and the router already selects deployments with. Read here too so the arm choice, which
-    happens before the router sees the call, is made under the same team."""
+    """The shadowed key's team, the scope start-time validation resolved the judge under,
+    so the judge's router-or-SDK arm is chosen the way the job was validated."""
     team_id: Final = metadata.get("user_api_key_team_id")
     return team_id if isinstance(team_id, str) and team_id else None
 
@@ -750,6 +741,7 @@ class ActiveShadowEvalJob(LiteLLMBaseModel):
     judge_model: str
     max_turns: int
     max_budget: float | None = None
+    created_by: str | None = None
     ends_at: datetime
     attempts: int = 0
     spend: float = 0.0
@@ -834,6 +826,7 @@ class ShadowEvalLogger(CustomLogger):
         job_spend_reader: Callable[[str, float, float], Awaitable[float]] | None = None,
         job_spend_writer: Callable[[str, float], Awaitable[None]] | None = None,
         funnel_recorder: Callable[[str, "ShadowEvalFunnelStage"], None] | None = None,
+        creator_admission: Callable[[str | None, Sequence[str]], Awaitable[Mapping[str, object] | None]] | None = None,
     ) -> None:
         """Providers are callables so the proxy's lazily-initialized globals are resolved
         at call time, not at logger construction. The spend reader and writer wrap the
@@ -844,6 +837,7 @@ class ShadowEvalLogger(CustomLogger):
         self._read_job_spend = job_spend_reader or _job_spend_from_counter
         self._write_job_spend = job_spend_writer or _add_job_spend_to_counter
         self._record_funnel = funnel_recorder or _record_funnel_event
+        self._admit_creator = creator_admission or _admit_creator
         self._inflight_shadow_tasks: int = 0
         # Starts per job since the last cache fill, never decremented within a
         # generation; the refill absorbs written rows and resets.
@@ -1056,8 +1050,9 @@ class ShadowEvalLogger(CustomLogger):
     ) -> None:
         """Budget gates once per sampled request, then every router arm in turn: shadow
         call -> blind judge -> one attempt row stamped with the arm. The gates that
-        decline to spend on an admitted sample (no DB to record into, an over-budget key,
-        an unverifiable or exhausted eval budget) count the REQUEST withheld before any
+        decline to spend on an admitted sample (no DB to record into, an unverifiable or
+        exhausted eval budget, a creator who cannot pay for every model the sample would
+        call) count the REQUEST withheld before any
         arm runs, so funnel counters stay per-request and a leg's eligible traffic still
         reconciles as not_sampled + unjudgeable + shed + withheld + sampled requests,
         where each sampled request writes one attempt row per arm. A budget crossed
@@ -1070,9 +1065,6 @@ class ShadowEvalLogger(CustomLogger):
         if prisma is None:
             self._record_funnel(job.id, "withheld")
             return
-        if await _key_or_team_is_over_budget(parent_metadata):
-            self._record_funnel(job.id, "withheld")
-            return
         if job.max_budget is not None:
             try:
                 spend: Final = await self._read_job_spend(_job_spend_counter_key(job.id), job.spend, job.max_budget)
@@ -1083,6 +1075,12 @@ class ShadowEvalLogger(CustomLogger):
             if spend >= job.max_budget:
                 self._record_funnel(job.id, "withheld")
                 return
+        creator_metadata: Final = await self._admit_creator(
+            job.created_by, (*(job.arm_target(arm) for arm in job.arm_router_names), job.judge_model)
+        )
+        if creator_metadata is None:
+            self._record_funnel(job.id, "withheld")
+            return
         for arm_router in job.arm_router_names:
             await self._run_shadow_arm(
                 prisma=prisma,
@@ -1098,6 +1096,7 @@ class ShadowEvalLogger(CustomLogger):
                 control_tier=control_tier,
                 shadow_params=shadow_params,
                 parent_metadata=parent_metadata,
+                creator_metadata=creator_metadata,
             )
 
     async def _run_shadow_arm(
@@ -1115,12 +1114,13 @@ class ShadowEvalLogger(CustomLogger):
         control_tier: str | None,
         shadow_params: Mapping[str, object],
         parent_metadata: Mapping[str, object],
+        creator_metadata: Mapping[str, object],
     ) -> None:
         """One arm's pipeline: shadow call -> blind judge -> one attempt row, every exit
         recording this arm's outcome, so one arm's fault never silences a sibling arm."""
         try:
             shadow: Final = await self._call_router_shadow(
-                job.arm_target(arm_router), messages, shadow_params, parent_metadata
+                job.arm_target(arm_router), messages, shadow_params, creator_metadata
             )
         except Exception as e:  # noqa: BLE001  # detached task: nothing billed yet, record and never raise
             verbose_logger.debug("shadow_eval: pipeline failed for %s: %s", request_id, e)
@@ -1162,6 +1162,7 @@ class ShadowEvalLogger(CustomLogger):
                 shadow_text=shadow.text,
                 tools=shadow_params.get("tools"),
                 parent_metadata=parent_metadata,
+                creator_metadata=creator_metadata,
             )
             if isinstance(verdict, _CallFailure):
                 await self._record_attempt(
@@ -1269,18 +1270,19 @@ class ShadowEvalLogger(CustomLogger):
         target_model: str,
         messages: Sequence[Mapping[str, object]],
         shadow_params: Mapping[str, object],
-        parent_metadata: Mapping[str, object],
+        creator_metadata: Mapping[str, object],
     ) -> "_ShadowResponse | _CallFailure":
         """Send the prompt through the arm nobody was served: the auto-router under
-        evaluation, or a reverse job's fixed baseline model. The metadata carries the
-        shadowed key's identity (spend attribution) and receives a routing decision
-        write-back, which a plain baseline model simply never makes."""
+        evaluation, or a reverse job's fixed baseline model. The call runs as the job's
+        creator and receives a routing decision write-back, which a plain baseline model
+        simply never makes."""
         router: Final = self._router_provider()
         if router is None:
             return _CallFailure("no router configured on this pod")
-        shadow_metadata: Final[dict[str, object]] = (  # mutable-ok: router writes its routing decision back
-            sanitized_forwardable_call_metadata(parent_metadata, SHADOW_EVAL_ROUTER_CALL_ORIGIN)
-        )
+        shadow_metadata: Final[dict[str, object]] = {  # mutable-ok: router writes its routing decision back
+            **creator_metadata,
+            INTERNAL_CALL_ORIGIN_METADATA_KEY: SHADOW_EVAL_ROUTER_CALL_ORIGIN,
+        }
         try:
             response: Final = await router.acompletion(
                 model=target_model,
@@ -1322,6 +1324,7 @@ class ShadowEvalLogger(CustomLogger):
         shadow_text: str,
         tools: object,
         parent_metadata: Mapping[str, object],
+        creator_metadata: Mapping[str, object],
     ) -> "_JudgeVerdict | _CallFailure":
         """Blind pairwise judge with A/B labels randomized to cancel position bias. Both
         arms were offered the same tools, so the judge is shown their definitions too: a
@@ -1335,7 +1338,7 @@ class ShadowEvalLogger(CustomLogger):
             for m in messages
             if m.get("content") is not None
         )
-        judge_metadata: Final = sanitized_forwardable_call_metadata(parent_metadata, SHADOW_EVAL_JUDGE_CALL_ORIGIN)
+        judge_metadata: Final = {**creator_metadata, INTERNAL_CALL_ORIGIN_METADATA_KEY: SHADOW_EVAL_JUDGE_CALL_ORIGIN}
         judge_messages: Final = [
             {"role": "system", "content": PAIRWISE_JUDGE_SYSTEM_PROMPT},
             {
