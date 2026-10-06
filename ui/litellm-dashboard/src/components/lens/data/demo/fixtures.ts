@@ -26,6 +26,8 @@ function makeTrace(scene: Scenario, index: number, now: number) {
     parent_span_id: null,
     span_id: spanId(0),
     spend: null,
+    spend_log_request_id: null,
+    spend_match: null,
     start_offset_ms: 0,
     status: "ok",
     type: "agent",
@@ -53,6 +55,7 @@ function makeTrace(scene: Scenario, index: number, now: number) {
     input_tokens: 520 + index * 41,
     output_tokens: 48 + index * 7,
     spend: 0.003 + index * 0.0002,
+    spend_match: "matched",
   };
   const trace: Trace = {
     summary: {
@@ -71,6 +74,7 @@ function makeTrace(scene: Scenario, index: number, now: number) {
       service: "demo-agents",
       span_count: toolCount + 2,
       spend: model.spend,
+      priced_calls: 1,
       start_time: iso(now - (index + 1) * 35 * 60_000),
       status: scene.failed ? "error" : "ok",
       tool_calls: toolCount,
@@ -85,6 +89,7 @@ function makeTrace(scene: Scenario, index: number, now: number) {
         llm_calls: 1,
         tool_calls: toolCount,
         spend: model.spend,
+        priced_calls: 1,
       },
     ],
     spans: [base, ...tools, model],
@@ -132,6 +137,9 @@ export function createLensDemoData(now = Date.now()) {
   }): Finding => ({
     id,
     check_id: check,
+    check_ids: [check],
+    investigation_runs: [],
+    merged_finding_ids: [],
     title,
     description,
     suggestion,
@@ -279,6 +287,7 @@ export function createLensDemoData(now = Date.now()) {
         findings: snapshot,
         settings,
         revision: 1,
+        review_versions: [],
         assessments: sample.map((e) => ({
           execution_id: e.id,
           cannot_assess: false,
@@ -299,6 +308,10 @@ export function createLensDemoData(now = Date.now()) {
           model: settings.model,
           at: iso(now - 320_000 - day * 60_000 + index * 1000),
           duration_ms: 1200,
+          content_version: "",
+          reused: false,
+          consolidated: false,
+          partial: false,
           cannot_assess: false,
           reasoning:
             snapshot.find((finding) => finding.occurrences.includes(execution.id))?.description ??
@@ -327,6 +340,8 @@ export function createLensDemoData(now = Date.now()) {
           partial: 0,
           unassessable: 0,
           failed_tasks: 0,
+          reused: 0,
+          reusable: 0,
         },
         status: "completed",
         stage: "Complete",
@@ -340,6 +355,7 @@ export function createLensDemoData(now = Date.now()) {
     return {
       id: definition.id,
       version: 1,
+      reservations: [],
       revision: 1,
       spent: jobs.reduce((sum, job) => sum + job.cost, 0),
       scope: { all_teams: true, api_key_hash: "", team_id: "" },

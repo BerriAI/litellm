@@ -723,6 +723,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # enqueue closure here instead of firing it immediately.
         self._defer_async_logging: bool = False
         self._enqueue_deferred_logging: Callable[[], None] | None = None
+        self._async_success_scheduled: bool = False
         self._on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -2260,6 +2261,15 @@ class Logging(LiteLLMLoggingBaseClass):
             return True
         except Exception:
             return True
+
+    def claim_async_success_log(self) -> bool:
+        """One async success log per request. The innermost @client wrapper always exits first,
+        since the outer one is awaiting it, so it claims the log here and the outer wrapper gets
+        False and schedules nothing."""
+        if self._async_success_scheduled:
+            return False
+        self._async_success_scheduled = True
+        return True
 
     def mark_logging_complete(
         self,
@@ -5223,9 +5233,15 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     collector) keeps the base exporters, since it has nothing else to deliver through.
     A preset that needs operator credentials it cannot find is allowed to build only
     when it serves a key/team destination in that situation. Otherwise a preset that
-    raises or that ends up with nothing but its gated exporter and the default
-    console placeholder returns ``None``, so the caller falls through to the legacy
-    path exactly as before V2 landed.
+    raises, or whose only ungated exporter is the default console placeholder, returns
+    ``None``, so the caller falls through to the legacy path exactly as before V2
+    landed. One that dropped its exporters instead stays on V2 and exports nowhere
+    until a key/team destination appears: the proxy builds the operator's callback at
+    startup, before any request has resolved a destination, and the legacy path there
+    would post every non-team request to the backend keyless. That logger is reused by
+    later calls as long as the preset would again build exporting nowhere; one that
+    was degraded for a destination while the preset raises without one is not, since
+    the degrade was justified by that destination alone.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
@@ -5241,22 +5257,26 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     serves_a_destination: Final = callback_name in destination_backends()
     has_v2_logger: Final = any(isinstance(callback, OpenTelemetryV2) for callback in _in_memory_loggers)
     carried: Final = serves_a_destination and has_v2_logger
-    for callback in _in_memory_loggers:
-        if (
-            isinstance(callback, OpenTelemetryV2)
-            and callback.callback_name == callback_name
-            and (serves_a_destination or not _exports_nowhere(callback.config))
-        ):
-            return callback
+    existing: Final = next(
+        (
+            callback
+            for callback in _in_memory_loggers
+            if isinstance(callback, OpenTelemetryV2) and callback.callback_name == callback_name
+        ),
+        None,
+    )
+    if existing is not None and (serves_a_destination or not _exports_nowhere(existing.config)):
+        return existing
     try:
         built: Final = preset_fn(allow_missing_credentials=carried)
     except Exception:
         # If env vars are missing or the preset raises, defer to the legacy path
         # so customers get the same error story they had before V2 landed.
         return None
-    gated: Final = _is_credential_gated(built)
-    if gated and not carried and not _has_operator_exporter(built):
+    if _is_credential_gated(built) and not carried and _only_the_placeholder_would_export(built):
         return None
+    if existing is not None and _exports_nowhere(built):
+        return existing
     config: Final = _only_the_presets_own_exporters(built, callback_name) if has_v2_logger else built
     if _exports_nowhere(config):
         verbose_logger.warning(
@@ -5278,11 +5298,12 @@ def _is_credential_gated(config: "OpenTelemetryV2Config") -> bool:
     return any(_is_gated(spec) for spec in config.exporters)
 
 
-def _has_operator_exporter(config: "OpenTelemetryV2Config") -> bool:
-    """Whether the operator configured somewhere real to export, beyond the default console placeholder."""
+def _only_the_placeholder_would_export(config: "OpenTelemetryV2Config") -> bool:
+    """Whether every ungated exporter is the console placeholder ``_normalize`` folds in for an empty list."""
     from litellm.integrations.otel.presets.utils import is_unconfigured_placeholder
 
-    return any(not _is_gated(spec) and not is_unconfigured_placeholder(spec) for spec in config.exporters)
+    ungated: Final = tuple(spec for spec in config.exporters if not _is_gated(spec))
+    return bool(ungated) and all(is_unconfigured_placeholder(spec) for spec in ungated)
 
 
 def _only_the_presets_own_exporters(config: "OpenTelemetryV2Config", callback_name: str) -> "OpenTelemetryV2Config":

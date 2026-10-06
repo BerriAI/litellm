@@ -158,6 +158,11 @@ function LoadedRun({
         selection={selection}
         embedded={embedded}
         stale={switching}
+        conversationPaging={{
+          loading: isFetching,
+          failed: isError,
+          loadMore: fetchNextPage,
+        }}
       />
     </Tabs>
   );

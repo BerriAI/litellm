@@ -178,7 +178,7 @@ export function FindingsView({ readOnly = false }: { readOnly?: boolean }) {
                 <th className="px-3 font-medium">Finding</th>
                 <th className="hidden w-48 px-3 font-medium lg:table-cell">Investigation</th>
                 <th className="hidden w-40 px-3 font-medium md:table-cell">Agent</th>
-                <th className="hidden w-16 px-3 text-right font-medium sm:table-cell">Runs</th>
+                <th className="hidden w-16 px-3 text-right font-medium sm:table-cell">Traces</th>
                 <th className="hidden w-24 px-3 font-medium lg:table-cell">Last seen</th>
                 <th className="w-7">
                   <span className="sr-only">Details</span>
@@ -207,7 +207,7 @@ export function FindingsView({ readOnly = false }: { readOnly?: boolean }) {
                   <td className="px-3 py-2 sm:py-0" title={row.suggestion || undefined}>
                     <span className="line-clamp-2 text-foreground sm:block sm:truncate">{row.title}</span>
                     <span className="mt-1 block text-xs text-muted-foreground md:hidden">
-                      {row.agents.join(", ")} · {row.runs} {row.runs === 1 ? "run" : "runs"}
+                      {row.agents.join(", ")} · {row.runs} {row.runs === 1 ? "trace" : "traces"}
                     </span>
                   </td>
                   <InvestigationCell sources={row.sources} />

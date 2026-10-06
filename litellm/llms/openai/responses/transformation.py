@@ -549,7 +549,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     )
 
                 # Create ResponseReasoningItem object from the item data
-                reasoning_item: Final = ResponseReasoningItem(**item_data)
+                reasoning_item: Final = ResponseReasoningItem.model_validate(item_data)
 
                 # Convert back to dict with exclude_none=True to exclude None fields
                 dict_reasoning_item: Final = reasoning_item.model_dump(exclude_none=True)
