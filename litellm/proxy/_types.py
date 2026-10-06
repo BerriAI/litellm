@@ -25,6 +25,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_arize_otlp_protocol_value,
     validate_langfuse_environment_value,
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
@@ -2386,6 +2387,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 validate_langfuse_environment_value(callback_vars[key])
             if key == "langfuse_span_scope":
                 validate_langfuse_span_scope_value(callback_vars[key])
+            if key == "arize_otlp_protocol":
+                validate_arize_otlp_protocol_value(callback_vars[key])
         return values
 
 
@@ -3021,6 +3024,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     reject_clientside_metadata_tags: bool | None = Field(
         None,
         description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
+    )
+    vector_store_deny_by_default: bool = Field(
+        default=False,
+        description="When True, a vector store must be explicitly listed in object_permission.vector_stores: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing. Dashboard session keys are not yet covered",
+    )
+    search_tool_deny_by_default: bool = Field(
+        default=False,
+        description="When True, a search tool must be explicitly listed in object_permission.search_tools: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing, and the unregistered search fallback is denied. The master key and dashboard sessions are exempt",
     )
     missing_session_id: Literal["generate", "reject", "omit"] | None = Field(
         None,
@@ -4512,6 +4523,26 @@ class ProxyErrorTypes(str, enum.Enum):
     Organization does not have access to the vector store
     """
 
+    user_vector_store_access_denied = "user_vector_store_access_denied"
+    """
+    User does not have access to the vector store
+    """
+
+    key_search_tool_access_denied = "key_search_tool_access_denied"
+    """
+    Key does not have access to the search tool
+    """
+
+    team_search_tool_access_denied = "team_search_tool_access_denied"
+    """
+    Team does not have access to the search tool
+    """
+
+    user_search_tool_access_denied = "user_search_tool_access_denied"
+    """
+    User does not have access to the search tool
+    """
+
     team_member_already_in_team = "team_member_already_in_team"
     """
     Team member is already in team
@@ -4546,7 +4577,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
     @classmethod
     def get_vector_store_access_error_type_for_object(
-        cls, object_type: Literal["key", "team", "org"]
+        cls, object_type: Literal["key", "team", "org", "user"]
     ) -> "ProxyErrorTypes":
         """
         Get the vector store access error type for object_type
@@ -4557,6 +4588,18 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.team_vector_store_access_denied
         elif object_type == "org":
             return cls.org_vector_store_access_denied
+        elif object_type == "user":
+            return cls.user_vector_store_access_denied
+
+    @classmethod
+    def get_search_tool_access_error_type_for_object(
+        cls, object_type: Literal["key", "team", "user"]
+    ) -> "ProxyErrorTypes":
+        return {
+            "key": cls.key_search_tool_access_denied,
+            "team": cls.team_search_tool_access_denied,
+            "user": cls.user_search_tool_access_denied,
+        }[object_type]
 
 
 DB_CONNECTION_ERROR_TYPES: Final = (

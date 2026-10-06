@@ -165,6 +165,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
     handle_update_object_permission_common,
+    invalidate_cached_object_permissions,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -2553,6 +2554,10 @@ async def update_team(
 
         verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=team_row.team_id)
+        await invalidate_cached_object_permissions(
+            object_permission_ids=(existing_team.object_permission_id, team_row.object_permission_id),
+            user_api_key_cache=user_api_key_cache,
+        )
         await _refresh_cached_team(
             team_row=team_row,
             user_api_key_cache=user_api_key_cache,
