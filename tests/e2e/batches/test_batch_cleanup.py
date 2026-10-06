@@ -13,6 +13,7 @@ from batch_cleanup import (
 )
 from batch_client import AZURE_FILE_EXPIRY_SECONDS, BatchObject, FileDeleteResponse, batch_upload_form
 from capabilities import CAPABILITIES, Capability
+from e2e_metadata import Domain, Subject, meta
 from e2e_http import NetworkError, RateLimitedError, Result, Success, UnknownApiError
 from lifecycle import ResourceManager
 from models import KeyGenerateBody
@@ -86,6 +87,7 @@ def deleted_file(*, deleted: bool = True) -> Success[FileDeleteResponse]:
 
 
 class TestFileCleanup:
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_managed_delete_accepts_the_deleted_file_object(self) -> None:
         response: Final = Success(
             status_code=200, data=FileDeleteResponse.model_validate({"id": MANAGED_FILE_ID, "object": "file"})
@@ -95,6 +97,7 @@ class TestFileCleanup:
         client.calls.assert_done()
 
     @pytest.mark.parametrize("file_id", ["file-1", MANAGED_FILE_ID])
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_a_success_status_without_a_deletion_confirmation_is_rejected(self, file_id: str) -> None:
         client: Final = CleanupClient(
             calls=ExpectedCalls((f"delete None {file_id}",)),
@@ -105,6 +108,7 @@ class TestFileCleanup:
         client.calls.assert_done()
 
     @pytest.mark.parametrize("cap", CAPABILITIES, ids=[cap.id for cap in CAPABILITIES])
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_deletes_raw_files_through_the_upload_provider(self, cap: Capability) -> None:
         expected_provider: Final = cap.provider if cap.scenario in {"model_param", "provider_fallback"} else None
         client: Final = CleanupClient(
@@ -113,6 +117,7 @@ class TestFileCleanup:
         cleanup_file(client, "file-1", key="test-key", provider=cap.file_provider)
         client.calls.assert_done()
 
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_failed_delete_is_reported_after_remaining_resources_are_cleaned(self) -> None:
         client: Final = CleanupClient(
             calls=ExpectedCalls(("delete azure file-1", "delete key test-key")),
@@ -127,6 +132,7 @@ class TestFileCleanup:
         assert len(caught.value.exceptions) == 1
         assert str(caught.value.exceptions[0]) == "Delete file file-1 failed: HTTP 403"
 
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_success_response_must_confirm_deletion(self) -> None:
         client: Final = CleanupClient(
             calls=ExpectedCalls(("delete None file-1",)), files=(deleted_file(deleted=False),)
@@ -135,6 +141,7 @@ class TestFileCleanup:
             cleanup_file(client, "file-1", key="test-key")
         client.calls.assert_done()
 
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_delete_refused_because_a_batch_still_references_the_file_is_left_and_reported(self) -> None:
         client: Final = CleanupClient(
             calls=ExpectedCalls((f"delete None {MANAGED_FILE_ID}",)),
@@ -152,12 +159,14 @@ class TestFileCleanup:
             UnknownApiError(status_code=501, body=IN_USE_REFUSAL),
         ],
     )
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_any_other_delete_failure_still_raises(self, failure: UnknownApiError) -> None:
         client: Final = CleanupClient(calls=ExpectedCalls((f"delete None {MANAGED_FILE_ID}",)), files=(failure,))
         with pytest.raises(AssertionError, match=f"Delete file {MANAGED_FILE_ID} failed: HTTP {failure.status_code}"):
             cleanup_file(client, MANAGED_FILE_ID, key="test-key")
         client.calls.assert_done()
 
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_cleanup_is_idempotent_when_file_is_already_deleted(self) -> None:
         client: Final = CleanupClient(
             calls=ExpectedCalls(("delete azure file-1",)),
@@ -166,6 +175,7 @@ class TestFileCleanup:
         cleanup_file(client, "file-1", key="test-key", provider="azure")
         client.calls.assert_done()
 
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_default_resource_cleanup_keeps_existing_best_effort_behavior(self) -> None:
         client: Final = CleanupClient(
             calls=ExpectedCalls(("delete None file-1", "delete key test-key")),
@@ -183,6 +193,7 @@ class TestCleanupRetries:
         "failure",
         [NetworkError(message="offline"), RateLimitedError(), UnknownApiError(status_code=503, body="unavailable")],
     )
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_transient_error_retries_and_returns_success(self, failure: Result[FileDeleteResponse]) -> None:
         responses: Final = (failure, deleted_file())
         outcomes: Final = Mock(side_effect=responses)
@@ -191,6 +202,7 @@ class TestCleanupRetries:
         assert isinstance(result, Success) and result.data.deleted
         delays.assert_done()
 
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_persistent_error_has_bounded_retries(self) -> None:
         failure: Final = UnknownApiError(status_code=503, body="unavailable")
         outcomes: Final = Mock(return_value=failure)
@@ -200,6 +212,7 @@ class TestCleanupRetries:
         delays.assert_done()
         assert outcomes.call_count == len(CLEANUP_DELAYS) + 1
 
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_permanent_error_is_not_retried(self) -> None:
         failure: Final = UnknownApiError(status_code=403, body="forbidden")
         responses: Final = (failure, deleted_file())
@@ -211,6 +224,7 @@ class TestCleanupRetries:
 
 
 class TestBatchCancellation:
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_cancelling_batch_is_polled_until_terminal_without_cancelling_again(self) -> None:
         client: Final = CleanupClient(
             calls=ExpectedCalls((f"retrieve None {MANAGED_BATCH_ID}",) * 3),
@@ -221,6 +235,7 @@ class TestBatchCancellation:
         client.calls.assert_done()
         delays.assert_done()
 
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_batch_still_cancelling_at_the_deadline_and_its_input_file_are_left_and_reported(self) -> None:
         client: Final = CleanupClient(
             calls=ExpectedCalls(
@@ -255,6 +270,7 @@ class TestBatchCancellation:
             (UnknownApiError(status_code=403, body="forbidden"), "after cancellation failed: HTTP 403"),
         ],
     )
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_anything_but_still_cancelling_at_the_deadline_still_fails(
         self, last: Result[BatchObject], reported: str
     ) -> None:
@@ -268,11 +284,13 @@ class TestBatchCancellation:
         client.calls.assert_done()
 
     @pytest.mark.parametrize("status", ["completed", "failed", "expired", "cancelled"])
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_inactive_batch_needs_no_cancellation(self, status: str) -> None:
         client: Final = CleanupClient(calls=ExpectedCalls(("retrieve None batch-1",)), batches=(batch(status),))
         cleanup_batch(client, "batch-1", key="test-key")
         client.calls.assert_done()
 
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_active_batch_is_cancelled_through_its_provider(self) -> None:
         client: Final = CleanupClient(
             calls=ExpectedCalls(("retrieve azure batch-1", "cancel azure batch-1")),
@@ -284,6 +302,7 @@ class TestBatchCancellation:
 
     @pytest.mark.parametrize("batch_id", ["batch-1", MANAGED_BATCH_ID])
     @pytest.mark.parametrize("pending_status", ["validating", "in_progress"])
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_accepted_cancellation_waits_through_stale_provider_status(
         self, batch_id: str, pending_status: str
     ) -> None:
@@ -313,6 +332,7 @@ class TestBatchCancellation:
         delays.assert_done()
 
     @pytest.mark.parametrize("output_delete_fails", [False, True])
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_batch_that_completed_before_cleanup_deletes_output_and_error_files(
         self, output_delete_fails: bool
     ) -> None:
@@ -343,6 +363,7 @@ class TestBatchCancellation:
         client.calls.assert_done()
 
     @pytest.mark.parametrize("status", ["completed", "in_progress"])
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_cancellation_conflict_is_accepted_only_when_batch_became_inactive(self, status: str) -> None:
         client: Final = CleanupClient(
             calls=ExpectedCalls(("retrieve None batch-1", "cancel None batch-1", "retrieve None batch-1")),
@@ -358,6 +379,7 @@ class TestBatchCancellation:
 
 
 class TestAzureFileExpiry:
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_azure_form_serializes_native_expiry_for_the_proxy(self) -> None:
         form: Final = batch_upload_form("azure", target_model_names="azure-test")
         assert form.model_dump(by_alias=True, exclude_none=True) == {
@@ -368,5 +390,6 @@ class TestAzureFileExpiry:
         }
 
     @pytest.mark.parametrize("provider", ["openai", "vertex_ai", "bedrock"])
+    @meta(Subject(domain=Domain.LLM_TRANSLATION))
     def test_other_providers_keep_their_existing_upload_fields(self, provider: str) -> None:
         assert batch_upload_form(provider).model_dump(by_alias=True, exclude_none=True) == {"purpose": "batch"}

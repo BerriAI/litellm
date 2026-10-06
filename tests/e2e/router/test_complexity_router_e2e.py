@@ -22,6 +22,7 @@ exact failure before the fix.
 import pytest
 
 from complexity_router_client import ComplexityRouterClient
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from e2e_http import unwrap
 from models import ChatBody, ChatMessage
 
@@ -45,6 +46,13 @@ class TestComplexityRouterLlmClassifier:
         "(e.g. Is P equal to NP?); re-enable when classifier tier quality is fixed"
     )
     @pytest.mark.covers("reliability.routing.complexity_llm_classifier.routes_by_llm_tier")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI, Provider.ANTHROPIC,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_llm_classifier_runs_and_routes_by_semantic_tier(
         self, client: ComplexityRouterClient, complexity_key: str
     ) -> None:
