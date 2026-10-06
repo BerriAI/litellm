@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
@@ -217,6 +218,20 @@ async def test_ceiling_caps_owner_raise_at_callers_own_budget(monkeypatch):
             data=UpdateKeyRequest(key="sk-1", max_budget=30.0),
             existing=_key(max_budget=10.0),
             caller=_caller(max_budget=20.0),
+        )
+    assert exc.value.status_code == 400
+    assert "cannot exceed the caller's own max_budget (20.0)" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_ceiling_caps_ui_session_owner_raise_at_user_budget(monkeypatch):
+    with pytest.raises(HTTPException) as exc:
+        await _update(
+            monkeypatch,
+            policy="ceiling",
+            data=UpdateKeyRequest(key="sk-1", max_budget=30.0),
+            existing=_key(max_budget=10.0),
+            caller=_caller(team_id=UI_SESSION_TOKEN_TEAM_ID, user_max_budget=20.0),
         )
     assert exc.value.status_code == 400
     assert "cannot exceed the caller's own max_budget (20.0)" in str(exc.value.detail)
