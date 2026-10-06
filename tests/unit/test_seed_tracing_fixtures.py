@@ -77,9 +77,12 @@ def test_all_fixture_replays_are_recent_and_preserve_spans(path: Path) -> None:
             assert after_span_attributes["lens.original_trace_id"] == seed_id(
                 before_original_trace_id, replay.namespace, 32
             )
-            assert after["TraceId"] == hashlib.sha256(
-                f"litellm.claude.session.v1\0{seed_id(before_session, replay.namespace, 32)}".encode()
-            ).hexdigest()[:32]
+            assert (
+                after["TraceId"]
+                == hashlib.sha256(
+                    f"litellm.claude.session.v1\0{seed_id(before_session, replay.namespace, 32)}".encode()
+                ).hexdigest()[:32]
+            )
             assert after["TraceId"] != before["TraceId"]
         else:
             assert after["TraceId"] == seed_id(trace_id, replay.namespace, 32)
@@ -255,3 +258,14 @@ def test_seed_cli_rejects_invalid_http_timeouts(timeout: str) -> None:
     with pytest.raises(SystemExit) as error:
         seed_arguments(["--timeout-seconds", timeout])
     assert error.value.code == 2
+
+
+def test_replay_rebases_provider_request_evidence_with_the_spend_row() -> None:
+    spend: Final = {**dict(spend_fixtures())["deepagents_swarm"][0], "provider_request_id": "req_replay"}
+    pattern: Final = response_pattern((spend,))
+    replayed: Final = rebase_spend((spend,), 0, "another-run", pattern)[0]
+    export: Final = rebase({"request_id": "req_replay"}, 0, "another-run", pattern)
+
+    assert export == {"request_id": replayed["provider_request_id"]}
+    assert replayed["provider_request_id"] != spend["provider_request_id"]
+    assert replayed["provider_request_id"].startswith("req_")
