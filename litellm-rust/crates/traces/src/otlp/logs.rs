@@ -1,6 +1,6 @@
 use opentelemetry_proto::tonic::{
     collector::{logs::v1::ExportLogsServiceRequest, trace::v1::ExportTraceServiceRequest},
-    common::v1::{KeyValue, any_value::Value},
+    common::v1::{AnyValue, KeyValue, any_value::Value},
     logs::v1::LogRecord,
     trace::v1::{ResourceSpans, ScopeSpans, Span, Status},
 };
@@ -28,7 +28,11 @@ fn text<'a>(attributes: &'a [KeyValue], key: &str) -> &'a str {
     }
 }
 
-fn message(record: LogRecord) -> Span {
+fn absent_id(id: &[u8], length: usize) -> bool {
+    id.is_empty() || (id.len() == length && id.iter().all(|byte| *byte == 0))
+}
+
+fn message(mut record: LogRecord) -> Span {
     let timestamp = if record.time_unix_nano == 0 {
         record.observed_time_unix_nano
     } else {
@@ -50,15 +54,47 @@ fn message(record: LogRecord) -> Span {
     } else {
         hash.update(uuid);
     }
+    let missing_trace = absent_id(&record.trace_id, 16);
+    let missing_parent = absent_id(&record.span_id, 8);
+    if missing_trace {
+        hash.update(b"\0unassigned\0");
+        hash.update(text(&record.attributes, "session.id"));
+    }
+    let identity = hash.finalize();
+    if missing_trace || missing_parent {
+        record.attributes.push(KeyValue {
+            key: "lens.capture.warning".to_owned(),
+            value: Some(AnyValue {
+                value: Some(Value::StringValue(
+                    "This native log has incomplete trace context. Its content is retained, but its execution parent is unconfirmed.".to_owned(),
+                )),
+            }),
+            ..KeyValue::default()
+        });
+    }
+    let trace_id = if missing_trace {
+        let session = text(&record.attributes, "session.id");
+        if session.is_empty() {
+            identity[..16].to_vec()
+        } else {
+            span::session_trace_id(session)
+        }
+    } else {
+        record.trace_id
+    };
     let failed = match value(&record.attributes, "success") {
         Some(Value::BoolValue(success)) => !success,
         Some(Value::StringValue(success)) => success == "false",
         _ => false,
     };
     Span {
-        trace_id: record.trace_id,
-        span_id: hash.finalize()[..8].to_vec(),
-        parent_span_id: record.span_id,
+        trace_id,
+        span_id: identity[..8].to_vec(),
+        parent_span_id: if missing_parent {
+            Vec::new()
+        } else {
+            record.span_id
+        },
         name: format!("claude_code.{}", text(&record.attributes, "event.name")),
         kind: 1,
         start_time_unix_nano: timestamp,
