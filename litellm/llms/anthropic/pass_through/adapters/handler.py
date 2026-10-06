@@ -78,6 +78,8 @@ def _store_response_cost_before_usage_flattening(completion_response: object, kw
         return
     try:
         cost = litellm_logging_obj._response_cost_calculator(  # pyright: ignore[reportPrivateUsage]
+            # cast-ok: the adapter hands back an OpenAI-shaped ModelResponse; the calculator
+            # accepts it as-is and only the usage fields are read.
             result=cast(ModelResponse, completion_response)
         )
     except Exception:
