@@ -1,4 +1,10 @@
-WITH page AS (
+WITH
+    (Framework = 'claude-code' AND (SpanAttributes['session.id'] != '' OR SpanAttributes['agent_id'] != '')) AS native,
+    (native AND SpanAttributes['agent_id'] != '') AS native_child,
+    (native AND (SpanName = 'claude_code.interaction' OR
+        coalesce(nullIf(SpanAttributes['query_source_safe'], ''), SpanAttributes['query_source']) IN
+        ('repl_main_thread', 'sdk', 'sdk_main_thread', 'generate_session_title', 'prompt_suggestion'))) AS native_root,
+    page AS (
 SELECT TraceId AS trace_id,
        hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId))) AS trace_ref,
        if(length(groupUniqArrayArray(UserIds)) = 1, arrayElement(groupUniqArrayArray(UserIds), 1), '') AS user_id, TeamId AS team_id, ApiKeyHash AS api_key_hash,
@@ -27,7 +33,8 @@ HAVING min(StartTs) >= fromUnixTimestamp64Milli({start_ms:Int64})
 ORDER BY start_ms DESC, trace_ref DESC
 LIMIT {limit:UInt32}
 )
-SELECT page.* EXCEPT (trace_start, trace_end),
+SELECT page.* EXCEPT (trace_start, trace_end, agent_invocations),
+       if(identities.native_count > 0, identities.resolved_invocations, page.agent_invocations) AS agent_invocations,
        identities.agent_names AS agent_names, identities.agent_count AS agent_count,
        identities.frameworks AS frameworks
 FROM page
@@ -35,7 +42,13 @@ LEFT JOIN (
     SELECT TeamId, ApiKeyHash, TraceId,
            arraySort(groupUniqArrayIf(AgentName, AgentName != '')) AS agent_names,
            arraySort(groupUniqArrayIf(toString(Framework), Framework != '')) AS frameworks,
-           uniqExactIf(if(AgentName = '', SpanName, AgentName), ObservationType = 'agent') AS agent_count
+           uniqExactIf((SpanAttributes['session.id'], SpanAttributes['agent_id']), native_child)
+             + uniqExactIf(SpanAttributes['session.id'], native_root) AS native_count,
+           native_count + uniqExactIf(if(AgentName = '', SpanName, AgentName), ObservationType = 'agent' AND NOT native) AS agent_count,
+           uniqExactIf(SpanId, ObservationType = 'agent' AND NOT native)
+             + uniqExactIf((SpanAttributes['session.id'], SpanAttributes['agent_id']), native_child)
+             + greatest(uniqExactIf(SpanId, native AND SpanName = 'claude_code.interaction'),
+                        uniqExactIf(SpanAttributes['session.id'], native_root)) AS resolved_invocations
     FROM otel_traces
     WHERE Timestamp >= (SELECT min(trace_start) FROM page)
       AND Timestamp <= (SELECT max(trace_end) FROM page)

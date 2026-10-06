@@ -297,6 +297,10 @@ mod tests {
 
     fn row(span_id: &str) -> TraceSpansRow {
         TraceSpansRow {
+            native_agent_id: String::new(),
+            native_parent_agent_id: String::new(),
+            session_id: String::new(),
+            query_source: String::new(),
             trace_id: String::new(),
             span_id: span_id.into(),
             parent_span_id: String::new(),

@@ -81,6 +81,14 @@ pub struct TraceSpansRow {
     pub wrapper_candidate: bool,
     pub agent: String,
     #[serde(default)]
+    pub native_agent_id: String,
+    #[serde(default)]
+    pub native_parent_agent_id: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub query_source: String,
+    #[serde(default)]
     pub framework: String,
     #[serde(serialize_with = "crate::wire::serialize_status")]
     pub status: crate::SpanStatus,

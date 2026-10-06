@@ -25792,6 +25792,8 @@ export interface components {
         };
         /** AgentNode */
         AgentNode: {
+            /** Actor Id */
+            actor_id?: string | null;
             /** Duration Ms */
             duration_ms: number;
             /** Invocations */
@@ -25800,6 +25802,8 @@ export interface components {
             llm_calls: number;
             /** Name */
             name: string;
+            /** Parent Actor Id */
+            parent_actor_id?: string | null;
             /** Parent Agent */
             parent_agent: string | null;
             /** Spend */
@@ -45075,6 +45079,8 @@ export interface components {
         };
         /** Span */
         Span: {
+            /** Actor Id */
+            actor_id?: string | null;
             /** Agent */
             agent: string;
             /** Duration Ms */
@@ -45097,6 +45103,8 @@ export interface components {
             name: string;
             /** Output Tokens */
             output_tokens: number;
+            /** Parent Actor Id */
+            parent_actor_id?: string | null;
             /** Parent Span Id */
             parent_span_id: string | null;
             /** Span Id */

@@ -25,6 +25,10 @@ pub struct Span {
     #[serde(rename = "type")]
     pub kind: crate::ObservationType,
     pub agent: String,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub actor_id: Option<String>,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub parent_actor_id: Option<String>,
     pub framework: String,
     pub start_offset_ms: f64,
     pub duration_ms: f64,
@@ -43,6 +47,10 @@ pub struct Span {
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentNode {
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub actor_id: Option<String>,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub parent_actor_id: Option<String>,
     pub name: String,
     pub parent_agent: Option<String>,
     pub invocations: u64,

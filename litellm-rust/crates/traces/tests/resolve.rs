@@ -10,6 +10,10 @@ const MS: i64 = 1_000_000;
 
 fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> TraceSpansRow {
     TraceSpansRow {
+        native_agent_id: String::new(),
+        native_parent_agent_id: String::new(),
+        session_id: String::new(),
+        query_source: String::new(),
         trace_id: String::new(),
         span_id: span_id.into(),
         parent_span_id: parent.into(),
@@ -214,6 +218,8 @@ fn repeated_subagent_invocations_aggregate_into_one_node() {
     assert_eq!(
         trace.agents[0],
         AgentNode {
+            actor_id: None,
+            parent_actor_id: None,
             name: "deep_research_agent".into(),
             parent_agent: None,
             invocations: 1,
@@ -1388,4 +1394,283 @@ fn native_tool_failure_log_matches_by_call_id_without_double_counting(
     let trace = resolve_trace("trace", "", &[tool, log], &[]).unwrap();
     assert_eq!(trace.spans[0].status, expected);
     assert_eq!(trace.summary.error_count, 1);
+}
+
+#[rstest]
+#[case::root_recorded(true)]
+#[case::root_pending(false)]
+fn native_actor_identity_survives_same_names_nested_and_resumed_work(#[case] root_recorded: bool) {
+    let native = |mut row: TraceSpansRow, actor: &str, parent: &str, source: &str| {
+        row.framework = "claude-code".into();
+        row.session_id = "session-one".into();
+        row.native_agent_id = actor.into();
+        row.native_parent_agent_id = parent.into();
+        row.query_source = source.into();
+        row
+    };
+    let mut rows = vec![
+        native(
+            at(
+                row(
+                    "root-call",
+                    "root",
+                    "claude_code.llm_request",
+                    "llm",
+                    "claude-code",
+                ),
+                0,
+                10,
+            ),
+            "",
+            "",
+            "repl_main_thread",
+        ),
+        native(
+            at(
+                row(
+                    "first-call",
+                    "launch-execution",
+                    "claude_code.llm_request",
+                    "llm",
+                    "claude-code",
+                ),
+                10,
+                10,
+            ),
+            "first",
+            "",
+            "agent.builtin.general-purpose",
+        ),
+        native(
+            at(
+                row(
+                    "second-call",
+                    "root",
+                    "claude_code.llm_request",
+                    "llm",
+                    "claude-code",
+                ),
+                20,
+                10,
+            ),
+            "second",
+            "",
+            "agent.builtin.general-purpose",
+        ),
+        native(
+            at(
+                row(
+                    "nested-call",
+                    "root",
+                    "claude_code.llm_request",
+                    "llm",
+                    "claude-code",
+                ),
+                30,
+                10,
+            ),
+            "nested",
+            "first",
+            "agent.builtin.general-purpose",
+        ),
+        native(
+            at(
+                row(
+                    "resumed-call",
+                    "new-root",
+                    "claude_code.llm_request",
+                    "llm",
+                    "claude-code",
+                ),
+                100,
+                10,
+            ),
+            "first",
+            "",
+            "agent.builtin.general-purpose",
+        ),
+        native(
+            at(row("tool", "root", "Bash", "tool", "claude-code"), 105, 2),
+            "first",
+            "",
+            "",
+        ),
+        native(
+            at(
+                row(
+                    "launch-execution",
+                    "root",
+                    "claude_code.tool.execution",
+                    "framework",
+                    "claude-code",
+                ),
+                9,
+                1,
+            ),
+            "",
+            "",
+            "",
+        ),
+        native(
+            at(
+                row(
+                    "reply",
+                    "launch-execution",
+                    "claude_code.assistant_response",
+                    "chain",
+                    "claude-code",
+                ),
+                21,
+                0,
+            ),
+            "",
+            "",
+            "agent:builtin:general-purpose",
+        ),
+        native(
+            at(
+                row(
+                    "unassigned",
+                    "new-root",
+                    "claude_code.assistant_response",
+                    "chain",
+                    "claude-code",
+                ),
+                115,
+                0,
+            ),
+            "",
+            "",
+            "agent:builtin:general-purpose",
+        ),
+    ];
+    if root_recorded {
+        rows.push(native(
+            at(
+                row(
+                    "root",
+                    "",
+                    "claude_code.interaction",
+                    "agent",
+                    "claude-code",
+                ),
+                0,
+                90,
+            ),
+            "",
+            "",
+            "",
+        ));
+        rows.push(native(
+            at(
+                row(
+                    "new-root",
+                    "",
+                    "claude_code.interaction",
+                    "agent",
+                    "claude-code",
+                ),
+                95,
+                25,
+            ),
+            "",
+            "",
+            "",
+        ));
+    }
+    let trace = resolve_trace("trace", "", &rows, &[]).unwrap();
+    assert_eq!(trace.summary.agent_count, 4);
+    assert_eq!(
+        trace
+            .agents
+            .iter()
+            .map(|actor| actor.llm_calls)
+            .sum::<u64>(),
+        trace.summary.llm_calls
+    );
+    assert_eq!(
+        trace
+            .agents
+            .iter()
+            .map(|actor| actor.tool_calls)
+            .sum::<u64>(),
+        trace.summary.tool_calls
+    );
+    let first_id = trace
+        .spans
+        .iter()
+        .find(|span| span.span_id == "first-call")
+        .unwrap()
+        .actor_id
+        .as_ref()
+        .unwrap();
+    let first = trace
+        .agents
+        .iter()
+        .find(|actor| actor.actor_id.as_ref() == Some(first_id))
+        .unwrap();
+    assert_eq!(first.name, "general-purpose");
+    assert_eq!(
+        (
+            first.invocations,
+            first.llm_calls,
+            first.tool_calls,
+            first.duration_ms
+        ),
+        (1, 2, 1, 101.0)
+    );
+    for id in ["resumed-call", "tool", "reply"] {
+        assert_eq!(
+            trace
+                .spans
+                .iter()
+                .find(|span| span.span_id == id)
+                .unwrap()
+                .actor_id
+                .as_ref(),
+            Some(first_id)
+        );
+    }
+    let second = trace
+        .spans
+        .iter()
+        .find(|span| span.span_id == "second-call")
+        .unwrap();
+    assert_ne!(second.actor_id.as_ref(), Some(first_id));
+    let nested = trace
+        .spans
+        .iter()
+        .find(|span| span.span_id == "nested-call")
+        .unwrap();
+    assert_eq!(nested.parent_actor_id.as_ref(), Some(first_id));
+    assert!(
+        trace
+            .spans
+            .iter()
+            .find(|span| span.span_id == "unassigned")
+            .unwrap()
+            .actor_id
+            .is_none()
+    );
+    assert_eq!(
+        trace.summary.agent_invocations,
+        if root_recorded { 5 } else { 4 }
+    );
+}
+
+#[rstest]
+fn native_actor_identifiers_are_scoped_to_their_session() {
+    let rows = ["session-one", "session-two"].map(|session| TraceSpansRow {
+        session_id: session.into(),
+        native_agent_id: "shared-child-id".into(),
+        framework: "claude-code".into(),
+        ..row(session, "", "claude_code.llm_request", "llm", "claude-code")
+    });
+    let trace = resolve_trace("trace", "", &rows, &[]).unwrap();
+    assert_eq!(trace.summary.agent_count, 2);
+    assert_ne!(trace.spans[0].actor_id, trace.spans[1].actor_id);
+    assert_ne!(
+        trace.spans[0].parent_actor_id,
+        trace.spans[1].parent_actor_id
+    );
 }

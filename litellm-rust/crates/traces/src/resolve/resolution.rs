@@ -8,6 +8,7 @@ use crate::{
 };
 
 use super::{
+    actors::Actors,
     graph::Graph,
     spend::{self, Ownership, Requests, SpendEvidence},
 };
@@ -22,6 +23,7 @@ pub(super) fn agent_label(row: &TraceSpansRow) -> &str {
 
 pub(super) struct Resolution<'a> {
     pub(super) graph: Graph<'a>,
+    pub(super) actors: Actors,
     ownership: Ownership<'a>,
     spend: &'a [SpendRow],
     types: HashMap<&'a str, ObservationType>,
@@ -46,6 +48,7 @@ impl<'a> Resolution<'a> {
             })
             .collect();
         Self {
+            actors: Actors::new(&graph),
             ownership: Ownership {
                 team_id: &rows[0].team_id,
                 api_key_hash: &rows[0].api_key_hash,

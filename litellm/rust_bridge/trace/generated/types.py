@@ -52,6 +52,8 @@ SpanStatus: TypeAlias = Literal["ok", "error", "unset"]
 
 
 class AgentNode(typing_extensions.TypedDict):
+    actor_id: ReadOnly[NotRequired[str | None]]
+    parent_actor_id: ReadOnly[NotRequired[str | None]]
     name: ReadOnly[str]
     parent_agent: ReadOnly[str | None]
     invocations: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
@@ -128,6 +130,8 @@ class Span(typing_extensions.TypedDict):
     name: ReadOnly[str]
     type: ReadOnly[SpanType]
     agent: ReadOnly[str]
+    actor_id: ReadOnly[NotRequired[str | None]]
+    parent_actor_id: ReadOnly[NotRequired[str | None]]
     framework: ReadOnly[str]
     start_offset_ms: ReadOnly[float]
     duration_ms: ReadOnly[float]

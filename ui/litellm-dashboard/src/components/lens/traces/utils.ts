@@ -113,7 +113,7 @@ export function errorSource(span: Span): ErrorSource | null {
 
 type GroupOrSpan = Span | { group: Span[] };
 
-const groupKey = (span: Pick<Span, "name" | "type" | "agent">): string => `${span.agent}|${span.name}|${span.type}`;
+const groupKey = (span: Pick<Span, "name" | "type" | "agent" | "actor_id">): string => `${span.actor_id ?? span.agent}|${span.name}|${span.type}`;
 
 /** Siblings sharing agent + name + type fold into one group once there are enough of them (or enough failures). */
 function groupChildren(children: readonly Span[]): GroupOrSpan[] {
@@ -142,7 +142,7 @@ function groupChildren(children: readonly Span[]): GroupOrSpan[] {
   return out;
 }
 
-export const groupRowId = (parentKey: string, span: Pick<Span, "name" | "type" | "agent">): string =>
+export const groupRowId = (parentKey: string, span: Pick<Span, "name" | "type" | "agent" | "actor_id">): string =>
   `grp::${parentKey}::${groupKey(span)}`;
 
 interface RowContext {

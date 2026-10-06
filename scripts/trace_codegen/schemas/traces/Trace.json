@@ -3,6 +3,13 @@
     "AgentNode": {
       "description": "One distinct agent in a trace: 200 invocations of `researcher` are one node.",
       "properties": {
+        "actor_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-python-optional": true
+        },
         "duration_ms": {
           "format": "double",
           "type": "number"
@@ -21,6 +28,13 @@
         },
         "name": {
           "type": "string"
+        },
+        "parent_actor_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-python-optional": true
         },
         "parent_agent": {
           "type": [
@@ -43,6 +57,8 @@
         }
       },
       "required": [
+        "actor_id",
+        "parent_actor_id",
         "name",
         "parent_agent",
         "invocations",
@@ -55,6 +71,13 @@
     },
     "Span": {
       "properties": {
+        "actor_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-python-optional": true
+        },
         "agent": {
           "type": "string"
         },
@@ -104,6 +127,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "parent_actor_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-python-optional": true
+        },
         "parent_span_id": {
           "type": [
             "string",
@@ -137,6 +167,8 @@
         "name",
         "type",
         "agent",
+        "actor_id",
+        "parent_actor_id",
         "framework",
         "start_offset_ms",
         "duration_ms",

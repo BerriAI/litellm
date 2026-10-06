@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use litellm_http::Client;
 use litellm_traces::query::named::ReadAccessParams;
-use litellm_traces_cache::{ReadError, TraceReader};
+use litellm_traces_cache::{ReadError, TraceReader, TraceStore};
 use litellm_traces_clickhouse::{
     ClickHouseTraces, Connection, InsertTable, QueryScope, insert_rows,
 };
@@ -708,5 +708,107 @@ async fn gateway_ids_resolve_through_detail_and_batch_reads_with_legacy_fallback
         assert_eq!(detail.summary.spend, expected, "{id}");
         assert_eq!(summary.spend, expected, "{id}");
     }
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn historical_native_actors_are_resolved_from_raw_attributes_with_tenant_isolation(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let client = &fixture.database.client;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let start_ms = 1_790_000_000_000_i64;
+    let records = [
+        ("root", "", "agent", "", "", "team-a"),
+        ("first", "root", "llm", "first", "", "team-a"),
+        ("second", "root", "llm", "second", "", "team-a"),
+        ("nested", "root", "llm", "nested", "first", "team-a"),
+        ("tool", "root", "tool", "first", "", "team-a"),
+        ("foreign", "root", "llm", "foreign", "", "team-b"),
+    ];
+    let rows = records.iter().enumerate().map(|(index, (id, parent, kind, actor, parent_actor, team))| {
+        BTreeMap::from([
+            ("Timestamp".into(), json!((start_ms + index as i64) * 1_000_000)),
+            ("TraceId".into(), json!("native-run")),
+            ("SpanId".into(), json!(id)),
+            ("ParentSpanId".into(), json!(parent)),
+            ("SpanName".into(), json!(if *kind == "agent" { "claude_code.interaction" } else { kind })),
+            ("ObservationType".into(), json!(kind)),
+            ("Framework".into(), json!("claude-code")),
+            ("AgentName".into(), json!("claude-code")),
+            ("SpanAttributes".into(), json!({
+                "session.id": "historical-session", "agent_id": actor, "parent_agent_id": parent_actor,
+                "query_source_safe": if actor.is_empty() { "repl_main_thread" } else { "agent.builtin.general-purpose" },
+            })),
+            ("TeamId".into(), json!(team)),
+            ("ApiKeyHash".into(), json!("key-a")),
+            ("Duration".into(), json!(1_000_000)),
+        ])
+    }).collect();
+    insert_rows(client, &writer, DATABASE, InsertTable::OtelTraces, rows).await?;
+    let connection = fixture
+        .readers
+        .connection(client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let (reader, store) = make_reader(client, connection);
+    let access = ReadAccessParams {
+        all_teams: false,
+        user_id: String::new(),
+        team_ids: vec!["team-a".into()],
+    };
+    let listed = store
+        .list_runs(&litellm_traces::query::named::ListTracesParams {
+            access: access.clone(),
+            start_ms: 0,
+            end_ms: 2_000_000_000_000,
+            cursor_ms: 0,
+            cursor_trace_id: String::new(),
+            limit: 50,
+        })
+        .await?;
+    assert_eq!(listed[0].agent_count, 4);
+    assert_eq!(listed[0].agent_invocations, 4);
+    let page = reader
+        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .await?;
+    assert_eq!(page.data.len(), 1);
+    assert_eq!(page.data[0].agent_count, 4);
+    let trace = reader
+        .get_trace(&store, &access, "native-run", &page.data[0].trace_ref)
+        .await?
+        .ok_or("missing trace")?;
+    assert_eq!(trace.summary.agent_count, 4);
+    assert_eq!(trace.summary.agent_invocations, 4);
+    assert_eq!(
+        trace
+            .agents
+            .iter()
+            .map(|actor| actor.llm_calls)
+            .sum::<u64>(),
+        3
+    );
+    assert_eq!(
+        trace
+            .agents
+            .iter()
+            .map(|actor| actor.tool_calls)
+            .sum::<u64>(),
+        1
+    );
+    assert!(!trace.spans.iter().any(|span| span.span_id == "foreign"));
+    let first = trace
+        .spans
+        .iter()
+        .find(|span| span.span_id == "first")
+        .ok_or("missing first actor")?;
+    let nested = trace
+        .spans
+        .iter()
+        .find(|span| span.span_id == "nested")
+        .ok_or("missing nested actor")?;
+    assert!(first.actor_id.is_some());
+    assert_eq!(nested.parent_actor_id, first.actor_id);
     Ok(())
 }

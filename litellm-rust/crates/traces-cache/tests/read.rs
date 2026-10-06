@@ -259,6 +259,10 @@ fn access() -> ReadAccessParams {
 
 fn span(index: usize) -> TraceSpansRow {
     TraceSpansRow {
+        native_agent_id: String::new(),
+        native_parent_agent_id: String::new(),
+        session_id: String::new(),
+        query_source: String::new(),
         trace_id: "trace".into(),
         span_id: format!("span-{index}"),
         parent_span_id: if index == 0 {

@@ -45,12 +45,15 @@ fn span_type(name: &str, attributes: &BTreeMap<String, String>) -> SpanType {
     }
 }
 
-/// `agent:custom:search_agent` -> `search_agent`: the subagent a request ran for.
 fn subagent(attributes: &BTreeMap<String, String>) -> Option<&str> {
-    let mut parts = attr(attributes, "query_source")
-        .strip_prefix("agent:")?
-        .splitn(2, ':');
-    let (_kind, name) = (parts.next()?, parts.next()?);
+    let source =
+        super::super::select_attribute(attributes, &["query_source", "query_source_safe"])?;
+    let (rest, separator) = if let Some(rest) = source.text.strip_prefix("agent:") {
+        (rest, ':')
+    } else {
+        (source.text.strip_prefix("agent.")?, '.')
+    };
+    let (_, name) = rest.split_once(separator)?;
     (!name.is_empty()).then_some(name)
 }
 
@@ -199,7 +202,7 @@ impl Format for ClaudeCode {
         let kind = span_type(context.name, attributes);
         let base = SpanFacts {
             role: Some(RoleEvidence::Declared(ObservationType::Framework)),
-            agent_name: Some(CLAUDE_CODE_AGENT.to_owned()),
+            agent_name: Some(subagent(attributes).unwrap_or(CLAUDE_CODE_AGENT).to_owned()),
             tool_call_id: present(attributes, &["gen_ai.tool.call.id"]),
             ..SpanFacts::default()
         };
@@ -311,6 +314,32 @@ mod tests {
         normalize::{Normalization, NormalizedSpan, ObservationType},
         otlp::DecodedEvent,
     };
+
+    #[rstest]
+    #[case::log_source("query_source", "agent:builtin:general-purpose")]
+    #[case::span_source("query_source_safe", "agent.builtin.general-purpose")]
+    fn native_actor_metadata_does_not_require_session_capture(
+        #[case] key: &str,
+        #[case] source: &str,
+    ) {
+        let attributes = BTreeMap::from([
+            ("span.type".into(), "llm_request".into()),
+            ("session.id".into(), "session".into()),
+            ("agent_id".into(), "child".into()),
+            ("parent_agent_id".into(), "parent".into()),
+            (key.into(), source.into()),
+        ]);
+        let span = normalization("claude_code.llm_request", &attributes, &[])
+            .unwrap()
+            .span;
+        assert_eq!(span.agent_name.as_deref(), Some("general-purpose"));
+        assert_eq!(span.agent_metadata.agent_id.as_deref(), Some("child"));
+        assert_eq!(
+            span.agent_metadata.parent_agent_id.as_deref(),
+            Some("parent")
+        );
+        assert_eq!(span.agent_metadata.session_id.as_deref(), Some("session"));
+    }
 
     fn normalization(
         name: &str,

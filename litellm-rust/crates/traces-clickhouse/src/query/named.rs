@@ -95,6 +95,14 @@ struct TraceSpansRowEncoding {
     pub wrapper_candidate: bool,
     pub agent: String,
     #[serde(default)]
+    pub native_agent_id: String,
+    #[serde(default)]
+    pub native_parent_agent_id: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub query_source: String,
+    #[serde(default)]
     pub framework: String,
     #[serde(serialize_with = "litellm_traces::wire::serialize_status")]
     pub status: litellm_traces::SpanStatus,
@@ -344,7 +352,7 @@ mod tests {
             quoted,
         );
         round_trip::<TraceSpansRow>(
-            json!({"trace_id": "trace", "span_id": "span", "parent_span_id": "parent", "name": "agent", "type": "agent", "wrapper_candidate": 1, "agent": "agent", "framework": "claude-agent-sdk", "status": "STATUS_CODE_ERROR", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "call_keys": ["provider_response:request"], "call_evidence": "complete", "tool_call_id": "call", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
+            json!({"trace_id": "trace", "span_id": "span", "parent_span_id": "parent", "name": "agent", "type": "agent", "wrapper_candidate": 1, "agent": "agent", "native_agent_id": "child", "native_parent_agent_id": "parent", "session_id": "session", "query_source": "agent.builtin.general-purpose", "framework": "claude-agent-sdk", "status": "STATUS_CODE_ERROR", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "call_keys": ["provider_response:request"], "call_evidence": "complete", "tool_call_id": "call", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
             quoted,
         );
         round_trip::<SpanDetailRow>(

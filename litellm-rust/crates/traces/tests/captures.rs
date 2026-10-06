@@ -176,6 +176,23 @@ fn trace_span(span: DecodedSpan) -> TraceSpansRow {
         })
         .unwrap_or_default();
     TraceSpansRow {
+        native_agent_id: span.attributes.get("agent_id").cloned().unwrap_or_default(),
+        native_parent_agent_id: span
+            .attributes
+            .get("parent_agent_id")
+            .cloned()
+            .unwrap_or_default(),
+        session_id: span
+            .attributes
+            .get("session.id")
+            .cloned()
+            .unwrap_or_default(),
+        query_source: span
+            .attributes
+            .get("query_source_safe")
+            .or_else(|| span.attributes.get("query_source"))
+            .cloned()
+            .unwrap_or_default(),
         trace_id: span.trace_id,
         span_id: span.span_id,
         parent_span_id: span.parent_span_id,
@@ -266,6 +283,10 @@ fn unrelated_transport(call: &TraceSpansRow) -> TraceSpansRow {
         i64::try_from(i128::from(call.start_ns) + i128::from(call.duration_ns) + 1_000_000)
             .expect("valid unrelated transport timestamp");
     TraceSpansRow {
+        native_agent_id: String::new(),
+        native_parent_agent_id: String::new(),
+        session_id: String::new(),
+        query_source: String::new(),
         trace_id: call.trace_id.clone(),
         span_id: format!("unrelated-transport-{}", call.span_id),
         parent_span_id: call.parent_span_id.clone(),
