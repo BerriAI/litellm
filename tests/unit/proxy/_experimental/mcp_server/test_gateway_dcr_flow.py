@@ -1962,6 +1962,64 @@ async def test_revoke_answers_503_while_the_shared_record_cannot_be_written_then
     assert already_burned.status_code == 200
 
 
+class _RedisThatFaultsOnTheSecondWrite:
+    """A shared Redis double whose first increment lands and whose second raises, the fault between
+    revoke's two writes; its raw client reads back exactly the keys that landed, and later writes land."""
+
+    def __init__(self) -> None:
+        self.landed: tuple[str, ...] = ()
+        self.writes = 0
+
+    def check_and_fix_namespace(self, key: str) -> str:
+        return key
+
+    def init_async_client(self) -> "_RedisThatFaultsOnTheSecondWrite":
+        return self
+
+    async def async_increment(self, key: str, value: int, **kwargs: object) -> int:
+        self.writes += 1
+        if self.writes == 2:
+            raise ConnectionError("redis down")
+        self.landed = (*self.landed, key)
+        return self.landed.count(key)
+
+    async def get(self, key: str) -> int | None:
+        return self.landed.count(key) or None
+
+
+@pytest.mark.asyncio
+async def test_revoke_ends_the_chain_first_so_a_fault_before_the_jti_burn_leaves_no_descendant_renewable():
+    """A revocation whose chain marker landed but whose ``jti`` burn faulted answers 503, and the
+    descendant a copy already rotated must be refused from that moment, not renewable until the
+    client retries; the retry then lands with only the ``jti`` left to burn."""
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    issued = DualCache()
+    payload = json.loads(
+        (await _redeem_native(await _native_code(client_id, cache=issued), client_id, _Minter(), cache=issued)).body
+    )
+    copied_and_rotated = json.loads(
+        (await _refresh_native(payload["refresh_token"], client_id, _Minter(), issued)).body
+    )
+    redis: Final = _RedisThatFaultsOnTheSecondWrite()
+    shared: Final = DualCache(redis_cache=redis)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+
+    half_written = await revoke_refresh_token(
+        token=payload["refresh_token"], client_id=client_id, master_key=MASTER_KEY, cache=shared
+    )
+    assert half_written.status_code == 503
+
+    refused = await _refresh_native(copied_and_rotated["refresh_token"], client_id, _Minter(), shared)
+    assert refused.status_code == 400
+    assert json.loads(refused.body)["error"] == "invalid_grant"
+    assert "revoked" in json.loads(refused.body)["error_description"]
+
+    retried = await revoke_refresh_token(
+        token=payload["refresh_token"], client_id=client_id, master_key=MASTER_KEY, cache=shared
+    )
+    assert retried.status_code == 200
+    assert json.loads(retried.body) == {}
+
+
 @pytest.mark.asyncio
 async def test_refresh_answers_503_without_burning_the_token_while_redis_is_down():
     """Fail closed, but say why: a refresh the shared backend could not record is refused with 503

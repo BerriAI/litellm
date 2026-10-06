@@ -1601,15 +1601,17 @@ async def revoke_session_refresh_token(
     the gateway never registered: burn the presented refresh token's ``jti`` and its rotation
     chain when it was issued to ``client_id``, answer 200 for anything else (an access token,
     a dead or foreign token, garbage), and 503 when a burn could not be recorded in the shared
-    backend."""
+    backend. The chain marker is written first: a fault between the two writes then leaves
+    every token of the chain refused rather than a descendant still renewable, and the retry
+    the 503 asks for only has the presented ``jti`` left to burn."""
     signing: Final = resolve_session_signing(master_key, "mcp_gateway revoke")
     if isinstance(signing, Response):
         return signing
     opened: Final = open_session_refresh_bearer(token, signing.keys, signing.now, expected_client_id=client_id)
     if isinstance(opened, SessionRefreshOpened):
         guard: Final = _SingleUseGuard(cache)
-        burned: Final = await guard.claim(_refresh_claim_key(opened.jti), _REFRESH_CLAIM_TTL_SECONDS)
         ended: Final = await guard.claim(_refresh_family_key(opened.family), _REFRESH_CLAIM_TTL_SECONDS)
+        burned: Final = await guard.claim(_refresh_claim_key(opened.jti), _REFRESH_CLAIM_TTL_SECONDS)
         if "unavailable" in (burned, ended):
             return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
     return Response(content="{}", media_type="application/json", headers=TOKEN_NO_CACHE_HEADERS)
