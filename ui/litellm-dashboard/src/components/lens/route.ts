@@ -34,7 +34,7 @@ const INBOX_PARSERS = {
   priority: parseAsStringLiteral(["all", "high", "medium", "low"]).withDefault("all"),
 };
 
-const DATASET_PARSERS = { dataset: parseAsString, revision: parseAsInteger };
+const DATASET_PARSERS = { dataset: parseAsString, revision: parseAsInteger, case: parseAsString };
 
 const LIST_PARSERS = { search: parseAsString.withDefault("") };
 
@@ -205,16 +205,17 @@ export function useInboxFilters() {
 
 /** `revision` null means the latest revision, so a dataset link keeps following new saves. */
 export function useDatasetRoute() {
-  const [{ dataset, revision }, setParams] = useQueryStates(DATASET_PARSERS, { history: "push" });
+  const [{ dataset, revision, case: caseId }, setParams] = useQueryStates(DATASET_PARSERS, { history: "push" });
   const openDataset = useCallback(
-    (next: string | null) => void setParams({ dataset: next, revision: null }),
+    (next: string | null) => void setParams({ dataset: next, revision: null, case: null }),
     [setParams],
   );
   const setRevision = useCallback(
     (next: number | null) => void setParams({ revision: next }, { history: "replace" }),
     [setParams],
   );
-  return { datasetId: dataset, revision, openDataset, setRevision };
+  const setCaseId = useCallback((next: string | null) => void setParams({ case: next }), [setParams]);
+  return { datasetId: dataset, revision, caseId, openDataset, setRevision, setCaseId };
 }
 
 const SOURCE_TRACE_PARSERS = { tab: LENS_PARSERS.tab, ...OPEN_TRACE_PARSERS };
