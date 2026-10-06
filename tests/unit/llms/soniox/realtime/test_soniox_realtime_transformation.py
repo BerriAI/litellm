@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from litellm.llms.soniox.realtime.transformation import (
-    CONNECTED_FRAME,
     DEFAULT_SONIOX_REALTIME_URL,
     SESSION_STARTED_FRAME,
     SonioxEventTransformer,
@@ -90,12 +89,13 @@ def test_session_update_starts_the_stream_with_client_audio_and_deployment_optio
     }
 
 
-def test_audio_before_session_update_starts_a_default_stream_once():
+def test_audio_before_session_update_starts_a_default_stream_once_and_rejects_a_later_change():
     config = SonioxRealtimeConfig()
 
     first = config.transform_realtime_request(_append(), MODEL)
     second = config.transform_realtime_request(_append(), MODEL)
-    late_update = config.transform_realtime_request(_session_update({"turn_detection": None}), MODEL)
+    with pytest.raises(SonioxProtocolError, match="once the stream has started"):
+        config.transform_realtime_request(_session_update({"turn_detection": None}), MODEL)
 
     assert _start_request(first) == {
         "model": MODEL,
@@ -106,7 +106,7 @@ def test_audio_before_session_update_starts_a_default_stream_once():
     }
     assert first[1:] == (PCM,)
     assert second == (PCM,)
-    assert late_update == ()
+    assert config.transform_realtime_request(_append(), MODEL) == (PCM,)
 
 
 @pytest.mark.parametrize(
@@ -293,6 +293,7 @@ def test_stream_open_time_is_billed_on_close_because_soniox_charges_the_whole_st
     now = [100.0]
     config = SonioxRealtimeConfig(clock=lambda: now[0])
     config.wrap_backend(_RecordingBackend())
+    config.transform_realtime_request(_append(), MODEL)
     config.transform_realtime_response(
         _response([_token("Hi"), _token("<end>")], total_audio_proc_ms=5000), MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT
     )
@@ -302,18 +303,38 @@ def test_stream_open_time_is_billed_on_close_because_soniox_charges_the_whole_st
     assert config.unbilled_usage_on_session_close(MODEL) is None
 
 
-def test_connection_is_announced_with_the_deployment_session_for_cost_tracking():
+def test_a_connection_that_never_started_a_stream_bills_nothing():
+    now = [100.0]
+    config = SonioxRealtimeConfig(clock=lambda: now[0])
+    config.wrap_backend(_RecordingBackend())
+    now[0] = 160.0
+
+    assert config.unbilled_usage_on_session_close(MODEL) is None
+
+
+def test_soniox_opts_out_of_deferred_setup_so_client_frames_reach_it_in_order():
+    assert SonioxRealtimeConfig().requires_session_configuration()
+
+
+def test_a_session_update_matching_the_started_stream_is_a_no_op():
+    config = SonioxRealtimeConfig()
+    config.transform_realtime_request(_append(), MODEL)
+
+    assert config.transform_realtime_request(_session_update({"format": {"type": "audio/pcm", "rate": 24_000}}), MODEL) == ()
+
+
+def test_session_created_event_advertises_the_deployment_model_for_cost_tracking():
     config = SonioxRealtimeConfig(options=SonioxRealtimeOptions(language_hints=("de",)))
 
-    result = config.transform_realtime_response(CONNECTED_FRAME, MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT)
+    event = config.transform_session_created_event(MODEL, "session_1")
 
-    assert _types(tuple(result["response"])) == ["session.created"]
-    assert result["response"][0]["session"]["audio"]["input"]["transcription"] == {"model": MODEL, "language": "de"}
+    assert event["session"]["id"] == "session_1"
+    assert event["session"]["audio"]["input"]["transcription"] == {"model": MODEL, "language": "de"}
 
 
 def test_backend_session_start_is_announced_with_the_negotiated_session():
     config = SonioxRealtimeConfig()
-    connected = config.transform_realtime_response(CONNECTED_FRAME, MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT)
+    config.transform_session_created_event(MODEL, "session_1")
     config.transform_realtime_request(
         _session_update(
             {
@@ -328,7 +349,7 @@ def test_backend_session_start_is_announced_with_the_negotiated_session():
     result = config.transform_realtime_response(SESSION_STARTED_FRAME, MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT)
 
     assert _types(tuple(result["response"])) == ["session.created"]
-    assert result["response"][0]["session"]["id"] == connected["response"][0]["session"]["id"]
+    assert result["response"][0]["session"]["id"] == "session_1"
     assert result["response"][0]["session"]["audio"]["input"] == {
         "format": {"type": "audio/pcm", "rate": 16_000},
         "transcription": {"model": MODEL, "language": "it"},
@@ -432,7 +453,6 @@ async def test_backend_announces_the_session_once_the_start_request_is_sent_whil
     backend = SonioxRealtimeBackend(inner)
 
     async with backend:
-        assert await backend.recv() == CONNECTED_FRAME
         pending = asyncio.create_task(backend.recv())
         await backend.send('{"type":"keepalive"}')
         await asyncio.sleep(0)
@@ -451,7 +471,6 @@ async def test_backend_relays_upstream_frames_that_arrive_before_the_session_sta
     async with SonioxRealtimeBackend(inner) as backend:
         await inner.upstream.put('{"error_code":401,"error_message":"Invalid API key."}')
 
-        assert await backend.recv() == CONNECTED_FRAME
         assert await backend.recv() == '{"error_code":401,"error_message":"Invalid API key."}'
 
 
@@ -460,7 +479,6 @@ async def test_a_cancelled_read_loses_no_frames_and_upstream_errors_reach_the_re
     inner = _RecordingBackend()
 
     async with SonioxRealtimeBackend(inner) as backend:
-        assert await backend.recv() == CONNECTED_FRAME
         cancelled = asyncio.create_task(backend.recv())
         await asyncio.sleep(0)
         cancelled.cancel()
@@ -478,7 +496,6 @@ async def test_closing_the_backend_cancels_pending_reads_and_closes_upstream():
     inner = _RecordingBackend()
     backend = SonioxRealtimeBackend(inner)
     await backend.__aenter__()
-    assert await backend.recv() == CONNECTED_FRAME
     pending = asyncio.create_task(backend.recv())
     await backend.send('{"model":"stt-rt-v5"}')
     assert await pending == SESSION_STARTED_FRAME

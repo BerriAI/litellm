@@ -46,7 +46,6 @@ _CONTROL_FRAMES: Final = frozenset((_FINALIZE, _KEEPALIVE, _END_STREAM))
 _CLIENT_CONTROL_FRAMES: Final = MappingProxyType(
     {"input_audio_buffer.commit": _FINALIZE, "input_audio_buffer.end": _END_STREAM}
 )
-CONNECTED_FRAME: Final = '{"type":"litellm.soniox.connected"}'
 SESSION_STARTED_FRAME: Final = '{"type":"litellm.soniox.session_started"}'
 _ENDPOINT_TOKEN: Final = "<end>"
 _FINALIZED_TOKEN: Final = "<fin>"
@@ -232,7 +231,6 @@ class SonioxRealtimeBackend:
 
     async def __aenter__(self) -> Self:
         await self._inner.__aenter__()
-        self._frames.put_nowait(CONNECTED_FRAME)
         self._tasks = (asyncio.create_task(self._pump()), asyncio.create_task(self._keepalive()))
         return self
 
@@ -301,12 +299,15 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         self._clock: Final = clock
         self._transformer: Final = SonioxEventTransformer(translated_only=self._options.translation is not None)
         self._start_request: SonioxStartRequest | None = None
-        self._session_id: Final = f"sess_{uuid.uuid4().hex}"
+        self._session_id: str = f"sess_{uuid.uuid4().hex}"
         self._opened_at: float | None = None
 
     @classmethod
     def from_litellm_params(cls, litellm_params: Mapping[str, object]) -> Self:
         return cls(options=SonioxRealtimeOptions.model_validate(dict(litellm_params)))
+
+    def requires_session_configuration(self) -> bool:
+        return True
 
     def validate_environment(
         self,
@@ -325,6 +326,15 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
     def wrap_backend(self, backend: RealtimeBackend) -> RealtimeBackend:
         self._opened_at = self._clock()
         return self._wrap(backend)
+
+    def transform_session_created_event(
+        self,
+        model: str,
+        logging_session_id: str,
+        session_configuration_request: str | None = None,
+    ) -> OpenAIRealtimeTranscriptionSessionCreated:
+        self._session_id = logging_session_id
+        return _session_created(logging_session_id, build_start_request(model, None, self._options))
 
     def transform_realtime_request(
         self,
@@ -347,8 +357,9 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
 
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         opened_at: Final = self._opened_at
-        stream_ms: Final = 0 if opened_at is None else int((self._clock() - opened_at) * 1000)
-        return self._transformer.take_unbilled_usage(stream_ms)
+        if opened_at is None or self._start_request is None:
+            return self._transformer.take_unbilled_usage()
+        return self._transformer.take_unbilled_usage(int((self._clock() - opened_at) * 1000))
 
     def transform_realtime_response(
         self,
@@ -359,7 +370,7 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
     ) -> RealtimeResponseTypedDict:
         payload: Final = message.decode("utf-8") if isinstance(message, bytes) else message
         result: Final[RealtimeResponseTypedDict] = {
-            "response": list(self._backend_events(payload, model)),
+            "response": list(self._backend_events(payload)),
             "current_output_item_id": realtime_response_transform_input.get("current_output_item_id"),
             "current_response_id": realtime_response_transform_input.get("current_response_id"),
             "current_delta_chunks": realtime_response_transform_input.get("current_delta_chunks"),
@@ -370,19 +381,20 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         }
         return result
 
-    def _backend_events(self, payload: str, model: str) -> tuple[OpenAIRealtimeEvents, ...]:
-        if payload == CONNECTED_FRAME:
-            return (_session_created(self._session_id, build_start_request(model, None, self._options)),)
+    def _backend_events(self, payload: str) -> tuple[OpenAIRealtimeEvents, ...]:
         if payload != SESSION_STARTED_FRAME:
             return self._transformer.transform(payload)
         assert self._start_request is not None  # the backend signals session start only after the start request
         return (_session_created(self._session_id, self._start_request),)
 
     def _start(self, model: str, update: TranscriptionSessionUpdate | None) -> tuple[str, ...]:
-        if self._start_request is not None:
-            if update is not None:
-                verbose_logger.debug("Soniox realtime: ignoring session.update after the stream was configured")
+        started: Final = self._start_request
+        if started is not None and update is None:
             return ()
         start_request: Final = build_start_request(model, update, self._options)
+        if started is not None:
+            if start_request != started:
+                raise SonioxProtocolError("Soniox realtime can't change the session once the stream has started")
+            return ()
         self._start_request = start_request
         return (start_request.model_dump_json(exclude_none=True),)
