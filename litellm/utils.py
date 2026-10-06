@@ -2425,10 +2425,8 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
         if isinstance(e, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
             raise
         verbose_logger.warning(
-            "Falling back to tiktoken for %s; token counts may be approximate. "
-            "For Python Hugging Face tokenization, install tokenizers and huggingface-hub. Error: %s",
-            model,
-            e,
+            "Falling back to tiktoken; token counts may be approximate. "
+            "For Python Hugging Face tokenization, install tokenizers and huggingface-hub.",
         )
 
     # default - tiktoken

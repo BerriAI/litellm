@@ -403,18 +403,19 @@ def test_huggingface_encoding_exposes_the_tokenizers_lookup_and_mutation_surface
         actual.pad(8, direction="sideways")
 
 
-def test_missing_python_tokenizer_warns_before_approximate_count(caplog, monkeypatch):
+@pytest.mark.parametrize("log_level", ["WARNING", "ERROR"])
+def test_missing_python_tokenizer_warns_before_approximate_count(caplog, monkeypatch, log_level):
     from unittest.mock import patch
     from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper
 
     monkeypatch.setenv("LITELLM_RUST", "false")
     _load_huggingface_tokenizer.cache_clear()
-    with patch.dict(sys.modules, {"tokenizers": None}):
+    with caplog.at_level(log_level, logger="LiteLLM"), patch.dict(sys.modules, {"tokenizers": None}):
         result = _select_tokenizer_helper("llama-2")
     assert result["type"] == "openai_tokenizer"
     assert result["tokenizer"].encode("hello")
-    assert "token counts may be approximate" in caplog.text
-    assert "install tokenizers" in caplog.text
+    assert ("token counts may be approximate" in caplog.text) is (log_level == "WARNING")
+    assert ("install tokenizers" in caplog.text) is (log_level == "WARNING")
 
 
 @pytest.mark.parametrize("python_installed", [False, True])
@@ -450,3 +451,18 @@ def test_unknown_tokenizer_export_raises_attribute_error():
 
     with pytest.raises(AttributeError, match="unknown_tokenizer"):
         getattr(types, "unknown_tokenizer")
+
+
+@pytest.mark.parametrize("python_installed", [False, True])
+def test_added_token_return_annotation_resolves_without_optional_import(python_installed):
+    from contextlib import nullcontext
+    from typing import get_type_hints
+    from unittest.mock import patch
+
+    with nullcontext() if python_installed else patch.dict(sys.modules, {"tokenizers": None}):
+        hints = get_type_hints(HuggingFaceTokenizer.get_added_tokens_decoder)
+    assert "return" in hints
+    decoder = HuggingFaceTokenizer.from_str(TOKENIZER_JSON).get_added_tokens_decoder()
+    for token in decoder.values():
+        assert isinstance(token.content, str)
+        assert isinstance(token.special, bool)

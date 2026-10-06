@@ -455,69 +455,74 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         # iam_cache: static keys, ambient env (including skip-AssumeRole path), web identity, and
         # AssumeRole. Do not cache profile / explicit session-token paths here.
         #########################################################
-        if self._is_auth_with_web_identity_token(
-            aws_web_identity_token,
-            aws_role_name,
-            aws_session_name,
-        ):
-            return self._get_or_set_cached_credentials(
-                args,
-                lambda: self._auth_with_web_identity_token(
-                    aws_web_identity_token=cast(str, aws_web_identity_token),
-                    aws_role_name=cast(str, aws_role_name),
-                    aws_session_name=cast(str, aws_session_name),
-                    aws_region_name=aws_region_name,
-                    aws_sts_endpoint=aws_sts_endpoint,
-                    aws_external_id=aws_external_id,
-                    ssl_verify=ssl_verify,
-                ),
-            )
-        elif self._is_auth_with_aws_role(aws_role_name):
-            return self._get_or_set_cached_credentials(
-                args,
-                lambda: self._resolve_role_credentials(
-                    aws_access_key_id=aws_access_key_id,
-                    aws_secret_access_key=aws_secret_access_key,
-                    aws_session_token=aws_session_token,
-                    aws_role_name=cast(str, aws_role_name),
-                    aws_session_name=aws_session_name,
-                    aws_region_name=aws_region_name,
-                    aws_sts_endpoint=aws_sts_endpoint,
-                    aws_external_id=aws_external_id,
-                    aws_session_tags=session_tags,
-                    ssl_verify=ssl_verify,
-                ),
-            )
+        try:
+            if self._is_auth_with_web_identity_token(
+                aws_web_identity_token,
+                aws_role_name,
+                aws_session_name,
+            ):
+                return self._get_or_set_cached_credentials(
+                    args,
+                    lambda: self._auth_with_web_identity_token(
+                        aws_web_identity_token=cast(str, aws_web_identity_token),
+                        aws_role_name=cast(str, aws_role_name),
+                        aws_session_name=cast(str, aws_session_name),
+                        aws_region_name=aws_region_name,
+                        aws_sts_endpoint=aws_sts_endpoint,
+                        aws_external_id=aws_external_id,
+                        ssl_verify=ssl_verify,
+                    ),
+                )
+            elif self._is_auth_with_aws_role(aws_role_name):
+                return self._get_or_set_cached_credentials(
+                    args,
+                    lambda: self._resolve_role_credentials(
+                        aws_access_key_id=aws_access_key_id,
+                        aws_secret_access_key=aws_secret_access_key,
+                        aws_session_token=aws_session_token,
+                        aws_role_name=cast(str, aws_role_name),
+                        aws_session_name=aws_session_name,
+                        aws_region_name=aws_region_name,
+                        aws_sts_endpoint=aws_sts_endpoint,
+                        aws_external_id=aws_external_id,
+                        aws_session_tags=session_tags,
+                        ssl_verify=ssl_verify,
+                    ),
+                )
 
-        elif self._is_auth_with_aws_profile(aws_profile_name):
-            credentials, _cache_ttl = self._auth_with_aws_profile(cast(str, aws_profile_name))
-            return credentials
-        elif self._is_auth_with_aws_session_token_tuple(
-            aws_access_key_id,
-            aws_secret_access_key,
-            aws_session_token,
-        ):
-            credentials, _cache_ttl = self._auth_with_aws_session_token(
-                aws_access_key_id=cast(str, aws_access_key_id),
-                aws_secret_access_key=cast(str, aws_secret_access_key),
-                aws_session_token=cast(str, aws_session_token),
-            )
-            return credentials
-        elif self._is_auth_with_access_key_and_secret_key(
-            aws_access_key_id,
-            aws_secret_access_key,
-            aws_region_name,
-        ):
-            return self._get_or_set_cached_credentials(
-                args,
-                lambda: self._auth_with_access_key_and_secret_key(
+            elif self._is_auth_with_aws_profile(aws_profile_name):
+                credentials, _cache_ttl = self._auth_with_aws_profile(cast(str, aws_profile_name))
+                return credentials
+            elif self._is_auth_with_aws_session_token_tuple(
+                aws_access_key_id,
+                aws_secret_access_key,
+                aws_session_token,
+            ):
+                credentials, _cache_ttl = self._auth_with_aws_session_token(
                     aws_access_key_id=cast(str, aws_access_key_id),
                     aws_secret_access_key=cast(str, aws_secret_access_key),
-                    aws_region_name=cast(str, aws_region_name),
-                ),
-            )
-        else:
-            return self._get_or_set_cached_credentials(args, self._auth_with_env_vars)
+                    aws_session_token=cast(str, aws_session_token),
+                )
+                return credentials
+            elif self._is_auth_with_access_key_and_secret_key(
+                aws_access_key_id,
+                aws_secret_access_key,
+                aws_region_name,
+            ):
+                return self._get_or_set_cached_credentials(
+                    args,
+                    lambda: self._auth_with_access_key_and_secret_key(
+                        aws_access_key_id=cast(str, aws_access_key_id),
+                        aws_secret_access_key=cast(str, aws_secret_access_key),
+                        aws_region_name=cast(str, aws_region_name),
+                    ),
+                )
+            else:
+                return self._get_or_set_cached_credentials(args, self._auth_with_env_vars)
+        except ModuleNotFoundError as error:
+            if error.name not in {"boto3", "botocore"}:
+                raise
+            raise ImportError("Missing boto3 for AWS credentials. Run 'pip install boto3'.") from error
 
     def resolve_credentials(self, auth_params: AwsAuthParams, aws_region_name: str | None) -> Credentials:
         return self.get_credentials(
@@ -1608,7 +1613,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             return BearerPreparedRequest(
                 method="POST",
                 url=str(bearer_request.url),
-                headers=bearer_request.headers,
+                headers={
+                    name.decode("ascii"): value.decode(bearer_request.headers.encoding)
+                    for name, value in bearer_request.headers.raw
+                },
                 body=bearer_request.content,
             )
         else:

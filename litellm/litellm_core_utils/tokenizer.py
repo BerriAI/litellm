@@ -22,7 +22,6 @@ import tiktoken
 if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
-    from tokenizers import AddedToken
     from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
 
     from litellm.rust_bridge._native import HuggingFaceEncoding
@@ -269,7 +268,7 @@ class HuggingFaceTokenizer:
     def get_vocab_size(self, with_added_tokens: bool = True) -> int:
         return self._native.get_vocab_size(with_added_tokens)
 
-    def get_added_tokens_decoder(self) -> dict[int, AddedToken]:  # mutable-ok: [LIT001] SDK return type
+    def get_added_tokens_decoder(self) -> dict[int, _AddedToken]:  # mutable-ok: [LIT001] SDK return type
         from tokenizers import AddedToken
 
         return {
@@ -382,6 +381,21 @@ def __getattr__(name: str) -> UnionType | type[HuggingFaceTokenizer]:
 
 
 class _AddedToken(Protocol):
+    @property
+    def content(self) -> str: ...
+
+    @property
+    def single_word(self) -> bool: ...
+
+    @property
+    def lstrip(self) -> bool: ...
+
+    @property
+    def rstrip(self) -> bool: ...
+
+    @property
+    def normalized(self) -> bool: ...
+
     @property
     def special(self) -> bool: ...
 

@@ -4117,6 +4117,8 @@ def test_dynamic_aws_params_propagation(model, param_name, param_value, expected
 
 
 def test_bearer_request_preparation_does_not_require_botocore():
+    import httpx
+
     with patch.dict("sys.modules", {"botocore.credentials": None, "botocore.awsrequest": None}):
         target = BaseAWSLLM()._get_boto_credentials_from_optional_params(
             {"aws_region_name": "us-west-2"}, bearer_token="test-token"
@@ -4130,9 +4132,9 @@ def test_bearer_request_preparation_does_not_require_botocore():
             headers={"Content-Type": "application/json"},
             api_key="test-token",
         )
-    assert request.headers["Authorization"] == "Bearer test-token"
+    assert dict(request.headers)["Authorization"] == "Bearer test-token"
     assert request.body == '{"text":"café"}'.encode()
-    assert int(request.headers["Content-Length"]) == len(request.body)
+    assert int(httpx.Headers(request.headers)["Content-Length"]) == len(request.body)
 
 
 @pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
@@ -4172,6 +4174,30 @@ def test_json_signers_report_only_missing_aws_dependency(missing, shared_signer)
     with patch.dict(os.environ, {}, clear=True), patch("builtins.__import__", side_effect=failure):
         with pytest.raises(ImportError) as error:
             sign()
+    if missing == "botocore":
+        assert "pip install boto3" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure
+
+
+@pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
+def test_direct_credentials_report_missing_aws_without_masking_other_imports(missing):
+    import builtins
+
+    original_import = builtins.__import__
+    failure = ModuleNotFoundError("dependency unavailable", name=missing)
+
+    def import_dependency(name, *args, **kwargs):
+        if name.startswith("botocore"):
+            raise failure
+        return original_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=import_dependency):
+        with pytest.raises(ImportError) as error:
+            BaseAWSLLM().get_credentials(
+                aws_access_key_id="test-key", aws_secret_access_key="test-secret", aws_session_token="test-session"
+            )
     if missing == "botocore":
         assert "pip install boto3" in str(error.value)
         assert error.value.__cause__ is failure
