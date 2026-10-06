@@ -1328,6 +1328,13 @@ def _call_type_for_route(route: str | None) -> str | None:
 
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
+_PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
+    {"model", "messages", "input", "prompt", "user", "stream", "metadata", "litellm_metadata", "litellm_call_id"}
+)
+
+
+def _proxy_only_error_log_fields(request_data: Mapping[str, _T]) -> Mapping[str, _T]:
+    return MappingProxyType({k: v for k, v in request_data.items() if k in _PROXY_ONLY_ERROR_LOGGED_FIELDS})
 
 
 _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
@@ -3714,7 +3721,7 @@ class ProxyLogging:
                 original_function=route or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
-                **request_data,
+                **_proxy_only_error_log_fields(request_data),
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
             if "metadata" not in request_data:
@@ -3727,7 +3734,7 @@ class ProxyLogging:
             _litellm_params: Final = {}
 
             litellm_param_keys: Final = LoggedLiteLLMParams.__annotations__.keys()
-            for k, v in request_data.items():
+            for k, v in _proxy_only_error_log_fields(request_data).items():
                 if k in litellm_param_keys:
                     _litellm_params[k] = v
                 elif k not in ("model", "user", "litellm_logging_obj"):

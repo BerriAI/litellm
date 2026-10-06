@@ -18,7 +18,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.gcs_bucket import *
-from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
+from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -137,49 +137,16 @@ class GCSBucketBase(CustomBatchLogger):
 
     async def get_gcs_logging_config(self, kwargs: dict[str, Any] | None = {}) -> GCSLoggingConfig:
         """
-        This function is used to get the GCS logging config for the GCS Bucket Logger.
-        It checks if the dynamic parameters are provided in the kwargs and uses them to get the GCS logging config.
-        If no dynamic parameters are provided, it uses the default values.
+        Returns the bucket and service account this logger was configured with.
         """
-        if kwargs is None:
-            kwargs = {}
-
-        standard_callback_dynamic_params: Final[StandardCallbackDynamicParams | None] = kwargs.get(
-            "standard_callback_dynamic_params", None
-        )
-
-        bucket_name: str
-        path_service_account: str | None
-        if standard_callback_dynamic_params is not None:
-            verbose_logger.debug("Using dynamic GCS logging")
-            verbose_logger.debug("standard_callback_dynamic_params: %s", standard_callback_dynamic_params)
-
-            _bucket_name: str | None = standard_callback_dynamic_params.get("gcs_bucket_name", None) or self.BUCKET_NAME
-            _path_service_account: Final[str | None] = (
-                standard_callback_dynamic_params.get("gcs_path_service_account", None) or self.path_service_account_json
+        if self.BUCKET_NAME is None:
+            raise ValueError(
+                "GCS_BUCKET_NAME is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_BUCKET_NAME' in the environment."
             )
-
-            if _bucket_name is None:
-                raise ValueError(
-                    "GCS_BUCKET_NAME is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_BUCKET_NAME' in the environment."
-                )
-            bucket_name = _bucket_name
-            path_service_account = _path_service_account
-            vertex_instance = await self.get_or_create_vertex_instance(credentials=path_service_account)
-        else:
-            # If no dynamic parameters, use the default instance
-            if self.BUCKET_NAME is None:
-                raise ValueError(
-                    "GCS_BUCKET_NAME is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_BUCKET_NAME' in the environment."
-                )
-            bucket_name = self.BUCKET_NAME
-            path_service_account = self.path_service_account_json
-            vertex_instance = await self.get_or_create_vertex_instance(credentials=path_service_account)
-
         return GCSLoggingConfig(
-            bucket_name=bucket_name,
-            vertex_instance=vertex_instance,
-            path_service_account=path_service_account,
+            bucket_name=self.BUCKET_NAME,
+            vertex_instance=await self.get_or_create_vertex_instance(credentials=self.path_service_account_json),
+            path_service_account=self.path_service_account_json,
         )
 
     async def get_or_create_vertex_instance(self, credentials: str | None) -> VertexBase:
