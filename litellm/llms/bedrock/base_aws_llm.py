@@ -15,7 +15,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeVar, cast, get_args, overload
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
@@ -33,6 +33,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn, get_aws_dns_suffix
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSessionTag
 
 if TYPE_CHECKING:
@@ -176,7 +177,7 @@ def pop_aws_auth_params(
     )
 
 
-class BedrockRequestTarget(BaseModel):
+class BedrockRequestTarget(LiteLLMBaseModel):
     aws_region_name: str
     aws_bedrock_runtime_endpoint: str | None
 
@@ -194,7 +195,7 @@ def bedrock_bearer_token(api_key: str | None) -> str | None:
     return token or None
 
 
-class _WebIdentityTokenClaims(BaseModel):
+class _WebIdentityTokenClaims(LiteLLMBaseModel):
     aud: str | list[str] | None = None
     iss: str | None = None
 

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -12,7 +13,6 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
-from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     AnthropicConfig,

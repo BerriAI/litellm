@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import BaseModel, Json, TypeAdapter, ValidationError
+from pydantic import Json, TypeAdapter, ValidationError
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.router_utils.auto_router_model_naming import (
@@ -19,17 +19,18 @@ from litellm.router_utils.auto_router_tuning_baseline import (
     mutable_tuned_identities,
     tuning_quota_violation,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterAllowance,
     AutoRouterAvailabilityResponse,
 )
 
 
-class _CatalogModelInfo(BaseModel):
+class _CatalogModelInfo(LiteLLMBaseModel):
     team_id: str | None = None
 
 
-class _CatalogSource(BaseModel):
+class _CatalogSource(LiteLLMBaseModel):
     model_id: str
     created_by: str | None = None
     litellm_params: Json[dict[str, object]] | dict[str, object]

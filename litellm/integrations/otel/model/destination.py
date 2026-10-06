@@ -8,12 +8,13 @@ from collections.abc import Mapping
 from typing import Final
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import OtelSpanScope
 
 
-class OtelDestination(BaseModel):
+class OtelDestination(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     endpoint: str
