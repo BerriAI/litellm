@@ -39,7 +39,6 @@ const runs = (traceList as TracePage).data as TraceSummary[];
 const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
   new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
 
-/** A day that rolls with now, as the page opens by default. */
 const ROLLING_DAY = { hours: 24, anchorMs: null };
 const PINNED_DAY = { hours: 24, anchorMs: Date.parse("2026-10-01T00:00Z") };
 
