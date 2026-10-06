@@ -350,3 +350,62 @@ async def test_async_audio_speech_records_provider_response_headers():
         )
 
     _assert_provider_headers_recorded(response)
+
+
+def _embedding_transport() -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "model": "embedding-test",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+        )
+    )
+
+
+@pytest.mark.parametrize("max_retries,expected_retries", [(0, 0), (3, 3), (None, litellm.DEFAULT_MAX_RETRIES)])
+def test_embedding_honors_explicit_retry_limit(max_retries: int | None, expected_retries: int) -> None:
+    with OpenAI(
+        api_key="transport-only",
+        base_url="https://embedding.example/v1",
+        max_retries=7,
+        http_client=httpx.Client(transport=_embedding_transport()),
+    ) as client:
+        response: Final = litellm.embedding(
+            model="openai/embedding-test",
+            input=["retry control"],
+            encoding_format="float",
+            client=client,
+            max_retries=max_retries,
+            api_key="transport-only",
+            api_base=str(client.base_url),
+        )
+
+    assert client.max_retries == expected_retries
+    assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_retries,expected_retries", [(0, 0), (3, 3), (None, litellm.DEFAULT_MAX_RETRIES)])
+async def test_aembedding_honors_explicit_retry_limit(max_retries: int | None, expected_retries: int) -> None:
+    async with AsyncOpenAI(
+        api_key="transport-only",
+        base_url="https://embedding.example/v1",
+        max_retries=7,
+        http_client=httpx.AsyncClient(transport=_embedding_transport()),
+    ) as client:
+        response: Final = await litellm.aembedding(
+            model="openai/embedding-test",
+            input=["retry control"],
+            encoding_format="float",
+            client=client,
+            max_retries=max_retries,
+            api_key="transport-only",
+            api_base=str(client.base_url),
+        )
+
+    assert client.max_retries == expected_retries
+    assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}]
