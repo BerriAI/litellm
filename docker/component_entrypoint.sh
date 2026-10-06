@@ -3,7 +3,7 @@
 # stale samples from a previous container incarnation would be summed into the aggregate
 if [ -n "$PROMETHEUS_MULTIPROC_DIR" ]; then
     mkdir -p "$PROMETHEUS_MULTIPROC_DIR"
-    rm -f "$PROMETHEUS_MULTIPROC_DIR"/*.db
+    rm -f "$PROMETHEUS_MULTIPROC_DIR"/*.db "$PROMETHEUS_MULTIPROC_DIR"/litellm_admitted_series_*
 fi
 
 case "$USE_DDTRACE" in

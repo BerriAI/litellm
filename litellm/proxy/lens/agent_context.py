@@ -17,7 +17,6 @@ class JournalPosition(BaseModel):
     model_config = ConfigDict(extra="ignore")
     journal_turns: int = 0
     resume_history_from_turn: int | None = None
-    initial_context_archived: bool = False
 
 
 def visible_journal(messages: tuple[ModelMessage, ...]) -> int:
@@ -70,14 +69,15 @@ async def compact_context(
     activity: ActivityTracker | None,
 ) -> tuple[ModelMessage, ...]:
     instruction: Final = ModelMessage(
-        role="user",
+        role="system",
         content=json.dumps(
             {
                 "task": (
                     "Compact this analysis conversation so the investigation can continue. Return only "
                     "working_notes, a concise replacement memory of the material visible here. Preserve the "
                     "assignment, coverage, supported leads, exact evidence references, counterexamples, "
-                    "unresolved questions and next steps. Do not issue tools or finalize findings. The original "
+                    "existing finding IDs, statuses and feedback, unresolved questions and next steps. "
+                    "Do not issue tools or finalize findings. The original "
                     "evidence and complete tool journal remain available. Some later tool results may have "
                     "been excluded from this compaction request because they exceeded the context window; "
                     "do not claim to have inspected anything you cannot see. The continuation will identify "
@@ -98,17 +98,7 @@ async def compact_context(
                     "working_notes": notes.working_notes,
                     "journal_turns": journal_turns,
                     "resume_history_from_turn": visible_journal(prefix),
-                    "initial_context_archived": len(prefix) == 1
-                    or any(journal_position(message).initial_context_archived for message in prefix),
-                    "continuation": (
-                        "Context was compacted. Resume review of archived turns from resume_history_from_turn; "
-                        "their tool results may not have been read. Use working notes to avoid repeating "
-                        "completed reads. History supports turn ranges "
-                        "and char_start/char_end over the serialized reply, so even one oversized result is "
-                        "readable in pieces. history with turn_end=0 lists turn character sizes. If "
-                        "initial_context_archived is true, retrieve include_initial=true to recover the "
-                        "original assignment. All original evidence also remains available through tools."
-                    ),
+                    "initial_context_archived": True,
                 },
                 ensure_ascii=False,
             ),

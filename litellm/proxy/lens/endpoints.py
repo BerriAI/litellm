@@ -61,6 +61,7 @@ from litellm.proxy.lens.state import (
     next_scan_start,
     queue_job,
     replace_job,
+    result_status,
     reviews_after,
     scheduled_window,
     snapshot_finding,
@@ -638,7 +639,7 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
         merged_ids: Final = frozenset(f.id for f in merged)
         return replace_job(
             e,
-            end_job(active, "failed" if body.error else "completed", now).model_copy(
+            end_job(active, result_status(body), now).model_copy(
                 update=MappingProxyType(
                     {
                         "coverage": active.coverage if body.error and body.coverage == Coverage() else body.coverage,
