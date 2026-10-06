@@ -71,9 +71,7 @@ ALL_METRICS = frozenset(
     }
 )
 
-# Copied from the OTel GenAI semantic conventions (gen-ai-metrics.md), as of
-# 2026-10, so a typo in MetricBuckets cannot also be a typo in the expectation.
-# gen_ai.client.response.duration has no semconv entry and reuses operation.duration's.
+# OTel GenAI semconv gen-ai-metrics.md, as of 2026-10. response.duration has no entry and reuses operation.duration's
 _DURATION_BOUNDARIES = (0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92)
 EXPECTED_BOUNDARIES = {
     OPERATION_DURATION: _DURATION_BOUNDARIES,
@@ -189,7 +187,6 @@ def _drive_success(reader, callback_settings_attributes=None, *, semconv_histogr
 
 
 def _sdk_default_boundaries():
-    """The bounds the SDK gives a histogram created with no advisory and no View."""
     reader = InMemoryMetricReader()
     MeterProvider(metric_readers=[reader]).get_meter("probe").create_histogram("probe").record(1)
     (dp,) = _metrics_by_name(reader)["probe"]
@@ -197,9 +194,6 @@ def _sdk_default_boundaries():
 
 @pytest.mark.parametrize("name, expected", EXPECTED_BOUNDARIES.items())
 def test_histograms_use_semconv_bucket_boundaries(name, expected):
-    """With LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS on, each latency/token histogram
-    carries the semconv boundaries. Without them the SDK defaults (0, 5, 10, ...
-    sized for ms) put every seconds-valued latency in one bucket."""
     metrics = _drive_success(InMemoryMetricReader(), semconv_histogram_buckets=True)
     points = metrics[name]
     assert points, f"{name} recorded no data points"
@@ -209,8 +203,6 @@ def test_histograms_use_semconv_bucket_boundaries(name, expected):
 
 @pytest.mark.parametrize("name", sorted(ALL_METRICS))
 def test_histograms_keep_sdk_default_boundaries_when_flag_off(name):
-    """The flag defaults off so an upgrade does not change bucket layouts under an
-    operator's stored data: every histogram is created exactly as before."""
     metrics = _drive_success(InMemoryMetricReader())
     points = metrics[name]
     assert points, f"{name} recorded no data points"
@@ -219,20 +211,16 @@ def test_histograms_keep_sdk_default_boundaries_when_flag_off(name):
 
 
 def test_cost_histogram_keeps_sdk_default_boundaries_with_flag_on():
-    """Semconv defines no boundaries for gen_ai.usage.cost, so the flag leaves it alone."""
     (dp,) = _drive_success(InMemoryMetricReader(), semconv_histogram_buckets=True)[TOKEN_COST]
     assert tuple(dp.explicit_bounds) == _sdk_default_boundaries()
 
 
 def test_semconv_histogram_buckets_flag_reads_env(monkeypatch):
-    """Operators turn the flag on with the env var, which the config resolves at
-    construction, before the histograms are created."""
     monkeypatch.setenv("LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS", "true")
     assert OpenTelemetryV2Config(exporter="in_memory").semconv_histogram_buckets is True
 
 
 def test_operator_view_overrides_default_boundaries():
-    """The boundaries are an advisory, so an operator's own View still wins."""
     custom = (0.5, 1, 2, 5, 10, 30)
     reader = InMemoryMetricReader()
     logger = OpenTelemetryV2(
@@ -255,8 +243,6 @@ def test_operator_view_overrides_default_boundaries():
 
 
 def test_distinct_latencies_land_in_distinct_buckets():
-    """With the SDK's ms-sized defaults, a 0.3 s call and a 4.9 s call shared the
-    (0, 5] bucket, making percentiles meaningless."""
     reader = InMemoryMetricReader()
     logger = _logger(reader, enable_metrics=True, semconv_histogram_buckets=True)
     for seconds in (0.3, 4.9):
@@ -271,8 +257,6 @@ def test_distinct_latencies_land_in_distinct_buckets():
 
 
 class _PreAdvisoryMeter:
-    """A meter shaped like opentelemetry-api < 1.30.0, whose create_histogram has no
-    explicit_bucket_boundaries_advisory parameter and raises TypeError if given one."""
 
     def __init__(self):
         self.created = []
@@ -294,9 +278,6 @@ def _advisory_warnings(caplog):
 
 
 def test_flag_on_with_pre_advisory_api_creates_histograms_and_warns_once(caplog, fresh_advisory_warning):
-    """On an opentelemetry-api without the advisory argument, turning the flag on must
-    not break logger startup; all six histograms are still created, and the operator
-    is told once (not per histogram) why the boundaries did not apply."""
     meter = _PreAdvisoryMeter()
     with caplog.at_level("WARNING"):
         create_genai_metrics(meter, semconv_buckets=True)
@@ -306,7 +287,6 @@ def test_flag_on_with_pre_advisory_api_creates_histograms_and_warns_once(caplog,
 
 
 def test_flag_off_with_pre_advisory_api_does_not_warn(caplog, fresh_advisory_warning):
-    """An operator who never asked for semconv boundaries hears nothing about them."""
     meter = _PreAdvisoryMeter()
     with caplog.at_level("WARNING"):
         create_genai_metrics(meter)
