@@ -2701,13 +2701,13 @@ class AmazonConverseConfig(BaseConfig):
 
         ## HANDLE TOOL CALLS
         _message: Final = Message(**chat_completion_message)
-        initial_finish_reason = map_finish_reason(completion_response["stopReason"])
+        mapped_finish_reason: Final = map_finish_reason(completion_response["stopReason"])
 
-        # When json_mode filtered out all synthetic tool calls the response
-        # is plain content, not a pending tool invocation. Fix finish_reason
-        # so callers (e.g. OpenAI SDK) don't misinterpret it.
-        if resolved_json_mode and not filtered_tools and tools:
-            initial_finish_reason = "stop"
+        initial_finish_reason: Final = (
+            "stop"
+            if resolved_json_mode and not filtered_tools and tools and mapped_finish_reason == "tool_calls"
+            else mapped_finish_reason
+        )
 
         (
             returned_message,

@@ -5,7 +5,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
-import { LensPreviewButton } from "@/components/lens/ui/LensPreviewButton";
 
 import { useInvalidateLenses } from "../data/mutations";
 import { lensQueries } from "../data/queries";
@@ -64,13 +63,20 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
   const actions = useInvestigationActions();
   const { dialog, target, openDialog, closeDialog } = useDialogRoute();
   const { issueKey, setIssueKey } = useIssueRoute();
-  const { lensId, setLensId } = useLensRoute();
+  const { lensId, setLensId, setTab } = useLensRoute();
   const list = useQuery(lensQueries.list(api));
   const status = useLensReadiness(true);
   const { connected } = status;
   const screenInput = { list, lensId, dialog, target };
   const screen = investigationScreen(screenInput);
   const lenses = list.data?.lenses ?? [];
+  const queue = {
+    api,
+    lenses,
+    workers: list.data?.workers ?? [],
+    onConnect: () => setTab("settings"),
+    onOpenLens: setLensId,
+  };
   const lens = lenses.find((candidate) => candidate.id === lensId);
   const peeked = issueKey ? findFinding(lenses, issueKey) ?? null : null;
   const selectedRow = (open: Lens | undefined): InvestigationRow | null => {
@@ -114,10 +120,11 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
       case "welcome":
         if (status.loading) return <InvestigationsLoading />;
         return (
-          <>
-            {!status.ready && <LensPreviewButton />}
-            <OnboardingSetup state={status} className="mx-auto w-full max-w-3xl py-6" />
-          </>
+          <OnboardingSetup
+            state={status}
+            includeTracing={!status.hasRecordedActivity}
+            className="mx-auto w-full max-w-3xl p-4 sm:p-6"
+          />
         );
       case "list":
         return (
@@ -156,12 +163,14 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
                     ready={status.ready}
                     busy={actions.busy}
                     connected={connected}
+                    queue={queue}
                     onEdit={() => openDialog("edit")}
                     onDuplicate={() => openDialog("duplicate")}
                     onPause={() => void actions.pause(row.lens)}
                     onEnableMonitoring={() => openDialog("monitoring")}
                     onCancelRun={() => void actions.cancelRun(row.lens)}
                     onRunNow={() => openDialog("run_now")}
+                    onConnectWorker={() => setTab("settings")}
                     onReviewFinding={(owned, reviewStatus, reason) =>
                       void actions.review(owned.lens, owned.finding, reviewStatus, reason)
                     }
@@ -205,8 +214,11 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
           busy={actions.busy}
           onClose={closeDialog}
           onRun={async (request) => {
-            await actions.startRun(dialogLens, request);
-            closeDialog();
+            const started = await actions.startRun(dialogLens, request);
+            if (started) {
+              closeDialog();
+              setLensId(dialogLens.id);
+            }
           }}
         />
       )}

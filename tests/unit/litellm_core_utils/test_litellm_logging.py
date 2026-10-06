@@ -2,13 +2,15 @@ import asyncio
 import contextlib
 import copy
 import datetime
+import importlib.abc
 import json
 import logging
 import os
 import sys
 import time
-from collections.abc import Callable, Iterator, Mapping
-from types import MappingProxyType
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from importlib.machinery import ModuleSpec
+from types import MappingProxyType, ModuleType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1540,11 +1542,161 @@ def test_logging_prevent_double_logging(logging_obj):
     This is to avoid double logging.
     """
     logging_obj.stream = False
-    logging_obj.has_run_logging(event_type="sync_success")
-    assert logging_obj.should_run_logging(event_type="sync_success") == False
-    assert logging_obj.should_run_logging(event_type="sync_failure") == True
-    assert logging_obj.should_run_logging(event_type="async_success") == True
-    assert logging_obj.should_run_logging(event_type="async_failure") == True
+    logging_obj.mark_logging_complete(event_type="sync_success")
+    assert logging_obj.should_run_logging(event_type="sync_success") is False
+    assert logging_obj.should_run_logging(event_type="sync_failure") is True
+    assert logging_obj.should_run_logging(event_type="async_success") is True
+    assert logging_obj.should_run_logging(event_type="async_failure") is True
+
+
+class _FailureCountingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.async_failure_events: asyncio.Queue[None] = asyncio.Queue()
+        self.sync_failure_events: asyncio.Queue[None] = asyncio.Queue()
+
+    async def async_log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.async_failure_events.put_nowait(None)
+
+    def log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.sync_failure_events.put_nowait(None)
+
+
+def _register_failure_counting_logger(
+    monkeypatch: pytest.MonkeyPatch,
+    logger: _FailureCountingLogger,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [logger])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [logger])
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "event",
+    ["async_success", "sync_success", "async_failure", "sync_failure"],
+)
+def test_mark_logging_complete_flags_by_stream_and_event(
+    logging_obj: LitellmLogging,
+    stream: bool,
+    event: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
+) -> None:
+    events: Final[tuple[Literal["async_success", "sync_success", "async_failure", "sync_failure"], ...]] = (
+        "async_success",
+        "sync_success",
+        "async_failure",
+        "sync_failure",
+    )
+    logging_obj.stream = stream
+
+    logging_obj.mark_logging_complete(event_type=event)
+
+    expected_to_run: Final = stream and event in ("async_success", "sync_success")
+    assert logging_obj.should_run_logging(event_type=event) is expected_to_run
+    assert all(logging_obj.should_run_logging(event_type=other_event) for other_event in events if other_event != event)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_has_run_logging_alias_marks_logging_complete(
+    logging_obj: LitellmLogging,
+    stream: bool,
+) -> None:
+    logging_obj.stream = stream
+
+    logging_obj.has_run_logging(event_type="async_failure")
+    assert logging_obj.should_run_logging(event_type="async_failure") is False
+
+    logging_obj.has_run_logging(event_type="async_success")
+    assert logging_obj.should_run_logging(event_type="async_success") is stream
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("concurrent", [False, True])
+async def test_async_failure_handler_dispatches_once_on_repeated_notifications(
+    logging_obj: LitellmLogging,
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    concurrent: bool,
+) -> None:
+    failure_logger: Final = _FailureCountingLogger()
+    _register_failure_counting_logger(monkeypatch, failure_logger)
+    logging_obj.stream = stream
+    logging_obj.model_call_details["litellm_params"] = {}
+    error: Final = litellm.ServiceUnavailableError("503", "anthropic", "claude")
+    failure_calls: Final = tuple(logging_obj.async_failure_handler(error, "tb") for _ in range(3))
+
+    if concurrent:
+        await asyncio.gather(*failure_calls)
+    else:
+        for failure_call in failure_calls:
+            await failure_call
+
+    assert failure_logger.async_failure_events.qsize() == 1
+
+
+def test_sync_failure_handler_dispatches_once_on_repeated_streaming_notifications(
+    logging_obj: LitellmLogging,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure_logger: Final = _FailureCountingLogger()
+    _register_failure_counting_logger(monkeypatch, failure_logger)
+    logging_obj.stream = True
+    logging_obj.call_type = "completion"
+    logging_obj.model_call_details["litellm_params"] = {}
+    error: Final = litellm.ServiceUnavailableError("503", "anthropic", "claude")
+
+    for _ in range(3):
+        logging_obj.failure_handler(error, "tb")
+
+    assert failure_logger.sync_failure_events.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_streaming_sync_and_async_failure_dedupe_independently(
+    logging_obj: LitellmLogging,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure_logger: Final = _FailureCountingLogger()
+    _register_failure_counting_logger(monkeypatch, failure_logger)
+    logging_obj.stream = True
+    logging_obj.call_type = "completion"
+    logging_obj.model_call_details["litellm_params"] = {}
+    error: Final = litellm.ServiceUnavailableError("503", "anthropic", "claude")
+
+    await logging_obj.async_failure_handler(error, "tb")
+    await logging_obj.async_failure_handler(error, "tb")
+    logging_obj.failure_handler(error, "tb")
+    logging_obj.failure_handler(error, "tb")
+
+    assert failure_logger.async_failure_events.qsize() == 1
+    assert failure_logger.sync_failure_events.qsize() == 1
+
+
+def test_streaming_success_is_not_marked_complete(logging_obj: LitellmLogging) -> None:
+    logging_obj.stream = True
+
+    logging_obj.mark_logging_complete(event_type="async_success")
+    logging_obj.mark_logging_complete(event_type="sync_success")
+
+    assert logging_obj.should_run_logging(event_type="async_success") is True
+    assert logging_obj.should_run_logging(event_type="sync_success") is True
+    assert "has_logged_async_success" not in logging_obj.model_call_details
+    assert "has_logged_sync_success" not in logging_obj.model_call_details
 
 
 @pytest.mark.asyncio
@@ -7129,6 +7281,64 @@ def test_response_cost_calculator_prices_proxy_vertex_calls_on_the_configured_lo
     assert cost_at("us-east5") == pytest.approx(info["regional_endpoint_uplift_multiplier"] * expected_global)
 
 
+def test_response_cost_calculator_prices_proxy_vertex_image_calls_on_the_configured_location(monkeypatch):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+    from litellm.types.utils import ImageObject, ImageUsage, ImageUsageInputTokensDetails
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **get_model_cost_map(url=""),
+            "vertex_ai/fake-regional-image-model": {
+                "litellm_provider": "vertex_ai-language-models",
+                "mode": "image_generation",
+                "input_cost_per_token": 5e-07,
+                "output_cost_per_image_token": 6e-05,
+                "regional_endpoint_uplift_multiplier": 1.1,
+            },
+        },
+    )
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    def cost_at(location):
+        logging_obj = LitellmLogging(
+            model="fake-regional-image-model",
+            messages=[],
+            stream=False,
+            call_type="image_generation",
+            start_time=datetime.now(),
+            litellm_call_id=f"vertex-image-loc-{location}",
+            function_id="f",
+        )
+        logging_obj.update_environment_variables(
+            model="fake-regional-image-model",
+            user="",
+            optional_params={"vertex_location": location},
+            litellm_params={"api_base": ""},
+            custom_llm_provider="vertex_ai",
+        )
+        response = ImageResponse(
+            data=[ImageObject(b64_json="img")],
+            usage=ImageUsage(
+                input_tokens=100,
+                input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=100),
+                output_tokens=1120,
+                total_tokens=1220,
+            ),
+        )
+        return logging_obj._response_cost_calculator(result=response)
+
+    expected_global = 100 * 5e-07 + 1120 * 6e-05
+
+    assert cost_at("global") == pytest.approx(expected_global)
+    assert cost_at("us-east5") == pytest.approx(1.1 * expected_global)
+
+
 def test_set_cost_breakdown_stores_vertex_location():
     """vertex_location is recorded in the pricing basis, None for non-vertex requests."""
     from datetime import datetime
@@ -9165,3 +9375,164 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+def test_enterprise_alerting_loggers_resolves_real_classes():
+    from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
+    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import SendGridEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._enterprise_alerting_loggers.cache_clear()
+    try:
+        loggers = logging_module._enterprise_alerting_loggers()
+        assert loggers.pagerduty is PagerDutyAlerting
+        assert loggers.resend_email is ResendEmailLogger
+        assert loggers.sendgrid_email is SendGridEmailLogger
+        assert loggers.smtp_email is SMTPEmailLogger
+    finally:
+        logging_module._enterprise_alerting_loggers.cache_clear()
+
+
+def test_enterprise_alerting_loggers_falls_back_without_disabling_callback_controls(
+    monkeypatch,
+):
+    from litellm_enterprise.enterprise_callbacks.callback_controls import (
+        EnterpriseCallbackControls,
+    )
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    class BlockPagerDutyFinder(importlib.abc.MetaPathFinder):
+        def find_spec(
+            self,
+            fullname: str,
+            path: Sequence[str] | None = None,
+            target: ModuleType | None = None,
+        ) -> ModuleSpec | None:
+            if fullname == "litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty":
+                raise ImportError("blocked pagerduty import")
+            return None
+
+    module_prefixes: Final = (
+        "litellm_enterprise.enterprise_callbacks.pagerduty",
+        "litellm_enterprise.enterprise_callbacks.send_emails",
+    )
+    logging_module._enterprise_alerting_loggers.cache_clear()
+    for module_name in tuple(sys.modules):
+        if any(
+            module_name == prefix or module_name.startswith(f"{prefix}.")
+            for prefix in module_prefixes
+        ):
+            monkeypatch.delitem(sys.modules, module_name, raising=False)
+    monkeypatch.setattr(sys, "meta_path", [BlockPagerDutyFinder(), *sys.meta_path])
+
+    try:
+        loggers = logging_module._enterprise_alerting_loggers()
+        assert loggers.pagerduty is CustomLogger
+        assert loggers.resend_email is CustomLogger
+        assert loggers.sendgrid_email is CustomLogger
+        assert loggers.smtp_email is CustomLogger
+        assert logging_module.EnterpriseCallbackControls is EnterpriseCallbackControls
+    finally:
+        logging_module._enterprise_alerting_loggers.cache_clear()
+
+
+@pytest.mark.parametrize("integration", ("smtp_email", "resend_email", "sendgrid_email"))
+def test_init_email_alerting_logger_reuses_instance(
+    integration: Literal["smtp_email", "resend_email", "sendgrid_email"],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import SendGridEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
+
+    logger_class: Final = (
+        SMTPEmailLogger
+        if integration == "smtp_email"
+        else ResendEmailLogger
+        if integration == "resend_email"
+        else SendGridEmailLogger
+    )
+    monkeypatch.setenv("RESEND_API_KEY", "test-resend-key")
+    monkeypatch.setenv("SENDGRID_API_KEY", "test-sendgrid-key")
+    logging_module._in_memory_loggers.clear()
+    try:
+        logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration=integration,
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(logger, logger_class)
+        assert (
+            logging_module._init_custom_logger_compatible_class(
+                logging_integration=integration,
+                internal_usage_cache=None,
+                llm_router=None,
+                custom_logger_init_args={},
+            )
+            is logger
+        )
+        assert logging_module.get_custom_logger_compatible_class(integration) is logger
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
+def test_init_pagerduty_logger_reuses_instance(monkeypatch):
+    from litellm.types.integrations.pagerduty import AlertingConfig
+    from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    monkeypatch.setenv("PAGERDUTY_API_KEY", "test-pagerduty-key")
+    logging_module._in_memory_loggers.clear()
+    try:
+        logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="pagerduty",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={
+                "alerting_args": AlertingConfig(
+                    failure_threshold=1,
+                    failure_threshold_window_seconds=10,
+                )
+            },
+        )
+        assert isinstance(logger, PagerDutyAlerting)
+        assert (
+            logging_module._init_custom_logger_compatible_class(
+                logging_integration="pagerduty",
+                internal_usage_cache=None,
+                llm_router=None,
+                custom_logger_init_args={
+                    "alerting_args": AlertingConfig(
+                        failure_threshold=1,
+                        failure_threshold_window_seconds=10,
+                    )
+                },
+            )
+            is logger
+        )
+        assert logging_module.get_custom_logger_compatible_class("pagerduty") is logger
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
+@pytest.mark.parametrize("integration", ("smtp_email", "pagerduty", "resend_email", "sendgrid_email"))
+def test_get_custom_logger_compatible_class_does_not_match_generic_api_logger(
+    integration: Literal["smtp_email", "pagerduty", "resend_email", "sendgrid_email"],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", "https://generic-logger.test")
+    logging_module._in_memory_loggers.clear()
+    try:
+        with patch("asyncio.create_task", side_effect=lambda coro: coro.close()):
+            logging_module._in_memory_loggers.append(GenericAPILogger())
+        assert logging_module.get_custom_logger_compatible_class(integration) is None
+    finally:
+        logging_module._in_memory_loggers.clear()

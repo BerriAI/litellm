@@ -30,8 +30,10 @@ from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from functools import partial
 from typing import Final, Literal
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
+from fastapi import FastAPI, HTTPException
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -63,8 +65,14 @@ if _REPO_ROOT not in sys.path:
 
 from backend.routes.allowlist import BACKEND_MOUNT_PATHS
 from gateway.routes.allowlist import GATEWAY_MOUNT_PATHS
+from litellm.proxy import tracing_endpoints
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
+from litellm.rust_bridge.trace.storage import ClickHouseStorage
+from litellm.tracing import Tenant, TraceReceiver
 from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
@@ -221,6 +229,78 @@ def test_composed_lifespan_propagates_lifecycle_failures(
     assert events == (["startup"] if phase == "startup" else ["startup", "serving", "shutdown"])
 
 
+@pytest.mark.parametrize(
+    "component_lifespan", (_gateway_lifespan, _backend_lifespan), ids=("gateway", "backend")
+)
+@pytest.mark.parametrize("endpoint", ("/v1/traces", "/v1/logs"), ids=("traces", "logs"))
+def test_otlp_ingest_routes_authenticate_and_isolate_tenants_on_each_component(
+    component_lifespan: Lifespan[Starlette], endpoint: str
+) -> None:
+    application: Final = FastAPI()
+    application.include_router(tracing_endpoints.router)
+    storage: Final = MagicMock(spec=ClickHouseStorage)
+    storage.ingest = AsyncMock(return_value=1)
+    application.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(storage)
+
+    async def lookup(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+        return ()
+
+    application.dependency_overrides[get_log_team_lookup] = lambda: lookup
+
+    def authenticate(request: Request) -> UserAPIKeyAuth:
+        match request.headers.get("Authorization"):
+            case "Bearer team-a-key":
+                return UserAPIKeyAuth(
+                    user_id="user-a",
+                    token="hashed-a",
+                    team_id="team-a",
+                    org_id="org-a",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                )
+            case "Bearer team-b-key":
+                return UserAPIKeyAuth(
+                    user_id="user-b",
+                    token="hashed-b",
+                    team_id="team-b",
+                    org_id="org-b",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                )
+            case _:
+                raise HTTPException(status_code=401, detail="Invalid API key")
+
+    application.dependency_overrides[user_api_key_auth] = authenticate
+    application.router.lifespan_context = partial(
+        component_lifespan, lifespan=application.router.lifespan_context
+    )
+
+    body: Final = b'{"resourceLogs": []}'
+    content_type: Final = "application/json"
+    with TestClient(application) as client:
+        unauthenticated: Final = client.post(endpoint, content=body, headers={"content-type": content_type})
+        assert unauthenticated.status_code == 401, unauthenticated.text
+
+        team_a: Final = client.post(
+            endpoint,
+            content=body,
+            headers={"Authorization": "Bearer team-a-key", "content-type": content_type},
+        )
+        assert team_a.status_code == 200, team_a.text
+
+        team_b: Final = client.post(
+            endpoint,
+            content=body,
+            headers={"Authorization": "Bearer team-b-key", "content-type": content_type},
+        )
+        assert team_b.status_code == 200, team_b.text
+
+    tenant_a: Final = Tenant(team_id="team-a", api_key_hash="hashed-a", org_id="org-a", user_id="user-a")
+    tenant_b: Final = Tenant(team_id="team-b", api_key_hash="hashed-b", org_id="org-b", user_id="user-b")
+    assert storage.ingest.await_args_list == [
+        call(body, content_type, tenant_a, endpoint == "/v1/logs"),
+        call(body, content_type, tenant_b, endpoint == "/v1/logs"),
+    ]
+
+
 def test_gateway_plus_backend_covers_full_app():
     """Every route on the proxy app must be served by gateway or backend.
 
@@ -368,3 +448,54 @@ def test_every_app_mount_is_assigned_to_a_component():
         f"Add them to GATEWAY_MOUNT_PATHS, BACKEND_MOUNT_PATHS, or serve them "
         f"from the UI container:\n  " + "\n  ".join(sorted(unassigned))
     )
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+@pytest.mark.parametrize(
+    "component_lifespan", (None, _gateway_lifespan, _backend_lifespan), ids=("proxy", "gateway", "backend")
+)
+@pytest.mark.parametrize("enabled", (False, True))
+def test_admin_mcp_survives_only_management_component_lifespans(
+    monkeypatch: pytest.MonkeyPatch, component_lifespan: Lifespan[Starlette] | None, enabled: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.admin_mcp import admin_mcp_lifespan
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", str(enabled).lower())
+    for name in (
+        "PROXY_BASE_URL", "LITELLM_MCP_PUBLIC_URL", "LITELLM_ADMIN_TOOLS", "LITELLM_ADMIN_READ_ONLY",
+        "LITELLM_ADMIN_RESPONSE_VIEW", "LITELLM_ADMIN_SCHEMA_MODE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncGenerator[Mapping[str, object], None]:
+        async with admin_mcp_lifespan(application):
+            yield {"tracing_receiver": None}
+
+    application: Final = FastAPI(lifespan=lifespan)
+
+    @application.get("/user/info")
+    async def user_info() -> dict[str, object]:
+        return {"user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"}}
+
+    if component_lifespan is not None:
+        application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
+    for _ in range(2):
+        with TestClient(application, base_url="http://localhost:4000") as client:
+            response: Final = client.post(
+                "/admin/mcp",
+                headers={"Authorization": "Bearer admin", "Accept": "application/json, text/event-stream"},
+                json={
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26", "capabilities": {},
+                        "clientInfo": {"name": "component-test", "version": "1"},
+                    },
+                },
+            )
+            expected_status: Final = 200 if enabled and component_lifespan is not _gateway_lifespan else 404
+            assert response.status_code == expected_status, response.text
+            if response.status_code == 200:
+                assert response.json()["result"]["serverInfo"]["name"] == "litellm-admin-mcp"

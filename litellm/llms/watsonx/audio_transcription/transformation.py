@@ -4,9 +4,11 @@ Translates from OpenAI's `/v1/audio/transcriptions` to IBM WatsonX's `/ml/v1/aud
 WatsonX follows the OpenAI spec for audio transcription.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from httpx import Response
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
@@ -24,6 +26,8 @@ from ...openai.transcriptions.whisper_transformation import (
     OpenAIWhisperAudioTranscriptionConfig,
 )
 from ..common_utils import IBMWatsonXMixin
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTranscriptionConfig):
@@ -174,8 +178,9 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
 
         # Extract only valid fields for TranscriptionResponse.__init__()
         # TranscriptionResponse only accepts 'text' and 'usage' in __init__()
-        text: Final = raw_response_json.get("text")
-        usage: Final = raw_response_json.get("usage")
+        response_object: Final = _JSON_OBJECT.validate_python(raw_response_json)
+        text: Final = response_object.get("text")
+        usage: Final = response_object.get("usage")
 
         # Create response with only valid fields
         response_kwargs: Final = {}
@@ -187,14 +192,14 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         if not response_kwargs:
             raise ValueError(
                 "Invalid response format. Received response does not match the expected format. Got: ",
-                raw_response_json,
+                response_object,
             )
 
         response: Final = TranscriptionResponse(**response_kwargs)
 
         # Add other fields using dictionary-style assignment (like duration, task, etc.)
         # Skip fields that TranscriptionResponse doesn't accept in __init__()
-        for key, value in raw_response_json.items():
+        for key, value in response_object.items():
             if key not in [
                 "text",
                 "usage",
