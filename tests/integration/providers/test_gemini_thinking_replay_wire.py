@@ -1,6 +1,7 @@
 import base64
 import itertools
 import json
+import os
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
@@ -26,7 +27,7 @@ _API_KEY: Final = "synthetic-gemini-key"
 _PROJECT: Final = "scripted-project"
 _LOCATION: Final = "us-central1"
 _MODEL_PATH: Final = f"/v1/projects/{_PROJECT}/locations/{_LOCATION}/publishers/google/models/{_BACKEND}"
-_SALT: Final = "sk-integration-salt"
+_SALT: Final = os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt")
 _CLAUDE_SIGNATURE: Final = "CAQSyAsKEAgSGAI4AUIIdGhpbmtpbmcSDAlY-synthetic-claude-signature"
 _GEMINI_SIGNATURE: Final = "synthetic-gemini-thought-signature"
 _REASONING: Final = "private thought about fruit"
