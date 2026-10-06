@@ -23,6 +23,7 @@ from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import MISSING, dataclass, fields, is_dataclass, replace
 from functools import cache, reduce
+from itertools import chain
 from pathlib import Path
 from types import ModuleType, UnionType
 from typing import Final, Union, cast, get_args, get_origin, get_type_hints
@@ -414,8 +415,9 @@ def _decorated_defs(body: list[ast.stmt], prefix: str = "") -> Iterator[str]:
         match node:
             case ast.ClassDef(name=name, body=inner):
                 yield from _decorated_defs(inner, f"{prefix}{name}.")
-            case ast.FunctionDef(name=name, decorator_list=decorators) | ast.AsyncFunctionDef(
-                name=name, decorator_list=decorators
+            case (
+                ast.FunctionDef(name=name, decorator_list=decorators)
+                | ast.AsyncFunctionDef(name=name, decorator_list=decorators)
             ):
                 yield from (f"{prefix}{name}" for decorator in decorators if _is_step(decorator))
             case _:
@@ -468,7 +470,7 @@ def _harness_files() -> tuple[Path, ...]:
 
 @cache
 def step_helpers() -> tuple[StepHelper, ...]:
-    return tuple(helper for path in _harness_files() for helper in _helpers_in(path))
+    return tuple(chain.from_iterable(_helpers_in(path) for path in _harness_files()))
 
 
 def _placeholders() -> Iterator[tuple[StepHelper, str]]:
@@ -493,12 +495,12 @@ def _read(helper: StepHelper, field: str) -> PlaceholderRead | None:
     and the types it ends up printing, or None if one of the fields doesn't exist."""
     read: PlaceholderRead = PlaceholderRead((), _alternatives(helper.hint(field)))  # rebind-ok: one hop per attribute
     for attribute in field.split(".")[1:]:
-        found = tuple(_attribute(owner, attribute) for owner in read.printed)  # rebind-ok: one hop per attribute
-        hop = tuple(entry for entry in found if entry is not None)  # rebind-ok: one hop per attribute
+        found = tuple(_attribute(owner, attribute) for owner in read.printed)
+        hop = tuple(entry for entry in found if entry is not None)
         if len(hop) != len(found):
             return None
-        printed = tuple(member for entry in hop for member in _alternatives(entry.annotation))  # rebind-ok: one hop
-        read = PlaceholderRead((*read.fields, *hop), printed)  # rebind-ok: one hop per attribute
+        printed = tuple(chain.from_iterable(_alternatives(entry.annotation) for entry in hop))
+        read = PlaceholderRead((*read.fields, *hop), printed)
     return read
 
 
@@ -532,9 +534,8 @@ def _printed(helper: StepHelper, field: str) -> tuple[object, ...]:
 
 
 def _printed_models() -> frozenset[type[BaseModel]]:
-    return frozenset[type[BaseModel]]().union(
-        *(_models_in(printed) for helper, field in _placeholders() for printed in _printed(helper, field))
-    )
+    printed: Final = chain.from_iterable(_printed(helper, field) for helper, field in _placeholders())
+    return frozenset[type[BaseModel]]().union(*(_models_in(annotation) for annotation in printed))
 
 
 class TestLabelTemplates:
@@ -594,12 +595,10 @@ class TestLabelTemplates:
             _ = step("Send {body.messages[0]}")(chat)
 
     def test_every_step_in_the_harness_is_checked(self) -> None:
-        written: Final = Counter(
-            path for path in _harness_files() for _ in STEP_DECORATOR.finditer(path.read_text())
-        )
+        written: Final = Counter({path: len(STEP_DECORATOR.findall(path.read_text())) for path in _harness_files()})
         discovered: Final = Counter(helper.path for helper in step_helpers())
         assert written[E2E_DIR / "proxy_client.py"] > 0
-        assert discovered == written
+        assert discovered == +written
 
     def test_every_dotted_placeholder_in_the_harness_names_a_real_field(self) -> None:
         """A dotted placeholder is read on every live call, so one naming a field the
