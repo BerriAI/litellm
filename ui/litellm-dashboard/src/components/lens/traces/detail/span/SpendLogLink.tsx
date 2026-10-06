@@ -3,6 +3,9 @@
 import { ArrowUpRight } from "lucide-react";
 import { useState } from "react";
 
+import litellmMonogram from "../../../../../../public/assets/logos/litellm_monogram.svg";
+import { Button } from "@/components/ui/button";
+
 import { LogDetailsDrawer } from "../../../../logs/detail";
 import { formatCost } from "../../list/AgentTracesTable";
 import type { Span } from "../../types";
@@ -16,8 +19,6 @@ const UNMATCHED_REASON: Record<Exclude<NonNullable<Span["spend_match"]>, "matche
 
 export const unmatchedReason = (span: Span): string | null =>
   span.spend_match && span.spend_match !== "matched" ? UNMATCHED_REASON[span.spend_match] : null;
-
-const shortId = (id: string): string => (id.length > 12 ? `${id.slice(0, 10)}…` : id);
 
 /** The spend log a model call was priced from, opened in the request log drawer over the run. */
 export function SpendLogLink({
@@ -46,24 +47,19 @@ export function SpendLogLink({
   const missing = open && logQuery.isSuccess && logQuery.data === null;
   return (
     <>
-      <button
-        type="button"
+      <Button
+        variant="outline"
+        size="xs"
         onClick={() => setOpen(true)}
         title={requestId}
-        aria-label={`Open spend log ${requestId}`}
-        className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground tabular-nums transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring active:scale-[0.97] motion-reduce:transition-none"
+        aria-label={`Open LiteLLM spend log ${requestId}`}
+        className="tabular-nums active:scale-[0.97] motion-reduce:transition-none"
       >
-        <span>Spend log</span>
-        <span aria-hidden>·</span>
-        <span className="font-medium text-foreground">{shortId(requestId)}</span>
-        {span.spend != null && (
-          <>
-            <span aria-hidden>·</span>
-            <span className="font-medium text-foreground">{formatCost(span.spend)}</span>
-          </>
-        )}
-        <ArrowUpRight className="size-3.5" />
-      </button>
+        <img src={litellmMonogram.src} alt="" aria-hidden className="size-3.5" />
+        <span className="font-medium">LiteLLM Spend Log</span>
+        {span.spend != null && <span className="text-muted-foreground">{formatCost(span.spend)}</span>}
+        <ArrowUpRight data-icon="inline-end" />
+      </Button>
       {missing && <span className="text-xs text-muted-foreground">Spend log not visible in this time range</span>}
       <LogDetailsDrawer
         open={open && Boolean(logQuery.data)}

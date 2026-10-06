@@ -263,8 +263,8 @@ describe("DetailPane", () => {
     const user = userEvent.setup();
     vi.mocked(uiSpendLogsCall).mockResolvedValue({ data: [{ request_id: "req_7f3a9c2e1b44" }] });
     renderPane(spanRow(llm));
-    const link = screen.getByRole("button", { name: "Open spend log req_7f3a9c2e1b44" });
-    expect(link).toHaveTextContent("Spend log·req_7f3a9c…·$0.0002");
+    const link = screen.getByRole("button", { name: "Open LiteLLM spend log req_7f3a9c2e1b44" });
+    expect(link).toHaveTextContent("LiteLLM Spend Log$0.0002");
     await user.click(link);
     expect(await screen.findByRole("dialog", { name: "Request log" })).toHaveTextContent("req_7f3a9c2e1b44");
     expect(vi.mocked(uiSpendLogsCall).mock.calls[0][0].params).toEqual({ request_id: "req_7f3a9c2e1b44" });
@@ -278,7 +278,7 @@ describe("DetailPane", () => {
     const unpriced: SpanFields = { ...llmFields, spend: null, spend_log_request_id: null, spend_match };
     renderPane(spanRow(span(unpriced)));
     expect(screen.getByTitle(reason)).toHaveTextContent("Cost not matched");
-    expect(screen.queryByRole("button", { name: /Open spend log/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open LiteLLM spend log/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "Request" }));
     expect(await screen.findByText(reason, { selector: "p" })).toBeInTheDocument();
   });
