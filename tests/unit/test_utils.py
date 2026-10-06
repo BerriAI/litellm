@@ -74,7 +74,6 @@ from litellm.utils import(
     _check_provider_match,
     get_potential_model_names,
     _is_litellm_router_call,
-    _invalidate_model_cost_lowercase_map,
     _is_streaming_request,
     _run_success_deployment_hook_on_converted_chat_stream,
     _snapshot_exception_for_hook,
