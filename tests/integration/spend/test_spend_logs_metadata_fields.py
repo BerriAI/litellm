@@ -481,7 +481,7 @@ def _router_models(wire: Wire, router: str) -> tuple[Mapping[str, JsonValue], ..
     [(None, SAVINGS_FIELDS), ({"exclude": list(SAVINGS_FIELDS)}, ())],
     ids=["unset-keeps-savings", "excluded-savings-stay-out"],
 )
-@pytest.mark.timeout(240)  # projection retries a scope at most every 30 seconds after its first attempt
+@pytest.mark.timeout(240)
 def test_delayed_autorouter_savings_publication_respects_retention(
     gateway: Gateway, tmp_path: Path, retention: Mapping[str, JsonValue] | None, stored: tuple[str, ...]
 ) -> None:
