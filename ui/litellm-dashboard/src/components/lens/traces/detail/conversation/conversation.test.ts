@@ -64,6 +64,23 @@ describe("trace conversation", () => {
     expect([...pendingConversationBranches(spans, details, false)].toSorted()).toEqual(["agent", "child"]);
   });
 
+  it.each([false, true])("handles 20,000-level pending ancestry without overflowing (cycle: %s)", (cycle) => {
+    const rootParent = cycle ? "deep-19999" : null;
+    const chain = Array.from({ length: 20_000 }, (_, index) => ({
+      ...root,
+      span_id: `deep-${index}`,
+      parent_span_id: index === 0 ? rootParent : `deep-${index - 1}`,
+    }));
+    const spans = [...chain, root];
+    const details = new Map(
+      spans.filter((span) => span.span_id !== "deep-19999").map((span) => [span.span_id, detail(span.span_id, [], [])]),
+    );
+    const pending = pendingConversationBranches(spans, details, false);
+    expect(pending.size).toBe(chain.length);
+    expect(chain.every((span) => pending.has(span.span_id))).toBe(true);
+    expect(pending.has(root.span_id)).toBe(false);
+  });
+
   it.each([
     { boundary: 10, morePages: true, pending: true },
     { boundary: 20, morePages: true, pending: true },

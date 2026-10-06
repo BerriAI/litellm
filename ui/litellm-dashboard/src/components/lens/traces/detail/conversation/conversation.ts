@@ -30,12 +30,33 @@ export function pendingConversationBranches(
     const mayHaveLaterChildren = hasMoreSpans && span.start_offset_ms + span.duration_ms >= pageBoundary;
     return missingDetail || mayHaveLaterChildren;
   });
-  const ancestorIds = (span: Span | undefined, path: readonly string[] = []): readonly string[] => {
-    if (!span || path.includes(span.span_id)) return path;
-    const parent = span.parent_span_id ? byId.get(span.parent_span_id) : undefined;
-    return ancestorIds(parent, [...path, span.span_id]);
+  const initial = {
+    pending: new Set(pending.map((span) => span.span_id)),
+    ancestors: new Map(
+      spans.flatMap((span) =>
+        span.parent_span_id && byId.has(span.parent_span_id) ? [[span.span_id, span.parent_span_id] as const] : [],
+      ),
+    ),
   };
-  return new Set(pending.flatMap((span) => ancestorIds(span)));
+  const doublingPasses = Math.ceil(Math.log2(Math.max(1, spans.length)));
+  return Array.from({ length: doublingPasses }).reduce<typeof initial>((state) => {
+    if (!state.pending.size || !state.ancestors.size) return state;
+    return {
+      pending: new Set([
+        ...state.pending,
+        ...[...state.pending].flatMap((id) => {
+          const ancestor = state.ancestors.get(id);
+          return ancestor ? [ancestor] : [];
+        }),
+      ]),
+      ancestors: new Map(
+        [...state.ancestors].flatMap(([id, ancestor]) => {
+          const next = state.ancestors.get(ancestor);
+          return next ? [[id, next] as const] : [];
+        }),
+      ),
+    };
+  }, initial).pending;
 }
 
 function contentText(value: string, content?: UIContent): string {
