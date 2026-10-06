@@ -28,6 +28,7 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
     BaseLiteLLMOpenAIResponseObject,
+    ChatCompletionAnnotation,
     ContentPartAddedEvent,
     ContentPartDoneEvent,
     ContentPartDonePartOutputText,
@@ -823,11 +824,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         text: Final = getattr(litellm_complete_object.choices[0].message, "content", "") or ""
         annotations: Final = getattr(litellm_complete_object.choices[0].message, "annotations", None)
 
-        response_annotations: Final = self._message_annotations(
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
-                annotations=annotations
-            )
-        )
+        response_annotations: Final = self._message_annotations(annotations)
         part: Final[PART_UNION_TYPES] = ContentPartDonePartOutputText(
             type="output_text",
             text=text,
@@ -850,11 +847,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         text: Final = litellm_complete_object.choices[0].message.content or ""
         annotations = getattr(litellm_complete_object.choices[0].message, "annotations", None)
 
-        response_annotations: Final = self._message_annotations(
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
-                annotations=annotations
-            )
-        )
+        response_annotations: Final = self._message_annotations(annotations)
         return OutputItemDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
             output_index=self._message_output_index,
@@ -880,10 +873,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def _message_annotations(
         self,
-        annotations: list[GenericResponseOutputItemContentAnnotation],
+        annotations: list[ChatCompletionAnnotation] | None,
         *,
         start: int | None = None,
         end: int | None = None,
+        positioned_only: bool = False,
     ) -> list[GenericResponseOutputItemContentAnnotation]:
         offset: Final = self._closed_message_text_length if start is None else start
         return [
@@ -894,8 +888,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     if value is not None
                 }
             )
-            for annotation in annotations
-            if (annotation.start_index is None and end is None)
+            for annotation in LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
+                annotations=annotations
+            )
+            if (annotation.start_index is None and end is None and not positioned_only)
             or (
                 annotation.start_index is not None
                 and annotation.start_index >= offset
@@ -922,13 +918,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _messages_with_final_annotations(
         self, response: ModelResponse
     ) -> tuple[tuple[int, GenericResponseOutputItem], ...]:
-        annotations: Final = [
-            annotation
-            for annotation in LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
-                annotations=getattr(response.choices[0].message, "annotations", None)
-            )
-            if annotation.start_index is not None
-        ]
+        annotations: Final[list[ChatCompletionAnnotation] | None] = getattr(
+            response.choices[0].message, "annotations", None
+        )
         offsets: Final = tuple(
             accumulate((len(item.content[0].text or "") for _, item in self._completed_message_items), initial=0)
         )
@@ -946,6 +938,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                                         end=offsets[position + 1]
                                         if position + 1 < len(self._completed_message_items)
                                         else None,
+                                        positioned_only=True,
                                     )
                                     + self._unpositioned_message_annotations(position)
                                 }
@@ -1411,11 +1404,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             annotations: Final = chunk.choices[0].delta.annotations
             if annotations and self.sent_annotation_events is False and not allow_reasoning_resumption:
                 # Store annotation events to emit them one by one
-                response_annotations = self._message_annotations(
-                    LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
-                        annotations=annotations
-                    )
-                )
+                response_annotations = self._message_annotations(annotations)
                 self.sent_annotation_events = bool(response_annotations)
                 self._pending_annotation_events = []
                 for idx, annotation in enumerate(response_annotations):
