@@ -102,11 +102,15 @@ impl PythonBinding for OcrPythonHost {
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: LiteLLMOcrResponse,
+        response: litellm_http::response::Response<LiteLLMOcrResponse>,
     ) -> PyResult<Py<PyAny>> {
         py.import("litellm.rust_bridge.ocr.route_host")?
             .getattr("response")?
-            .call1((to_py(py, &response)?,))
+            .call1((
+                to_py(py, &response.body)?,
+                super::super::transport::headers(py, &response.head.headers)?,
+                response.head.status.as_u16(),
+            ))
             .map(Bound::unbind)
     }
 

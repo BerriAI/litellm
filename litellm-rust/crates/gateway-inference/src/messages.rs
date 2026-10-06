@@ -32,7 +32,11 @@ pub async fn create(
         Ok(JsonObject(body)) => handle(&gateway, &identity, &headers, body).await,
         Err(error) => Err(error),
     };
-    result.map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
+    result.map_err(|error| {
+        error.apply_provider_headers(
+            (error.status(), Json(error.body(request_id.as_deref()))).into_response(),
+        )
+    })
 }
 
 async fn handle(
@@ -55,8 +59,11 @@ async fn handle(
 
     let call = project(deployment, body, headers)?;
     let machine = route.machine(call, cache_options.policy);
-    let stream =
-        Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
+    let stream = Sse::<Messages, _, _, _>::new(
+        crate::response::json,
+        crate::response::stream_head,
+        |error| Bytes::from(Error::from(error).sse_frame()),
+    );
     let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
     Ok(headers.apply(response))

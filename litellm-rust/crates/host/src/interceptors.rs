@@ -25,10 +25,7 @@ pub struct RequestContext {
     pub api_key: Option<litellm_auth::SecretValue>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RawResponse {
-    pub body: String,
-}
+pub type RawResponse = litellm_http::response::Response<String>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderIdentity {
@@ -164,7 +161,7 @@ mod tests {
                 .await?;
                 Interceptors::after_provider_response(
                     &channel.interceptors,
-                    RawResponse { body: "raw".into() },
+                    RawResponse::cached("raw".into()),
                 )
                 .await?;
                 Ok((sent, ()))

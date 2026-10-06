@@ -9,7 +9,10 @@ use support::*;
 const MODEL: &str = "mistral.voxtral-mini-3b-2507";
 
 async fn transcribe(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
-    audio_transcription_route().execute(request).await
+    audio_transcription_route()
+        .execute(request)
+        .await
+        .map(|response| response.body)
 }
 
 fn transcript_response(text: &str) -> ResponseTemplate {
@@ -46,18 +49,21 @@ async fn bedrock_converse_request_is_signed_for_the_requested_region(
     request: AudioTranscriptionRequest<'static>,
     #[case] region: &str,
 ) {
-    let upstream = upstream([transcript_response("hello")]).await;
+    let upstream =
+        upstream([transcript_response("hello").insert_header("request-id", "audio-attempt")]).await;
     let base = upstream.uri();
 
-    let response = transcribe(AudioTranscriptionRequest {
-        api_base: Some(&base),
-        optional_params: aws_params(region),
-        ..request
-    })
-    .await
-    .expect("transcription");
+    let response = audio_transcription_route()
+        .execute(AudioTranscriptionRequest {
+            api_base: Some(&base),
+            optional_params: aws_params(region),
+            ..request
+        })
+        .await
+        .expect("transcription");
 
-    assert_eq!(response, json!({"text": "hello"}));
+    assert_eq!(response.head.headers["request-id"], "audio-attempt");
+    assert_eq!(response.body, json!({"text": "hello"}));
     let sent = only_request(&upstream).await;
     assert_eq!(sent.method.as_str(), "POST");
     assert_eq!(sent.url.path(), format!("/model/{MODEL}/converse"));
@@ -221,12 +227,17 @@ async fn an_upstream_error_keeps_its_status_and_body(
     .await
     .expect_err("upstream error propagates");
 
+    let Error::Transport(litellm_http::transport::Error::Http {
+        status: actual_status,
+        body: actual_body,
+        ..
+    }) = error
+    else {
+        panic!("expected an upstream HTTP error");
+    };
     assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            status,
-            body: "upstream said no".into()
-        })
+        (actual_status, actual_body),
+        (status, "upstream said no".into())
     );
 }
 

@@ -112,7 +112,11 @@ mod tests {
             Box::pin(async move { Ok(wire) })
         }
 
-        fn response_received<'a>(&'a self, _body: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
+        fn response_received<'a>(
+            &'a self,
+            _head: &'a litellm_http::response::ResponseHead,
+            _body: &'a [u8],
+        ) -> BoxFuture<'a, Result<(), Error>> {
             Box::pin(async { Ok(()) })
         }
     }

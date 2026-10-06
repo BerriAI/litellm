@@ -1,3 +1,4 @@
+use litellm_http::response::ResponseHead;
 use std::{
     ops::ControlFlow,
     sync::{Mutex, mpsc},
@@ -5,10 +6,7 @@ use std::{
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
-use litellm_core::messages::{
-    MessagesCallResponse,
-    route::{Messages, MessagesStreamHead},
-};
+use litellm_core::messages::{MessagesCallResponse, route::Messages};
 use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::rstest;
 use tokio::{
@@ -87,8 +85,13 @@ impl RecordingStreamHost {
 }
 
 impl litellm_host_native::in_process::StreamConsumer<Messages> for RecordingStreamHost {
-    async fn open_stream(&self, head: MessagesStreamHead) -> Result<ControlFlow<()>, Error> {
-        Ok(self.record(Seen::Open(head.headers)))
+    async fn open_stream(&self, head: ResponseHead) -> Result<ControlFlow<()>, Error> {
+        Ok(self.record(Seen::Open(
+            head.headers
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_str().unwrap().to_owned()))
+                .collect(),
+        )))
     }
     async fn send_chunk(&self, chunk: Bytes) -> Result<ControlFlow<()>, Error> {
         Ok(self.record(Seen::Deliver(chunk)))
@@ -247,13 +250,15 @@ async fn an_upstream_error_fails_the_call_without_opening_the_stream(
         .await
         .expect_err("upstream error propagates");
 
-    assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            status: 429,
-            body: body.into()
-        })
-    );
+    let Error::Transport(litellm_http::transport::Error::Http {
+        status: actual_status,
+        body: actual_body,
+        ..
+    }) = error
+    else {
+        panic!("expected an upstream HTTP error");
+    };
+    assert_eq!((actual_status, actual_body), (429, body.into()));
     assert!(host.seen.into_inner().unwrap().is_empty());
 }
 
@@ -357,7 +362,7 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
         panic!("a streaming request returns a stream");
     };
     for (name, value) in UPSTREAM_HEADERS {
-        assert!(head.headers.contains(&(name.into(), value.into())));
+        assert_eq!(head.headers[name], value);
     }
     let delivered = chunks.try_collect::<Vec<_>>().await.unwrap().concat();
     assert_eq!(delivered, SSE_BODY.as_bytes());
@@ -374,13 +379,15 @@ async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall)
         .err()
         .expect("upstream failure is returned by messages()");
 
-    assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            status: 429,
-            body: "slow down".into(),
-        })
-    );
+    let Error::Transport(litellm_http::transport::Error::Http {
+        status: actual_status,
+        body: actual_body,
+        ..
+    }) = error
+    else {
+        panic!("expected an upstream HTTP error");
+    };
+    assert_eq!((actual_status, actual_body), (429, "slow down".into()));
 }
 
 #[rstest]

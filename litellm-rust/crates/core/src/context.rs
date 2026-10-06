@@ -31,10 +31,7 @@ impl<'a, I: Interceptors<RouteError>> CallContext<'a, I> {
         self.interceptors.result_ready(facts).await
     }
 
-    pub async fn response_received(&self, body: &str) -> Result<(), RouteError> {
-        let raw = RawResponse {
-            body: body.to_owned(),
-        };
+    pub async fn response_received(&self, raw: RawResponse) -> Result<(), RouteError> {
         if let Some(observers) = &self.observers {
             observers.emit(CallEvent::Execution(
                 ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },

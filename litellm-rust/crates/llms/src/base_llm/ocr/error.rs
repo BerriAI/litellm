@@ -4,7 +4,7 @@ pub enum Error {
     Provider {
         status: u16,
         body: String,
-        headers: Vec<(String, String)>,
+        headers: Box<reqwest::header::HeaderMap>,
     },
     #[error("File is empty or could not be read")]
     EmptyFile,

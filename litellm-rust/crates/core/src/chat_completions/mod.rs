@@ -47,7 +47,7 @@ impl ChatCompletionsRoute {
         request: ChatCompletionsRequest<'_>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         options: impl Into<crate::CallOptions>,
-    ) -> Result<ChatCompletionsResponse, Error> {
+    ) -> Result<litellm_http::response::Response<ChatCompletionsResponse>, Error> {
         let crate::CallOptions {
             cache: cache_options,
             observers,
@@ -70,7 +70,7 @@ impl ChatCompletionsRoute {
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<ChatCompletionsResponse, Error> {
+    ) -> Result<litellm_http::response::Response<ChatCompletionsResponse>, Error> {
         let resolved = resolve_request(request)?;
         let snapshot = self
             .secrets
@@ -78,16 +78,18 @@ impl ChatCompletionsRoute {
             .await?;
         let prepared = prepare_provider_request(resolved, snapshot)?;
         crate::diagnostic::provider(&prepared.model, &prepared.custom_llm_provider);
-        let execute: futures_util::future::BoxFuture<'_, Result<ChatCompletionsResponse, Error>> =
-            Box::pin(handler::execute(
-                &self.http,
-                &self.auth,
-                prepared,
-                self.cache.clone(),
-                cache_options,
-                interceptors,
-                observers,
-            ));
+        let execute: futures_util::future::BoxFuture<
+            '_,
+            Result<litellm_http::response::Response<ChatCompletionsResponse>, Error>,
+        > = Box::pin(handler::execute(
+            &self.http,
+            &self.auth,
+            prepared,
+            self.cache.clone(),
+            cache_options,
+            interceptors,
+            observers,
+        ));
         execute.await
     }
 }

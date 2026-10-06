@@ -1,5 +1,6 @@
 use litellm_host::lifecycle::ExecutionEvent;
 use litellm_host::observation::ObservationSender;
+use litellm_http::response::ResponseHead;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -8,7 +9,7 @@ use litellm_llms::base_llm::auth::{Authenticated, resolve_auth};
 
 use super::{
     Error,
-    types::{ProviderResponsesRequest, ResponsesOutput, ResponsesStreamHead},
+    types::{ProviderResponsesRequest, ResponsesOutput},
 };
 
 pub(super) async fn execute(
@@ -62,34 +63,29 @@ pub(super) async fn execute(
             let response = crate::outbound::send(outbound, http)
                 .await
                 .map_err(network)?;
-            let status = response.status().as_u16();
+            let head = ResponseHead::from_response(&response);
+            let status = head.status.as_u16();
             if !response.status().is_success() {
                 let body = response.text().await.map_err(network)?;
                 return Err(litellm_http::transport::Error::Http {
                     status,
+                    headers: head.headers.into(),
                     body: litellm_http::request::truncate_error_body(&body),
                 }
                 .into());
             }
             if stream {
-                let headers = response
-                    .headers()
-                    .iter()
-                    .filter_map(|(name, value)| {
-                        Some((name.to_string(), value.to_str().ok()?.to_owned()))
-                    })
-                    .collect();
                 let chunks = response
                     .bytes_stream()
                     .map(|chunk| chunk.map_err(network))
                     .boxed();
-                return Ok(ResponsesOutput::Stream {
-                    head: ResponsesStreamHead { headers },
-                    chunks,
-                });
+                return Ok(ResponsesOutput::Stream { head, chunks });
             }
             let body = response.text().await.map_err(network)?;
-            let raw = RawResponse { body: body.clone() };
+            let raw = RawResponse {
+                head: head.clone(),
+                body: body.clone(),
+            };
             if let Some(observers) = observers {
                 observers.emit(litellm_host::lifecycle::CallEvent::Execution(
                     ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
@@ -104,7 +100,9 @@ pub(super) async fn execute(
             request
                 .config
                 .transform_response_api_response(value)
-                .map(ResponsesOutput::Complete)
+                .map(|body| {
+                    ResponsesOutput::Complete(litellm_http::response::Response { head, body })
+                })
                 .map_err(Error::from)
         },
     )

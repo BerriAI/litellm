@@ -25,7 +25,7 @@ impl OcrRoute {
         request: LiteLLMOcrRequest,
         interceptors: &impl Interceptors<Error>,
         observers: Option<ObservationSender>,
-    ) -> Result<LiteLLMOcrResponse, Error> {
+    ) -> Result<litellm_http::response::Response<LiteLLMOcrResponse>, Error> {
         litellm_host::lifecycle::observe_unary(
             observers.clone(),
             self.run(request, interceptors, observers.as_ref()),
@@ -46,18 +46,20 @@ impl OcrRoute {
         request: LiteLLMOcrRequest,
         interceptors: &impl Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<LiteLLMOcrResponse, Error> {
+    ) -> Result<litellm_http::response::Response<LiteLLMOcrResponse>, Error> {
         crate::diagnostic::unary(async {
             let caller_document = matches!(&request.document, OcrDocumentInput::Document(_));
             let prepared = prepare_request_document(request).await?;
-            let execute: futures_util::future::BoxFuture<'_, Result<LiteLLMOcrResponse, Error>> =
-                Box::pin(perform_ocr_request(
-                    &self.client,
-                    prepared,
-                    interceptors,
-                    caller_document,
-                    observers,
-                ));
+            let execute: futures_util::future::BoxFuture<
+                '_,
+                Result<litellm_http::response::Response<LiteLLMOcrResponse>, Error>,
+            > = Box::pin(perform_ocr_request(
+                &self.client,
+                prepared,
+                interceptors,
+                caller_document,
+                observers,
+            ));
             execute.await
         })
         .await

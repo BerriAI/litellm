@@ -2,7 +2,6 @@ use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{
-    Json,
     extract::{Path, State},
     response::{IntoResponse, Response},
 };
@@ -73,7 +72,7 @@ async fn handle(
         ),
         (),
         headers.clone(),
-        litellm_host_http::Unary::new(Json),
+        litellm_host_http::Unary::new(crate::response::json),
         None,
     )
     .await?;

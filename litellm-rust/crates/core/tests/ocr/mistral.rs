@@ -108,7 +108,7 @@ async fn an_upstream_error_keeps_its_status_whole_body_and_headers(
         assert!(
             headers
                 .iter()
-                .any(|(key, actual)| key.eq_ignore_ascii_case(name) && actual == value),
+                .any(|(key, actual)| key.as_str().eq_ignore_ascii_case(name) && actual == value),
             "{name} missing from {headers:?}"
         );
     }

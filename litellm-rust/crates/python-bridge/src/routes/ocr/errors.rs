@@ -4,7 +4,7 @@ use pyo3::{
     prelude::*,
 };
 
-use crate::errors::{RustUpstreamError, by_fault};
+use crate::errors::by_fault;
 
 pub(super) fn to_pyerr(error: Error) -> PyErr {
     let status = error.http_status_code();
@@ -15,9 +15,11 @@ pub(super) fn to_pyerr(error: Error) -> PyErr {
                 body,
                 headers,
             } => upstream_error(py, status, body, headers)?,
-            Error::Transport(litellm_http::transport::Error::Http { status, body }) => {
-                upstream_error(py, status, body, Vec::new())?
-            }
+            Error::Transport(litellm_http::transport::Error::Http {
+                status,
+                body,
+                headers,
+            }) => upstream_error(py, status, body, headers)?,
             Error::RequestFormat => {
                 let error = by_fault(true, Error::RequestFormat.to_string());
                 error
@@ -53,11 +55,9 @@ fn upstream_error(
     py: Python<'_>,
     status: u16,
     body: String,
-    headers: Vec<(String, String)>,
+    headers: Box<reqwest::header::HeaderMap>,
 ) -> PyResult<PyErr> {
-    let error = RustUpstreamError::new_err((status, body));
-    error.value(py).setattr("headers", headers)?;
-    Ok(error)
+    crate::routes::transport::upstream_error(py, status, body, &headers)
 }
 
 fn attach_status(error: PyErr, status: Option<u16>) -> PyErr {
@@ -76,8 +76,9 @@ mod tests {
     use pyo3::exceptions::PyValueError;
 
     use super::*;
+    use crate::errors::RustUpstreamError;
 
-    #[test]
+    #[rstest::rstest]
     fn preserves_python_validation_and_provider_details() {
         Python::initialize();
         Python::attach(|py| {
@@ -96,15 +97,18 @@ mod tests {
             let mapped = to_pyerr(Error::Provider {
                 status: 429,
                 body: r#"{"message":"rate limited"}"#.to_string(),
-                headers: vec![("Retry-After".to_string(), "17".to_string())],
+                headers: [(reqwest::header::RETRY_AFTER, "17".parse().unwrap())]
+                    .into_iter()
+                    .collect::<reqwest::header::HeaderMap>()
+                    .into(),
             });
             assert!(mapped.is_instance_of::<RustUpstreamError>(py));
-            let headers: Vec<(String, String)> = mapped
+            let headers: Vec<(Vec<u8>, Vec<u8>)> = mapped
                 .value(py)
                 .getattr("headers")
                 .and_then(|headers| headers.extract())
                 .expect("OCR failures retain provider headers");
-            assert_eq!(headers, vec![("Retry-After".to_string(), "17".to_string())]);
+            assert_eq!(headers, vec![(b"retry-after".to_vec(), b"17".to_vec())]);
             let args: (u16, String) = mapped
                 .value(py)
                 .getattr("args")

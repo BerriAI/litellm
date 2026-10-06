@@ -2,9 +2,8 @@ mod host;
 
 use pyo3::types::{PyDict, PyTuple};
 
-use crate::execution::{run_async, run_sync};
-use litellm_core::chat_completions::{ChatCompletionsRoute, Error, types::ChatCompletionsRequest};
-use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
+use crate::execution::{run_async_value, run_sync_value};
+use litellm_core::chat_completions::{ChatCompletionsRoute, types::ChatCompletionsRequest};
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
@@ -22,7 +21,7 @@ async fn execute(
     messages: Vec<Value>,
     optional_params: Map<String, Value>,
     options: RouteOptions,
-) -> Result<ChatCompletionsResponse, Error> {
+) -> PyResult<Py<PyAny>> {
     let RouteOptions {
         model,
         api_key,
@@ -31,22 +30,28 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
-    ChatCompletionsRoute::new(http?, crate::http::resources().auth.clone(), secrets)
-        .execute(
-            ChatCompletionsRequest {
-                model: &model,
-                messages: Value::Array(messages),
-                optional_params,
-                api_key: api_key.as_deref(),
-                api_base: api_base.as_deref(),
-                custom_llm_provider: custom_llm_provider.as_deref(),
-                extra_headers,
-                timeout,
-            },
-            &(),
-            None,
-        )
-        .await
+    ChatCompletionsRoute::new(
+        http.map_err(|error| route_error_to_pyerr(error.into()))?,
+        crate::http::resources().auth.clone(),
+        secrets,
+    )
+    .execute(
+        ChatCompletionsRequest {
+            model: &model,
+            messages: Value::Array(messages),
+            optional_params,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            timeout,
+        },
+        &(),
+        None,
+    )
+    .await
+    .map_err(route_error_to_pyerr)
+    .and_then(|response| Python::attach(|py| super::transport::payload(py, response)))
 }
 
 #[pyfunction]
@@ -76,7 +81,7 @@ pub(crate) fn chat_completions(
     };
     let http = crate::http::provider_client(py, &PyDict::new(py), false)?;
     let secrets = crate::secrets::source(py)?;
-    run_sync(
+    run_sync_value(
         py,
         execute(
             http,
@@ -85,7 +90,6 @@ pub(crate) fn chat_completions(
             optional_params.unwrap_or_default(),
             options,
         ),
-        route_error_to_pyerr,
     )
 }
 
@@ -116,7 +120,7 @@ pub(crate) fn achat_completions<'py>(
     };
     let http = crate::http::provider_client(py, &PyDict::new(py), true)?;
     let secrets = crate::secrets::source(py)?;
-    run_async(
+    run_async_value(
         py,
         execute(
             http,
@@ -125,7 +129,6 @@ pub(crate) fn achat_completions<'py>(
             optional_params.unwrap_or_default(),
             options,
         ),
-        route_error_to_pyerr,
     )
 }
 

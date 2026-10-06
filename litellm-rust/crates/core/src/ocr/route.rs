@@ -25,7 +25,7 @@ pub struct OcrCall {
 pub struct Ocr;
 
 impl Protocol for Ocr {
-    type Response = LiteLLMOcrResponse;
+    type Response = litellm_http::response::Response<LiteLLMOcrResponse>;
     type Error = Error;
     type Request = OcrCall;
     type HostCall = OcrOp;

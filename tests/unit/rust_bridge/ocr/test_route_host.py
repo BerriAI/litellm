@@ -1,11 +1,12 @@
 from typing import Final
 
+import httpx
 import pytest
 
 import litellm
+from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 from litellm.rust_bridge.ocr.route_host import UpstreamFailure, map_failure
 from litellm.rust_bridge.ocr.route_host import response as build_ocr_response
-from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 
 REQUEST: Final = LiteLLMOcrRequest(
     model="mistral/mistral-ocr-latest",
@@ -29,7 +30,8 @@ class RustFormatError(Exception):
     ocr_request_format_error: Final = True
 
 
-def test_rust_ocr_response_retains_provider_native_response():
+def test_rust_ocr_response_retains_provider_native_response() -> None:
+    headers: Final = httpx.Headers({"request-id": "completed-poll"})
     provider_response = {"status": "succeeded", "analyzeResult": {"content": "native"}}
     response = build_ocr_response(
         {
@@ -39,9 +41,13 @@ def test_rust_ocr_response_retains_provider_native_response():
             "usage_info": {"pages_processed": 0},
             "object": "ocr",
             "provider_native_response": provider_response,
-        }
+        },
+        headers,
+        200,
     )
 
+    assert response._hidden_params["response_headers"] is headers
+    assert response._hidden_params["status_code"] == 200
     assert response.get_provider_native_response() == provider_response
     assert response.model_dump().get("provider_native_response") is None
 

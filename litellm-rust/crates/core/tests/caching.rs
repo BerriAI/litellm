@@ -32,11 +32,18 @@ use litellm_host::{
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
+fn envelope<T>(body: T) -> litellm_http::response::Response<T> {
+    litellm_http::response::Response {
+        head: litellm_http::response::ResponseHead::cached(),
+        body,
+    }
+}
+
 struct TestRoute;
 
 impl Protocol for TestRoute {
     type Request = Value;
-    type Response = Value;
+    type Response = litellm_http::response::Response<Value>;
     type Error = RouteError;
     type HostCall = Infallible;
     type Chunk = Bytes;
@@ -44,6 +51,7 @@ impl Protocol for TestRoute {
 }
 
 impl Cachable for TestRoute {
+    type Body = Value;
     const SURFACE: &'static str = "test";
 }
 
@@ -69,6 +77,48 @@ fn cache_request(input: Value) -> CacheRequest {
         },
         input,
     }
+}
+
+#[rstest]
+#[tokio::test]
+async fn cached_responses_do_not_reuse_provider_attempt_headers(
+    cache: Arc<dyn ResponseCacheService>,
+) {
+    let calls = AtomicUsize::new(0);
+    let mut heads = Vec::new();
+    for _ in 0..2 {
+        let response = execute_unary::<UnaryTestRoute, _, _>(
+            cache_request(json!({"input": "cache metadata"})),
+            Some(cache.clone()),
+            Some(CacheOptions::new(CacheScope::Shared)),
+            &(),
+            None,
+            || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(litellm_http::response::Response {
+                    head: litellm_http::response::ResponseHead {
+                        status: reqwest::StatusCode::CREATED,
+                        headers: [(
+                            reqwest::header::HeaderName::from_static("request-id"),
+                            "original-attempt".parse().unwrap(),
+                        )]
+                        .into_iter()
+                        .collect(),
+                    },
+                    body: json!({"result": "same body"}),
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.body, json!({"result": "same body"}));
+        heads.push(response.head);
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(heads[0].status, reqwest::StatusCode::CREATED);
+    assert_eq!(heads[0].headers["request-id"], "original-attempt");
+    assert_eq!(heads[1].status, reqwest::StatusCode::OK);
+    assert!(heads[1].headers.is_empty());
 }
 
 #[fixture]
@@ -102,9 +152,9 @@ async fn call(
         &(),
         None,
         || async {
-            Ok(CallOutput::Complete(
+            Ok(CallOutput::Complete(envelope(
                 json!({"call": calls.fetch_add(1, Ordering::SeqCst)}),
-            ))
+            )))
         },
     )
     .await
@@ -112,7 +162,7 @@ async fn call(
     let CallOutput::Complete(response) = output else {
         panic!("expected a response");
     };
-    response
+    response.body
 }
 
 #[rstest]
@@ -427,7 +477,7 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
             None,
             || async {
                 calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ResponsesApiResponse {
+                Ok(envelope(ResponsesApiResponse {
                     id: "fresh-response".into(),
                     model: "test".into(),
                     output: vec![
@@ -436,13 +486,13 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
                     extra: [("status".into(), json!("completed"))]
                         .into_iter()
                         .collect(),
-                })
+                }))
             },
         )
         .await
         .unwrap();
-        assert_eq!(response.id, "fresh-response");
-        assert_eq!(response.output[0]["content"][0]["text"], "fresh");
+        assert_eq!(response.body.id, "fresh-response");
+        assert_eq!(response.body.output[0]["content"][0]["text"], "fresh");
     }
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
@@ -487,18 +537,18 @@ async fn messages_cache_identity_includes_provider_native_parameters(
                 None,
                 || async {
                     let call = calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(Box::new(serde_json::from_value::<MessagesResponse>(json!({
+                    Ok(envelope(Box::new(serde_json::from_value::<MessagesResponse>(json!({
                     "id":call.to_string(), "type":"message", "role":"assistant", "model":"test",
                     "content":[{"type":"text","text":format!("answer {call}")}],
                     "stop_reason":"end_turn", "stop_sequence":null
-                })).unwrap()))
+                })).unwrap())))
                 },
             )
             .await
             .unwrap();
-        assert_eq!(response.id, expected_call.to_string());
+        assert_eq!(response.body.id, expected_call.to_string());
         assert_eq!(
-            response.content[0]["text"],
+            response.body.content[0]["text"],
             format!("answer {expected_call}")
         );
     }
@@ -670,6 +720,7 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
             || async { panic!("a cache hit must not call the provider") },
         )
         .await
+        .map(|response| response.body)
     };
     if reject {
         assert!(matches!(
@@ -692,7 +743,7 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
 
 impl Protocol for UnaryTestRoute {
     type Request = Value;
-    type Response = Value;
+    type Response = litellm_http::response::Response<Value>;
     type Error = RouteError;
     type HostCall = Infallible;
     type Chunk = Infallible;
@@ -700,6 +751,7 @@ impl Protocol for UnaryTestRoute {
 }
 
 impl Cachable for UnaryTestRoute {
+    type Body = Value;
     const SURFACE: &'static str = "unary-test";
 }
 
@@ -715,10 +767,15 @@ async fn unary_call(
         options,
         &(),
         None,
-        || async { Ok(json!({"call":calls.fetch_add(1, Ordering::SeqCst)})) },
+        || async {
+            Ok(envelope(
+                json!({"call":calls.fetch_add(1, Ordering::SeqCst)}),
+            ))
+        },
     )
     .await
     .unwrap()
+    .body
 }
 
 #[rstest]
@@ -855,17 +912,17 @@ async fn responses_cache_only_reuses_completed_responses(
             None,
             || async {
                 let call = calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ResponsesApiResponse {
+                Ok(envelope(ResponsesApiResponse {
                     id: call.to_string(),
                     model: "test".into(),
                     output: Vec::new(),
                     extra: [("status".into(), json!(status))].into_iter().collect(),
-                })
+                }))
             },
         )
         .await
         .unwrap();
-        assert_eq!(response.extra.get("status"), Some(&json!(status)));
+        assert_eq!(response.body.extra.get("status"), Some(&json!(status)));
     }
     assert_eq!(calls.load(Ordering::SeqCst), expected_calls);
 }
@@ -923,7 +980,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
             .await
             .unwrap();
         assert_eq!(
-            serde_json::to_value(response).unwrap()["usage"]["total_tokens"],
+            serde_json::to_value(response.body).unwrap()["usage"]["total_tokens"],
             15
         );
     }
@@ -1201,7 +1258,7 @@ async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheSer
             api_key:None,api_base:Some(&upstream.uri()),custom_llm_provider:None,extra_headers:None,timeout:None,
         }, &hooks, None).await.unwrap();
         assert_eq!(
-            serde_json::to_value(response).unwrap()["usage"]["total_tokens"],
+            serde_json::to_value(response.body).unwrap()["usage"]["total_tokens"],
             5
         );
     }

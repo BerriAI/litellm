@@ -24,12 +24,15 @@ async fn responses_aliases_run_the_core_route(
         json!({"type": "response.completed", "response": completed})
     );
     let template = if stream {
-        ResponseTemplate::new(200)
+        ResponseTemplate::new(201)
             .insert_header("content-type", "text/event-stream")
             .set_body_string(&events)
     } else {
-        ResponseTemplate::new(200).set_body_json(&completed)
-    };
+        ResponseTemplate::new(201).set_body_json(&completed)
+    }
+    .append_header("x-repeat", "first")
+    .append_header("x-repeat", "second")
+    .insert_header("alt-svc", "origin-only");
     Mock::given(method("POST"))
         .and(path("/responses"))
         .and(header("authorization", "Bearer test-key"))
@@ -39,7 +42,18 @@ async fn responses_aliases_run_the_core_route(
         .mount(&upstream).await;
     let response = support::post(support::app("openai/test-model", &upstream.uri()), route,
         json!({"model": "public/model", "input": "hello", "stream": stream, "metadata": {"caller": "test"}})).await;
-    assert_eq!(response.status(), 200);
+    assert_eq!(response.status(), 201);
+    assert_eq!(
+        response
+            .headers()
+            .get_all("llm_provider-x-repeat")
+            .iter()
+            .map(|value| value.as_bytes())
+            .collect::<Vec<_>>(),
+        [b"first".as_slice(), b"second".as_slice()]
+    );
+    assert_eq!(response.headers()["llm_provider-alt-svc"], "origin-only");
+    assert!(!response.headers().contains_key("alt-svc"));
     if stream {
         assert_eq!(response.headers()["content-type"], "text/event-stream");
         assert_eq!(
@@ -78,7 +92,10 @@ async fn responses_preserve_upstream_errors_without_retry() {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(
-            ResponseTemplate::new(429).set_body_json(json!({"error": {"message": "slow down"}})),
+            ResponseTemplate::new(429)
+                .set_body_json(json!({"error": {"message": "slow down"}}))
+                .insert_header("request-id", "failed-attempt")
+                .insert_header("retry-after", "17"),
         )
         .expect(1)
         .mount(&upstream)
@@ -90,6 +107,11 @@ async fn responses_preserve_upstream_errors_without_retry() {
     )
     .await;
     assert_eq!(response.status(), 429);
+    assert_eq!(
+        response.headers()["llm_provider-request-id"],
+        "failed-attempt"
+    );
+    assert_eq!(response.headers()["llm_provider-retry-after"], "17");
     assert!(
         support::json(response).await["error"]["message"]
             .as_str()

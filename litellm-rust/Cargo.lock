@@ -3964,6 +3964,7 @@ dependencies = [
  "futures-util",
  "litellm-auth",
  "litellm-coroutine",
+ "litellm-http",
  "rstest",
  "serde_json",
  "tokio",

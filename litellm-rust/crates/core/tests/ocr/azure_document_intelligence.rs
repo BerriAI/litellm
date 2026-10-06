@@ -1,7 +1,4 @@
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::time::Duration;
 
 use litellm_host::lifecycle::CallEvent;
 use litellm_host::lifecycle::ExecutionEvent;
@@ -178,6 +175,7 @@ async fn native_format_normalizes_pages_and_keeps_the_provider_response() {
     );
 }
 
+#[rstest]
 #[tokio::test]
 async fn client_settings_choose_the_api_version_and_the_inch_to_pixel_dpi() {
     let upstream = upstream([json_response(json!({
@@ -204,7 +202,7 @@ async fn client_settings_choose_the_api_version_and_the_inch_to_pixel_dpi() {
         Some("2099-01-01")
     );
     assert_eq!(
-        serde_json::to_value(&result.pages[0].dimensions).unwrap(),
+        serde_json::to_value(&result.body.pages[0].dimensions).unwrap(),
         json!({"width": 612, "height": 792, "dpi": 72})
     );
 }
@@ -268,33 +266,48 @@ async fn polling_forwards_bearer_credentials() {
     );
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn response_received_fires_for_the_submission_and_the_completed_poll() {
     let upstream = MockServer::start().await;
     respond_in_order(
         &upstream,
         [
-            accepted(&upstream, json!({"submitted": true})),
-            json_response(json!({"status": "succeeded"})),
+            accepted(&upstream, json!({"submitted": true}))
+                .insert_header("request-id", "submission"),
+            json_response(json!({"status": "succeeded"}))
+                .insert_header("request-id", "completed-poll"),
         ],
     )
     .await;
-    let observed = Arc::new(Mutex::new(Vec::new()));
-    let recorder = observed.clone();
-    let host =
-        LocalOcrHost::new(read_request(&upstream.uri(), json!({}))).with_observer(move |event| {
-            if let CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) = event {
-                recorder.lock().unwrap().push(raw.body.clone());
-            }
-        });
-
-    perform_with(host).await.unwrap();
+    let host = LocalOcrHost::new(read_request(&upstream.uri(), json!({})));
+    let result = litellm_host_native::in_process::run_hosted(
+        ocr_route().machine(host.request().unwrap(), None),
+        host.runtime(),
+    )
+    .await
+    .unwrap();
+    let litellm_host::call::HostedCompletion::Complete(response) = result else {
+        panic!("expected a completed OCR response");
+    };
 
     assert_eq!(received(&upstream).await.len(), 2);
-    assert_eq!(
-        *observed.lock().unwrap(),
-        [r#"{"submitted":true}"#, r#"{"status":"succeeded"}"#]
-    );
+    let events = host.events.0.lock().unwrap();
+    let raw = events
+        .iter()
+        .filter_map(|event| match event {
+            CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => Some(raw),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(raw.len(), 2);
+    assert_eq!(raw[0].head.status.as_u16(), 202);
+    assert_eq!(raw[0].head.headers["request-id"], "submission");
+    assert_eq!(raw[0].body, r#"{"submitted":true}"#);
+    assert_eq!(raw[1].head.status.as_u16(), 200);
+    assert_eq!(raw[1].head.headers["request-id"], "completed-poll");
+    assert_eq!(raw[1].body, r#"{"status":"succeeded"}"#);
+    assert_eq!(response.head, raw[1].head);
 }
 
 #[tokio::test]

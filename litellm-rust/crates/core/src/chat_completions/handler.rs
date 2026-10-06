@@ -25,7 +25,7 @@ pub(super) async fn execute(
     cache_options: Option<litellm_cache_response::CachePolicy>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
-) -> Result<ChatCompletionsResponse, Error> {
+) -> Result<litellm_http::response::Response<ChatCompletionsResponse>, Error> {
     let ProviderChatCompletionsRequest {
         model,
         custom_llm_provider,
@@ -91,7 +91,8 @@ pub(super) async fn execute(
                 }
             })?;
 
-            let status = response.status();
+            let head = litellm_http::response::ResponseHead::from_response(&response);
+            let status = head.status;
             let text = response.text().await.map_err(|err| {
                 Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
             })?;
@@ -99,10 +100,14 @@ pub(super) async fn execute(
             if !status.is_success() {
                 return Err(Error::Transport(litellm_http::transport::Error::Http {
                     status: status.as_u16(),
+                    headers: head.headers.into(),
                     body: truncate_error_body(&text),
                 }));
             }
-            let raw = RawResponse { body: text.clone() };
+            let raw = RawResponse {
+                head: head.clone(),
+                body: text.clone(),
+            };
             if let Some(observers) = observers {
                 observers.emit(litellm_host::lifecycle::CallEvent::Execution(
                     ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
@@ -123,6 +128,7 @@ pub(super) async fn execute(
                 .transform_response(&model, ProviderChatResponseData { body })
                 .map_err(Error::from)
                 .map_err(as_response_error)
+                .map(|body| litellm_http::response::Response { head, body })
         },
     )
     .await
@@ -321,6 +327,7 @@ mod tests {
             );
         }
         let upstream = Error::Transport(litellm_http::transport::Error::Http {
+            headers: Default::default(),
             status: 500,
             body: "boom".to_string(),
         });

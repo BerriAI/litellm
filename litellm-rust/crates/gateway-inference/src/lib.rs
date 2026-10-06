@@ -10,6 +10,7 @@ mod error;
 pub mod messages;
 mod ocr;
 mod request;
+mod response;
 mod responses;
 
 use std::sync::Arc;

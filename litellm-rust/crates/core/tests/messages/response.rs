@@ -47,7 +47,7 @@ async fn calls_defer_execution_until_polled(
         panic!("expected a completed message");
     };
     assert_eq!(
-        response.content,
+        response.body.content,
         message_body()["content"].as_array().unwrap().as_slice()
     );
     assert!(secrets.requested().contains(&"ANTHROPIC_API_KEY".into()));
@@ -97,15 +97,25 @@ async fn calls_defer_execution_until_polled(
 #[case::azure_ai("azure_ai")]
 #[tokio::test]
 async fn the_provider_message_is_returned(call: MessagesCall, #[case] provider: &str) {
-    let upstream = upstream([message_response()]).await;
+    let upstream = upstream([ResponseTemplate::new(201)
+        .set_body_json(message_body())
+        .insert_header("request-id", "buffered-messages")])
+    .await;
 
-    let message = run_message(MessagesCall {
+    let output = run(MessagesCall {
         custom_llm_provider: Some(provider.into()),
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
         ..call
     })
-    .await;
+    .await
+    .unwrap();
+    let MessagesOutput::Complete(response) = output else {
+        panic!("expected a buffered response");
+    };
+    assert_eq!(response.head.status.as_u16(), 201);
+    assert_eq!(response.head.headers["request-id"], "buffered-messages");
+    let message = response.body;
 
     assert_eq!(message.id, "msg_1");
     assert_eq!(message.content, [json!({"type": "text", "text": "hi"})]);
@@ -162,7 +172,12 @@ async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
     .await
     .expect_err("upstream error propagates");
 
-    let Error::Transport(TransportError::Http { status, body }) = error else {
+    let Error::Transport(TransportError::Http {
+        headers: _,
+        status,
+        body,
+    }) = error
+    else {
         panic!("{error:?}");
     };
     assert_eq!(status, 400);
@@ -183,12 +198,17 @@ async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall
     .await
     .expect_err("upstream error propagates");
 
+    let Error::Transport(litellm_http::transport::Error::Http {
+        status: actual_status,
+        body: actual_body,
+        ..
+    }) = error
+    else {
+        panic!("expected an upstream HTTP error");
+    };
     assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status: 500,
-            body: format!("{}... (truncated)", &long[..256])
-        })
+        (actual_status, actual_body),
+        (500, format!("{}... (truncated)", &long[..256]))
     );
 }
 
@@ -211,12 +231,17 @@ async fn an_upstream_error_keeps_its_status_and_body(call: MessagesCall, #[case]
     .await
     .expect_err("upstream error propagates");
 
+    let Error::Transport(litellm_http::transport::Error::Http {
+        status: actual_status,
+        body: actual_body,
+        ..
+    }) = error
+    else {
+        panic!("expected an upstream HTTP error");
+    };
     assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status,
-            body: "upstream said no".into()
-        })
+        (actual_status, actual_body),
+        (status, "upstream said no".into())
     );
 }
 
@@ -289,7 +314,7 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
     let MessagesCallResponse::Complete(message) = response else {
         panic!("a non-streaming request returns a message");
     };
-    assert_eq!(message.id, "msg_1");
+    assert_eq!(message.body.id, "msg_1");
     let sent = only_request(&upstream).await;
     assert_eq!(sent.header("x-api-key"), Some("sk-ant"));
     assert_eq!(sent.header("user-agent"), Some("host-owned/1"));
@@ -379,7 +404,7 @@ async fn route_uses_injected_dependencies_and_optional_cache(
             panic!("expected a completed message");
         };
         assert_eq!(
-            response.content,
+            response.body.content,
             message_body()["content"].as_array().unwrap().as_slice()
         );
     }
@@ -450,7 +475,7 @@ async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) 
         else {
             panic!("expected a completed message");
         };
-        assert_eq!(response.id, expected["id"].as_str().unwrap());
+        assert_eq!(response.body.id, expected["id"].as_str().unwrap());
     }
     assert_eq!(received(&upstream).await.len(), 2);
 }

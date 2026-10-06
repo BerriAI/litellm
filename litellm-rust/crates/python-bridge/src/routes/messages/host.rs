@@ -1,10 +1,10 @@
 use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
+use litellm_http::response::ResponseHead;
 
 use bytes::Bytes;
 use litellm_core::messages::{
-    Error, MessagesCall, MessagesShaping, messages_body,
-    route::{Messages, MessagesStreamHead},
+    Error, MessagesCall, MessagesShaping, messages_body, route::Messages,
 };
 use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
@@ -18,7 +18,7 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::{RustUpstreamError, route_error_to_pyerr},
+    errors::route_error_to_pyerr,
     marshal::{optional_timeout, python_timeout_seconds},
 };
 
@@ -64,13 +64,11 @@ fn merge_headers(
 
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
     match error {
-        Error::Transport(TransportError::Http { status, body }) => {
-            let error = RustUpstreamError::new_err((status, body));
-            error
-                .value(py)
-                .setattr("headers", Vec::<(String, String)>::new())?;
-            Ok(error)
-        }
+        Error::Transport(TransportError::Http {
+            status,
+            body,
+            headers,
+        }) => super::super::transport::upstream_error(py, status, body, &headers),
         Error::InvalidRequest(message) => {
             let error = PyValueError::new_err(message.to_string());
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
@@ -247,22 +245,27 @@ impl PythonBinding for MessagesPythonHost {
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: Box<litellm_llms_types::formats::messages::MessagesResponse>,
+        response: litellm_http::response::Response<
+            Box<litellm_llms_types::formats::messages::MessagesResponse>,
+        >,
     ) -> PyResult<Py<PyAny>> {
         py.import(ROUTE_HOST_MODULE)?
             .getattr("response")?
-            .call1((to_py(py, response.as_ref())?,))
+            .call1((
+                to_py(py, response.body.as_ref())?,
+                super::super::transport::headers(py, &response.head.headers)?,
+                response.head.status.as_u16(),
+            ))
             .map(Bound::unbind)
     }
 
-    fn encode_stream_head(
-        &mut self,
-        py: Python<'_>,
-        head: MessagesStreamHead,
-    ) -> PyResult<Py<PyAny>> {
+    fn encode_stream_head(&mut self, py: Python<'_>, head: ResponseHead) -> PyResult<Py<PyAny>> {
         py.import(ROUTE_HOST_MODULE)?
             .getattr("stream_hidden_params")?
-            .call1((to_py(py, &head.headers)?,))
+            .call1((
+                super::super::transport::headers(py, &head.headers)?,
+                head.status.as_u16(),
+            ))
             .map(Bound::unbind)
     }
 
@@ -363,7 +366,7 @@ mod tests {
     #[case::missing_field(Error::MissingField("max_tokens"), true)]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
     #[case::upstream_failure(
-        Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),
+        Error::Transport(TransportError::Http { headers: Default::default(), status: 400, body: "bad".into() }),
         false,
     )]
     fn only_request_rejections_carry_the_request_error_marker(

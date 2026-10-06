@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::{RustUpstreamError, route_error_to_pyerr},
+    errors::route_error_to_pyerr,
     marshal::{RouteOptions, optional_timeout, python_timeout_seconds},
 };
 
@@ -112,10 +112,18 @@ impl InferenceHost {
             .collect()
     }
 
-    pub fn response(&self, py: Python<'_>, response: &impl Serialize) -> PyResult<Py<PyAny>> {
+    pub fn response(
+        &self,
+        py: Python<'_>,
+        response: &litellm_http::response::Response<impl Serialize>,
+    ) -> PyResult<Py<PyAny>> {
         py.import(self.module)?
             .getattr("response")?
-            .call1((to_py(py, response)?,))
+            .call1((
+                to_py(py, &response.body)?,
+                super::transport::headers(py, &response.head.headers)?,
+                response.head.status.as_u16(),
+            ))
             .map(Bound::unbind)
     }
 
@@ -126,13 +134,11 @@ impl InferenceHost {
             return Ok(original);
         }
         let native = match error {
-            RouteError::Transport(TransportError::Http { status, body }) => {
-                let error = RustUpstreamError::new_err((status, body));
-                error
-                    .value(py)
-                    .setattr("headers", Vec::<(String, String)>::new())?;
-                error
-            }
+            RouteError::Transport(TransportError::Http {
+                status,
+                body,
+                headers,
+            }) => super::transport::upstream_error(py, status, body, &headers)?,
             other => route_error_to_pyerr(other),
         };
         let mapped = py

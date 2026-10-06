@@ -356,12 +356,15 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         model: &str,
         raw_response: reqwest::Response,
         context: OcrResponseContext<'_>,
-    ) -> impl Future<Output = Result<LiteLLMOcrResponse, Error>> + Send {
+    ) -> impl Future<Output = Result<litellm_http::response::Response<LiteLLMOcrResponse>, Error>> + Send
+    {
         async move {
+            let head = litellm_http::response::ResponseHead::from_response(&raw_response);
             let bytes =
                 read_response_bytes(raw_response, context.connection.max_response_bytes).await?;
-            context.hooks.response_received(&bytes).await?;
+            context.hooks.response_received(&head, &bytes).await?;
             self.transform_ocr_response(model, &bytes, context.request_format)
+                .map(|body| litellm_http::response::Response { head, body })
         }
     }
 
@@ -369,12 +372,12 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         &self,
         error_message: String,
         status_code: u16,
-        headers: Vec<(String, String)>,
+        headers: reqwest::header::HeaderMap,
     ) -> Error {
         Error::Provider {
             status: status_code,
             body: error_message,
-            headers,
+            headers: headers.into(),
         }
     }
 

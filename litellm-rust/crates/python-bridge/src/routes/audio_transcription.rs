@@ -1,6 +1,6 @@
-use crate::execution::{run_async, run_sync};
+use crate::execution::{run_async_value, run_sync_value};
 use litellm_core::audio_transcription::{
-    AudioTranscriptionRoute, Error, types::AudioTranscriptionRequest,
+    AudioTranscriptionRoute, types::AudioTranscriptionRequest,
 };
 use litellm_host_python::from_py_argument;
 use pyo3::{prelude::*, types::PyDict};
@@ -17,7 +17,7 @@ async fn execute(
     audio: Value,
     optional_params: Map<String, Value>,
     options: RouteOptions,
-) -> Result<Value, Error> {
+) -> PyResult<Py<PyAny>> {
     let RouteOptions {
         model,
         api_key,
@@ -26,18 +26,24 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
-    AudioTranscriptionRoute::new(http?, crate::http::resources().auth.clone(), secrets)
-        .execute(AudioTranscriptionRequest {
-            model: &model,
-            audio,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-        })
-        .await
+    AudioTranscriptionRoute::new(
+        http.map_err(|error| route_error_to_pyerr(error.into()))?,
+        crate::http::resources().auth.clone(),
+        secrets,
+    )
+    .execute(AudioTranscriptionRequest {
+        model: &model,
+        audio,
+        api_key: api_key.as_deref(),
+        api_base: api_base.as_deref(),
+        custom_llm_provider: custom_llm_provider.as_deref(),
+        extra_headers,
+        optional_params,
+        timeout,
+    })
+    .await
+    .map_err(route_error_to_pyerr)
+    .and_then(|response| Python::attach(|py| super::transport::payload(py, response)))
 }
 
 #[pyfunction]
@@ -67,7 +73,7 @@ pub(crate) fn transcription(
     };
     let http = crate::http::provider_client(py, &PyDict::new(py), false)?;
     let secrets = crate::secrets::source(py)?;
-    run_sync(
+    run_sync_value(
         py,
         execute(
             http,
@@ -76,7 +82,6 @@ pub(crate) fn transcription(
             optional_params.unwrap_or_default(),
             options,
         ),
-        route_error_to_pyerr,
     )
 }
 
@@ -107,7 +112,7 @@ pub(crate) fn atranscription<'py>(
     };
     let http = crate::http::provider_client(py, &PyDict::new(py), true)?;
     let secrets = crate::secrets::source(py)?;
-    run_async(
+    run_async_value(
         py,
         execute(
             http,
@@ -116,6 +121,5 @@ pub(crate) fn atranscription<'py>(
             optional_params.unwrap_or_default(),
             options,
         ),
-        route_error_to_pyerr,
     )
 }

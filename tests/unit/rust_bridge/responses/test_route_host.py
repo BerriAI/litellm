@@ -1,16 +1,18 @@
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
 import litellm
-from litellm.rust_bridge.responses.route_host import arguments, connection_defaults, response
 from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
+from litellm.rust_bridge.responses.route_host import arguments, connection_defaults, response
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 
 def test_response_validates_into_the_public_responses_model() -> None:
+    headers: Final = httpx.Headers([(b"x-repeat", b"first"), (b"x-repeat", b"second")])
     built: Final = response(
         MappingProxyType(
             {
@@ -29,12 +31,17 @@ def test_response_validates_into_the_public_responses_model() -> None:
                     }
                 ],
             }
-        )
+        ),
+        headers,
+        201,
     )
 
     assert isinstance(built, ResponsesAPIResponse)
     assert built.id == "resp_native"
     assert built.output[0].content[0].text == "native"
+
+    assert built._hidden_params["response_headers"] is headers
+    assert built._hidden_params["status_code"] == 201
 
 
 def test_response_rejects_a_payload_missing_required_fields() -> None:
