@@ -17,7 +17,7 @@ def apply_routing_group_priority(
     return prioritized
 
 
-VALID_ROUTING_STRATEGIES: Final = ("simple-shuffle", "lar1", *(s.value for s in RoutingStrategy))
+VALID_ROUTING_STRATEGIES: Final = ("simple-shuffle", *(s.value for s in RoutingStrategy))
 
 
 def validate_routing_strategy(routing_strategy: RoutingStrategy | str | None) -> None:
