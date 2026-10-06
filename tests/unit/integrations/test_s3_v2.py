@@ -6,8 +6,9 @@ import sys
 import textwrap
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
+from contextvars import Context
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -1231,6 +1232,33 @@ async def test_strip_base64_recursive_redaction():
 # --------------------------------------------------------------
 # Shared fixture that silences asyncio.create_task during tests
 # --------------------------------------------------------------
+@pytest_asyncio.fixture(loop_scope="function")
+async def cancel_s3_periodic_flush_tasks(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[None]:
+    periodic_flush_tasks: list[asyncio.Task[object]] = []
+    original_create_task = asyncio.create_task
+
+    def track_create_task(
+        coro: Coroutine[object, object, object],
+        *,
+        name: str | None = None,
+        context: Context | None = None,
+    ) -> asyncio.Task[object]:
+        if context is None:
+            task = original_create_task(coro, name=name)
+        else:
+            task = original_create_task(coro, name=name, context=context)
+        if coro.__qualname__.endswith("periodic_flush"):
+            periodic_flush_tasks.append(task)
+        return task
+
+    monkeypatch.setattr(asyncio, "create_task", track_create_task)
+    yield
+    for task in periodic_flush_tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*periodic_flush_tasks, return_exceptions=True)
+
+
 @pytest.fixture(autouse=True)
 def patch_asyncio_create_task(request):
     """Prevent 'no running event loop' errors when S3Logger calls asyncio.create_task()."""
@@ -5301,6 +5329,7 @@ def fake_s3_client(monkeypatch):
     litellm.callbacks = []
 
 @pytest.mark.usefixtures(
+    "cancel_s3_periodic_flush_tasks",
     "fake_s3_client",
     "_vcr_outcome_gate",
     "drain_logging_worker",
@@ -5357,6 +5386,7 @@ async def test_basic_s3_logging(sync_mode, streaming):
         s3.delete_object(Bucket="load-testing-oct", Key=key)
 
 @pytest.mark.usefixtures(
+    "cancel_s3_periodic_flush_tasks",
     "fake_s3_client",
     "_vcr_outcome_gate",
     "drain_logging_worker",
@@ -5409,6 +5439,7 @@ async def test_basic_s3_v2_logging(streaming):
     )
 
 @pytest.mark.usefixtures(
+    "cancel_s3_periodic_flush_tasks",
     "fake_s3_client",
     "_vcr_outcome_gate",
     "drain_logging_worker",
