@@ -3,6 +3,7 @@ import re
 import signal
 import time
 from collections.abc import Callable, Coroutine, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -258,6 +259,14 @@ def _held_provider(release: Event, held: SimpleQueue[str]) -> Callable[[Request]
     return respond
 
 
+@contextmanager
+def _released_on_exit(release: Event) -> Iterator[None]:
+    try:
+        yield
+    finally:
+        release.set()
+
+
 def _open_upstream_connections(pid: int, upstream: str) -> int:
     port: Final = urlsplit(upstream).port
     return sum(
@@ -282,6 +291,7 @@ async def test_a_killed_worker_keeps_its_upload_slots_used_and_the_sibling_servi
         with (
             owned_proxy_process(chaos.candidate, tmp_path, environment, config=config, workers=WORKERS) as owned,
             owned.gateway.scenario() as scenario,
+            _released_on_exit(release),
         ):
             candidate: Final = owned.gateway
             key: Final = _key(scenario, **{UPLOADS: HELD_UPLOADS})
