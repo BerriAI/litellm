@@ -14,7 +14,7 @@ import { InspectorTable } from "@/components/shared/InspectorTable";
 import { Button } from "@/components/ui/button";
 import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import { FINDING_PANEL_WIDTH_KEY } from "../storage";
-import { StateMessage } from "../ui/StateMessage";
+import { StateMessage } from "@/components/shared/StateMessage";
 import { useDatasetRoute } from "../route";
 import { useDatasets } from "./api";
 import { DatasetDetail } from "./DatasetDetail";
