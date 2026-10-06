@@ -1060,22 +1060,21 @@ def test_fix_enum_types():
         },
     }
 
-    # Expected output: String enums kept, integer enums preserved with format: enum and string values, boolean enums removed
     expected_output = {
         "type": "object",
         "properties": {
             "truncateMode": {
-                "enum": ["auto", "none", "start", "end"],  # Kept - string type
+                "enum": ["auto", "none", "start", "end"],
                 "type": "string",
                 "description": "How to truncate content",
             },
-            "maxLength": {  # integer enum converted to format: enum with string values
+            "maxLength": {
                 "type": "integer",
                 "format": "enum",
                 "enum": ["100", "200", "500"],
                 "description": "Maximum length",
             },
-            "enabled": {  # enum removed for boolean
+            "enabled": {
                 "type": "boolean",
                 "description": "Whether feature is enabled",
             },
@@ -1083,7 +1082,7 @@ def test_fix_enum_types():
                 "type": "object",
                 "properties": {
                     "innerEnum": {
-                        "enum": ["a", "b", "c"],  # Kept - string type
+                        "enum": ["a", "b", "c"],
                         "type": "string",
                     },
                     "innerNonStringEnum": {
@@ -1098,7 +1097,7 @@ def test_fix_enum_types():
                     {
                         "type": "string",
                         "enum": ["option1", "option2"],
-                    },  # Kept - has string type
+                    },
                     {
                         "type": "integer",
                         "format": "enum",
@@ -1109,14 +1108,13 @@ def test_fix_enum_types():
         },
     }
 
-    # Apply the transformation
     _fix_enum_types(input_schema)
-
-    # Verify the transformation
     assert input_schema == expected_output
 
-    # Verify specific transformations:
-    # 1. String enums are preserved
+    # Repeating the transformation on reused schema dictionaries must be idempotent
+    _fix_enum_types(input_schema)
+    assert input_schema == expected_output
+
     assert "enum" in input_schema["properties"]["truncateMode"]
     assert input_schema["properties"]["truncateMode"]["enum"] == [
         "auto",
@@ -1124,15 +1122,12 @@ def test_fix_enum_types():
         "start",
         "end",
     ]
-
     assert "enum" in input_schema["properties"]["nested"]["properties"]["innerEnum"]
     assert input_schema["properties"]["nested"]["properties"]["innerEnum"]["enum"] == [
         "a",
         "b",
         "c",
     ]
-
-    # 2. Integer enums are converted to format: enum with stringified values
     assert input_schema["properties"]["maxLength"]["format"] == "enum"
     assert input_schema["properties"]["maxLength"]["enum"] == ["100", "200", "500"]
     assert (
@@ -1144,18 +1139,13 @@ def test_fix_enum_types():
         "2",
         "3",
     ]
-
-    # 3. Boolean/other non-string/non-integer enums are removed
     assert "enum" not in input_schema["properties"]["enabled"]
-
-    # 4. anyOf with string/integer types preserves enums appropriately
     assert "enum" in input_schema["properties"]["anyOfField"]["anyOf"][0]
     assert input_schema["properties"]["anyOfField"]["anyOf"][1]["format"] == "enum"
     assert input_schema["properties"]["anyOfField"]["anyOf"][1]["enum"] == ["1", "2", "3"]
-
-    # 5. Other properties preserved
     assert input_schema["properties"]["maxLength"]["type"] == "integer"
     assert input_schema["properties"]["enabled"]["type"] == "boolean"
+
 
 
 def test_get_token_url():

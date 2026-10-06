@@ -635,11 +635,11 @@ def _fix_enum_empty_strings(schema, depth=0):
 
 
 def _fix_enum_types(schema, depth=0):
-    """Remove `enum` fields when the schema type is not string.
+    """Adjust `enum` fields for Vertex / Gemini schema requirements.
 
-    Gemini / Vertex APIs only allow enums for string-typed fields. When an enum
-    is present on a non-string typed property (or when `anyOf` types do not
-    include a string type), remove the enum to avoid provider validation errors.
+    Gemini / Vertex APIs allow enums on string fields, and integer fields when
+    formatted with format: "enum" and stringified choices. Remove enums on other
+    types to avoid provider validation errors.
     """
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
@@ -647,15 +647,14 @@ def _fix_enum_types(schema, depth=0):
     if not isinstance(schema, dict):
         return
 
-    # If enum exists on string, keep it.
-    # If enum exists on integer, Gemini/Vertex supports it as format: "enum" with stringified values.
-    # Otherwise, drop enum to avoid provider validation errors.
     if "enum" in schema and isinstance(schema["enum"], list):
         schema_type: Final = schema.get("type")
         if isinstance(schema_type, str) and schema_type.lower() == "string":
             pass
         elif isinstance(schema_type, str) and schema_type.lower() == "integer" and all(
-            isinstance(v, int) and not isinstance(v, bool) for v in schema["enum"]
+            (isinstance(v, int) and not isinstance(v, bool))
+            or (isinstance(v, str) and v.lstrip("-").isdigit())
+            for v in schema["enum"]
         ):
             schema["format"] = "enum"
             schema["enum"] = [str(v) for v in schema["enum"]]
@@ -672,6 +671,7 @@ def _fix_enum_types(schema, depth=0):
 
             if not keep_enum:
                 schema.pop("enum", None)
+
 
     # Recurse into nested structures
     properties: Final = schema.get("properties", None)
