@@ -21,6 +21,14 @@ if TYPE_CHECKING:
 _VERTEX_HEADER_ONLY_BETAS: Final = frozenset({ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value})
 
 
+def _beta_names(value: object) -> frozenset[str]:
+    if isinstance(value, str):
+        return frozenset(beta.strip() for beta in value.split(",") if beta.strip())
+    if isinstance(value, list):
+        return frozenset(str(beta).strip() for beta in value if str(beta).strip())
+    return frozenset()
+
+
 class VertexAIError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
@@ -139,16 +147,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
             beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
 
         extra_headers: Final = optional_params.get("extra_headers") or {}
-        anthropic_beta_value: Final = extra_headers.get("anthropic-beta", "")
-        if isinstance(anthropic_beta_value, str) and anthropic_beta_value:
-            for beta in anthropic_beta_value.split(","):
-                beta = beta.strip()
-                if beta:
-                    beta_set.add(beta)
-        elif isinstance(anthropic_beta_value, list):
-            beta_set.update(anthropic_beta_value)
-
+        beta_set.update(_beta_names(extra_headers.get("anthropic-beta")))
         data.pop("extra_headers", None)
+        beta_set.update(_beta_names(data.pop("anthropic_beta", None)))
 
         body_betas: Final = beta_set - _VERTEX_HEADER_ONLY_BETAS
         if body_betas:

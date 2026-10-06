@@ -984,6 +984,29 @@ def test_vertex_ai_anthropic_compaction_keeps_the_betas_the_client_sent_as_heade
     assert "anthropic_beta" not in result
 
 
+def test_vertex_ai_anthropic_client_sent_body_compact_2026_09_04_moves_to_the_header(local_beta_headers_config):
+    """Vertex rejects `compact-2026-09-04` inside the body `anthropic_beta` field with 400 "Unexpected value(s)"
+    (live, 2026-10-05), so a client that opts in through that field still gets the beta as a header and keeps
+    its other betas in the body."""
+    headers = {}
+
+    result = VertexAIAnthropicConfig().transform_request(
+        model="claude-opus-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "max_tokens": 100,
+            "is_vertex_request": True,
+            "compaction": {"type": "summarize"},
+            "anthropic_beta": ["compact-2026-09-04", "interleaved-thinking-2025-05-14"],
+        },
+        litellm_params={},
+        headers=headers,
+    )
+
+    assert headers["anthropic-beta"].split(",").count("compact-2026-09-04") == 1
+    assert result["anthropic_beta"] == ["interleaved-thinking-2025-05-14"]
+
+
 _VERTEX_MESSAGE_RESPONSE: Final = {
     "id": "msg_vrtx_test",
     "type": "message",
