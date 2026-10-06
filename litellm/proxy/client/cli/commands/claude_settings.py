@@ -25,7 +25,7 @@ from typing import Final, TypeAlias
 import click
 from filelock import FileLock
 from packaging.version import InvalidVersion, Version
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm._version import version as litellm_version
 from litellm.litellm_core_utils.private_json import (
@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.private_json import (
     stage_private_json,
     write_private_bytes,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from . import statusline_script
 from .cmd_quoting import quote_for_cmd
@@ -159,7 +160,7 @@ class StartOn:
 ModelChoice: TypeAlias = KeepModel | UnpinModel | StartOn
 
 
-class OwnedValue(BaseModel):
+class OwnedValue(LiteLLMBaseModel):
     """What one key held at a moment in time; `present=False` is an absent key, not a null one."""
 
     model_config = ConfigDict(frozen=True)
@@ -168,7 +169,7 @@ class OwnedValue(BaseModel):
     value: JsonValue = None
 
 
-class ConfigureReceipt(BaseModel):
+class ConfigureReceipt(LiteLLMBaseModel):
     """What `lite configure claude` found and what it owns, keyed by dotted path (`env.X` or a top-level key).
 
     Ownership moves only by a write: `written` fingerprints the keys some configure changed, at the

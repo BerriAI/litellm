@@ -10,6 +10,7 @@ import { usePersistedColumnVisibility } from "@/components/shared/DataTable/useP
 import { InspectorTable, useInspectorTable } from "@/components/shared/InspectorTable";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/cva.config";
 import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation } from "@/utils/activityTimestamp";
 
 import { SpanIcon } from "../ui/SpanIcon";
@@ -27,6 +28,8 @@ interface AgentTracesTableProps {
   error: Error | null;
   hasMore: boolean;
   isFetching?: boolean;
+  /** Rows from the previous range shown while the new one loads: blurred, and never paged further. */
+  isPlaceholder?: boolean;
   onRetry?: () => void;
   onLoadMore: () => void;
   rangeEmpty?: boolean;
@@ -211,6 +214,8 @@ function EmptyRuns({ rangeEmpty, onSetUpTracing }: { rangeEmpty: boolean; onSetU
   );
 }
 
+const bodyClassName = (blurred?: boolean) => cn("transition-[filter]", blurred && "blur-[1.5px]");
+
 /** Devtool-dense runs list: one row per agent run, newest first. */
 export function AgentTracesTable({
   traces,
@@ -220,6 +225,7 @@ export function AgentTracesTable({
   error,
   hasMore,
   isFetching = false,
+  isPlaceholder,
   onRetry,
   onLoadMore,
   rangeEmpty = false,
@@ -227,7 +233,7 @@ export function AgentTracesTable({
 }: AgentTracesTableProps) {
   const settled = !isLoading && !error;
   const isEmpty = settled && !hasMore && traces.length === 0;
-  const canContinue = settled && hasMore;
+  const canContinue = settled && hasMore && !isPlaceholder;
   const autoContinue = canContinue && traces.length > 0;
   const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility("lens-traces");
   const tableOptions: TableOptions<TraceSummary> = {
@@ -247,6 +253,7 @@ export function AgentTracesTable({
         <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">
           <InspectorTable.Header />
           <InspectorTable.Body<TraceSummary>
+            className={bodyClassName(isPlaceholder)}
             rowHeight={() => ROW_HEIGHT}
             after={
               <>

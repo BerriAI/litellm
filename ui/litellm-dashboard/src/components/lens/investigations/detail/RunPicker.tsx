@@ -10,6 +10,7 @@ import type { Lens, Job } from "../../model/types";
 import { useRunRoute } from "../../route";
 
 import { money, when } from "../../model/format";
+import { runStatus } from "../../model/status";
 
 export interface RunPickerProps {
   readonly lens: Lens;
@@ -33,12 +34,12 @@ export function RunPicker({ lens, job }: RunPickerProps) {
         <option value="latest">Latest run</option>
         {job && outsideHistory && (
           <option value={batchId}>
-            {when(job.created_at)} · {job.status}
+            {when(job.created_at)} · {runStatus(job)}
           </option>
         )}
         {options.map((j) => (
           <option key={j.id} value={j.id}>
-            {when(j.created_at)} · {j.status}
+            {when(j.created_at)} · {runStatus(j)}
           </option>
         ))}
         <option value="all">All accumulated findings</option>
@@ -74,7 +75,7 @@ export function RunPicker({ lens, job }: RunPickerProps) {
               </div>
               <div className="flex justify-between gap-2">
                 <dt className="text-muted-foreground">Status</dt>
-                <dd className="capitalize">{job.status}</dd>
+                <dd>{runStatus(job)}</dd>
               </div>
             </dl>
           </PopoverContent>
