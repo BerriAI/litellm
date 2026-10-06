@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -10,16 +12,19 @@ from urllib.parse import urlsplit
 import httpx
 import openai
 import pytest
-from integration._support.client import Gateway, Scenario
+from integration._support.client import Gateway, Scenario, eventually, object_value
 from integration._support.process import owned_proxy
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai.types.responses import Response as ResponsesAPIResponse
 from pydantic import JsonValue, TypeAdapter
 
+from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
+
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-responses-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_PROXY_WORKERS: Final = max(1, int(os.environ.get("INTEGRATION_PROXY_WORKERS", "1")))
 _ALIASES: Final = ("/v1", "", "/openai/v1")
 _DISABLE_HINT: Final = (
     "To disable this security feature, set general_settings::disable_responses_id_security to True "
@@ -36,6 +41,21 @@ _UNMANAGED_DETAIL: Final = (
     "To let keys address responses this proxy did not issue, set "
     "general_settings::allow_unmanaged_response_ids to True in the config.yaml file."
 )
+
+
+def _deployments_in_group(gateway: Gateway, group: str) -> int:
+    entries: Final = gateway.get("/model/info")["data"]
+    assert isinstance(entries, list), entries
+    return sum(object_value(entry).get("model_name") == group for entry in entries)
+
+
+def _wait_for_workers(gateway: Gateway, group: str, deployments: int) -> None:
+    ready_after: Final = time.monotonic() + (0 if _PROXY_WORKERS == 1 else PROXY_CONFIG_RELOAD_INTERVAL_SECONDS + 1)
+    eventually(
+        lambda: (_deployments_in_group(gateway, group), time.monotonic()),
+        lambda observation: observation[0] == deployments and observation[1] >= ready_after,
+        seconds=30 if _PROXY_WORKERS == 1 else PROXY_CONFIG_RELOAD_INTERVAL_SECONDS * 2 + 30,
+    )
 
 
 def _model_discovery_reply() -> Reply:
@@ -70,11 +90,13 @@ def _response(identity: str, status: str = "completed") -> bytes:
 
 
 def _deployment(scenario: Scenario, wire: Wire) -> str:
-    return scenario.model(
+    model: Final = scenario.model(
         model=f"openai/{_MODEL}",
         api_key=_API_KEY,
         api_base=f"{wire.url}/v1",
     )
+    _wait_for_workers(scenario.gateway, model, 1)
+    return model
 
 
 def _key(scenario: Scenario, team_id: str, user_id: str, model: str) -> str:

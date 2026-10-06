@@ -1,19 +1,39 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 import uuid
 from typing import Final
 
 import openai
 import pytest
-from integration._support.client import Gateway, Scenario, object_value, string_value
+from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai.types.responses import ResponseCompletedEvent
 from pydantic import JsonValue, TypeAdapter
 
+from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
+
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-responses-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_PROXY_WORKERS: Final = max(1, int(os.environ.get("INTEGRATION_PROXY_WORKERS", "1")))
+
+
+def _deployments_in_group(gateway: Gateway, group: str) -> int:
+    entries: Final = gateway.get("/model/info")["data"]
+    assert isinstance(entries, list), entries
+    return sum(object_value(entry).get("model_name") == group for entry in entries)
+
+
+def _wait_for_workers(gateway: Gateway, group: str, deployments: int) -> None:
+    ready_after: Final = time.monotonic() + (0 if _PROXY_WORKERS == 1 else PROXY_CONFIG_RELOAD_INTERVAL_SECONDS + 1)
+    eventually(
+        lambda: (_deployments_in_group(gateway, group), time.monotonic()),
+        lambda observation: observation[0] == deployments and observation[1] >= ready_after,
+        seconds=30 if _PROXY_WORKERS == 1 else PROXY_CONFIG_RELOAD_INTERVAL_SECONDS * 2 + 30,
+    )
 
 
 def model_discovery_reply(model: str) -> Reply:
@@ -55,6 +75,7 @@ def _stream(identity: str) -> tuple[bytes, ...]:
 
 
 def _register_in_group(scenario: Scenario, wire: Wire, group: str, order: int | None = None) -> str:
+    existing: Final = _deployments_in_group(scenario.gateway, group)
     created: Final = scenario.gateway.post(
         "/model/new",
         {
@@ -70,19 +91,20 @@ def _register_in_group(scenario: Scenario, wire: Wire, group: str, order: int | 
     )
     model_id: Final = string_value(object_value(created["model_info"])["id"])
     scenario.cleanups.callback(scenario.delete_model, model_id)
+    _wait_for_workers(scenario.gateway, group, existing + 1)
     return group
 
 
 def _register(scenario: Scenario, wire: Wire, group: str | None = None) -> str:
-    return (
-        scenario.model(
-            model=f"openai/{_MODEL}",
-            api_key=_API_KEY,
-            api_base=f"{wire.url}/v1",
-        )
-        if group is None
-        else _register_in_group(scenario, wire, group)
+    if group is not None:
+        return _register_in_group(scenario, wire, group)
+    model: Final = scenario.model(
+        model=f"openai/{_MODEL}",
+        api_key=_API_KEY,
+        api_base=f"{wire.url}/v1",
     )
+    _wait_for_workers(scenario.gateway, model, 1)
+    return model
 
 
 def _enable_responses_affinity(scenario: Scenario) -> None:
