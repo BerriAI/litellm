@@ -9,24 +9,35 @@ API Reference:
 - :streamQuery endpoint - for actual queries (stream_query method)
 """
 
+import base64
+import binascii
 import json
+import mimetypes
+import re
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Final, Optional, TypeAlias, Union, cast
+from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    convert_content_list_to_str,
-)
+from litellm.litellm_core_utils.prompt_templates.common_utils import extract_search_results_text
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.vertex_ai.agent_engine.sse_iterator import (
     VertexAgentEngineResponseIterator,
 )
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionFileObject,
+    ChatCompletionImageObject,
+    ChatCompletionTextObject,
+)
+from litellm.types.llms.vertex_ai import ContentType, PartType
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 if TYPE_CHECKING:
@@ -50,6 +61,125 @@ class VertexAgentEngineError(BaseLLMException):
         self.status_code = status_code
         self.message = message
         super().__init__(message=message, status_code=status_code)
+
+
+_AgentEngineContentBlock: TypeAlias = ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionFileObject
+_CONTENT_ADAPTER: Final = TypeAdapter(tuple[_AgentEngineContentBlock, ...])
+
+
+@dataclass(frozen=True, slots=True)
+class _AgentEngineInputError:
+    message: str
+
+
+def _data_url_content(source: str, mime_hint: str | None) -> tuple[str, str] | _AgentEngineInputError:
+    header, separator, encoded = source.partition(",")
+    if not separator or not header.endswith(";base64"):
+        return _AgentEngineInputError("Agent Engine requires base64-encoded data URLs")
+    declared_mime: Final = header[5:-7]
+    if mime_hint and mime_hint != declared_mime:
+        return _AgentEngineInputError("Agent Engine media format conflicts with the data URL MIME type")
+    return declared_mime, encoded
+
+
+def _media_to_part(
+    source: str,
+    mime_hint: str | None,
+    filename: str | None,
+    is_image: bool,
+    allow_inline: bool = True,
+) -> PartType | _AgentEngineInputError:
+    try:
+        parsed: Final = urlparse(source)
+    except ValueError:
+        return _AgentEngineInputError("Agent Engine requires a valid media URI")
+    is_uri: Final = parsed.scheme in ("gs", "https")
+    if is_uri and (not parsed.netloc or not parsed.path.strip("/")):
+        return _AgentEngineInputError("Agent Engine requires a valid gs:// or https:// media URI")
+    if not allow_inline and not is_uri:
+        return _AgentEngineInputError(
+            "Agent Engine cannot resolve file IDs; provide a gs:// or https:// URI or file_data"
+        )
+    if parsed.scheme not in ("", "gs", "https", "data"):
+        return _AgentEngineInputError("Agent Engine supports gs://, https:// and base64-encoded media only")
+    decoded: Final = (
+        _data_url_content(source, mime_hint)
+        if source.startswith("data:")
+        else (mime_hint or mimetypes.guess_type(filename or parsed.path)[0], source)
+    )
+    if isinstance(decoded, _AgentEngineInputError):
+        return decoded
+    mime_type, data = decoded
+    if not mime_type or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]*/[A-Za-z0-9][A-Za-z0-9.+_-]*", mime_type):
+        return _AgentEngineInputError(
+            "Agent Engine requires a MIME type; provide format or a filename with an extension"
+        )
+    if is_image and not mime_type.startswith("image/"):
+        return _AgentEngineInputError("Agent Engine image_url requires an image MIME type; use file for documents")
+    if is_uri:
+        return {"file_data": {"file_uri": source, "mime_type": mime_type}}
+    if not data:
+        return _AgentEngineInputError("Agent Engine media data cannot be empty")
+    try:
+        base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError):
+        return _AgentEngineInputError("Agent Engine media data must be valid base64")
+    return {"inline_data": {"data": data, "mime_type": mime_type}}
+
+
+def _content_block_to_part(block: _AgentEngineContentBlock) -> PartType | _AgentEngineInputError:
+    match block["type"]:
+        case "text":
+            return {"text": block["text"]}
+        case "image_url":
+            image: Final = block["image_url"]
+            return _media_to_part(
+                source=image if isinstance(image, str) else image["url"],
+                mime_hint=None if isinstance(image, str) else image.get("format"),
+                filename=None,
+                is_image=True,
+            )
+        case _:
+            file: Final = block["file"]
+            if bool(file.get("file_data")) == bool(file.get("file_id")):
+                return _AgentEngineInputError("Agent Engine requires exactly one of file_data or file_id")
+            return _media_to_part(
+                source=file.get("file_data") or file.get("file_id") or "",
+                mime_hint=file.get("format"),
+                filename=file.get("filename"),
+                is_image=False,
+                allow_inline=bool(file.get("file_data")),
+            )
+
+
+def _message_to_agent_input(message: Mapping[str, object]) -> str | ContentType | _AgentEngineInputError:
+    content: Final = message.get("content")
+    search_text: Final = extract_search_results_text(message.get("search_results"))
+    if content is None:
+        return search_text
+    if isinstance(content, str):
+        return content + search_text
+    try:
+        blocks: Final = _CONTENT_ADAPTER.validate_python(content)
+    except ValidationError:
+        return _AgentEngineInputError("Agent Engine supports text, image_url and file parts with valid required fields")
+    converted: Final = tuple(_content_block_to_part(block) for block in blocks)
+    error: Final = next((part for part in converted if isinstance(part, _AgentEngineInputError)), None)
+    if error is not None:
+        return error
+    parts: Final = [part for part in converted if not isinstance(part, _AgentEngineInputError)]
+    if all(block["type"] == "text" for block in blocks):
+        return "".join(part.get("text", "") for part in parts) + search_text
+    if message["role"] != "user":
+        return _AgentEngineInputError("Agent Engine media must be in the final user message")
+    search_parts: Final[list[PartType]] = [{"text": search_text}] if search_text else []
+    return {"role": "user", "parts": parts + search_parts}
+
+
+def _messages_to_agent_input(messages: list[AllMessageValues]) -> str | ContentType | _AgentEngineInputError:
+    if not messages:
+        return _AgentEngineInputError("Agent Engine requires at least one message")
+    return _message_to_agent_input(messages[-1])
 
 
 class VertexAgentEngineConfig(BaseConfig, VertexBase):
@@ -197,21 +327,20 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             }
         }
         """
-        # Use the last message content as the prompt
-        prompt: Final = convert_content_list_to_str(messages[-1])
+        prompt: Final = _messages_to_agent_input(messages)
+        if isinstance(prompt, _AgentEngineInputError):
+            raise VertexAgentEngineError(status_code=400, message=prompt.message)
 
         # Get user_id and session_id
         user_id: Final = self._get_user_id(optional_params)
         session_id: Final = self._get_session_id(optional_params)
 
         # Build the input
-        input_data: Final[dict[str, str]] = {
+        input_data: Final[dict[str, str | ContentType]] = {
             "message": prompt,
             "user_id": user_id,
+            **({"session_id": session_id} if session_id else {}),
         }
-
-        if session_id:
-            input_data["session_id"] = session_id
 
         # Build the request payload
         # Note: stream_query is used for both streaming and non-streaming
