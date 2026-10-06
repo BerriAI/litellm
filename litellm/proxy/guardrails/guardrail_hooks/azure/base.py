@@ -60,7 +60,9 @@ class AzureGuardrailBase:
         self.api_base = api_base
         self.api_version: str | None = kwargs.get("api_version")
 
-    async def _post_to_content_safety(self, endpoint_path: str, request_body: dict[str, object]) -> dict[str, Any]:
+    async def _post_to_content_safety(
+        self, endpoint_path: str, request_body: dict[str, object]
+    ) -> Mapping[str, object]:
         """POST to an Azure Content Safety endpoint with standard auth headers.
 
         Args:
@@ -85,7 +87,7 @@ class AzureGuardrailBase:
             json=request_body,
             timeout=self.timeout,
         )
-        response_json: Final[dict[str, Any]] = response.json()
+        response_json: Final[dict[str, object]] = response.json()
         verbose_proxy_logger.debug("Azure Content Safety response [%s]: %s", endpoint_path, response_json)
         return response_json
 

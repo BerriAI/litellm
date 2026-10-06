@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncGenerator, Iterator
 from copy import deepcopy
 import logging
-from collections.abc import Iterator
 from typing import Any, Callable, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,6 +26,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
 from litellm.proxy._types import UserAPIKeyAuth
@@ -2933,3 +2934,62 @@ async def test_streaming_iterator_hook_pipeline_discards_dropped_tool_call_on_re
 
     assert delivered == _responses_function_call_events()
     assert any("'gr-post'" in message and "discarded" in message for message in _warnings(caplog))
+
+
+class _RaisingAcloseIterator:
+    """Non-generator async iterator whose aclose raises after the stream ended."""
+
+    def __init__(self, response: AsyncGenerator[Any, None]) -> None:
+        self._response = response
+
+    def __aiter__(self) -> "_RaisingAcloseIterator":
+        return self
+
+    async def __anext__(self) -> Any:
+        return await self._response.__anext__()
+
+    async def aclose(self) -> None:
+        raise RuntimeError("cleanup failed")
+
+
+class RaisingAcloseCallback(CustomLogger):
+    """Iterator hook returning a non-generator async iterator whose aclose raises."""
+
+    def async_post_call_streaming_iterator_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # a custom async iterator worked before aclose handling
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncGenerator[Any, None],
+        request_data: dict[str, object],
+    ) -> _RaisingAcloseIterator:
+        return _RaisingAcloseIterator(response)
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_pipeline_releases_buffered_content_when_a_callback_aclose_raises(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(
+        litellm, "callbacks", [_rewriting_stream_guardrail(lambda inputs: {}), RaisingAcloseCallback()]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+    chunks = _tool_call_stream_chunks()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        delivered = [
+            item
+            async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+                response=_async_chunk_iter(chunks),
+                request_data=data,
+            )
+        ]
+
+    assert [chunk.model_dump() for chunk in delivered] == [chunk.model_dump() for chunk in chunks]
+    assert any(
+        "RaisingAcloseCallback" in message and "RuntimeError" in message and "cleanup failed" not in message
+        for message in _warnings(caplog)
+    )

@@ -65,6 +65,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
 )
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -111,6 +112,7 @@ from .config import (
     CustomDimension,
     OpenSourceClassifierConfig,
     TierDefinition,
+    configured_local_heuristic,
 )
 from .jev_classifier import (
     DEFAULT_JEV_INSTRUCTIONS,
@@ -136,13 +138,13 @@ else:
     SemanticRouter = Any
 
 
-class TierClassification(BaseModel):
+class TierClassification(LiteLLMBaseModel):
     """Structured response schema for the LLM-based complexity classifier."""
 
     tier: Literal["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
 
 
-class _LabeledTierClassification(BaseModel):
+class _LabeledTierClassification(LiteLLMBaseModel):
     """Parses the classifier's reply when the wire carries operator-chosen tier strings."""
 
     tier: str
@@ -1487,7 +1489,10 @@ class ComplexityRouter(CustomLogger):
                 resolve_tier_artifact(self.config.heuristic_v2_artifact),
                 routing_threshold=self.config.heuristic_v2_success_threshold,
             )
-            if self.config.classifier_type == "heuristic_v2"
+            if configured_local_heuristic(
+                {"classifier_type": self.config.classifier_type, "local_heuristic": self.config.local_heuristic}
+            )
+            == "heuristic_v2"
             else None
         )
 
@@ -1939,9 +1944,30 @@ class ComplexityRouter(CustomLogger):
         if self.config.classifier_type == "capability" and self.config.classifier_llm_config is not None:
             return await self._capability_classifier_outcome(prompt, request_kwargs, messages)
         if self.config.classifier_type not in ("llm", "llm_v2") or self.config.classifier_llm_config is None:
-            tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+            return self._classify_locally(prompt, system_prompt)
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
+
+    def _classify_locally(self, prompt: str, system_prompt: str | None) -> ClassificationOutcome:
+        if self._tier_success_predictor is not None:
+            return self._classify_with_heuristic_v2(prompt)
+        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
+        return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+
+    def _local_outcome_is_decided(self, outcome: ClassificationOutcome, margin: float | None = None) -> bool:
+        forecast: Final = outcome.heuristic_v2_forecast
+        if forecast is None:
+            return bool(outcome.signals) and (
+                margin is None or (outcome.score is not None and not self._is_near_tier_boundary(outcome.score, margin))
+            )
+        threshold: Final = forecast["threshold"]
+        if forecast["probabilities"][forecast["predicted_tier"]] < threshold:
+            return False
+        if margin is None:
+            return True
+        deciding_tiers: Final = TIER_SEVERITY_ORDER[
+            : TIER_SEVERITY_ORDER.index(ComplexityTier(forecast["predicted_tier"])) + 1
+        ]
+        return all(abs(forecast["probabilities"][tier.value] - threshold) > margin for tier in deciding_tiers)
 
     def _classify_with_heuristic_v2(self, prompt: str) -> ClassificationOutcome:
         predictor: Final = self._tier_success_predictor
@@ -1980,27 +2006,27 @@ class ComplexityRouter(CustomLogger):
         """Score locally, and only pay for the classifier call when the scorer did not confidently
         place the request at or below heuristic_first_max_tier.
 
-        Confidence is `signals`, not `score`. A prompt where no dimension fired scores exactly 0.0,
+        For v1, confidence is `signals`, not `score`. A prompt where no dimension fired scores exactly 0.0,
         which is below simple_medium and so lands SIMPLE by default rather than by evidence, and a
         threshold check alone would hand that traffic to the cheapest model without ever consulting
         the classifier. Scores also go negative when simple indicators fire, so a score threshold
-        would reject exactly the trivial prompts this path exists to serve.
+        would reject exactly the trivial prompts this path exists to serve. V2 requires its predicted
+        tier to meet the configured success threshold.
 
         A turn carrying images the classifier would see is never decided cheaply: the scorer reads
         text alone, so its confidence describes a request it has only partly seen, and a trivial
         caption beside a screenshot is exactly the misrouting vision classification exists to stop.
         """
-        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-        scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        scored: Final = self._classify_locally(prompt, system_prompt)
         threshold: Final = self.config.heuristic_first_max_tier
         decided_cheaply: Final = (
             threshold is not None
-            and bool(signals)
+            and self._local_outcome_is_decided(scored)
             and not self._classifier_image_parts(messages)
-            and self._active_tier_severity(tier) <= self._active_tier_severity(threshold)
+            and self._active_tier_severity(scored.tier) <= self._active_tier_severity(threshold)
         )
         if decided_cheaply:
-            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="heuristic_first_short_circuit")
+            return scored._replace(cause="heuristic_first_short_circuit")
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
 
     async def _classify_hybrid(
@@ -2014,21 +2040,20 @@ class ComplexityRouter(CustomLogger):
 
         Where heuristic_first asks how CHEAP the scorer's tier is, this asks how DECIDED it is, so a
         confident score keeps its tier at every tier including the most expensive one. Two things make
-        a score undecided: landing within hybrid_boundary_margin of an active boundary, where a
+        a v1 score undecided: landing within hybrid_boundary_margin of an active boundary, where a
         hair's difference in score would have named the adjacent tier and its model pool, and firing
         no dimension at all, which scores 0.0 and lands SIMPLE by default rather than by evidence.
+        V2 compares its selected and lower-tier probabilities against the success threshold.
         """
-        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-        scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        scored: Final = self._classify_locally(prompt, system_prompt)
         margin: Final = self.config.hybrid_boundary_margin
         decided: Final = (
             margin is not None
-            and bool(signals)
+            and self._local_outcome_is_decided(scored, margin)
             and not self._classifier_image_parts(messages)
-            and not self._is_near_tier_boundary(score, margin)
         )
         if decided:
-            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="hybrid_short_circuit")
+            return scored._replace(cause="hybrid_short_circuit")
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
 
     def _classifier_image_parts(
@@ -2310,8 +2335,7 @@ class ComplexityRouter(CustomLogger):
             return _with_signal(self._default_model_fallback_outcome(), signal)
         if scored is not None:
             return _with_signal(scored, signal)
-        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-        return _with_signal(ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause), signal)
+        return _with_signal(self._classify_locally(prompt, system_prompt), signal)
 
     async def _classify_with_plugin(
         self,
@@ -2945,7 +2969,7 @@ class ComplexityRouter(CustomLogger):
             raise ValueError(f"No candidate models left for tier {tier_key} after routing-plugin filtering")
         return self._pick_from_tier_value(context.candidate_models, tier_key)
 
-    def _ensure_adaptive_router(self) -> Any | None:
+    def _ensure_adaptive_router(self) -> AdaptiveRouter | None:
         if not self.config.adaptive:
             return None
         if self.adaptive_router is not None:
@@ -3087,7 +3111,7 @@ class ComplexityRouter(CustomLogger):
         pools: Final = self._tier_pools()
         classified_candidates: Final = _allowed(tuple(pools.get(_tier_name(classified_tier), ())), fit_filter)
         cold_start_candidates: Final = tuple(
-            model for model in classified_candidates if adaptive._cells[(request_type, model)].total_samples == 0
+            model for model in classified_candidates if adaptive.cell(request_type, model).total_samples == 0
         )
         if cold_start_candidates:
             chosen_model: Final = random.choice(cold_start_candidates)
@@ -3106,7 +3130,7 @@ class ComplexityRouter(CustomLogger):
                         "candidates": [
                             {
                                 "model": model,
-                                "total_samples": adaptive._cells[(request_type, model)].total_samples,
+                                "total_samples": adaptive.cell(request_type, model).total_samples,
                             }
                             for model in cold_start_candidates
                         ],
@@ -3123,7 +3147,7 @@ class ComplexityRouter(CustomLogger):
         best_score = float("-inf")
         candidate_scores: Final[list[dict[str, object]]] = []
         for model in self._adaptive_candidate_models(classified_tier, hard_floor, hard_ceiling, fit_filter):
-            cell = adaptive._cells[(request_type, model)]
+            cell = adaptive.cell(request_type, model)
             quality_sample = thompson_sample(cell)
             cost_score = normalized_cost(adaptive.model_to_cost.get(model, 0.0), all_costs)
             if self.config.adaptive_eligible == "classified_tier":

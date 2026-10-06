@@ -2,28 +2,29 @@ from __future__ import annotations
 
 import ipaddress
 from collections.abc import Sequence
-from typing import Any, Final
+from typing import Final
 
 from fastapi import Request
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm._logging import verbose_proxy_logger
+from litellm.types.llms.base import LiteLLMBaseModel
 
 TrustedProxyNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
-class NetworkContext(BaseModel):
+class NetworkContext(LiteLLMBaseModel):
     client_ip: str | None = None
     host: str | None = None
     via_trusted_proxy: bool = False
 
 
-class TrustedProxyConfig(BaseModel):
+class TrustedProxyConfig(LiteLLMBaseModel):
     use_forwarded_for: bool = False
     trusted_proxy_cidrs: Sequence[str] = Field(default_factory=tuple)
 
 
-def normalize_cidr_ranges(configured_ranges: Any, *, setting_name: str = "trusted_proxy_cidrs") -> list[str]:
+def normalize_cidr_ranges(configured_ranges: object, *, setting_name: str = "trusted_proxy_cidrs") -> list[str]:
     if not configured_ranges:
         return []
     if isinstance(configured_ranges, str):
@@ -39,7 +40,7 @@ def normalize_cidr_ranges(configured_ranges: Any, *, setting_name: str = "truste
 
 
 def parse_trusted_proxy_ranges(
-    configured_ranges: Any, *, setting_name: str = "trusted_proxy_cidrs"
+    configured_ranges: object, *, setting_name: str = "trusted_proxy_cidrs"
 ) -> list[TrustedProxyNetwork]:
     networks: Final[list[TrustedProxyNetwork]] = []
     for cidr in normalize_cidr_ranges(configured_ranges, setting_name=setting_name):

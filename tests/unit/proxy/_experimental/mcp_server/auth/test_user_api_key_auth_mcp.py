@@ -2810,7 +2810,7 @@ class TestMCPDelegateAuthToUpstream:
             "type": "http",
             "method": "POST",
             "path": "/mcp/delegated_oauth_server",
-            "headers": [(b"x-litellm-api-key", b"Bearer sk-1234")],
+            "headers": [(b"x-litellm-api-key", b"Bearer sk-9876")],
         }
 
         with (
@@ -2842,7 +2842,7 @@ class TestMCPDelegateAuthToUpstream:
             "type": "http",
             "method": "POST",
             "path": "/mcp/delegated_oauth_server",
-            "headers": [(b"authorization", b"Bearer sk-1234")],
+            "headers": [(b"authorization", b"Bearer sk-9876")],
         }
 
         with (
@@ -2867,7 +2867,7 @@ class TestMCPDelegateAuthToUpstream:
             ) = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert auth_result.user_id == "real-user"
-            assert oauth2_headers.get("Authorization") == "Bearer sk-1234"
+            assert oauth2_headers.get("Authorization") == "Bearer sk-9876"
             mock_auth.assert_awaited_once()
 
     async def test_delegate_ignored_for_client_credentials_server(self):

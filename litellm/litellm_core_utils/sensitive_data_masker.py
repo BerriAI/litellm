@@ -124,7 +124,7 @@ class SensitiveDataMasker:
         if depth >= max_depth:
             return data
 
-        masked_data: Final[dict[str, Any]] = {}
+        masked_data: Final[dict[str, object]] = {}
         for k, v in data.items():
             try:
                 key_is_sensitive = self.is_sensitive_key(k, excluded_keys)
@@ -292,7 +292,7 @@ def _redact_sequence(values: Sequence[object], depth: int) -> Sequence[object]:
 """
 masker = SensitiveDataMasker()
 data = {
-    "api_key": "sk-1234567890abcdef",
+    "api_key": "sk-9876543210abcdef",
     "redis_password": "very_secret_pass",
     "port": 6379,
     "tags": ["East US 2", "production", "test"]

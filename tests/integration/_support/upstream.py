@@ -385,6 +385,14 @@ class Provider:
 
     async def realtime(self, websocket: WebSocket) -> None:
         scenario_id: Final = websocket.headers.get("authorization", "").removeprefix("Bearer ")
+        self.observations.put(
+            Observation(
+                websocket.url.path,
+                websocket.headers.get("authorization", ""),
+                {"query": [[key, value] for key, value in websocket.query_params.multi_items()]},
+                "WEBSOCKET",
+            )
+        )
         response: Final = self.scenario_store.get(scenario_id)
         if not isinstance(response, RealtimeResponse):
             await websocket.close(code=4404)
@@ -585,7 +593,13 @@ def main() -> None:
     parser: Final = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8190)
     arguments: Final = parser.parse_args()
-    uvicorn.run(Provider().app(), host="127.0.0.1", port=cast(int, arguments.port), access_log=False)
+    uvicorn.run(
+        Provider().app(),
+        host="127.0.0.1",
+        port=cast(int, arguments.port),
+        access_log=False,
+        timeout_keep_alive=125,
+    )
 
 
 if __name__ == "__main__":

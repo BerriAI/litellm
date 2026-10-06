@@ -384,15 +384,6 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
 
   return (
     <div className="space-y-4">
-      {summaryLoading ? (
-        <ChartLoader />
-      ) : (
-        <ActivityMetrics
-          modelMetrics={{}}
-          summaryMetrics={summary}
-          hidePromptCachingMetrics={hidePromptCachingMetrics}
-        />
-      )}
       <div className="mt-2 flex flex-wrap items-center gap-3">
         <InputGroup className="max-w-md">
           <InputGroupAddon>
@@ -418,6 +409,15 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
           </span>
         )}
       </div>
+      {summaryLoading ? (
+        <ChartLoader />
+      ) : (
+        <ActivityMetrics
+          modelMetrics={{}}
+          summaryMetrics={summary}
+          hidePromptCachingMetrics={hidePromptCachingMetrics}
+        />
+      )}
       {noMatches ? emptyFilterBody : <div className="rounded-lg border">{listBody}</div>}
       {showSearchErrorNote && (
         <p className="text-sm text-muted-foreground">Could not search all keys. {searchRetryButton}</p>

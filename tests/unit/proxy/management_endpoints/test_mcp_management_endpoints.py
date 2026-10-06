@@ -1876,7 +1876,7 @@ class TestTemporaryMCPSessionEndpoints:
             url="https://temp.example.com",
             transport=MCPTransport.http,
         )
-        existing_server = MagicMock()
+        existing_server = MagicMock(dcr_issuer=None, dcr_server_url=None, token_endpoint_auth_method=None)
         existing_server.authentication_token = "token-abc"
         existing_server.client_id = "client-123"
         existing_server.client_secret = "secret-xyz"
@@ -1912,7 +1912,7 @@ class TestTemporaryMCPSessionEndpoints:
 
     @staticmethod
     def _inherit_with(payload_credentials, **server_overrides):
-        existing_server = MagicMock()
+        existing_server = MagicMock(dcr_issuer=None, dcr_server_url=None, token_endpoint_auth_method=None)
         existing_server.authentication_token = None
         existing_server.client_id = "client-123"
         existing_server.client_secret = "secret-xyz"
@@ -2616,6 +2616,9 @@ class TestTemporaryMCPSessionEndpoints:
             user_id="admin-user",
         )
         inherited_server = MagicMock(
+            dcr_issuer=None,
+            dcr_server_url=None,
+            token_endpoint_auth_method=None,
             authentication_token="token-abc",
             client_id="client-id",
             client_secret="client-secret",
@@ -11145,3 +11148,177 @@ async def test_protocol_update_on_missing_server_preserves_not_found() -> None:
                 user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
             )
     assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_changed_upstream_session_gets_an_isolated_id_without_saved_client(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-upstream", name="saved", transport="http", auth_type="oauth2",
+        url="https://old.example/mcp", issuer="https://old.example",
+        client_id="old-client", client_secret="old-secret",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
+        oauth2_flow="authorization_code", url="https://new.example/mcp", issuer="https://new.example",
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert not (staged.credentials or {}).get("client_id")
+    assert not (staged.credentials or {}).get("client_secret")
+    assert await management._resolve_session_server_id(staged) != saved.server_id
+    assert saved.client_id == "old-client"
+
+
+def test_staged_url_edit_clears_resubmitted_issuer_and_endpoints(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-oauth", name="saved", transport="http", auth_type="oauth2",
+        url="https://old.example/mcp", issuer="https://old.example",
+        authorization_url="https://old.example/authorize", token_url="https://old.example/token",
+        registration_url="https://old.example/register", client_id="old-client",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
+        oauth2_flow="authorization_code", url="https://new.example/mcp", issuer=saved.issuer,
+        authorization_url=saved.authorization_url, token_url=saved.token_url, registration_url=saved.registration_url,
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert staged.issuer is None
+    assert staged.authorization_url is None
+    assert staged.token_url is None
+    assert staged.registration_url is None
+    assert staged.oauth2_flow == "authorization_code"
+    assert saved.issuer == "https://old.example"
+
+
+@pytest.mark.asyncio
+async def test_distinct_issuer_identifier_edit_isolates_session_client(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-oauth", name="saved", transport="http", auth_type="oauth2",
+        url="https://resource.example/mcp", issuer="https://idp.example",
+        client_id="saved-client", client_secret="saved-secret",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
+        url=saved.url, issuer="https://IDP.example:443/",
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert not (staged.credentials or {}).get("client_id")
+    assert not (staged.credentials or {}).get("client_secret")
+    assert await management._resolve_session_server_id(staged) != saved.server_id
+
+
+@pytest.mark.asyncio
+async def test_url_edit_stages_existing_client_with_previous_issuer_binding(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-oauth", name="saved", transport="http", auth_type="oauth2",
+        url="https://resource.example/mcp", issuer="https://idp.example",
+        client_id="static-client", client_secret="static-secret", authentication_token="old-token",
+        token_endpoint_auth_method="client_secret_basic",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
+        url=saved.url + "?v=2", issuer=saved.issuer,
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert staged.credentials["client_id"] == "static-client"
+    assert staged.credentials["client_secret"] == "static-secret"
+    assert staged.credentials["dcr_issuer"] == saved.issuer
+    assert staged.credentials["dcr_server_url"] == saved.url
+    assert staged.credentials["token_endpoint_auth_method"] == "client_secret_basic"
+    assert "auth_value" not in staged.credentials
+    assert staged.issuer is None
+    assert await management._resolve_session_server_id(staged) != saved.server_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_changed", [False, True])
+async def test_session_identity_checks_saved_row_when_registry_is_empty(monkeypatch, upstream_changed):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+
+    saved = generate_mock_mcp_server_db_record(server_id="saved-oauth-row")
+    saved.auth_type = "oauth2"
+    saved.url = "https://old.example/mcp"
+    saved.issuer = "https://old.example"
+    saved.approval_status = "approved"
+    monkeypatch.setattr(management.global_mcp_server_manager, "get_mcp_server_by_id", lambda _: None)
+    monkeypatch.setattr(management, "_get_prisma_client_or_none", lambda: MagicMock())
+    monkeypatch.setattr(management, "get_mcp_server", AsyncMock(return_value=saved))
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, auth_type="oauth2", transport="http",
+        url="https://new.example/mcp" if upstream_changed else saved.url,
+    )
+    resolved = await management._resolve_session_server_id(payload)
+    assert (resolved != saved.server_id) is upstream_changed
+
+
+def test_new_oauth_session_does_not_look_up_saved_credentials(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+
+    lookup = MagicMock()
+    monkeypatch.setattr(management.global_mcp_server_manager, "get_mcp_server_by_id", lookup)
+    payload = NewMCPServerRequest(url="https://new.example/mcp", auth_type="oauth2", transport="http")
+    assert management._inherit_credentials_from_existing_server(payload) is payload
+    assert not payload.credentials
+    lookup.assert_not_called()
+
+
+def test_edit_does_not_rebind_resubmitted_saved_client_to_new_issuer(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-static", name="saved", transport="http", auth_type="oauth2",
+        url="https://old.example/mcp", issuer="https://old.example",
+        client_id="saved-client", client_secret="saved-secret",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, transport="http", auth_type="oauth2",
+        url="https://new.example/mcp", issuer="https://new.example",
+        credentials={"client_id": saved.client_id, "client_secret": saved.client_secret},
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert not (staged.credentials or {}).get("client_id")
+    assert not (staged.credentials or {}).get("client_secret")
+    assert saved.client_id == "saved-client"
+
+
+@pytest.mark.parametrize("replacement", [
+    {"client_secret": "replacement-secret"},
+    {"client_secret": "old-secret", "token_endpoint_auth_method": "client_secret_basic"},
+    {"client_secret": None},
+    {"dcr_issuer": "https://new.example", "dcr_server_url": "https://new.example/mcp"},
+])
+def test_staged_issuer_edit_preserves_replacement_with_same_client_id(monkeypatch, replacement):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-static", name="saved", transport="http", auth_type="oauth2",
+        url="https://old.example/mcp", issuer="https://old.example",
+        client_id="shared-client", client_secret="old-secret",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    submitted = {"client_id": "shared-client", **replacement}
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, transport="http", auth_type="oauth2",
+        url="https://new.example/mcp", issuer="https://new.example", credentials=submitted,
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert staged.credentials == submitted
+    assert saved.client_secret == "old-secret"

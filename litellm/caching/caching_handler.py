@@ -21,7 +21,7 @@ import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 import litellm
 from litellm._internal_context import post_response_phase
@@ -35,16 +35,19 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
-from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
+from litellm.types.caching import CACHED_STREAM_EVENTS_KEY, EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CachingDetails,
     CallTypes,
+    Choices,
     Embedding,
     EmbeddingResponse,
     ModelResponse,
+    TextChoices,
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
@@ -68,7 +71,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 
-class CachingHandlerResponse(BaseModel):
+class CachingHandlerResponse(LiteLLMBaseModel):
     """
     This is the response object for the caching handler. We need to separate embedding cached responses and (completion / text_completion / transcription) cached responses
 
@@ -108,6 +111,43 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     if isinstance(obj, str):
         return obj.startswith("chat.completion")
     return "choices" in cached_result
+
+
+def _starts_content_block(event: object) -> bool:
+    text: Final = event.decode("utf-8", errors="replace") if isinstance(event, bytes) else event
+    return isinstance(text, str) and "event: content_block_start" in text.splitlines()
+
+
+def is_response_without_output(result: object) -> bool:
+    if isinstance(result, (ModelResponse, TextCompletionResponse)):
+        return not result.choices
+    if isinstance(result, ResponsesAPIResponse):
+        return not getattr(result, "output", None)
+    if not isinstance(result, dict):
+        return False
+    cached_stream_events: Final = result.get(CACHED_STREAM_EVENTS_KEY)
+    if isinstance(cached_stream_events, (list, tuple)):
+        return not any(_starts_content_block(event) for event in cached_stream_events)
+    if "choices" in result:
+        return not result["choices"]
+    if result.get("object") == "response":
+        return not result.get("output")
+    if result.get("type") == "message":
+        return not result.get("content")
+    return False
+
+
+def _choice_carries_output(choice: Choices | TextChoices) -> bool:
+    payload: Final[Mapping[str, object]] = (
+        choice.message.model_dump(exclude_none=True) if isinstance(choice, Choices) else {"text": choice.text}
+    )
+    return any(key != "role" and value not in ("", [], {}) for key, value in payload.items())
+
+
+def _assembled_stream_without_output(response: ModelResponse | TextCompletionResponse) -> bool:
+    """The stream wrapper closes a stream whose chunks carried no choice with an empty choice of its own, so the
+    assembled response has choices and the no-output check on it alone would store that empty answer."""
+    return not any(_choice_carries_output(choice) for choice in response.choices)
 
 
 def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
@@ -172,7 +212,7 @@ def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
     return request_kwargs.get("cache_key", None)
 
 
-class _CachedEmbeddingRecord(BaseModel):
+class _CachedEmbeddingRecord(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     embedding: list[float] | str | None
@@ -397,6 +437,9 @@ class LLMCachingHandler:
             print_verbose("Checking Sync Cache")
             with response_cache_phase("get"):
                 cached_result = litellm.cache.get_cache(**new_kwargs)
+            if is_response_without_output(cached_result):
+                verbose_logger.debug("LiteLLM Cache: cached response has no output, treating it as a miss")
+                return CachingHandlerResponse(cached_result=None)
             if cached_result is not None:
                 if "detail" in cached_result:
                     # implies an error occurred
@@ -835,7 +878,18 @@ class LLMCachingHandler:
                         cache_key=self.preset_cache_key,
                         **request_kwargs,
                     )
+        if is_response_without_output(cached_result):
+            verbose_logger.debug("LiteLLM Cache: cached response has no output, treating it as a miss")
+            self._forget_worker_copy()
+            return None
         return cached_result
+
+    def _forget_worker_copy(self) -> None:
+        """Drop this worker's memory copy of a stored response without output, so the next read reaches Redis,
+        where the refill lands: the text completion and messages writers skip the memory tier."""
+        if self.dual_cache is None or self.preset_cache_key is None:
+            return
+        self.dual_cache.in_memory_cache.delete_cache(self.preset_cache_key)
 
     def _convert_cached_result_to_model_response(
         self,
@@ -1062,6 +1116,9 @@ class LLMCachingHandler:
 
         if litellm.cache is None:
             return
+        if is_response_without_output(result):
+            verbose_logger.debug("LiteLLM Cache: not caching a response with no output")
+            return
         cache: Final = litellm.cache
 
         new_kwargs: Final = kwargs.copy()
@@ -1112,6 +1169,11 @@ class LLMCachingHandler:
         """
         Sync internal method to add the result to the cache
         """
+        if litellm.cache is None:
+            return
+        if is_response_without_output(result):
+            verbose_logger.debug("LiteLLM Cache: not caching a response with no output")
+            return
 
         new_kwargs: Final = kwargs.copy()
         new_kwargs.update(
@@ -1120,8 +1182,6 @@ class LLMCachingHandler:
                 args,
             )
         )
-        if litellm.cache is None:
-            return
 
         if self._should_store_result_in_cache(original_function=self.original_function, kwargs=new_kwargs):
             with response_cache_phase("set"):
@@ -1200,13 +1260,13 @@ class LLMCachingHandler:
                 is_async=True,
             )
         )
-        # if a complete_streaming_response is assembled, add it to the cache
-        if complete_streaming_response is not None:
-            await self.async_set_cache(
-                result=complete_streaming_response,
-                original_function=self.original_function,
-                kwargs=self.request_kwargs,
-            )
+        if complete_streaming_response is None or _assembled_stream_without_output(complete_streaming_response):
+            return
+        await self.async_set_cache(
+            result=complete_streaming_response,
+            original_function=self.original_function,
+            kwargs=self.request_kwargs,
+        )
 
     def _sync_add_streaming_response_to_cache(self, processed_chunk: ModelResponse):
         """
@@ -1223,12 +1283,12 @@ class LLMCachingHandler:
             )
         )
 
-        # if a complete_streaming_response is assembled, add it to the cache
-        if complete_streaming_response is not None:
-            self.sync_set_cache(
-                result=complete_streaming_response,
-                kwargs=self.request_kwargs,
-            )
+        if complete_streaming_response is None or _assembled_stream_without_output(complete_streaming_response):
+            return
+        self.sync_set_cache(
+            result=complete_streaming_response,
+            kwargs=self.request_kwargs,
+        )
 
     def _update_litellm_logging_obj_environment(
         self,

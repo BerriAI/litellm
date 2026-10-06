@@ -24,7 +24,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, TypeAlias
 
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -62,6 +62,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -101,7 +102,7 @@ _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapte
 IncrementAmounts: TypeAlias = dict[Literal["requests", "tokens"], int]
 
 
-class BatchFileUsage(BaseModel):
+class BatchFileUsage(LiteLLMBaseModel):
     """
     Internal model for batch file usage tracking, used for batch rate limiting
     """
@@ -523,7 +524,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         )
         from litellm.proxy.proxy_server import llm_router
 
-        fetch_kwargs: Final[dict[str, Any]] = {
+        fetch_kwargs: Final[dict[str, object]] = {
             "custom_llm_provider": custom_llm_provider,
         }
 

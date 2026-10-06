@@ -1,9 +1,10 @@
 from collections.abc import Mapping
 from typing import Any, Final
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm.types.litellm_params import AgenticSurface
+from litellm.types.llms.base import LiteLLMBaseModel
 
 CHAT_COMPLETION_AGENTIC_SURFACE: Final[AgenticSurface] = "chat_completions"
 RESPONSES_AGENTIC_SURFACE: Final[AgenticSurface] = "responses"
@@ -54,7 +55,7 @@ class AgenticLoopSafetyError(ValueError):
     """
 
 
-class StandardCustomLoggerInitParams(BaseModel):
+class StandardCustomLoggerInitParams(LiteLLMBaseModel):
     """
     Params for initializing a CustomLogger.
     """
@@ -62,7 +63,7 @@ class StandardCustomLoggerInitParams(BaseModel):
     turn_off_message_logging: bool | None = False
 
 
-class AgenticLoopRequestPatch(BaseModel):
+class AgenticLoopRequestPatch(LiteLLMBaseModel):
     """
     Patch returned by callbacks to request a follow-up LLM call.
     """
@@ -75,7 +76,7 @@ class AgenticLoopRequestPatch(BaseModel):
     kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
-class AgenticLoopPlan(BaseModel):
+class AgenticLoopPlan(LiteLLMBaseModel):
     """
     Typed callback response for agentic-loop reruns.
     """

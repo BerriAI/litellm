@@ -74,7 +74,7 @@ export function MonitoringDialog({
           Each investigation looks back over the saved time range. The interval starts after the previous run finishes.
         </p>
         {!ready && (
-          <p role="status" className="text-sm text-amber-700">
+          <p role="status" className="text-sm text-warning">
             Reconnect the worker before enabling monitoring.
           </p>
         )}

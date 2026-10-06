@@ -11,6 +11,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
@@ -495,7 +496,8 @@ def process_response_headers(
         **processed_headers,
         **additional_headers,
     }
-    return additional_headers
+    request_id: Final = get_provider_request_id(response_headers)
+    return {**additional_headers, **({"request-id": request_id} if request_id is not None else {})}
 
 
 def preserve_upstream_non_openai_attributes(
@@ -725,7 +727,7 @@ def redact_nested_match_and_regex_keys(
     if payload is None or isinstance(payload, str):
         return payload
     try:
-        redacted: Final[dict | list[Any] | str | None] = copy.deepcopy(payload)
+        redacted: Final[dict | list[object] | str | None] = copy.deepcopy(payload)
     except Exception:
         return payload
 
