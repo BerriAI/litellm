@@ -32,7 +32,6 @@ _KEY_ID: Final = "integration-signing-key"
 _UPSTREAM_KEY: Final = "synthetic-openai-key"
 _CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 _CHAT_BODY: Final = TypeAdapter(dict[str, JsonValue])
-_EXPECTED_MODEL_DISCOVERY: Final = ("GET", "/v1/models")
 pytestmark: Final = pytest.mark.timeout(180)
 
 
