@@ -14,7 +14,7 @@ from math import isclose, isfinite
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, NamedTuple
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -28,6 +28,7 @@ from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
     GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -122,7 +123,7 @@ class PricingBasis(NamedTuple):
 _STANDARD_RATES: Final = PricingBasis()
 
 
-class BaselineCostSnapshot(BaseModel):
+class BaselineCostSnapshot(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     model: str

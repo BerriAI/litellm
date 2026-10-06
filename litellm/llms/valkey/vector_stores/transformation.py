@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NoReturn
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
 from litellm.llms.base_llm.vector_store.transformation import (
@@ -20,6 +20,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     VectorStoreEmbeddingExecutor,
 )
 from litellm.llms.valkey.common_utils import build_valkey_url, pack_vector
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import (
     VectorStoreCreateOptionalRequestParams,
@@ -79,7 +80,7 @@ def _import_query() -> "type[Query]":
     return RedisQuery
 
 
-class _ValkeySearchParams(BaseModel):
+class _ValkeySearchParams(LiteLLMBaseModel):
     """Typed view over the vector store's litellm_params; unrelated keys are ignored."""
 
     model_config = ConfigDict(frozen=True, extra="ignore")
