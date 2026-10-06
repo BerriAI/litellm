@@ -270,6 +270,8 @@ async def test_members_list_sorts_by_spend_then_roster_order(proxy_client, prism
         pytest.param({"team_id": "other"}, id="unknown-param"),
         pytest.param({"sort": "budget_id"}, id="unsortable-field"),
         pytest.param({"filter[spend]": "1"}, id="unfilterable-field"),
+        pytest.param({"filter[role]": "owner"}, id="unknown-role"),
+        pytest.param({"page": "abc"}, id="non-integer-page"),
     ],
 )
 async def test_members_list_rejects_unsupported_params(params, proxy_client, prisma, scratch, world):

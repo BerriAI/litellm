@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
+from typing import Annotated, Final
 
 import pytest
-from fastapi import Request
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.list_api.common import ManagementProblem
+from litellm.proxy.list_api.list_framework import QueryPlan, build_query_plan
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management.teams.dependencies import get_readable_team, get_team_members_plan
+from litellm.proxy.management.teams.service import TEAM_MEMBERS_LIST_SPEC
+from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 
 TEAM: Final = LiteLLM_TeamTable(
     team_id="team-1", organization_id=None, members_with_roles=[Member(user_id="member", role="user")]
@@ -57,28 +62,45 @@ async def test_get_readable_team_stops_the_request_before_the_handler(
     assert refused.value.problem.status == status
 
 
-def request(query: str) -> Request:
-    return Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "scheme": "http",
-            "root_path": "",
-            "path": "/management/v1/teams/team-1/members",
-            "query_string": query.encode(),
-            "headers": [(b"host", b"testserver")],
-        }
-    )
+def plan_client(as_caller: UserAPIKeyAuth) -> TestClient:
+    app: Final = FastAPI()
+    app.dependency_overrides[user_api_key_auth] = lambda: as_caller
+
+    @app.get("/plan")
+    def planned(plan: Annotated[QueryPlan, Depends(get_team_members_plan)]) -> tuple[int, int]:
+        return plan.skip, plan.take
+
+    return TestClient(app)
 
 
 def test_get_team_members_plan_turns_paging_params_into_a_window_of_rows() -> None:
-    plan: Final = get_team_members_plan(request("page=3&page_size=10"), caller("member"))
+    planned: Final = plan_client(caller("member")).get("/plan", params={"page": "3", "page_size": "10"})
 
-    assert (plan.skip, plan.take) == (20, 10)
+    assert planned.json() == [20, 10]
 
 
 def test_get_team_members_plan_refuses_a_field_members_cannot_be_sorted_by() -> None:
     with pytest.raises(ManagementProblem) as refused:
-        get_team_members_plan(request("sort=budget_id"), caller("member"))
+        plan_client(caller("member")).get("/plan", params={"sort": "budget_id"})
 
     assert refused.value.problem.status == 400
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        pytest.param({"page": "abc"}, id="non-integer-page"),
+        pytest.param({"filter[role]": "owner"}, id="unknown-role"),
+        pytest.param({"team_id": "other"}, id="undeclared-param"),
+    ],
+)
+def test_get_team_members_plan_is_not_reached_by_params_the_query_model_rejects(params: dict[str, str]) -> None:
+    assert plan_client(caller("member")).get("/plan", params=params).is_client_error
+
+
+def test_documented_query_params_are_exactly_the_ones_the_roster_can_be_planned_by() -> None:
+    refusal: Final = build_query_plan(spec=TEAM_MEMBERS_LIST_SPEC, params={"undeclared": "1"}, caller=caller("member"))
+    documented: Final = plan_client(caller("member")).app.openapi()["paths"]["/plan"]["get"]["parameters"]
+
+    assert isinstance(refusal, ProblemDetail)
+    assert sorted(param["name"] for param in documented) == refusal.allowed

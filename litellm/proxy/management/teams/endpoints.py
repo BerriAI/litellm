@@ -35,14 +35,6 @@ async def list_team_members(
     Anyone who can read `/team/info` for the team can call this: proxy admins, admin viewers, the team's keys,
     its members and its org admins. Anyone else gets a 403, and a team that does not exist is a 404.
 
-    Query parameters, all optional:
-    - `q`: search by `user_id` or `user_email`. Matches any part of the value and ignores case
-    - `filter[role]`: `admin` or `user`. Use `filter[role][in]=admin,user` to match several roles
-    - `sort`: `user_alias`, `user_email`, `user_id`, `role`, `spend`, `total_spend`, `max_budget_in_team` or
-      `budget_reset_at`. Put `-` in front to sort descending. Defaults to the order members were added
-    - `page`: the page to return, starting at 1
-    - `page_size`: members per page. Defaults to 50, max 100
-
     `budget_source` says where a member's budget comes from:
     - `custom`: the member has a budget of their own
     - `team_default`: the member follows the team's member budget
