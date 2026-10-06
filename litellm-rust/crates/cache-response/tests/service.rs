@@ -10,7 +10,7 @@ use litellm_cache::ExactCacheContext;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
     CacheEntry, CacheKeyInput, CacheKeyRequest, CacheOptions, CacheScope, RequestRewrite,
-    ResponseCache, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, cache_key,
+    ResponseCache, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, get_cache_key,
 };
 use rstest::rstest;
 use serde_json::json;
@@ -82,8 +82,8 @@ async fn default_key_resolution_preserves_the_native_cache_key() {
         ..Default::default()
     });
     assert_eq!(
-        cache.resolve_key(&request).await.unwrap(),
-        cache_key(&request.key)
+        cache.get_cache_key(&request).await.unwrap(),
+        get_cache_key(&request.key)
     );
 }
 
@@ -223,7 +223,7 @@ fn policy_does_not_change_logical_identity() {
     }
     .request_with_key("test", "responses", input.clone());
     let original = baseline.request_with_key("test", "responses", input);
-    assert_eq!(cache_key(&original.key), cache_key(&controlled.key));
+    assert_eq!(get_cache_key(&original.key), get_cache_key(&controlled.key));
     assert_eq!(controlled.context.ttl, Some(Duration::from_secs(9)));
     assert_eq!(controlled.max_age, Some(Duration::from_secs(3)));
     assert!(!controlled.controls.reads());
@@ -248,8 +248,8 @@ fn preset_keys_keep_isolated_callers_separate() {
         input.clone(),
     );
     let shared = CacheOptions::new(CacheScope::Shared).request_with_key("test", "responses", input);
-    assert_ne!(cache_key(&first.key), cache_key(&second.key));
-    assert_eq!(cache_key(&shared.key), "explicit");
+    assert_ne!(get_cache_key(&first.key), get_cache_key(&second.key));
+    assert_eq!(get_cache_key(&shared.key), "explicit");
 }
 
 #[rstest]
@@ -280,8 +280,8 @@ fn retained_logical_parameters_override_provider_transformation() {
         "chat_completions",
         CacheKeyInput::from_parameters(json!({"model":"deployment-b", "max_new_tokens":64})),
     );
-    assert_eq!(cache_key(&first.key), cache_key(&expected.key));
-    assert_eq!(cache_key(&second.key), cache_key(&expected.key));
+    assert_eq!(get_cache_key(&first.key), get_cache_key(&expected.key));
+    assert_eq!(get_cache_key(&second.key), get_cache_key(&expected.key));
 }
 
 #[rstest]
@@ -321,7 +321,7 @@ fn selected_key_input_retains_request_state(#[case] rewritten: bool, #[case] pre
         }
     );
     assert_eq!(
-        cache_key(&request.key) == cache_key(&baseline.key),
+        get_cache_key(&request.key) == get_cache_key(&baseline.key),
         !rewritten || preset
     );
     assert_eq!(

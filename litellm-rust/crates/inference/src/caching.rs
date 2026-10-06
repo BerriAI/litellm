@@ -150,7 +150,7 @@ impl CacheSession {
         service: Arc<dyn ResponseCacheService>,
         request: ResponseCacheRequest,
     ) -> Option<Self> {
-        let key = match service.resolve_key(&request).await {
+        let key = match service.get_cache_key(&request).await {
             Ok(key) => key,
             Err(_) => {
                 tracing::warn!("response cache lookup failed");

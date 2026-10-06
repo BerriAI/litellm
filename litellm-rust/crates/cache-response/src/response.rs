@@ -8,7 +8,7 @@ use litellm_cache::{
 use serde_json::Value;
 
 use crate::{
-    CacheControls, CacheEntry, CacheKeyInput, PartialHits, ResponseCacheConfig, cache_key,
+    CacheControls, CacheEntry, CacheKeyInput, PartialHits, ResponseCacheConfig, get_cache_key,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -130,7 +130,7 @@ where
         }
         let entry = match self
             .backend
-            .get_cache(&cache_key(&request.key), &request.context)
+            .get_cache(&get_cache_key(&request.key), &request.context)
         {
             Ok(entry) => entry,
             Err(Error::InvalidEntry) => None,
@@ -149,7 +149,7 @@ where
         }
         let entry = match self
             .backend
-            .async_get_cache(&cache_key(&request.key), &request.context)
+            .async_get_cache(&get_cache_key(&request.key), &request.context)
             .await
         {
             Ok(entry) => entry,
@@ -174,7 +174,7 @@ where
         }
         let lookup = self
             .backend
-            .get_cache_with_similarity(&cache_key(&request.key), &request.context);
+            .get_cache_with_similarity(&get_cache_key(&request.key), &request.context);
         Self::fresh_semantic(lookup, now, request.max_age)
     }
 
@@ -191,7 +191,7 @@ where
         }
         let lookup = self
             .backend
-            .async_get_cache_with_similarity(&cache_key(&request.key), &request.context)
+            .async_get_cache_with_similarity(&get_cache_key(&request.key), &request.context)
             .await;
         Self::fresh_semantic(lookup, now, request.max_age)
     }
@@ -211,7 +211,7 @@ where
             .collect::<Vec<_>>();
         let keys = readable
             .iter()
-            .map(|(_, request)| cache_key(&request.key))
+            .map(|(_, request)| get_cache_key(&request.key))
             .collect::<Vec<_>>();
         let entries = if let Some((_, request)) = readable.first() {
             self.backend.batch_get_cache(&keys, &request.context)?
@@ -236,7 +236,7 @@ where
             .collect::<Vec<_>>();
         let keys = readable
             .iter()
-            .map(|(_, request)| cache_key(&request.key))
+            .map(|(_, request)| get_cache_key(&request.key))
             .collect::<Vec<_>>();
         let entries = if let Some((_, request)) = readable.first() {
             self.backend
@@ -258,7 +258,7 @@ where
             return Ok(());
         }
         self.backend.set_cache(
-            &cache_key(&request.key),
+            &get_cache_key(&request.key),
             CacheEntry {
                 timestamp: Some(now.as_secs_f64()),
                 response,
@@ -278,7 +278,7 @@ where
         }
         self.backend
             .async_set_cache(
-                &cache_key(&request.key),
+                &get_cache_key(&request.key),
                 CacheEntry {
                     timestamp: Some(now.as_secs_f64()),
                     response,
@@ -313,7 +313,7 @@ where
             .filter(|(request, response, _)| request.controls.writes() && self.fits(response))
             .map(|(request, response, now)| {
                 (
-                    cache_key(&request.key),
+                    get_cache_key(&request.key),
                     CacheEntry {
                         timestamp: Some(now.as_secs_f64()),
                         response,

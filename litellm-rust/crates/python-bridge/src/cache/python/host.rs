@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::service::CacheCall;
 
 enum Pending {
-    ResolveKey(Reply<Result<String, Error>>),
+    GetCacheKey(Reply<Result<String, Error>>),
     Lookup(Reply<Result<Option<Value>, Error>>),
     Store(Reply<Result<(), Error>>),
 }
@@ -56,14 +56,14 @@ impl PythonCache {
             })?
             .bind(py)
             .copy()?;
-        let await_result = self.asynchronous && !matches!(&call, CacheCall::ResolveKey { .. });
+        let await_result = self.asynchronous && !matches!(&call, CacheCall::GetCacheKey { .. });
         let (method, result) = match call {
-            CacheCall::ResolveKey { reply } => {
+            CacheCall::GetCacheKey { reply } => {
                 if let Some(explicit) = arguments.get_item("cache_key")? {
-                    self.pending = Some(Pending::ResolveKey(reply));
+                    self.pending = Some(Pending::GetCacheKey(reply));
                     return self.resume(py, Ok(explicit.unbind()));
                 }
-                self.pending = Some(Pending::ResolveKey(reply));
+                self.pending = Some(Pending::GetCacheKey(reply));
                 ("get_cache_key", None)
             }
             CacheCall::Lookup { key, reply } => {
@@ -116,7 +116,7 @@ impl PythonCache {
             return Err(result.err().unwrap());
         }
         match self.pending.take() {
-            Some(Pending::ResolveKey(reply)) => {
+            Some(Pending::GetCacheKey(reply)) => {
                 let key = result
                     .and_then(|value| value.bind(py).extract::<String>())
                     .map_err(|_| Error::Unavailable);

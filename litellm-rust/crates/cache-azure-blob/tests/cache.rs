@@ -9,7 +9,7 @@ use litellm_cache::{
 use litellm_cache_azure_blob::AzureBlobCache;
 use litellm_cache_response::{
     CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheCodec,
-    ResponseCacheRequest, cache_key,
+    ResponseCacheRequest, get_cache_key,
 };
 use rstest::{fixture, rstest};
 use serde_json::json;
@@ -35,9 +35,7 @@ fn request(model: &str) -> ResponseCacheRequest {
             api_parameter: true,
             internal_parameter: false,
         }],
-        preset: None,
-        namespace: None,
-        include_provider_parameters: false,
+        ..Default::default()
     })
 }
 
@@ -273,7 +271,7 @@ fn malformed_blobs_are_response_cache_misses(fixture: Fixture) {
     let broken = request("broken");
     fixture
         .service
-        .seed_blob(&cache_key(&broken.key), b"{not json");
+        .seed_blob(&get_cache_key(&broken.key), b"{not json");
     assert_eq!(response_cache.lookup(&broken, now()).unwrap(), None);
     assert_eq!(
         fixture
@@ -321,7 +319,7 @@ fn batch_get_preserves_order_and_marks_misses_and_invalid_entries(fixture: Fixtu
         .unwrap();
     fixture
         .service
-        .seed_blob(&cache_key(&requests[2].key), b"nope");
+        .seed_blob(&get_cache_key(&requests[2].key), b"nope");
     let hits = response_cache.lookup_batch(&requests, now()).unwrap();
     assert_eq!(hits.values, vec![Some(json!("HIT")), None, None]);
     assert_eq!(hits.missing_indices, vec![1, 2]);
@@ -424,7 +422,7 @@ fn response_cache_stores_and_reads_through_the_backend(fixture: Fixture) {
         .store(&request, response.clone(), now())
         .unwrap();
     assert_eq!(
-        fixture.stored_json(&cache_key(&request.key)),
+        fixture.stored_json(&get_cache_key(&request.key)),
         json!({"timestamp": 1_700_000_000.0, "response": {"id": "chatcmpl-1"}})
     );
     assert_eq!(

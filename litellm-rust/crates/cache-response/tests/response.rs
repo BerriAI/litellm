@@ -15,7 +15,7 @@ use litellm_cache::{
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
     CacheControls, CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheRequest,
-    WriteBuffer, cache_key,
+    WriteBuffer, get_cache_key,
 };
 use redis_test::MockCmd;
 use rstest::{fixture, rstest};
@@ -447,7 +447,7 @@ fn generated_keys_preserve_namespace_and_explicit_keys(
         ..Default::default()
     };
     let generated = ResponseCacheRequest::new(key.clone());
-    let explicit = keyed(&cache_key(&key));
+    let explicit = keyed(&get_cache_key(&key));
     memory
         .store(&generated, json!({"value": 7}), Duration::from_secs(100))
         .unwrap();

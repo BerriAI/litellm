@@ -9,7 +9,7 @@ mod service;
 pub use buffer::WriteBuffer;
 pub use caching::{
     CacheControls, CacheEntry, CacheKeyContext, CacheKeyField, CacheKeyInput, CacheKeyRequest,
-    CacheKeyTransport, CacheMode, cache_key, get_cache_key, should_use_cache,
+    CacheKeyTransport, CacheMode, get_cache_key, should_use_cache,
 };
 pub use codec::ResponseCacheCodec;
 pub use embedding::PartialHits;

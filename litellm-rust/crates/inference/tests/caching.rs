@@ -522,7 +522,7 @@ impl ResponseCacheService for ResolveFailureCache {
         &self.config
     }
 
-    fn resolve_key<'a>(
+    fn get_cache_key<'a>(
         &'a self,
         _: &'a litellm_cache_response::ResponseCacheRequest,
     ) -> futures_util::future::BoxFuture<'a, Result<String, litellm_cache::Error>> {

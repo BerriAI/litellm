@@ -1,6 +1,6 @@
 use litellm_cache_response::{
     CacheControls, CacheKeyContext, CacheKeyField, CacheKeyInput, CacheKeyRequest,
-    CacheKeyTransport, cache_key, get_cache_key, should_use_cache,
+    CacheKeyTransport, get_cache_key, should_use_cache,
 };
 use rstest::rstest;
 use sha2::{Digest, Sha256};
@@ -79,7 +79,6 @@ fn keys_match_python_order_groups_files_and_namespaces(
     };
     context.apply(&mut input);
     let expected = format!("{prefix}{}", hash(preimage));
-    assert_eq!(cache_key(&input), expected);
     assert_eq!(get_cache_key(&input), expected);
 }
 
@@ -112,7 +111,7 @@ fn keys_hash_api_and_opted_in_provider_parameters(
     } else {
         b"model: a"
     };
-    assert_eq!(cache_key(&input), hash(preimage));
+    assert_eq!(get_cache_key(&input), hash(preimage));
 }
 
 #[rstest]
@@ -125,7 +124,7 @@ fn preset_keys_are_used_verbatim(#[case] namespace: Option<&str>) {
         namespace: namespace.map(str::to_owned),
         ..Default::default()
     };
-    assert_eq!(cache_key(&input), "preset");
+    assert_eq!(get_cache_key(&input), "preset");
     assert_eq!(get_cache_key(&input), "preset");
 }
 
@@ -150,7 +149,7 @@ fn typed_transport_preserves_existing_key_bytes(#[case] rewritten: bool) {
         false => format!("model: modeltransport: {transport}"),
         true => format!("model: modeltransport: {transport}wire_changes: {request}"),
     };
-    assert_eq!(cache_key(&input), hash(preimage.as_bytes()));
+    assert_eq!(get_cache_key(&input), hash(preimage.as_bytes()));
 }
 
 const ENABLED: CacheControls = CacheControls {
@@ -206,7 +205,7 @@ fn selected_parameters_use_json_value_encoding() {
         "stream": false,
         "max_tokens": null,
     }));
-    assert_eq!(cache_key(&input), hash(
+    assert_eq!(get_cache_key(&input), hash(
         br#"messages: [{"content":"hello","role":"user"}]model: "logical"stream: falsetemperature: 0.5"#
     ));
 }
@@ -222,8 +221,8 @@ fn parameter_keys_ignore_nested_object_order() {
     )
     .unwrap();
     assert_eq!(
-        cache_key(&CacheKeyInput::from_parameters(first)),
-        cache_key(&CacheKeyInput::from_parameters(second)),
+        get_cache_key(&CacheKeyInput::from_parameters(first)),
+        get_cache_key(&CacheKeyInput::from_parameters(second)),
     );
 }
 
@@ -236,10 +235,10 @@ fn parameter_keys_preserve_value_identity(
     #[case] second: serde_json::Value,
 ) {
     assert_ne!(
-        cache_key(&CacheKeyInput::from_parameters(
+        get_cache_key(&CacheKeyInput::from_parameters(
             serde_json::json!({"input": first})
         )),
-        cache_key(&CacheKeyInput::from_parameters(
+        get_cache_key(&CacheKeyInput::from_parameters(
             serde_json::json!({"input": second})
         )),
     );

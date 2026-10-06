@@ -144,7 +144,7 @@ pub(super) fn project_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use litellm_cache_response::cache_key;
+    use litellm_cache_response::get_cache_key;
     use rstest::{fixture, rstest};
     use std::ffi::CString;
 
@@ -227,7 +227,7 @@ mod tests {
                     previous,
                 )
                 .unwrap();
-            assert_eq!(cache_key(&input), expected);
+            assert_eq!(get_cache_key(&input), expected);
         });
     }
 }

@@ -144,10 +144,6 @@ impl CacheKeyContext {
 }
 
 pub fn get_cache_key(input: &CacheKeyInput) -> String {
-    cache_key(input)
-}
-
-pub fn cache_key(input: &CacheKeyInput) -> String {
     if let Some(preset) = &input.preset {
         return preset.clone();
     }
