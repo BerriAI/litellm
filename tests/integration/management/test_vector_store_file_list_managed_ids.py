@@ -312,25 +312,26 @@ def _sdk_base_url(gateway: Gateway) -> str:
     return str(gateway.client.base_url).rstrip("/") + "/v1"
 
 
-def _models_over_a_fresh_connection(gateway: Gateway, _: int) -> frozenset[str]:
+def _models_over_a_fresh_connection(gateway: Gateway, key: str, _: int) -> frozenset[str]:
     with httpx.Client(base_url=gateway.client.base_url, timeout=15, trust_env=False) as client:
-        listed: Final = client.get("/v1/models", headers={"Authorization": f"Bearer {gateway.key}"})
+        listed: Final = client.get("/v1/models", headers={"Authorization": f"Bearer {key}"})
     assert listed.status_code == 200, listed.text
     data: Final = _json(listed)["data"]
     assert isinstance(data, list), listed.text
     return frozenset(string_value(object_value(entry)["id"]) for entry in data)
 
 
-def _every_worker_serves(gateway: Gateway, model: str) -> bool:
+def _every_worker_serves(gateway: Gateway, model: str, key: str) -> bool:
     with ThreadPoolExecutor(max_workers=16) as pool:
         rounds: Final = tuple(
-            tuple(pool.map(partial(_models_over_a_fresh_connection, gateway), range(16))) for _ in range(2)
+            tuple(pool.map(partial(_models_over_a_fresh_connection, gateway, key), range(16))) for _ in range(2)
         )
     return all(model in seen for round_ in rounds for seen in round_)
 
 
-def _wait_until_every_worker_serves(gateway: Gateway, model: str) -> None:
-    eventually(lambda: _every_worker_serves(gateway, model), lambda served: served, seconds=90)
+def _wait_until_every_worker_serves(gateway: Gateway, model: str, key: str | None = None) -> None:
+    caller: Final = gateway.key if key is None else key
+    eventually(lambda: _every_worker_serves(gateway, model, caller), lambda served: served, seconds=90)
 
 
 @dataclass(frozen=True, slots=True)
@@ -392,12 +393,7 @@ class _Rig:
 
 
 @contextmanager
-def _rig(
-    gateway: Gateway,
-    *filenames: str,
-    listing: Callable[[str, str], Listing] | None = None,
-    num_retries: int | None = None,
-) -> Generator[_Rig]:
+def _rig(gateway: Gateway, *filenames: str, listing: Callable[[str, str], Listing] | None = None) -> Generator[_Rig]:
     store: Final = "vs_" + uuid.uuid4().hex
     bearer: Final = "provider-key-" + uuid.uuid4().hex[:8]
     served: Final = (
@@ -406,11 +402,7 @@ def _rig(
         else _constant_listing(store, *(_provider_file_id(bearer, filename) for filename in filenames))
     )
     with gateway.scenario() as scenario, wire_server(_provider(store, served)) as wire:
-        model: Final = (
-            scenario.model(api_base=wire.url + "/v1", api_key=bearer)
-            if num_retries is None
-            else scenario.model(api_base=wire.url + "/v1", api_key=bearer, num_retries=num_retries)
-        )
+        model: Final = scenario.model(api_base=wire.url + "/v1", api_key=bearer)
         _wait_until_every_worker_serves(gateway, model)
         yield _Rig(gateway, scenario, wire, store, bearer, model)
 
@@ -704,6 +696,79 @@ def test_managed_file_lifecycle_routes_and_restores_managed_ids(gateway: Gateway
         assert all(request.headers["authorization"] == f"Bearer {bearer_a}" for request in lifecycle_requests)
         assert all(_query(request) == {} for request in lifecycle_requests), lifecycle_requests
         assert wire_b.drain() == ()
+
+
+def test_team_model_managed_file_lifecycle_forwards_the_provider_file_id(gateway: Gateway) -> None:
+    store: Final = f"vs_team_lifecycle_{uuid.uuid4().hex}"
+    bearer: Final = f"provider-team-lifecycle-{uuid.uuid4().hex}"
+    filename: Final = "team-lifecycle-managed.txt"
+    content: Final = b"team model vector store file contents\n"
+    provider_file_id: Final = _provider_file_id(bearer, filename)
+    update_body: Final[dict[str, JsonValue]] = {"attributes": {"tenant": "b"}}
+
+    with (
+        gateway.scenario() as scenario,
+        wire_server(_managed_file_lifecycle_provider(store, bearer, filename, content)) as wire,
+    ):
+        team: Final = scenario.team(models=[])
+        model: Final = scenario.model(api_base=f"{wire.url}/v1", api_key=bearer, model_info={"team_id": team})
+        user: Final = scenario.member(team)
+        key: Final = scenario.key(team_id=team, user_id=user)
+        _wait_until_every_worker_serves(gateway, model, key)
+        wire.drain()
+        entries: Final = gateway.get("/model/info")["data"]
+        assert isinstance(entries, list)
+        internal: Final = tuple(
+            string_value(object_value(entry)["model_name"])
+            for entry in entries
+            if object_value(object_value(entry)["model_info"]).get("team_public_model_name") == model
+        )
+        assert len(internal) == 1, entries
+        managed_file_id: Final = _upload(gateway, key, internal[0], filename)
+        assert _carried_provider_file_id(managed_file_id) == provider_file_id, _decoded(managed_file_id)
+        attached: Final = gateway.request(
+            "POST", f"/v1/vector_stores/{store}/files", {"file_id": provider_file_id}, key=key
+        )
+        assert attached.status_code == 200, attached.text
+        setup_requests: Final = wire.drain()
+        assert [(request.method, request.target) for request in setup_requests] == [
+            ("POST", "/v1/files"),
+            ("POST", f"/v1/vector_stores/{store}/files"),
+        ], setup_requests
+
+        file_path: Final = f"/v1/vector_stores/{store}/files/{managed_file_id}"
+        retrieved: Final = gateway.request("GET", file_path, key=key)
+        assert retrieved.status_code == 200, retrieved.text
+        assert _json(retrieved) == _store_file_response(store, managed_file_id, {"tenant": "a"}), retrieved.text
+        updated: Final = gateway.request("POST", file_path, update_body, key=key)
+        assert updated.status_code == 200, updated.text
+        assert _json(updated) == _store_file_response(store, managed_file_id, {"tenant": "b"}), updated.text
+        downloaded: Final = gateway.request("GET", f"{file_path}/content", key=key)
+        assert downloaded.status_code == 200, downloaded.text
+        assert downloaded.content == json.dumps(_file_content_page(content), separators=(",", ":")).encode(), (
+            downloaded.text
+        )
+        assert downloaded.headers["content-disposition"] == f'attachment; filename="{managed_file_id}"', (
+            downloaded.text
+        )
+        assert downloaded.headers["x-content-type-options"] == "nosniff", downloaded.text
+        deleted: Final = gateway.request("DELETE", file_path, key=key)
+        assert deleted.status_code == 200, deleted.text
+        assert _json(deleted) == {"id": managed_file_id, "object": "vector_store.file.deleted", "deleted": True}, (
+            deleted.text
+        )
+
+        provider_path: Final = f"/v1/vector_stores/{store}/files/{provider_file_id}"
+        lifecycle_requests: Final = wire.drain()
+        assert [(request.method, request.target) for request in lifecycle_requests] == [
+            ("GET", provider_path),
+            ("POST", provider_path),
+            ("GET", f"{provider_path}/content"),
+            ("DELETE", provider_path),
+        ], lifecycle_requests
+        assert JSON_OBJECT.validate_json(lifecycle_requests[1].body) == update_body, lifecycle_requests[1]
+        assert tuple(lifecycle_requests[index].body for index in (0, 2, 3)) == (b"", b"", b""), lifecycle_requests
+        assert all(request.headers["authorization"] == f"Bearer {bearer}" for request in lifecycle_requests)
 
 
 def test_stranger_cannot_access_another_teams_managed_file(gateway: Gateway) -> None:
@@ -1052,12 +1117,12 @@ def test_provider_errors_reach_the_caller_and_other_models_keep_mapping(
     gateway: Gateway, status: int, expected_error_type: str
 ) -> None:
     message: Final = f"provider refused listing {uuid.uuid4().hex[:8]}"
-    with _rig(gateway, listing=_error_listing(status, message), num_retries=0) as failing, _rig(
+    with _rig(gateway, listing=_error_listing(status, message)) as failing, _rig(
         gateway, "a.txt"
     ) as healthy:
         member: Final = _member(failing.scenario, failing.model, healthy.model)
         managed_a: Final = healthy.upload(member.key, "a.txt")
-        failed: Final = failing.list(member.key, {"model": failing.model})
+        failed: Final = failing.list(member.key, {"model": failing.model}, {"x-litellm-num-retries": "0"})
         assert failed.status_code == status, failed.text
         error: Final = object_value(_json(failed)["error"])
         assert message in string_value(error["message"]), failed.text
@@ -1073,7 +1138,7 @@ def test_non_json_provider_body_is_an_error_response_and_other_models_keep_mappi
     with _rig(gateway, listing=_html_listing()) as failing, _rig(gateway, "a.txt") as healthy:
         member: Final = _member(failing.scenario, failing.model, healthy.model)
         managed_a: Final = healthy.upload(member.key, "a.txt")
-        failed: Final = failing.list(member.key, {"model": failing.model})
+        failed: Final = failing.list(member.key, {"model": failing.model}, {"x-litellm-num-retries": "0"})
         assert failed.status_code == 500, failed.text
         assert string_value(object_value(_json(failed)["error"])["message"]), failed.text
         assert _ids(healthy.listed(member.key)) == (managed_a,)

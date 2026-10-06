@@ -291,9 +291,33 @@ def test_team_owned_store_rejects_other_team_info_update_and_delete(gateway: Gat
         owner_updated_store: Final = object_value(owner_updated_rows[0]["to_jsonb"])
         assert owner_updated_store["vector_store_name"] == "owner route grant update", owner_updated_rows
         assert owner_updated_store["team_id"] == owner_team, owner_updated_rows
-        deleted: Final = gateway.request("POST", "/vector_store/delete", {"vector_store_id": store_id}, key=gateway.key)
-        assert deleted.status_code == 200, deleted.text
+        owner_deleted: Final = gateway.request(
+            "POST", "/vector_store/delete", {"vector_store_id": store_id}, key=owner_route_key
+        )
+        assert owner_deleted.status_code == 200, owner_deleted.text
         assert read_rows(snapshot_query, (store_id,)) == []
+        owner_info_after_delete: Final = gateway.request(
+            "POST", "/vector_store/info", {"vector_store_id": store_id}, key=gateway.key
+        )
+        assert owner_info_after_delete.status_code == 404, owner_info_after_delete.text
+
+        admin_store_id: Final = f"vs_team_owned_admin_{uuid.uuid4().hex}"
+        admin_created: Final = gateway.request(
+            "POST",
+            "/vector_store/new",
+            {"vector_store_id": admin_store_id, "custom_llm_provider": "openai", "vector_store_name": "admin target"},
+            key=owner_admin_key,
+        )
+        assert admin_created.status_code == 200, admin_created.text
+        scenario.cleanups.callback(
+            gateway.request, "POST", "/vector_store/delete", {"vector_store_id": admin_store_id}, key=gateway.key
+        )
+        assert len(read_rows(snapshot_query, (admin_store_id,))) == 1
+        admin_deleted: Final = gateway.request(
+            "POST", "/vector_store/delete", {"vector_store_id": admin_store_id}, key=gateway.key
+        )
+        assert admin_deleted.status_code == 200, admin_deleted.text
+        assert read_rows(snapshot_query, (admin_store_id,)) == []
 
 
 @pytest.mark.covers("other.vector_store.chat.config_store_search_reaches_upstream_after_listing")
