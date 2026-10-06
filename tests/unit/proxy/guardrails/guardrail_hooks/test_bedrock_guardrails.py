@@ -1175,6 +1175,25 @@ async def test_apply_guardrail_response_scans_every_choice_when_latest_role_only
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_request_keeps_rewritten_input_when_responses_key_is_present():
+    """A caller-supplied responses key must not turn a request scan into assistant output."""
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "outputs": [{"text": "contact {EMAIL}"}],
+        }
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["contact ada@example.com"]},
+            request_data={"model": "gpt-4o", "responses": []},
+            input_type="request",
+        )
+
+    assert result["texts"] == ["contact {EMAIL}"]
+
+
+@pytest.mark.asyncio
 async def test_bedrock_apply_guardrail_request_uses_INPUT_source():
     """input_type='request' must call Bedrock with source=INPUT and user messages."""
     guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")

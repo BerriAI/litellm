@@ -3212,8 +3212,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         texts: Sequence[object],
         masked_texts: Sequence[object],
         request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
     ) -> None:
-        if "responses" not in request_data and not _STREAMING_REPLAYS_ORIGINAL_TEXT.get():
+        if input_type != "response" or not _STREAMING_REPLAYS_ORIGINAL_TEXT.get():
             return
         original_texts: Final = tuple(str(text) for text in texts)
         rewritten_texts: Final = tuple(str(text) for text in masked_texts)
@@ -3357,6 +3358,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 texts=texts,
                 masked_texts=masked_texts,  # pyright: ignore[reportUnknownArgumentType] # output list is untyped
                 request_data=request_data,  # pyright: ignore[reportUnknownArgumentType] # request dict is untyped
+                input_type=input_type,
             )
             inputs["texts"] = masked_texts
             return inputs
