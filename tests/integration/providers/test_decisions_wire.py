@@ -115,11 +115,16 @@ class _Provider:
     api_key: str | None
     wraps_result: bool
     cost_map_key: str | None
+    speaks_openai: bool = False
 
     def upstream_body(self) -> dict[str, JsonValue]:
+        if self.speaks_openai:
+            return {"model": self.body_model, "input": _INPUT, "questions": _QUESTIONS}
         return {"model": self.body_model, "state": _INPUT, "questions": _SYSTEM_ONE_QUESTIONS}
 
     def upstream_reply(self) -> dict[str, JsonValue]:
+        if self.speaks_openai:
+            return {"model": self.body_model, "answers": _ANSWERS, "usage": _USAGE}
         answer: Final[dict[str, JsonValue]] = {
             "model": self.body_model,
             "answers": _SYSTEM_ONE_ANSWERS,
@@ -163,6 +168,7 @@ _PROVIDERS: Final = (
         True,
         "cloudflare/@cf/cloudflare/clef",
     ),
+    _Provider("openai", "openai/gpt-6-luna", "/v1/decisions", "gpt-6-luna", _API_KEY, False, "gpt-6-luna", True),
 )
 _PERPLEXITY: Final = _PROVIDERS[0]
 _PREDICATE: Final[dict[str, JsonValue]] = {"type": "predicate", "name": "q", "instructions": "Is it?"}
@@ -384,6 +390,17 @@ def test_system_one_providers_refuse_images_at_the_gateway_without_an_upstream_c
         assert response.status_code == 400, response.text
         assert "input_image" in response.text
         assert _upstream_calls(gateway, handle) == []
+
+
+def test_openai_forwards_image_input_as_is(gateway: Gateway) -> None:
+    openai: Final = _PROVIDERS[5]
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, openai.upstream_reply())
+        model: Final = _deployment(scenario, handle, openai)
+        response: Final = _decide(gateway, model, input=_IMAGE_INPUT)
+        assert response.status_code == 200, response.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["body"] == {"model": openai.body_model, "input": _IMAGE_INPUT, "questions": _QUESTIONS}
 
 
 def test_unknown_model_is_refused_like_chat(gateway: Gateway) -> None:

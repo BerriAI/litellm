@@ -342,6 +342,11 @@ model_list:
       model: cloudflare/@cf/cloudflare/clef
       api_base: http://127.0.0.1:8191
       api_key: synthetic-cloudflare-key
+  - model_name: openai/gpt-6-luna
+    litellm_params:
+      model: openai/gpt-6-luna
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
   - model_name: strands_decider/strands-decider-2B-hobson-v19
     litellm_params:
       model: strands_decider/strands-decider-2B-hobson-v19

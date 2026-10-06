@@ -104,6 +104,11 @@ _ZERO_USAGE: Final = DecisionsUsage(
     output_tokens_details=DecisionsOutputTokensDetails(reasoning_tokens=0),
     total_tokens=0,
 )
+_OPENAI_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "gpt-6-luna",
+    "answers": [*_EXPECTED_ANSWERS, {"type": "refusal", "name": None}],
+    "usage": _EXPECTED_USAGE,
+}
 _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
     ("perplexity", "perplexity/pplx-decider-v1-27b", "https://api.perplexity.ai/v1/decisions", "pplx-decider-v1-27b"),
     ("typesafe", "typesafe/jev-1.13", "https://api.typesafe.ai/v1/systemone", "jev-1.13"),
@@ -188,6 +193,40 @@ async def test_adecisions_translates_to_the_system_one_wire_contract(
     assert isinstance(response.answers[1], ChoiceAnswer)
     assert isinstance(response.answers[2], ScoreAnswer)
     assert response._hidden_params["custom_llm_provider"] == provider
+
+
+@pytest.mark.asyncio
+async def test_openai_decisions_are_forwarded_without_translation(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    image_input: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": _INPUT},
+                {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=", "detail": "auto"},
+            ],
+        }
+    ]
+
+    response: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input=image_input,
+        questions=[*_QUESTIONS, {"type": "choice", "instructions": "Refund?", "choices": [{"value": True}]}],
+        safety_identifier="user-123",
+        api_key="caller-key",
+    )
+
+    assert route.called
+    request: Final = respx_mock.calls[0].request
+    assert request.headers["authorization"] == "Bearer caller-key"
+    assert json.loads(request.content) == {
+        "model": "gpt-6-luna",
+        "input": image_input,
+        "questions": [*_QUESTIONS, {"type": "choice", "instructions": "Refund?", "choices": [{"value": True}]}],
+        "safety_identifier": "user-123",
+    }
+    assert response.model_dump(mode="json") == _OPENAI_RESPONSE
+    assert response._hidden_params["custom_llm_provider"] == "openai"
 
 
 @pytest.mark.asyncio

@@ -1950,6 +1950,7 @@
         "moderations": true,
         "batches": true,
         "rerank": false,
+        "systemone": true,
         "container": true,
         "compact": true,
         "a2a": true,
