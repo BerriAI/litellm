@@ -1,10 +1,15 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import litellm
 from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.router_utils.cooldown_handlers import (
+    _async_get_cooldown_deployments,
+    _async_get_cooldown_deployments_with_debug_info,
+    _get_cooldown_deployments,
     _get_deployment_cooldown_policy,
     _increment_allowed_fails,
     _resolve_allowed_fails_from_policy,
@@ -535,3 +540,163 @@ class TestIncrementAllowedFailsServiceTarget:
 
         assert _increment_allowed_fails(cache, "deployment:dep-1:fails", ttl=60.0) == 4
         assert seen == ["router_cooldowns"]
+
+
+class TestCooldownDeploymentsModelFilter:
+    def _make_router(self):
+        router = MagicMock()
+        router.get_model_ids.return_value = ["dep-1", "dep-2"]
+        router.cooldown_cache = MagicMock()
+        from unittest.mock import AsyncMock
+
+        router.cooldown_cache.async_get_active_cooldowns = AsyncMock(return_value=[("dep-1", 10.0)])
+        router.cooldown_cache.get_active_cooldowns.return_value = [("dep-1", 10.0)]
+        return router
+
+    @pytest.mark.asyncio
+    async def test_async_get_cooldown_deployments_with_model_name(self):
+        router = self._make_router()
+        res = await _async_get_cooldown_deployments(router, parent_otel_span=None, model_name="gpt-4")
+        assert res == ["dep-1"]
+        router.get_model_ids.assert_called_once_with(model_name="gpt-4")
+
+    @pytest.mark.asyncio
+    async def test_async_get_cooldown_deployments_without_model_name(self):
+        router = self._make_router()
+        res = await _async_get_cooldown_deployments(router, parent_otel_span=None)
+        assert res == ["dep-1"]
+        router.get_model_ids.assert_called_once_with(model_name=None)
+
+    def test_get_cooldown_deployments_with_model_name(self):
+        router = self._make_router()
+        res = _get_cooldown_deployments(router, parent_otel_span=None, model_name="claude-3")
+        assert res == ["dep-1"]
+        router.get_model_ids.assert_called_once_with(model_name="claude-3")
+
+    def test_get_cooldown_deployments_without_model_name(self):
+        router = self._make_router()
+        res = _get_cooldown_deployments(router, parent_otel_span=None)
+        assert res == ["dep-1"]
+        router.get_model_ids.assert_called_once_with(model_name=None)
+
+    @pytest.mark.asyncio
+    async def test_async_get_cooldown_deployments_debug_with_model_name(self):
+        router = self._make_router()
+        res = await _async_get_cooldown_deployments_with_debug_info(router, parent_otel_span=None, model_name="gpt-4")
+        assert res == [("dep-1", 10.0)]
+        router.get_model_ids.assert_called_once_with(model_name="gpt-4")
+
+    @pytest.mark.asyncio
+    async def test_async_get_cooldown_deployments_debug_without_model_name(self):
+        router = self._make_router()
+        res = await _async_get_cooldown_deployments_with_debug_info(router, parent_otel_span=None)
+        assert res == [("dep-1", 10.0)]
+        router.get_model_ids.assert_called_once_with(model_name=None)
+
+    @pytest.mark.asyncio
+    async def test_routing_read_batch_passes_model_name(self):
+        from unittest.mock import AsyncMock
+
+        from litellm.router_utils.routing_read_batch import RoutingReadBatch
+
+        router = self._make_router()
+        router.cooldown_cache.cooldown_store = MagicMock()
+        router.cooldown_cache.active_cooldowns_from_results.return_value = [("dep-1", 10.0)]
+
+        batch = RoutingReadBatch(usage_selector=None)
+        with patch.object(DualCache, "async_batch_get_cache_shared", AsyncMock(return_value=([("dep-1", 10.0)],))):
+            res = await batch.async_get_cooldown_deployments(
+                litellm_router_instance=router,
+                healthy_deployments=[],
+                parent_otel_span=None,
+                model_name="gpt-4",
+            )
+            assert res == ["dep-1"]
+            router.get_model_ids.assert_called_once_with(model_name="gpt-4")
+
+    @pytest.mark.asyncio
+    async def test_routing_read_batch_scopes_to_healthy_deployments(self):
+        from unittest.mock import AsyncMock
+
+        from litellm.router_utils.routing_read_batch import RoutingReadBatch
+
+        router = self._make_router()
+        router.cooldown_cache.cooldown_store = MagicMock()
+        router.cooldown_cache.active_cooldowns_from_results.return_value = [("dep-custom", 10.0)]
+
+        batch = RoutingReadBatch(usage_selector=None)
+        with patch.object(
+            DualCache, "async_batch_get_cache_shared", AsyncMock(return_value=([("dep-custom", 10.0)],))
+        ) as mock_batch:
+            res = await batch.async_get_cooldown_deployments(
+                litellm_router_instance=router,
+                healthy_deployments=[{"model_info": {"id": "dep-custom"}}],
+                parent_otel_span=None,
+            )
+            assert res == ["dep-custom"]
+            cooldown_keys = mock_batch.call_args[0][0][0][1]
+            assert cooldown_keys == ["deployment:dep-custom:cooldown"]
+
+    @pytest.mark.asyncio
+    async def test_routing_read_batch_uses_route_candidate_ids(self):
+        from unittest.mock import AsyncMock
+
+        from litellm.router_utils.routing_read_batch import RoutingReadBatch
+
+        router = self._make_router()
+        router.get_candidate_model_ids_for_route.return_value = frozenset({"dep-route"})
+        router.cooldown_cache.cooldown_store = MagicMock()
+        router.cooldown_cache.active_cooldowns_from_results.return_value = [("dep-route", 10.0)]
+
+        batch = RoutingReadBatch(usage_selector=None)
+        with patch.object(
+            DualCache, "async_batch_get_cache_shared", AsyncMock(return_value=([("dep-route", 10.0)],))
+        ) as mock_batch:
+            res = await batch.async_get_cooldown_deployments(
+                litellm_router_instance=router,
+                healthy_deployments=[],
+                parent_otel_span=None,
+                model_name="fast",
+            )
+            assert res == ["dep-route"]
+            cooldown_keys = mock_batch.call_args[0][0][0][1]
+            assert cooldown_keys == ["deployment:dep-route:cooldown"]
+
+    @pytest.mark.asyncio
+    async def test_async_get_cooldown_deployments_falls_back_when_model_ids_empty(self):
+        router = self._make_router()
+        router.get_model_ids.side_effect = lambda model_name=None: [] if model_name else ["dep-1", "dep-2"]
+        res = await _async_get_cooldown_deployments(router, parent_otel_span=None, model_name="unknown-group")
+        assert res == ["dep-1"]
+        assert router.get_model_ids.call_count == 2
+
+    def test_get_cooldown_deployments_falls_back_when_model_ids_empty(self):
+        router = self._make_router()
+        router.get_model_ids.side_effect = lambda model_name=None: [] if model_name else ["dep-1", "dep-2"]
+        res = _get_cooldown_deployments(router, parent_otel_span=None, model_name="unknown-group")
+        assert res == ["dep-1"]
+        assert router.get_model_ids.call_count == 2
+
+    def test_get_cooldown_deployments_with_healthy_deployments(self):
+        router = self._make_router()
+        healthy = [{"model_info": {"id": "dep-custom"}}]
+        res = _get_cooldown_deployments(router, parent_otel_span=None, healthy_deployments=healthy)
+        assert res == ["dep-1"]
+        router.cooldown_cache.get_active_cooldowns.assert_called_once_with(
+            model_ids=["dep-custom"], parent_otel_span=None
+        )
+
+    def test_resolve_cooldown_model_ids_from_route_candidate_ids(self):
+        router = self._make_router()
+        router.get_candidate_model_ids_for_route.return_value = frozenset({"dep-route-1", "dep-route-2"})
+        res = _get_cooldown_deployments(router, parent_otel_span=None, model_name="fast")
+        assert res == ["dep-1"]
+        call_ids = router.cooldown_cache.get_active_cooldowns.call_args[1]["model_ids"]
+        assert set(call_ids) == {"dep-route-1", "dep-route-2"}
+
+    def test_resolve_cooldown_model_ids_handles_exception_in_candidate_route(self):
+        router = self._make_router()
+        router.get_candidate_model_ids_for_route.side_effect = Exception("error")
+        res = _get_cooldown_deployments(router, parent_otel_span=None, model_name="gpt-4")
+        assert res == ["dep-1"]
+        router.get_model_ids.assert_called_once_with(model_name="gpt-4")

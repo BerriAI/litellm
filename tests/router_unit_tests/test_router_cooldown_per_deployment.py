@@ -14,8 +14,6 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
 from litellm.router_utils.cooldown_handlers import (
-    _get_deployment_cooldown_policy,
-    _has_explicit_allowed_fails_policy_for_exception,
     _resolve_allowed_fails_from_policy,
     _should_cooldown_deployment,
     mark_advisor_orchestration_failure,
@@ -777,3 +775,162 @@ class TestRouterLevelGetAllowedFailsFromPolicy:
         router = self._make_router(InternalServerErrorAllowedFails=5)
         exc = litellm.RateLimitError("429", "openai", "gpt-4")
         assert router.get_allowed_fails_from_policy(exc) is None
+
+
+class TestRouterCooldownModelFilter:
+    def test_sync_get_available_deployment_passes_model_name_to_cooldown(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4", "api_key": "fake"},
+                    "model_info": {"id": "dep-1"},
+                },
+                {
+                    "model_name": "claude-3",
+                    "litellm_params": {"model": "anthropic/claude-3", "api_key": "fake"},
+                    "model_info": {"id": "dep-2"},
+                },
+            ]
+        )
+        with patch(
+            "litellm.router._get_cooldown_deployments", wraps=litellm.router._get_cooldown_deployments
+        ) as mock_get_cooldown:
+            dep = router.get_available_deployment(model="gpt-4")
+            assert dep["model_info"]["id"] == "dep-1"
+            call_kwargs = mock_get_cooldown.call_args.kwargs
+            assert call_kwargs.get("model_name") == "gpt-4"
+
+    @pytest.mark.asyncio
+    async def test_async_get_available_deployment_passes_model_name_to_cooldown(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4", "api_key": "fake"},
+                    "model_info": {"id": "dep-1"},
+                },
+                {
+                    "model_name": "claude-3",
+                    "litellm_params": {"model": "anthropic/claude-3", "api_key": "fake"},
+                    "model_info": {"id": "dep-2"},
+                },
+            ]
+        )
+        with patch(
+            "litellm.router._async_get_cooldown_deployments", wraps=litellm.router._async_get_cooldown_deployments
+        ) as mock_async_get_cooldown:
+            dep = await router.async_get_available_deployment(model="gpt-4", request_kwargs={})
+            assert dep["model_info"]["id"] == "dep-1"
+            call_kwargs = mock_async_get_cooldown.call_args.kwargs
+            assert call_kwargs.get("model_name") == "gpt-4"
+
+    def test_team_public_model_cooldown_filtered(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "team-gpt-4-1",
+                    "litellm_params": {"model": "openai/gpt-4", "api_key": "fake"},
+                    "model_info": {"id": "dep-team-1", "team_id": "team-1", "team_public_model_name": "gpt-4"},
+                },
+                {
+                    "model_name": "team-gpt-4-2",
+                    "litellm_params": {"model": "openai/gpt-4", "api_key": "fake"},
+                    "model_info": {"id": "dep-team-2", "team_id": "team-1", "team_public_model_name": "gpt-4"},
+                },
+            ]
+        )
+        router.cooldown_cache.add_deployment_to_cooldown(
+            model_id="dep-team-1",
+            original_exception=Exception("rate limit"),
+            exception_status=429,
+            cooldown_time=60.0,
+        )
+        dep = router.get_available_deployment(
+            model="gpt-4",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-1"}},
+        )
+        assert dep["model_info"]["id"] == "dep-team-2"
+
+    def test_routing_group_cooldown_scoped(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4", "api_key": "fake"},
+                    "model_info": {"id": "dep-1"},
+                },
+                {
+                    "model_name": "claude-3",
+                    "litellm_params": {"model": "anthropic/claude-3", "api_key": "fake"},
+                    "model_info": {"id": "dep-2"},
+                },
+            ],
+            routing_groups=[
+                {"group_name": "fast", "models": ["gpt-4"], "routing_strategy": "simple-shuffle"},
+            ],
+        )
+        with patch(
+            "litellm.router._get_cooldown_deployments", wraps=litellm.router._get_cooldown_deployments
+        ) as mock_get_cooldown:
+            dep = router.get_available_deployment(model="fast")
+            assert dep["model_info"]["id"] == "dep-1"
+            call_kwargs = mock_get_cooldown.call_args.kwargs
+            assert call_kwargs.get("model_name") == "fast"
+            healthy = call_kwargs.get("healthy_deployments")
+            assert healthy is not None
+            assert [d["model_info"]["id"] for d in healthy] == ["dep-1"]
+
+    def test_prefetch_arm_scopes_cooldown_keys(self):
+        from litellm.router_utils.routing_read_batch import RoutingPrefetch
+
+        router = MagicMock()
+        router.get_model_ids.return_value = ["dep-1", "dep-2", "dep-3"]
+        router.cache.redis_cache = MagicMock()
+        router.cooldown_cache.cooldown_store = MagicMock()
+        router.cooldown_cache.cooldown_store.reserve_redis_batch_reads.return_value = (
+            ["deployment:dep-1:cooldown"],
+            {},
+        )
+
+        request_batches = MagicMock()
+        request_batches.prefetched = {}
+        batch_mock = MagicMock()
+        batch_mock.mget.return_value = MagicMock()
+        request_batches.batch.return_value = batch_mock
+
+        with patch(
+            "litellm.router_utils.routing_read_batch.active_request_redis_batches", return_value=request_batches
+        ):
+            RoutingPrefetch.arm(
+                litellm_router_instance=router,
+                usage_selector=None,
+                deployments=[{"model_info": {"id": "dep-1"}}],
+            )
+            cooldown_keys = router.cooldown_cache.cooldown_store.reserve_redis_batch_reads.call_args[0][0]
+            assert "deployment:dep-1:cooldown" in cooldown_keys
+            assert "deployment:dep-2:cooldown" not in cooldown_keys
+            assert "deployment:dep-3:cooldown" not in cooldown_keys
+
+    def test_all_deployments_cooled_down_raises_rate_limit_error(self):
+        from litellm.types.router import RouterRateLimitError
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4", "api_key": "fake"},
+                    "model_info": {"id": "dep-1"},
+                },
+            ]
+        )
+        router.cooldown_cache.add_deployment_to_cooldown(
+            model_id="dep-1",
+            original_exception=Exception("rate limit"),
+            exception_status=429,
+            cooldown_time=60.0,
+        )
+        with pytest.raises(RouterRateLimitError) as exc_info:
+            router.get_available_deployment(model="gpt-4")
+        assert exc_info.value.model == "gpt-4"
+        assert exc_info.value.cooldown_list == ["dep-1"]

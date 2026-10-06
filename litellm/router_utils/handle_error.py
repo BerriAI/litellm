@@ -4,6 +4,7 @@ from litellm._logging import redact_secrets, verbose_router_logger
 from litellm.constants import MAX_EXCEPTION_MESSAGE_LENGTH
 from litellm.router_utils.cooldown_handlers import (
     _async_get_cooldown_deployments_with_debug_info,
+    resolve_cooldown_model_ids,
 )
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterRateLimitError
@@ -75,13 +76,17 @@ async def async_raise_no_deployment_exception(
     Raises a RouterRateLimitError if no deployment is found for the given model.
     """
     verbose_router_logger.info("get_available_deployment for model: %s, No deployment available", model)
-    model_ids: Final = litellm_router_instance.get_model_ids(model_name=model)
+    model_ids: Final = resolve_cooldown_model_ids(
+        litellm_router_instance=litellm_router_instance,
+        model_name=model,
+    )
     _cooldown_time: Final = litellm_router_instance.cooldown_cache.get_min_cooldown(
         model_ids=model_ids, parent_otel_span=parent_otel_span
     )
     _cooldown_list: Final = await _async_get_cooldown_deployments_with_debug_info(
         litellm_router_instance=litellm_router_instance,
         parent_otel_span=parent_otel_span,
+        model_name=model,
     )
     verbose_router_logger.info(
         "No deployment found for model: %s, cooldown_list with debug info: %s", model, _cooldown_list

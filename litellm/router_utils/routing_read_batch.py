@@ -23,6 +23,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import BatchResult, active_request_redis_batches
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
+from litellm.router_utils.cooldown_handlers import resolve_cooldown_model_ids
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -102,9 +103,11 @@ class RoutingPrefetch:
         redis_cache: Final = litellm_router_instance.cache.redis_cache
         if request is None or redis_cache is None or _PREFETCH_SLOT in request.prefetched:
             return
-        cooldown_keys: Final = tuple(
-            CooldownCache.get_cooldown_cache_key(model_id) for model_id in litellm_router_instance.get_model_ids()
+        model_ids: Final = resolve_cooldown_model_ids(
+            litellm_router_instance=litellm_router_instance,
+            healthy_deployments=deployments,
         )
+        cooldown_keys: Final = tuple(CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids)
         usage_keys: Final = (
             () if usage_selector is None else tuple(itertools.chain(*usage_selector.usage_counter_keys(deployments)))
         )
@@ -189,12 +192,20 @@ class RoutingReadBatch:
         litellm_router_instance: "Router",
         healthy_deployments: list,
         parent_otel_span: "Span | None",
+        model_name: str | None = None,
+        team_id: str | None = None,
     ) -> list[str]:
         """
         `_async_get_cooldown_deployments`, with the strategy's tpm/rpm counters for
         `healthy_deployments` fetched in the same MGET and kept as `prefetched_usage`.
         """
-        model_ids: Final = litellm_router_instance.get_model_ids()
+        model_ids: Final = resolve_cooldown_model_ids(
+            litellm_router_instance=litellm_router_instance,
+            model_name=model_name,
+            healthy_deployments=healthy_deployments,
+            team_id=team_id,
+        )
+
         cooldown_keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
         selector: Final = self.usage_selector
         usage_keys: Final = (
