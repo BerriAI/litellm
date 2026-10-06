@@ -470,6 +470,40 @@ it("opens the saved results of an older batch", async () => {
   expect(within(screen.getByRole("tabpanel", { name: "History" })).getByText(/Took 2m 13s/)).toBeVisible();
 });
 
+it("keeps history status and cost updating when an older run fails to load", async () => {
+  testQueryClient.clear();
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const running = { ...lens.jobs[0], status: "running" as const, cost: 0.25 };
+  const older = { ...lens.jobs[0], id: "older", created_at: "2026-09-29T10:00:00Z" };
+  const runs = vi.fn().mockResolvedValue([running, older]);
+  proxy.get.mockImplementation(async (path) => {
+    if (path.endsWith("/reviews")) return { reviews: [], reviewed: 0 };
+    if (path === "/lens") return { lenses: [{ ...lens, jobs: [running] }], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return runs();
+    if (path === "/lens/lens/runs/older") throw new Error("Run unavailable");
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  const { unmount } = renderWithProviders(<InvestigationsView readOnly />);
+  try {
+    await user.click(await screen.findByRole("tab", { name: "History" }));
+    const history = within(screen.getByRole("tabpanel", { name: "History" }));
+    expect(await history.findByText("Running")).toBeVisible();
+    expect(history.getByText("$0.25")).toBeVisible();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Investigation run" }), "older");
+    expect(await screen.findByText(/Could not load this run/)).toBeVisible();
+
+    runs.mockResolvedValue([{ ...running, status: "completed", cost: 1.75 }, older]);
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(await history.findByText("$1.75")).toBeVisible();
+    expect(history.queryByText("Running")).not.toBeInTheDocument();
+    expect(history.getAllByText("Completed")).toHaveLength(2);
+  } finally {
+    unmount();
+    vi.useRealTimers();
+  }
+});
+
 it("reads request content from the beginning after its abbreviated preview", async () => {
   testQueryClient.clear();
   const requestId = btoa(JSON.stringify(["requests", "", "request-1"]));

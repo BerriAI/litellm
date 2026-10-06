@@ -316,7 +316,7 @@ export function RunReport({ lens, job, findings, connected, ready, busy, picker,
           <h3 className="mt-0.5 text-base font-semibold">{view.headline(known)}</h3>
         </div>
         <div className="flex items-center gap-1">
-          {job && picker}
+          {picker}
           {action && actions && (
             <NextAction action={action} facts={known} ready={ready} busy={busy} onClick={actions[action]} />
           )}
