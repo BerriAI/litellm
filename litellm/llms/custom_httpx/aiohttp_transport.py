@@ -14,15 +14,16 @@ import aiohttp.client_exceptions
 import aiohttp.http_exceptions
 import httpx
 from aiohttp.client import ClientResponse, ClientSession
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class HttpxTimeoutExtension(BaseModel):
+class HttpxTimeoutExtension(LiteLLMBaseModel):
     connect: float | None = None
     read: float | None = None
     write: float | None = None

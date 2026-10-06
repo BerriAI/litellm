@@ -40,7 +40,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,  # Import UserAPIKeyAuth
 )
-from litellm.proxy.management.teams.access import TeamAccess
+from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_endpoints import (
     _STRIP_DELETED_TEAM_FROM_USERS_SQL,
     GetTeamMemberPermissionsResponse,

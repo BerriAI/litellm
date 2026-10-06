@@ -5,6 +5,8 @@ WITH greatest(toInt64({offset:UInt32})-1,1) AS content_offset,
 SELECT * FROM (
     SELECT SpanId AS span_id, ParentSpanId AS parent_span_id, SpanName AS name,
         ObservationType AS kind,
+        toString(Timestamp, 'UTC') AS start_time,
+        toString(addNanoseconds(Timestamp, Duration), 'UTC') AS end_time,
         if({offset:UInt32}=1 AND lengthUTF8(concat('Input: ',Input,'\nOutput: ',Output,'\nStatus: ',StatusCode,' ',StatusMessage))>8000,
             concat('Input: ',excerpt(Input,2000),'\nOutput: ',excerpt(Output,5000),
                 '\nStatus: ',StatusCode,' ',excerpt(StatusMessage,500)),
@@ -22,6 +24,8 @@ SELECT * FROM (
 UNION ALL
 SELECT * FROM (
     SELECT request_id AS span_id, '' AS parent_span_id, model AS name, 'llm' AS kind,
+        toString(start_time, 'UTC') AS start_time,
+        toString(end_time, 'UTC') AS end_time,
         if({offset:UInt32}=1 AND lengthUTF8(concat('Input: ',messages,'\nOutput: ',response,'\nError: ',error_str))>8000,
             concat('Input: ',excerpt(messages,2000),'\nOutput: ',excerpt(response,5000),'\nError: ',excerpt(error_str,500)),
             substringUTF8(concat('Input: ',messages,'\nOutput: ',response,'\nError: ',error_str),

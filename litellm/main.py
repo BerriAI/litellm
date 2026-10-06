@@ -44,6 +44,7 @@ import litellm
 
 # client must be imported from litellm as it's a decorator used at function definition time
 from litellm import client
+from litellm.types.llms.base import LiteLLMBaseModel
 
 # Other utils are imported directly to avoid circular imports
 from litellm.utils import (
@@ -862,11 +863,11 @@ async def _sleep_for_timeout_async(timeout: float | str | httpx.Timeout):
         await asyncio.sleep(timeout.connect)
 
 
-class _AdmissionReservation(BaseModel):
+class _AdmissionReservation(LiteLLMBaseModel):
     input_tokens: int | None = None
 
 
-class _AdmissionMetadata(BaseModel):
+class _AdmissionMetadata(LiteLLMBaseModel):
     user_api_key_budget_reservation: _AdmissionReservation | None = None
 
 
@@ -5832,6 +5833,7 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 encoding=_get_encoding(),
                 stream=stream,
+                cache=kwargs.get("cache"),
             )
         elif (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
             custom_llm_provider == "azure"

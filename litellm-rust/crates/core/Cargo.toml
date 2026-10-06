@@ -8,7 +8,7 @@ repository.workspace = true
 [dependencies]
 litellm-cache.workspace = true
 litellm-cache-response.workspace = true
-litellm-framing.workspace = true
+litellm-framer.workspace = true
 tokio-util = { version = "0.7", features = ["codec"] }
 litellm-secrets.workspace = true
 litellm-llms-types.workspace = true

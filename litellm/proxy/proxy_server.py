@@ -262,7 +262,7 @@ def generate_feedback_box():
 
 import contextlib
 from collections import defaultdict
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from functools import lru_cache, partial
 
 import litellm
@@ -1614,75 +1614,81 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         settings=tracing_settings,
     ) as receiver:
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
-        yield state
+        from litellm.proxy.admin_mcp import admin_mcp_lifespan
 
-        if model_info_scheduler is not None and model_info_scheduler.running:
-            model_info_scheduler.remove_job("refresh_model_info")
-            if model_info_scheduler is not scheduler:
-                model_info_scheduler.shutdown(wait=False)
+        try:
+            async with AsyncExitStack() as admin_mcp_stack:
+                try:
+                    await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
+                    yield state
+                finally:
+                    if model_info_scheduler is not None and model_info_scheduler.running:
+                        model_info_scheduler.remove_job("refresh_model_info")
+                        if model_info_scheduler is not scheduler:
+                            model_info_scheduler.shutdown(wait=False)
 
-        # Shutdown event - stop starting scheduled jobs; the ones already running keep the drain window
-        if scheduler is not None:
-            pause_scheduled_jobs(scheduler)
+                    # Shutdown event - stop starting scheduled jobs; the ones already running keep the drain window
+                    if scheduler is not None:
+                        pause_scheduled_jobs(scheduler)
 
-        # Shutdown event - drain in-flight requests before tearing down dependencies
-        # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
-        GracefulShutdownManager.start_shutdown()
-        await GracefulShutdownManager.wait_for_drain()
+                    # Shutdown event - drain in-flight requests before tearing down dependencies
+                    # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
+                    GracefulShutdownManager.start_shutdown()
+                    await GracefulShutdownManager.wait_for_drain()
+        finally:
+            # Shutdown event - close shared aiohttp session
+            if shared_aiohttp_session is not None:
+                try:
+                    await shared_aiohttp_session.close()
+                    verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
+                except Exception as e:
+                    verbose_proxy_logger.error("Error closing shared aiohttp session: %s", e)
 
-        # Shutdown event - close shared aiohttp session
-        if shared_aiohttp_session is not None:
-            try:
-                await shared_aiohttp_session.close()
-                verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
-            except Exception as e:
-                verbose_proxy_logger.error("Error closing shared aiohttp session: %s", e)
+            # Shutdown event - stop RDS IAM token refresh background task
+            if (
+                prisma_client is not None
+                and hasattr(prisma_client, "db")
+                and hasattr(prisma_client.db, "stop_token_refresh_task")
+            ):
+                try:
+                    await prisma_client.db.stop_token_refresh_task()
+                except Exception as e:
+                    verbose_proxy_logger.error("Error stopping token refresh task: %s", e)
 
-        # Shutdown event - stop RDS IAM token refresh background task
-        if (
-            prisma_client is not None
-            and hasattr(prisma_client, "db")
-            and hasattr(prisma_client.db, "stop_token_refresh_task")
-        ):
-            try:
-                await prisma_client.db.stop_token_refresh_task()
-            except Exception as e:
-                verbose_proxy_logger.error("Error stopping token refresh task: %s", e)
+            # Shutdown event - stop Prisma DB health watchdog task
+            if prisma_client is not None and hasattr(prisma_client, "stop_db_health_watchdog_task"):
+                try:
+                    await prisma_client.stop_db_health_watchdog_task()
+                except Exception as e:
+                    verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
 
-        # Shutdown event - stop Prisma DB health watchdog task
-        if prisma_client is not None and hasattr(prisma_client, "stop_db_health_watchdog_task"):
-            try:
-                await prisma_client.stop_db_health_watchdog_task()
-            except Exception as e:
-                verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
+            if prisma_client is not None and hasattr(prisma_client, "stop_view_setup_task"):
+                try:
+                    await prisma_client.stop_view_setup_task()
+                except Exception as e:
+                    verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
 
-        if prisma_client is not None and hasattr(prisma_client, "stop_view_setup_task"):
-            try:
-                await prisma_client.stop_view_setup_task()
-            except Exception as e:
-                verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
+            await _drain_spend_event_producer_on_shutdown()
 
-        await _drain_spend_event_producer_on_shutdown()
+            # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
+            if scheduler is not None and scheduler_executor is not None:
+                try:
+                    await stop_in_flight_scheduler_jobs(scheduler, scheduler_executor)
+                except Exception as e:
+                    verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
-        # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
-        if scheduler is not None and scheduler_executor is not None:
-            try:
-                await stop_in_flight_scheduler_jobs(scheduler, scheduler_executor)
-            except Exception as e:
-                verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
+            await flush_spend_counters_on_shutdown()
 
-        await flush_spend_counters_on_shutdown()
+            await _flush_spend_logs_queue_on_shutdown()
 
-        await _flush_spend_logs_queue_on_shutdown()
+            await proxy_config.stop_config_sync_subscriber()
 
-        await proxy_config.stop_config_sync_subscriber()
+            await proxy_config.stop_auth_cache_invalidation_subscriber()
 
-        await proxy_config.stop_auth_cache_invalidation_subscriber()
+            await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
 
-        await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
-
-        if prometheus_multiproc_dir:
-            mark_worker_exit(os.getpid())
+            if prometheus_multiproc_dir:
+                mark_worker_exit(os.getpid())
 
 
 def _generate_stable_operation_id(route: "APIRoute") -> str:
@@ -8199,6 +8205,8 @@ class ProxyConfig:
         self,
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
+        *,
+        ui_settings_already_synced: bool = False,
     ) -> ReconcileOutcome:
         """
         - Check db for new models
@@ -8221,7 +8229,8 @@ class ProxyConfig:
         Also re-reads the UI settings that back runtime flags. That runs before the lock, so a
         setting written through one pod reaches the others without waiting on a model reconcile.
         """
-        await sync_ui_settings_to_general_settings(prisma_client)
+        if not ui_settings_already_synced:
+            await sync_ui_settings_to_general_settings(prisma_client)
 
         async with MODEL_RECONCILE_LOCK:
             return await self._add_deployment_locked(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
@@ -18322,6 +18331,9 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "admission_queue_timeout_seconds": "Float",
         "max_request_size_mb": "Integer",
         "max_batch_file_size_mb": "Integer",
+        "max_batch_file_records": "Integer",
+        "max_batch_file_uploads_per_day": "Integer",
+        "max_file_downloads_per_minute": "Integer",
         "max_file_size_mb": "Integer",
         "allowed_file_extensions": "List",
         "blocked_file_extensions": "List",
