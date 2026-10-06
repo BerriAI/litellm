@@ -5,7 +5,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
-from typing import Final, Literal, assert_never
+from typing import Final, Literal
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -14,6 +14,7 @@ from integration._support.client import Gateway, Scenario, eventually, object_va
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, JsonValue, TypeAdapter
+from typing_extensions import assert_never
 
 from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
 

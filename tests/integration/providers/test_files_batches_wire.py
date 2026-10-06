@@ -8,7 +8,7 @@ from email.message import Message
 from email.parser import BytesParser
 from email.policy import HTTP
 from functools import partial
-from typing import Final, Literal, assert_never
+from typing import Final, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -18,6 +18,7 @@ from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import OpenAI
 from pydantic import BaseModel, JsonValue, TypeAdapter
+from typing_extensions import assert_never
 
 from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
 
