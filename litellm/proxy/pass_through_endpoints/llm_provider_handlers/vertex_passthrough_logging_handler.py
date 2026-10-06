@@ -777,6 +777,7 @@ class VertexPassthroughLoggingHandler:
 
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
+        litellm_model_response._hidden_params["response_cost"] = response_cost  # pyright: ignore[reportPrivateUsage]  # no public accessor
 
         # pretty print standard logging object
         verbose_proxy_logger.debug("kwargs= %s", kwargs)
