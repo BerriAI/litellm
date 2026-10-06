@@ -28124,6 +28124,7 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
+        "deprecation_date": "2026-11-19",
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -28183,6 +28184,7 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
+        "deprecation_date": "2027-01-28",
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -30398,6 +30400,7 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
+        "deprecation_date": "2026-11-19",
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -30457,6 +30460,7 @@
         "input_cost_per_token_priority": 1.35e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "cache_read_input_token_cost_priority": 1.35e-07,
+        "deprecation_date": "2027-01-28",
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
