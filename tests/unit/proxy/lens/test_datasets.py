@@ -6,7 +6,7 @@ from typing import Final
 import pytest
 
 from litellm.constants import LENS_DATASET_MAX_CASE_CHARS, LENS_DATASET_MAX_CASES
-from litellm.proxy.lens.datasets import build_cases, case_id, export_jsonl
+from litellm.proxy.lens.datasets import build_cases, case_id, export_jsonl, revision_problem
 from litellm.proxy.lens.models import (
     BuildRequest,
     BuildResult,
@@ -289,10 +289,10 @@ async def test_each_skip_reason_is_reported_against_its_source() -> None:
     result: Final = await build_cases(
         BuildRequest(
             sources=(
-                TraceSource(trace_id="t1", span_id="s1"),
-                TraceSource(trace_id="t1", span_id="s1"),
                 TraceSource(trace_id="t1", span_id="missing"),
                 TraceSource(trace_id="t1", span_id="big"),
+                TraceSource(trace_id="t1", span_id="s1"),
+                TraceSource(trace_id="t1", span_id="s1"),
                 TraceSource(trace_id="t1", span_id="s3"),
             )
         ),
@@ -302,11 +302,83 @@ async def test_each_skip_reason_is_reported_against_its_source() -> None:
 
     assert tuple(c.source.span_id for c in result.cases) == ("s1",)
     assert tuple((s.source.span_id, s.reason) for s in result.skipped) == (
-        ("s1", "duplicate"),
         ("missing", "no_content"),
         ("big", "too_large"),
+        ("s1", "over_limit"),
         ("s3", "over_limit"),
     )
+
+
+class CountingReader(FakeReader):
+    def __init__(self, spans: Mapping[tuple[str, str], SpanDetail]) -> None:
+        super().__init__(spans)
+        self.reads: list[str] = []  # mutable-ok: records which spans the build actually fetched
+
+    async def span(self, trace_id: str, span_id: str, trace_ref: str) -> SpanDetail | None:
+        self.reads.append(span_id)
+        return await super().span(trace_id, span_id, trace_ref)
+
+
+@pytest.mark.asyncio
+async def test_sources_past_the_case_limit_are_not_read() -> None:
+    reader: Final = CountingReader({("t1", "s1"): detail("s1", "a"), ("t1", "s2"): detail("s2", "b")})
+    full: Final = tuple(
+        DatasetCase(id=str(i), messages=(DatasetMessage(role="user", content=str(i)),), source=CaseSource())
+        for i in range(LENS_DATASET_MAX_CASES - 1)
+    )
+    result: Final = await build_cases(
+        BuildRequest(sources=(TraceSource(trace_id="t1", span_id="s1"), TraceSource(trace_id="t1", span_id="s2"))),
+        reader,
+        full,
+    )
+
+    assert reader.reads == ["s1"]
+    assert result.skipped == (SkippedCase(source=CaseSource(trace_id="t1", span_id="s2"), reason="over_limit"),)
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_jsonl_line_is_skipped_without_losing_the_valid_lines() -> None:
+    good: Final = json.dumps({"messages": [{"role": "user", "content": "refund?"}], "reply": "No"})
+    result: Final = await build(FakeReader({}), TextSource(text=f'{good}\n{{not json\n{{"reply": "no messages"}}'))
+
+    assert tuple(c.reply for c in result.cases) == ("No",)
+    assert tuple(s.reason for s in result.skipped) == ("invalid", "invalid")
+
+
+@pytest.mark.asyncio
+async def test_an_exported_case_rebuilds_with_its_source_and_agent_version() -> None:
+    original: Final = DatasetCase(
+        id="",
+        messages=(DatasetMessage(role="user", content="refund?"),),
+        reply="No",
+        expected="Decline politely",
+        source=CaseSource(trace_id="t1", span_id="s1"),
+        agent_version="v7",
+    )
+    result: Final = await build(FakeReader({}), TextSource(text=export_jsonl((original,))))
+
+    rebuilt: Final = result.cases[0]
+    assert (rebuilt.source, rebuilt.agent_version, rebuilt.expected) == (original.source, "v7", "Decline politely")
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        DatasetCase(
+            id="",
+            messages=(DatasetMessage(role="user", content="q"),),
+            expected="x" * LENS_DATASET_MAX_CASE_CHARS,
+            source=CaseSource(),
+        ),
+        DatasetCase(
+            id="",
+            messages=(DatasetMessage(role="user", content="q", name="x" * LENS_DATASET_MAX_CASE_CHARS),),
+            source=CaseSource(),
+        ),
+    ),
+)
+def test_expected_and_message_names_count_toward_the_case_size_limit(case: DatasetCase) -> None:
+    assert revision_problem((case,)) is not None
 
 
 def raw_span(span_id: str, input_ui: UIContent, output_ui: UIContent, raw_input: str, raw_output: str) -> SpanDetail:
