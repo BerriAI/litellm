@@ -25,50 +25,32 @@ caused, because every failure re-arms the cooldown.
 
 The sibling cell is the one that asserts the speed, and it sends every call
 through the stack's front door the way a customer does, never to a gateway pod
-by address. The litellm-e2e-pr gate runs one worker per gateway pod behind an
-nginx ingress (project-releaser's .github/scripts/src/releng/ingress_nginx.py)
-that emits a plain proxy_pass to the Service with no upstream block and no
-keepalive, so every request opens a fresh upstream connection and the Service
-picks the pod per connection: each call is an independent draw over the two
-routers, with seven other xdist workers sharing them. The cell first sends
-COOLDOWN_WARM_CALLS calls, all at once, to a warm group it registers whose one
-deployment answers from a canned reply, and waits for all of their answers
-before it trips: a router reads the cooldown keys when it picks the
-deployment, at the start of a call, and the pick happens whatever the
-deployment then answers with, so every pod's read of the failing deployment's
-key, and the read interval that starts with it, is over before the trip is
-even sent, a few hundred milliseconds before its bench is written. A pod the
-warm never reached (odds 2^(1-COOLDOWN_WARM_CALLS) at two pods) would read
-Redis on its first touch of the key and pass even under a regressed interval,
-and so would a pod whose warm read fell further before the trip than the
-regressed interval, its timer having lapsed before the first probe, which is
-why the warm answers from a canned reply instead of a live model: ten live
-answers would spread the reads across their latencies, and tripping before the
-answers would leave a warm call free to reach a pod after the bench and hand
-it a fresh read of the bench itself. The warm follows the registrations
-because their propagation wait is what puts the groups on every pod, and a pod
-that has not loaded the deployment holds no read timer for it. The trip is one
-call, retries off, that surfaces the deployment's own 500; the cell then waits
-the interval plus a margin and sends SIBLING_PROBES calls, and every probe has
-to come back from the backup: a pod that has not seen the bench answers a 500
-to any probe it takes, and the odds that no probe reaches it are
-2^-SIBLING_PROBES, 0.1% at ten. That is the miss rate for a pod that never
-catches up. A pod whose interval regressed to I
-seconds catches up on its own at its next Redis read, which other workers'
-traffic schedules anywhere within I of the trip, so under the full suite such a
-regression is caught on the runs whose first probe lands on the stale pod
-before that read, while the per-file run (loadfile keeps this file on one
-worker, so nothing else touches the key meanwhile) catches every regression
-wider than the span from the warm's reads to the first probe the stale pod
-takes: the warm, the trip, the wait, and a probe or two, about six seconds at
-two pods on the two-process rig the cell was proven on, which caught ten. The
-bench for this cell is
-SIBLING_COOLDOWN_SECONDS rather than COOLDOWN_SECONDS because it never waits
-for the recovery and its probes, ten live calls to the backup, have to land
-before the bench can lapse. Pinning the tripping and the sibling gateway by
-address was dropped because the gate exports only the router URL, so the
-pinned cell skipped on every PR build, and a pod addressed by name is not the
-surface a customer ever uses.
+by address: the litellm-e2e-pr gate fronts two pods with an nginx ingress that
+picks the pod per connection, so each call is an independent draw over the two
+routers. The cell registers a warm group whose deployment answers from a
+canned reply, sends it COOLDOWN_WARM_CALLS calls at once, and waits for every
+answer before it trips. A router reads the cooldown keys when it picks the
+deployment, at the start of a call, so every pod's read of the failing
+deployment's key, and the read interval that starts with it, is over before
+the trip is sent; a pod the warm never reached (odds 2^(1-COOLDOWN_WARM_CALLS)
+at two pods) would read Redis on its first touch of the key and pass even
+under a regressed interval. The warm answers from a canned reply rather than a
+live model because ten live answers would spread the reads across their
+latencies, and tripping before they land would let a warm call reach a pod
+after the bench and hand it a fresh read of the bench itself. The trip is one
+call, retries off, that surfaces the deployment's own 500; after the interval
+plus a margin, SIBLING_PROBES calls each have to come back from the backup,
+since a pod that has not seen the bench answers 500 to any probe it takes, and
+no probe reaching it has odds 2^-SIBLING_PROBES, 0.1% at ten. Other workers'
+traffic can refresh a stale pod's read anywhere within a regressed interval of
+the trip, so under the full suite a regression is caught on the runs whose
+first probe reaches the stale pod before that read, while the per-file run,
+which nothing else shares, catches every regression wider than the span from
+the warm to the stale pod's first probe, about six seconds at two pods on the
+two-process rig that proved the cell at ten. The bench is
+SIBLING_COOLDOWN_SECONDS rather than COOLDOWN_SECONDS because the cell never
+waits for the recovery and its probes, ten live calls to the backup, have to
+land before the bench can lapse.
 
 The failures are the same real ones the retry tests use: a 1ms deadline and a
 bogus key on the real backend, and this proxy standing in as the upstream for
