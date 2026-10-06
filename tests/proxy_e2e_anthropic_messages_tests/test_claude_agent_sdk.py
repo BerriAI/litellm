@@ -29,7 +29,7 @@ TEST_MODELS = [
 def litellm_proxy_config():
     """Configure connection to LiteLLM proxy"""
     proxy_url = os.getenv("LITELLM_PROXY_URL", "http://localhost:4000")
-    api_key = os.getenv("LITELLM_API_KEY", "sk-1234")
+    api_key = os.environ["LITELLM_API_KEY"]
 
     # Set environment variables for Claude Agent SDK
     os.environ["ANTHROPIC_BASE_URL"] = proxy_url.rstrip("/")

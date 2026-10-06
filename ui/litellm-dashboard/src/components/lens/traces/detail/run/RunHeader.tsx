@@ -10,8 +10,8 @@ import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
 import type { TraceHandoff } from "../../api";
+import { runCost } from "../../list/AgentTracesTable";
 import { traceRefOf, traceShareUrl } from "../../routing";
-import { formatCost } from "../../list/AgentTracesTable";
 import { IdChip } from "../../ui/IdChip";
 import { SpanIcon } from "../../ui/SpanIcon";
 import { FrameworkLogo, traceFramework } from "../../ui/TraceFramework";
@@ -89,6 +89,7 @@ interface RunHeaderProps {
 export function RunHeader({ trace, handoff, onBack, embedded }: RunHeaderProps) {
   const { summary } = trace;
   const failed = summary.status === "error";
+  const cost = runCost(summary);
   return (
     <header className="@container/run-header flex shrink-0 flex-col gap-2 border-b bg-background px-4 pt-3 pb-2.5">
       <div className="flex min-w-0 flex-col gap-2 @xl/run-header:flex-row @xl/run-header:items-center">
@@ -127,7 +128,10 @@ export function RunHeader({ trace, handoff, onBack, embedded }: RunHeaderProps) 
         <Stat label="Duration" value={fmtMs(summary.duration_ms)} />
         <Stat label="Steps" value={summary.span_count.toLocaleString()} />
         <Stat label="Tokens" value={fmtTok(summary.input_tokens + summary.output_tokens)} />
-        <Stat label="Cost" value={summary.spend == null ? "Not reported" : formatCost(summary.spend)} />
+        <Stat
+          label="Cost"
+          value={cost ? [cost.label, cost.partial?.long].filter(Boolean).join(" · ") : "Not reported"}
+        />
         {summary.error_count > 0 && <Stat label="Step errors" value={summary.error_count.toLocaleString()} error />}
       </div>
     </header>

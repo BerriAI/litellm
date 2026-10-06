@@ -37,11 +37,13 @@ export function FindingDetails({
   onReview,
 }: FindingDetailsProps) {
   const [reason, setReason] = useState(finding.reason ?? "");
-  const evidenceGroups = [...new Set(finding.evidence.map((e) => e.execution_id))].map((id) => ({
-    id,
-    run: sampledRuns.find((r) => r.id === id),
-    quotes: finding.evidence.filter((e) => e.execution_id === id),
-  }));
+  const evidenceGroups = [...new Set([...finding.occurrences, ...finding.evidence.map((e) => e.execution_id)])].map(
+    (id) => ({
+      id,
+      run: sampledRuns.find((r) => r.id === id),
+      quotes: finding.evidence.filter((e) => e.execution_id === id),
+    }),
+  );
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <header className="flex flex-col gap-1.5 border-b px-4 py-4">
@@ -49,8 +51,14 @@ export function FindingDetails({
         <p className="text-sm text-muted-foreground">
           {agents.length > 0 && <span className="font-medium text-foreground">{agents.join(", ")} · </span>}
           {finding.kind === "issue" ? `${finding.priority} priority` : "Pattern"} · {finding.occurrences?.length ?? 0}{" "}
-          linked {finding.occurrences?.length === 1 ? "run" : "runs"}
+          affected {finding.occurrences?.length === 1 ? "trace" : "traces"}
         </p>
+        {(finding.investigation_runs?.length ?? 0) > 0 && (
+          <p className="text-sm text-muted-foreground">
+            Found across {finding.investigation_runs.length} investigation{" "}
+            {finding.investigation_runs.length === 1 ? "run" : "runs"}
+          </p>
+        )}
       </header>
       <div className="space-y-6 p-4">
         {finding.brief ? (
@@ -76,7 +84,7 @@ export function FindingDetails({
           </details>
         )}
         <div>
-          <p className="text-sm font-medium">Evidence by run</p>
+          <p className="text-sm font-medium">Affected traces and counterexamples</p>
           <p className="mt-1 mb-3 text-xs text-muted-foreground">
             Exact quotes from the recorded activity. Counterexamples are labeled separately from supporting evidence.
           </p>
@@ -91,6 +99,12 @@ export function FindingDetails({
                   </span>
                 </summary>
                 <div className="mt-3 space-y-3">
+                  {group.quotes.length === 0 && (
+                    <Button variant="ghost" size="sm" onClick={() => onOpenEvidence({ id: group.id, span: "" })}>
+                      Open original trace
+                      <ArrowUpRight className="size-3" />
+                    </Button>
+                  )}
                   {group.quotes.map((e, i) => (
                     <div key={`${e.span_id}-${i}`} className="rounded-md bg-muted/40 p-3">
                       {e.role === "counterexample" && (

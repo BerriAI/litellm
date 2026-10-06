@@ -1595,7 +1595,7 @@ def test_arouter_responses_api_bridge():
                 "litellm_params": {
                     "model": "azure/responses/o_series/webinterface-o3-pro",
                     "api_base": "https://webhook.site/fba79dae-220a-4bb7-9a3a-8caa49604e55",
-                    "api_key": "sk-1234567890",
+                    "api_key": "sk-9876567890",
                     "api_version": "preview",
                     "stream": True,
                 },

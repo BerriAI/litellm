@@ -108,7 +108,13 @@ def response_ids(rows: tuple[SpendLogRecord, ...]) -> Iterator[str]:
 def response_pattern(rows: tuple[SpendLogRecord, ...]) -> re.Pattern[str]:
     identities: Final = sorted(
         frozenset(
-            identity for identity in chain(response_ids(rows), (row["litellm_call_id"] for row in rows)) if identity
+            identity
+            for identity in chain(
+                response_ids(rows),
+                (row["litellm_call_id"] for row in rows),
+                (row.get("provider_request_id", "") for row in rows),
+            )
+            if identity
         ),
         key=len,
         reverse=True,
@@ -119,8 +125,11 @@ def response_pattern(rows: tuple[SpendLogRecord, ...]) -> re.Pattern[str]:
 def rebased_response(value: str, namespace: str, pattern: re.Pattern[str]) -> str:
     decoded: Final = managed_response(value)
     if decoded is None:
+        if value.startswith(("msg_", "req_")):
+            prefix, suffix = value.split("_", 1)
+            return f"{prefix}_seed-{namespace}-{suffix}"
         return f"seed-{namespace}-{value}"
-    payload: Final = pattern.sub(lambda match: f"seed-{namespace}-{match.group()}", decoded)
+    payload: Final = pattern.sub(lambda match: rebased_response(match.group(), namespace, pattern), decoded)
     return "resp_" + base64.b64encode(payload.encode()).decode()
 
 
@@ -194,9 +203,7 @@ def rebase(
     if isinstance(value, dict):
         attribute_key: Final = value.get("key")
         attribute_value: Final = value.get("value")
-        session_id: Final = (
-            attribute_value.get("stringValue") if isinstance(attribute_value, dict) else None
-        )
+        session_id: Final = attribute_value.get("stringValue") if isinstance(attribute_value, dict) else None
         if (
             isinstance(attribute_key, str)
             and attribute_key in TRACE_ID_ATTRIBUTES
@@ -431,6 +438,7 @@ WHERE t.TraceId IN {{trace_ids:Array(String)}}
 SELECT s.* REPLACE (
     {clickhouse_call_id("s.request_id")} AS request_id,
     {clickhouse_call_id("s.response_id")} AS response_id,
+    {clickhouse_call_id("s.provider_request_id")} AS provider_request_id,
     {clickhouse_call_id("s.litellm_call_id")} AS litellm_call_id,
     {clickhouse_hash("s.trace_id", trace_salt, 32)} AS trace_id,
     {clickhouse_hash("s.session_id", trace_salt, 32)} AS session_id,

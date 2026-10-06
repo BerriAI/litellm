@@ -17,6 +17,48 @@ export function conversationSteps(spans: readonly Span[]): Span[] {
     .sort((a, b) => a.start_offset_ms - b.start_offset_ms);
 }
 
+export function pendingConversationBranches(
+  spans: readonly Span[],
+  details: ReadonlyMap<string, SpanDetail>,
+  hasMoreSpans: boolean,
+): ReadonlySet<string> {
+  const byId = new Map(spans.map((span) => [span.span_id, span]));
+  const steps = new Set(conversationSteps(spans).map((span) => span.span_id));
+  const pageBoundary = spans.reduce((latest, span) => Math.max(latest, span.start_offset_ms), -Infinity);
+  const pending = spans.filter((span) => {
+    const missingDetail = steps.has(span.span_id) && !details.has(span.span_id);
+    const mayHaveLaterChildren = hasMoreSpans && span.start_offset_ms + span.duration_ms >= pageBoundary;
+    return missingDetail || mayHaveLaterChildren;
+  });
+  const initial = {
+    pending: new Set(pending.map((span) => span.span_id)),
+    ancestors: new Map(
+      spans.flatMap((span) =>
+        span.parent_span_id && byId.has(span.parent_span_id) ? [[span.span_id, span.parent_span_id] as const] : [],
+      ),
+    ),
+  };
+  const doublingPasses = Math.ceil(Math.log2(Math.max(1, spans.length)));
+  return Array.from({ length: doublingPasses }).reduce<typeof initial>((state) => {
+    if (!state.pending.size || !state.ancestors.size) return state;
+    return {
+      pending: new Set([
+        ...state.pending,
+        ...[...state.pending].flatMap((id) => {
+          const ancestor = state.ancestors.get(id);
+          return ancestor ? [ancestor] : [];
+        }),
+      ]),
+      ancestors: new Map(
+        [...state.ancestors].flatMap(([id, ancestor]) => {
+          const next = state.ancestors.get(ancestor);
+          return next ? [[id, next] as const] : [];
+        }),
+      ),
+    };
+  }, initial).pending;
+}
+
 function contentText(value: string, content?: UIContent): string {
   if (content?.kind === "text") return content.text;
   if (content?.kind === "fields")
@@ -147,7 +189,7 @@ function conversationEvents(
   steps: readonly Span[],
   byId: ReadonlyMap<string, Span>,
   details: ReadonlyMap<string, SpanDetail>,
-  complete: boolean,
+  { complete, pendingBranches }: { complete: boolean; pendingBranches?: ReadonlySet<string> },
 ): ConversationEvent[] {
   const missingIndex = steps.findIndex((span) => !details.has(span.span_id));
   const loaded = missingIndex < 0 ? steps : steps.slice(0, missingIndex);
@@ -170,7 +212,8 @@ function conversationEvents(
       const start = { span, time: messageTime(span, loaded, details), output: false };
       if (span.type === "tool" || (span.type !== "agent" && span.parent_span_id !== null)) return [start];
       const end = ends.get(span.span_id)!;
-      return (complete && missingIndex < 0) || end < boundary ? [start, { span, time: end, output: true }] : [start];
+      const branchComplete = (complete && missingIndex < 0) || pendingBranches?.has(span.span_id) === false;
+      return branchComplete || end < boundary ? [start, { span, time: end, output: true }] : [start];
     })
     .sort(
       (a, b) =>
@@ -252,6 +295,7 @@ export function buildConversation(
   spans: readonly Span[],
   recordedDetails: ReadonlyMap<string, SpanDetail>,
   complete: boolean,
+  pendingBranches?: ReadonlySet<string>,
 ): ConversationItem[] {
   const details = claudeToolDetails(spans, recordedDetails);
   const byId = new Map(spans.map((span) => [span.span_id, span]));
@@ -259,7 +303,7 @@ export function buildConversation(
   const completedOutputs = new Map<string, TraceMessage[]>();
   const pendingCalls = new Map<string, TraceToolCall[]>();
   const items: ConversationItem[] = [];
-  const events = conversationEvents(conversationSteps(spans), byId, details, complete);
+  const events = conversationEvents(conversationSteps(spans), byId, details, { complete, pendingBranches });
   const branch = (span: Span): string => conversationBranch(span, byId);
   for (const event of events) {
     const { span } = event;
@@ -353,6 +397,17 @@ export function buildConversation(
 export type ConversationGroup =
   | { kind: "item"; item: ConversationItem }
   | { kind: "branch"; id: string; name: string; children: ConversationGroup[] };
+
+export function conversationBranchGroups(groups: ConversationGroup[], branchId: string | null): ConversationGroup[] {
+  if (branchId === null) return groups;
+  for (const group of groups) {
+    if (group.kind === "item") continue;
+    if (group.id === branchId) return group.children;
+    const nested = conversationBranchGroups(group.children, branchId);
+    if (nested.length) return nested;
+  }
+  return [];
+}
 
 export function groupConversation(items: readonly ConversationItem[], spans: readonly Span[]): ConversationGroup[] {
   const byId = new Map(spans.map((span) => [span.span_id, span]));

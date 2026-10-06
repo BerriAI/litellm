@@ -543,7 +543,7 @@ async def new_user(
     ```shell
      curl -X POST "http://localhost:4000/user/new" \
      -H "Content-Type: application/json" \
-     -H "Authorization: Bearer sk-1234" \
+     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
      -d '{
          "username": "new_user",
          "email": "new_user@example.com"
@@ -952,7 +952,7 @@ async def user_info(
     Example request
     ```
     curl -X GET 'http://localhost:4000/user/info?user_id=krrish7%40berri.ai' \
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import model_max_budget_limiter, prisma_client
@@ -1105,7 +1105,7 @@ async def user_info_v2(
     Example request:
     ```
     curl -X GET 'http://localhost:4000/v2/user/info?user_id=user123' \\
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import model_max_budget_limiter, prisma_client
@@ -1458,11 +1458,7 @@ async def _invalidate_cached_user_entitlement(user_id: str | None, object_permis
         *(object_permission_cache_key(permission_id) for permission_id in dict.fromkeys(object_permission_ids)),
         *((user_object_permission_id_cache_key(user_id), user_id) if user_id is not None else ()),
     )
-    for key in keys:
-        try:
-            await user_api_key_cache.async_delete_cache(key=key)
-        except Exception as e:  # noqa: BLE001  # a cache we cannot clear still expires; never fail the write
-            verbose_proxy_logger.warning("Failed to invalidate cached entitlement key %r: %s", key, e)
+    await evict_and_broadcast(cache_keys=keys, user_api_key_cache=user_api_key_cache)
 
 
 async def _update_single_user_helper(
@@ -1685,7 +1681,7 @@ async def user_update(
 
     ```
     curl --location 'http://0.0.0.0:4000/user/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "user_id": "test-litellm-user-4",
@@ -1873,7 +1869,7 @@ async def bulk_user_update(
     Example request for specific users:
     ```bash
     curl --location 'http://0.0.0.0:4000/user/bulk_update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "users": [
@@ -1894,7 +1890,7 @@ async def bulk_user_update(
     Example request for all users:
     ```bash
     curl --location 'http://0.0.0.0:4000/user/bulk_update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "all_users": true,
@@ -2415,7 +2411,7 @@ async def delete_user(
     ```
     curl --location 'http://0.0.0.0:4000/user/delete' \
 
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     --header 'Content-Type: application/json' \
 

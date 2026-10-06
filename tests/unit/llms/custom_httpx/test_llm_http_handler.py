@@ -895,6 +895,7 @@ async def test_async_anthropic_messages_handler_streaming_forwards_provider_resp
     additional_headers = result._hidden_params["additional_headers"]
     assert additional_headers["llm_provider-x-amzn-requestid"] == "amzn-req-123"
     assert additional_headers["llm_provider-x-amzn-trace-id"] == "Root=1-abc-def"
+    assert mock_logging_obj.model_call_details["response_headers"] == dict(upstream_response.headers)
 
     collected = b"".join([chunk async for chunk in result])
     assert b"message_start" in collected
@@ -1601,8 +1602,7 @@ async def test_async_anthropic_messages_handler_forwards_request_timeout(monkeyp
     expected_response = {"id": "msg_1", "content": []}
     mock_config.transform_anthropic_messages_response = Mock(return_value=expected_response)
 
-    ok_response = Mock()
-    ok_response.raise_for_status = Mock(return_value=None)
+    ok_response = httpx.Response(200, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"))
     mock_client = AsyncMock(spec=AsyncHTTPHandler)
     mock_client.post = AsyncMock(return_value=ok_response)
 
@@ -2072,8 +2072,7 @@ async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks(
         captured_kwargs.update(call_kwargs)
         return sentinel_response
 
-    mock_httpx_response = Mock()
-    mock_httpx_response.status_code = 200
+    mock_httpx_response = httpx.Response(200, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"))
 
     with (
         patch.object(
