@@ -6,6 +6,7 @@ import { renderWithLens, stubGateway } from "@/../tests/lens-test-utils";
 import { ApiError } from "@/lib/http/client";
 import { lensKeys } from "../data/queries";
 import { InvestigationsView } from "./InvestigationsView";
+import { RunReport } from "./detail/RunReport";
 import { briefMarkdown } from "../model/findings";
 import { findingKey } from "../model/inbox";
 import { runTime } from "../model/format";
@@ -930,6 +931,59 @@ it("pauses monitoring from the detail menu by saving the investigation with moni
   await user.click(await screen.findByRole("menuitem", { name: "Pause monitoring" }));
   await waitFor(() => expect(proxy.put).toHaveBeenCalledTimes(1));
   expect(sentBody(proxy.put, "/lens/lens")).toEqual([{ ...watching.settings, enabled: false }]);
+});
+
+it("updates elapsed time without reformatting the activity log and still shows new model calls", async () => {
+  vi.useFakeTimers();
+  const formatTime = vi.spyOn(Date.prototype, "toLocaleTimeString");
+  const created_at = new Date(Date.now() - 60_000).toISOString();
+  const running = {
+    ...lens.jobs[0],
+    status: "running" as const,
+    stage: "Reading executions",
+    created_at,
+    coverage: { ...lens.jobs[0].coverage, selected: 62, screened: 13 },
+    steps: Array.from({ length: 200 }, (_, index) => ({
+      at: created_at,
+      kind: "model" as const,
+      label: `Reviewed run ${index}`,
+      model: "analysis",
+      purpose: "extract" as const,
+      prompt_tokens: 100,
+      completion_tokens: 20,
+      cost: 0.01,
+    })),
+  };
+  const view = (job: typeof running) => (
+    <RunReport lens={lens} job={job} findings={[]} connected ready busy={false} picker={null} />
+  );
+  const { rerender, unmount } = renderWithProviders(view(running));
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "Activity log" }));
+    expect(screen.getByRole("progressbar", { name: "Investigation progress" })).toHaveAttribute("aria-valuenow", "13");
+    expect(screen.getByRole("progressbar", { name: "Investigation progress" })).toHaveAttribute(
+      "aria-valuetext",
+      "13% overall. Reviewing activity: 13 of 62 selected runs reviewed",
+    );
+    expect(within(screen.getByRole("list", { name: "Investigation steps" })).getAllByRole("listitem")).toHaveLength(
+      200,
+    );
+    formatTime.mockClear();
+    await act(async () => vi.advanceTimersByTime(3000));
+    expect(screen.getByText("1m 3s")).toBeVisible();
+    expect(formatTime.mock.calls.length).toBe(0);
+
+    rerender(
+      view({ ...running, cost: 2.01, steps: [...running.steps, { ...running.steps[0], label: "New model call" }] }),
+    );
+    expect(screen.getByText("201 model calls")).toBeVisible();
+    expect(screen.getByText("$2.01")).toBeVisible();
+    expect(screen.getByText(/New model call/)).toBeVisible();
+  } finally {
+    unmount();
+    formatTime.mockRestore();
+    vi.useRealTimers();
+  }
 });
 
 it("stops the running job from the run report's primary action", async () => {
