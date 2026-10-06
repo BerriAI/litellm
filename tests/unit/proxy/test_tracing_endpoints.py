@@ -1056,3 +1056,23 @@ async def test_storage_rejects_native_query_help_that_drifts_from_the_contract(
     storage: Final = ClickHouseStorage(TraceStorageConfig("http://clickhouse:8123"))
     with pytest.raises(RuntimeError, match="invalid response"):
         await storage.query_help({"kind": "all"}, "secret")
+
+
+@pytest.mark.parametrize("count", (0, 101))
+def test_bulk_span_details_rejects_invalid_count(client: TestClient, receiver: MagicMock, count: int) -> None:
+    response: Final = client.post("/v1/traces/t1/spans", json={"span_ids": ["s1"] * count})
+    assert response.status_code == 422
+    receiver.get_spans.assert_not_called()
+
+
+def test_bulk_span_details_preserves_scope_and_canonical_content(client: TestClient, receiver: MagicMock) -> None:
+    receiver.get_spans = AsyncMock(return_value=[SPAN_DETAIL_RESPONSE])
+    response: Final = client.post("/v1/traces/t1/spans", json={"trace_ref": "run-one", "span_ids": ["s1"]})
+    assert response.status_code == 200, response.text
+    assert response.json() == [SPAN_DETAIL_RESPONSE]
+    receiver.get_spans.assert_awaited_once_with(
+        "t1", ("s1",), {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one"
+    )
+    receiver.get_spans.return_value = None
+    assert client.post("/v1/traces/missing/spans", json={"span_ids": ["s1"]}).status_code == 404
+    assert client.post("/v1/traces/t1/spans", json={"span_ids": ["s1"], "unexpected": True}).status_code == 422

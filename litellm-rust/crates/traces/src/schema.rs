@@ -81,6 +81,10 @@ pub fn request_schemas() -> BTreeMap<&'static str, Schema> {
             requested::<crate::request::TraceSpanRequest>(),
         ),
         (
+            "TraceSpanDetailsRequest",
+            requested::<crate::request::TraceSpanDetailsRequest>(),
+        ),
+        (
             "TraceErrorPageRequest",
             requested::<crate::request::TraceErrorPageRequest>(),
         ),

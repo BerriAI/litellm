@@ -12,10 +12,10 @@ use crate::{
 use litellm_traces::{
     SpanDetail, SpanErrorPage, Trace, TracePage,
     query::named::{
-        ListTracesParams, ReadAccessParams, SpanDetailParams, SpanErrorParams, TraceIdentityParams,
-        TraceSpansParams,
+        ListTracesParams, ReadAccessParams, SpanDetailParams, SpanDetailsParams, SpanErrorParams,
+        TraceIdentityParams, TraceSpansParams,
     },
-    request::{TRACE_PAGE_SIZE_MAX, TRACE_PAGE_SIZE_MIN},
+    request::{SPAN_DETAILS_MAX, TRACE_PAGE_SIZE_MAX, TRACE_PAGE_SIZE_MIN},
     resolve_trace, to_ui_content,
 };
 
@@ -242,14 +242,35 @@ impl TraceReader {
             span_id: span_id.to_owned(),
         };
         let row = store.span_detail(&params).await.map_err(map_store_error)?;
-        Ok(row.map(|row| SpanDetail {
-            input_ui: to_ui_content(&row.input),
-            output_ui: to_ui_content(&row.output),
-            span_id: row.span_id,
-            input: row.input,
-            output: row.output,
-            attributes: row.attributes,
-        }))
+        let detail = row.map(span_detail);
+        response_fits(&detail, self.response_bytes)?;
+        Ok(detail)
+    }
+
+    pub async fn get_spans<S: TraceStore>(
+        &self,
+        store: &S,
+        access: &ReadAccessParams,
+        trace_id: &str,
+        span_ids: &[String],
+        trace_ref: &str,
+    ) -> Result<Option<Vec<SpanDetail>>, ReadError<S::Error>> {
+        if span_ids.is_empty() || span_ids.len() > SPAN_DETAILS_MAX {
+            return Err(ReadError::InvalidParameters);
+        }
+        let Some(trace_ref) = reference(store, access, trace_id, trace_ref).await? else {
+            return Ok(None);
+        };
+        let params = SpanDetailsParams {
+            access: access.clone(),
+            trace_id: trace_id.to_owned(),
+            trace_ref,
+            span_ids: span_ids.to_vec(),
+        };
+        let rows = store.span_details(&params).await.map_err(map_store_error)?;
+        let details: Vec<_> = rows.into_iter().map(span_detail).collect();
+        response_fits(&details, self.response_bytes)?;
+        Ok(Some(details))
     }
 
     pub async fn get_span_error<S: TraceStore>(
@@ -352,6 +373,25 @@ fn page<E>(
         }
         trace = create_page(trace.spans.len() / 2);
     }
+}
+
+fn span_detail(row: litellm_traces::query::named::SpanDetailRow) -> SpanDetail {
+    SpanDetail {
+        input_ui: to_ui_content(&row.input),
+        output_ui: to_ui_content(&row.output),
+        span_id: row.span_id,
+        input: row.input,
+        output: row.output,
+        attributes: row.attributes,
+    }
+}
+
+fn response_fits<T: serde::Serialize, E>(value: &T, limit: usize) -> Result<(), ReadError<E>> {
+    let bytes = serde_json::to_vec(value).map_err(|error| ReadError::Encode(Arc::new(error)))?;
+    if bytes.len() > limit {
+        return Err(ReadError::TooLarge);
+    }
+    Ok(())
 }
 
 pub(super) fn now_ms() -> u64 {

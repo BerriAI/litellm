@@ -22500,6 +22500,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/traces/{trace_id}/spans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Get Agent Trace Spans */
+        post: operations["get_agent_trace_spans_v1_traces__trace_id__spans_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/traces/{trace_id}/spans/{span_id}": {
         parameters: {
             query?: never;
@@ -47375,6 +47392,16 @@ export interface components {
             data: {
                 [key: string]: components["schemas"]["JsonValue"];
             }[];
+        };
+        /** TraceSpanDetailsRequest */
+        TraceSpanDetailsRequest: {
+            /** Span Ids */
+            span_ids: string[];
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
         };
         /** TraceSummary */
         TraceSummary: {
@@ -80432,6 +80459,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Trace"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_trace_spans_v1_traces__trace_id__spans_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TraceSpanDetailsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpanDetail"][];
                 };
             };
             /** @description Validation Error */

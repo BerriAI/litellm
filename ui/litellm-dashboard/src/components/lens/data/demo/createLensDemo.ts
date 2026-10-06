@@ -90,6 +90,7 @@ function demoTracesApi(data: LensDemoData): TracesApi {
       }),
     anyRecorded: async () => data.runs.length > 0,
     trace: (traceId) => found(run(traceId)?.trace),
+    spans: (traceId, spanIds) => found(run(traceId)?.details.filter((span) => spanIds.includes(span.span_id))),
     span: (traceId, spanId) => found(run(traceId)?.details.find((span) => span.span_id === spanId)),
     spanError: async (traceId, spanId) => {
       const span = run(traceId)?.trace.spans.find((item) => item.span_id === spanId);

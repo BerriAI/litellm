@@ -119,6 +119,7 @@ import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_componen
 import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
 import type {
   SpanDetail,
+  SpanDetailsBody,
   SpanErrorPage,
   SpanErrorQuery,
   SpanQuery,
@@ -2004,6 +2005,17 @@ export const agentTraceSpanCall = async (
   apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
     accessToken,
     query: { trace_ref: traceRef || undefined } satisfies SpanQuery,
+  });
+
+export const agentTraceSpansCall = async (
+  accessToken: string,
+  traceId: string,
+  spanIds: string[],
+  traceRef?: string,
+): Promise<SpanDetail[]> =>
+  apiClient.post<SpanDetail[]>(`/v1/traces/${encodeURIComponent(traceId)}/spans`, {
+    accessToken,
+    body: { trace_ref: traceRef || "", span_ids: spanIds } satisfies SpanDetailsBody,
   });
 
 export const agentTraceSpanErrorCall = async (

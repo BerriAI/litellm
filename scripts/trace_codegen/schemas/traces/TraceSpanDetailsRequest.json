@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "span_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100,
+      "minItems": 1,
+      "type": "array"
+    },
+    "trace_ref": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "span_ids"
+  ],
+  "title": "TraceSpanDetailsRequest",
+  "type": "object"
+}

@@ -141,9 +141,9 @@ function ConversationFeedback({
         ({ query, span }) =>
           query.isError && (
             <div key={span.span_id} role="alert" className="rounded-md border p-3 text-sm">
-              Could not load {span.name}. Retry this step to continue the conversation.
+              Could not load conversation content starting at {span.name}. Retry this batch to continue.
               <Button variant="outline" size="sm" className="mt-2" onClick={() => query.refetch()}>
-                Retry step
+                Retry batch
               </Button>
             </div>
           ),
@@ -300,8 +300,10 @@ function ConversationStep({
 }
 
 function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpenStep: (id: string) => void }) {
-  const [open, setOpen] = useState(item.span.status === "error");
-  const failed = item.span.status === "error";
+  const failed = item.toolAttempt?.isError ?? item.span.status === "error";
+  const executionStatus = failed ? "Failed" : "Completed";
+  const [open, setOpen] = useState(failed);
+  const name = item.toolAttempt ? "Tool attempt" : item.span.name;
   const summary = toolSummary(item.toolCall?.args);
   return (
     <div className={cn("min-w-0 overflow-hidden rounded-md border", failed && "border-destructive/40")}>
@@ -309,7 +311,7 @@ function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpen
         <button
           type="button"
           aria-expanded={open}
-          aria-label={`${open ? "Collapse" : "Expand"} ${item.span.name} tool call`}
+          aria-label={`${open ? "Collapse" : "Expand"} ${name} tool call`}
           onClick={() => setOpen((value) => !value)}
           className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left text-sm hover:bg-muted/40"
         >
@@ -318,7 +320,8 @@ function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpen
           />
           <Wrench className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium">{item.span.name}</span>
+            <span className="block truncate font-medium">{name}</span>
+            {item.toolAttempt && <span className="block text-xs text-muted-foreground">Execution not recorded</span>}
             {summary && !open && (
               <span className="mt-1 block truncate font-mono text-xs text-muted-foreground" title={summary}>
                 {summary}
@@ -326,7 +329,7 @@ function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpen
             )}
           </span>
           <span className={cn("ml-auto shrink-0 text-xs", failed ? "text-destructive" : "text-muted-foreground")}>
-            {failed ? "Failed" : "Completed"}
+            {item.toolAttempt ? "Result recorded" : executionStatus}
           </span>
         </button>
         <Button
@@ -357,7 +360,7 @@ function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpen
           {item.toolResult ? (
             <ToolOutput result={item.toolResult} failed={failed} />
           ) : (
-            <p className="text-sm text-muted-foreground">No result content recorded.</p>
+            <p className="text-sm text-muted-foreground">{item.contentWarning ?? "No result content recorded."}</p>
           )}
         </div>
       )}

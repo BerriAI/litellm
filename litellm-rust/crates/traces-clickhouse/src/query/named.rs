@@ -279,7 +279,22 @@ impl Query for SpanDetail {
     type Params = SpanDetailParams;
     type Row = SpanDetailRow;
 
-    const SQL: &'static str = include_str!("../../query/span_detail.sql");
+    const SQL: &'static str = concat!(
+        "WITH [{span_id:String}] AS requested_ids, ",
+        include_str!("../../query/span_detail.sql")
+    );
+}
+
+pub struct SpanDetails;
+
+impl Query for SpanDetails {
+    type Params = contracts::SpanDetailsParams;
+    type Row = SpanDetailRow;
+
+    const SQL: &'static str = concat!(
+        "WITH {span_ids:Array(String)} AS requested_ids, ",
+        include_str!("../../query/span_detail.sql")
+    );
 }
 
 pub struct SpanError;

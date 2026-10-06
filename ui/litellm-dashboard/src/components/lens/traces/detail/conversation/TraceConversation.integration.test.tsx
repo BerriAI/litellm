@@ -1,3 +1,4 @@
+import { ApiError } from "@/lib/http/client";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,9 +13,10 @@ import research from "../../__fixtures__/research_trace.json";
 vi.mock("../../../../networking", () => ({
   agentTraceCall: vi.fn(),
   agentTraceSpanCall: vi.fn(),
+  agentTraceSpansCall: vi.fn(),
   getProxyBaseUrl: () => "http://proxy.test",
 }));
-import { agentTraceCall, agentTraceSpanCall } from "../../../../networking";
+import { agentTraceCall, agentTraceSpanCall, agentTraceSpansCall } from "../../../../networking";
 
 function RoutedRunView(props: Omit<ComponentProps<typeof RunView>, "selection">) {
   const { selection } = useOpenTraceRouting();
@@ -41,6 +43,13 @@ describe("TraceConversation", () => {
   beforeEach(() => {
     testQueryClient.clear();
     vi.mocked(agentTraceCall).mockReset().mockResolvedValue(trace);
+    vi.mocked(agentTraceSpansCall)
+      .mockReset()
+      .mockImplementation(async (token, traceId, ids, traceRef) =>
+        Promise.all(
+          ids.map(async (id) => ({ ...(await agentTraceSpanCall(token, traceId, id, traceRef)), span_id: id })),
+        ),
+      );
     vi.mocked(agentTraceSpanCall)
       .mockReset()
       .mockImplementation(async (_token, _trace, id) => (id === "root" ? rootDetail : { ...toolDetail, span_id: id }));
@@ -130,11 +139,11 @@ describe("TraceConversation", () => {
     renderWithProviders(<TraceConversation trace={long} accessToken="test" onOpenStep={vi.fn()} />);
     const more = await screen.findByRole("button", { name: "Load next 20 entries" });
     await waitFor(() => expect(more).toBeEnabled());
-    expect(agentTraceSpanCall).toHaveBeenCalledTimes(20);
+    expect(agentTraceSpansCall).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("The release is ready")).not.toBeInTheDocument();
     await user.click(more);
     expect(await screen.findByText("The release is ready")).toBeVisible();
-    expect(agentTraceSpanCall).toHaveBeenCalledTimes(31);
+    expect(agentTraceSpansCall).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("button", { name: /Load next/ })).not.toBeInTheDocument();
   });
 
@@ -191,7 +200,7 @@ describe("TraceConversation", () => {
     );
     await user.click(await screen.findByRole("tab", { name: "Conversation" }));
     expect(await screen.findByText("2 entries shown")).toBeVisible();
-    expect(agentTraceSpanCall).toHaveBeenCalledTimes(20);
+    expect(agentTraceSpansCall).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: "Load next 20 entries", exact: true }));
     expect(await screen.findByText("22 entries shown")).toBeVisible();
     expect(screen.getAllByRole("region", { name: /Conversation step parent tool/ })).toHaveLength(20);
@@ -252,7 +261,7 @@ describe("TraceConversation", () => {
     await user.click(screen.getByText("Subagent: Reviewer", { exact: true }));
     expect(screen.getByText("Review finished")).toBeVisible();
     expect(screen.queryByRole("button", { name: /entries in Reviewer/ })).not.toBeInTheDocument();
-    expect(agentTraceSpanCall).toHaveBeenCalledTimes(20);
+    expect(agentTraceSpansCall).toHaveBeenCalledTimes(1);
     expect(loadMore).not.toHaveBeenCalled();
   });
 
@@ -310,7 +319,7 @@ describe("TraceConversation", () => {
     expect(screen.getAllByRole("region", { name: /Conversation step child tool/ })).toHaveLength(25);
     expect(screen.getByRole("button", { name: "Load next 20 entries", exact: true })).toBeEnabled();
     expect(screen.queryByText("Loading conversation…")).not.toBeInTheDocument();
-    expect(agentTraceSpanCall).toHaveBeenCalledTimes(40);
+    expect(agentTraceSpansCall).toHaveBeenCalledTimes(2);
     expect(agentTraceCall).toHaveBeenCalledTimes(paged ? 2 : 1);
     expect(agentTraceCall).not.toHaveBeenCalledWith("test", trace.summary.trace_id, undefined, "unrelated-page");
   });
@@ -446,12 +455,34 @@ describe("TraceConversation", () => {
     },
   );
 
+  it("splits oversized content batches and still renders canonical results", async () => {
+    vi.mocked(agentTraceSpansCall).mockImplementation(async (_token, _trace, ids) => {
+      if (ids.length > 1) throw new ApiError("Content too large", 413, {});
+      return [ids[0] === "root" ? rootDetail : toolDetail];
+    });
+    renderWithProviders(<TraceConversation trace={trace} accessToken="test" onOpenStep={vi.fn()} />);
+    expect(await screen.findByText("The release is ready")).toBeVisible();
+    expect(vi.mocked(agentTraceSpansCall).mock.calls.map((call) => call[2])).toEqual([
+      ["root", "tool"],
+      ["root"],
+      ["tool"],
+    ]);
+    expect(agentTraceSpanCall).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing bulk result instead of silently ending the conversation", async () => {
+    vi.mocked(agentTraceSpansCall).mockResolvedValue([rootDetail]);
+    renderWithProviders(<TraceConversation trace={trace} accessToken="test" onOpenStep={vi.fn()} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Retry this batch");
+    expect(screen.queryByText("End of conversation")).not.toBeInTheDocument();
+  });
+
   it("shows a missing step explicitly and lets the user retry it", async () => {
     const user = userEvent.setup();
     vi.mocked(agentTraceSpanCall).mockRejectedValueOnce(new Error("temporarily unavailable"));
     renderWithProviders(<TraceConversation trace={trace} accessToken="test" onOpenStep={vi.fn()} />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Retry this step to continue the conversation");
-    await user.click(screen.getByRole("button", { name: "Retry step" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Retry this batch to continue");
+    await user.click(screen.getByRole("button", { name: "Retry batch" }));
     expect(await screen.findByText("Read the release notes")).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -476,10 +507,12 @@ describe("TraceConversation", () => {
     const more = screen.getByRole("button", { name: "Load next 20 entries", exact: true });
     await waitFor(() => expect(more).toBeEnabled());
     await user.click(more);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load check 21");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not load conversation content starting at check 19",
+    );
     expect(retry).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Expand check 22 tool call" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Retry step" }));
+    await user.click(screen.getByRole("button", { name: "Retry batch" }));
     expect(await screen.findByText("40 entries shown")).toBeVisible();
     expect(screen.getAllByRole("region", { name: /Conversation step check/ })).toHaveLength(39);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -512,13 +545,13 @@ describe("TraceConversation", () => {
     });
     renderWithProviders(<TraceConversation trace={traced} accessToken="test" onOpenStep={vi.fn()} />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("read_file");
-    expect(await screen.findByText("Checking the release")).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Retry this batch");
+    expect(screen.queryByText("Checking the release")).not.toBeInTheDocument();
     expect(screen.queryByText("The release is ready")).not.toBeInTheDocument();
     expect(screen.queryByText("End of conversation")).not.toBeInTheDocument();
-    expect(screen.getByText("2 entries shown")).toBeVisible();
+    expect(screen.queryByText("2 entries shown")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Retry step" }));
+    await user.click(screen.getByRole("button", { name: "Retry batch" }));
     expect(await screen.findByText("The release is ready")).toBeVisible();
     expect(screen.getAllByText("Checking the release")).toHaveLength(1);
     expect(screen.getAllByText("Read the release notes")).toHaveLength(1);

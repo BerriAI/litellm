@@ -131,6 +131,15 @@ pub struct SpanDetailParams {
     pub span_id: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SpanDetailsParams {
+    #[serde(flatten)]
+    pub access: ReadAccessParams,
+    pub trace_id: String,
+    pub trace_ref: String,
+    pub span_ids: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SpanDetailRow {
     pub span_id: String,

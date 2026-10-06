@@ -34,6 +34,7 @@ from litellm.rust_bridge.trace.generated.requests import (
     TraceErrorPageRequest,
     TraceListRequest,
     TraceQueryRequest,
+    TraceSpanDetailsRequest,
     TraceSpanRequest,
 )
 from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
@@ -289,6 +290,22 @@ async def get_agent_trace(
     if trace is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
     return trace
+
+
+@router.post("/v1/traces/{trace_id}/spans", response_model=list[SpanDetail])
+async def get_agent_trace_spans(
+    trace_id: str,
+    body: TraceSpanDetailsRequest,
+    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
+) -> list[SpanDetail]:
+    tracing, scope = context.reader()
+    try:
+        spans: Final = await tracing.get_spans(trace_id, body.span_ids, scope, body.trace_ref)
+    except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
+        raise read_failure(error) from error
+    if spans is None:
+        raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
+    return spans
 
 
 @router.get("/v1/traces/{trace_id}/spans/{span_id}", response_model=SpanDetail)

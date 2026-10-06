@@ -13,7 +13,7 @@ The proxy endpoints are thin wrappers: auth -> build tenant/scope -> call one me
 """
 
 import asyncio
-from collections.abc import AsyncIterable, Callable, Mapping
+from collections.abc import AsyncIterable, Callable, Mapping, Sequence
 from io import BytesIO
 from threading import BoundedSemaphore
 from typing import Final
@@ -113,6 +113,11 @@ class TraceReceiver:
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
         return await self.storage.get_span(trace_id, span_id, scope, trace_ref)
+
+    async def get_spans(
+        self, trace_id: str, span_ids: Sequence[str], scope: TraceScope, trace_ref: str = ""
+    ) -> list[SpanDetail] | None:
+        return await self.storage.get_spans(trace_id, span_ids, scope, trace_ref)
 
     async def get_span_error(
         self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "", cursor: str | None = None

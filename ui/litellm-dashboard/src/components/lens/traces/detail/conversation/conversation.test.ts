@@ -564,7 +564,37 @@ describe("coding sessions", () => {
     expect(items.find((item) => item.span.span_id === response.span_id)?.agentId).toBe("agent-tool");
   });
 
-  it("fills native tool arguments and missing results from logs without duplicating calls or replacing recorded output", () => {
+  it("shows unexecuted tool results once as attempts without inventing executed spans", () => {
+    const body = {
+      ...root,
+      span_id: "body",
+      framework: "claude-code",
+      type: "framework" as const,
+      name: "claude_code.api_request_body",
+    };
+    const duplicate = { ...body, span_id: "retry" };
+    const output = {
+      ...detail("body", "", ""),
+      attributes: {
+        "lens.content.unexecuted_tool_results": JSON.stringify([
+          { id: "denied", content: "Tool permission denied", is_error: true },
+        ]),
+      },
+    };
+    const details = new Map([
+      [body.span_id, output],
+      [duplicate.span_id, { ...output, span_id: duplicate.span_id }],
+    ]);
+    const items = buildConversation([body, duplicate], details, true);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      toolAttempt: { isError: true },
+      toolResult: "Tool permission denied",
+      span: { type: "framework" },
+    });
+  });
+
+  it("uses canonical native tool content without browser supplements overriding it", () => {
     const tool = {
       ...root,
       span_id: "tool",
@@ -583,8 +613,8 @@ describe("coding sessions", () => {
     };
     const body = { ...log, span_id: "body", name: "claude_code.api_request_body", start_offset_ms: 3 };
     const toolDetail = {
-      ...detail(tool.span_id, { command: "exit 3" }, ""),
-      output: "",
+      ...detail(tool.span_id, { command: "exit 3", description: "Expected failure" }, ""),
+      output: "Canonical stdout",
       attributes: { "gen_ai.tool.call.id": "call-1" },
     };
     const details = new Map([
@@ -612,7 +642,7 @@ describe("coding sessions", () => {
     expect(items.filter((item) => item.toolCall)).toHaveLength(1);
     expect(items.find((item) => item.toolCall)).toMatchObject({
       toolCall: { args: { command: "exit 3", description: "Expected failure" } },
-      toolResult: "Expected stdout",
+      toolResult: "Canonical stdout",
     });
     details.set(tool.span_id, { ...toolDetail, output: "Recorded output" });
     expect(buildConversation(spans, details, true).find((item) => item.toolCall)?.toolResult).toBe("Recorded output");

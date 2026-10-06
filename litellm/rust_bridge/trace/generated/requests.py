@@ -47,6 +47,16 @@ class TraceQueryRequest(LiteLLMBaseModel):
     sql: str
 
 
+class TraceSpanDetailsRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    trace_ref: str = ""
+    span_ids: tuple[str, ...] = Field(..., max_length=100, min_length=1)
+
+
 class TraceSpanRequest(LiteLLMBaseModel):
     model_config = ConfigDict(
         frozen=True,
@@ -56,6 +66,11 @@ class TraceSpanRequest(LiteLLMBaseModel):
 
 
 TraceWireRequests: TypeAlias = Annotated[
-    TraceDetailRequest | TraceErrorPageRequest | TraceListRequest | TraceQueryRequest | TraceSpanRequest,
+    TraceDetailRequest
+    | TraceErrorPageRequest
+    | TraceListRequest
+    | TraceQueryRequest
+    | TraceSpanDetailsRequest
+    | TraceSpanRequest,
     Field(..., title="TraceWireRequests"),
 ]

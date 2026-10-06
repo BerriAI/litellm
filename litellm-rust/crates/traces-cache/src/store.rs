@@ -1,9 +1,9 @@
 use std::future::Future;
 
 use litellm_traces::query::named::{
-    ListTracesParams, ListTracesRow, SpanDetailParams, SpanDetailRow, SpanErrorParams,
-    SpanErrorRow, SpendByResponseIdsParams, SpendByResponseIdsRow, TraceIdentityParams,
-    TracePageSpansParams, TraceSpansParams, TraceSpansRow,
+    ListTracesParams, ListTracesRow, SpanDetailParams, SpanDetailRow, SpanDetailsParams,
+    SpanErrorParams, SpanErrorRow, SpendByResponseIdsParams, SpendByResponseIdsRow,
+    TraceIdentityParams, TracePageSpansParams, TraceSpansParams, TraceSpansRow,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -54,6 +54,11 @@ pub trait TraceStore: Sync {
         &self,
         params: &SpanDetailParams,
     ) -> impl Future<Output = Result<Option<SpanDetailRow>, StoreError<Self::Error>>> + Send;
+
+    fn span_details(
+        &self,
+        params: &SpanDetailsParams,
+    ) -> impl Future<Output = Result<Vec<SpanDetailRow>, StoreError<Self::Error>>> + Send;
 
     fn span_error(
         &self,

@@ -238,6 +238,16 @@ impl TraceStore for FakeStore {
         Ok(state.span_detail.clone())
     }
 
+    async fn span_details(
+        &self,
+        _: &litellm_traces::query::named::SpanDetailsParams,
+    ) -> Result<Vec<SpanDetailRow>, StoreError<Self::Error>> {
+        self.calls.span_detail.fetch_add(1, Ordering::SeqCst);
+        let state = self.state.lock().unwrap();
+        Self::failure(&state, Operation::SpanDetail)?;
+        Ok(state.span_detail.clone().into_iter().collect())
+    }
+
     async fn span_error(
         &self,
         _: &SpanErrorParams,
@@ -765,4 +775,56 @@ async fn concurrent_pages_of_an_evicted_snapshot_share_one_storage_read() {
     assert_eq!(left.unwrap().unwrap().spans[0].span_id, "span-1");
     assert_eq!(right.unwrap().unwrap().spans[0].span_id, "span-1");
     assert_eq!(store.calls(Operation::TraceSpans), 1);
+}
+
+#[rstest]
+#[case::empty(0)]
+#[case::over_limit(litellm_traces::request::SPAN_DETAILS_MAX + 1)]
+#[tokio::test]
+async fn bulk_content_rejects_invalid_counts_before_storage(#[case] count: usize) {
+    let store = FakeStore::default();
+    let reader = TraceReader::new(1_000_000);
+    let result = reader
+        .get_spans(
+            &store,
+            &access(),
+            "trace",
+            &vec!["span".to_owned(); count],
+            "run",
+        )
+        .await;
+    assert!(matches!(result, Err(ReadError::InvalidParameters)));
+    assert_eq!(store.calls(Operation::SpanDetail), 0);
+    assert_eq!(store.calls(Operation::TraceRefs), 0);
+}
+
+#[rstest]
+#[case::single(false)]
+#[case::bulk(true)]
+#[tokio::test]
+async fn content_reads_enforce_response_budget(#[case] bulk: bool) {
+    let store = FakeStore::default();
+    store.state.lock().unwrap().span_detail = Some(SpanDetailRow {
+        span_id: "span".into(),
+        input: String::new(),
+        output: "x".repeat(1_024),
+        attributes: Default::default(),
+    });
+    let reader = TraceReader::new(100);
+    let oversized = if bulk {
+        matches!(
+            reader
+                .get_spans(&store, &access(), "trace", &["span".into()], "run")
+                .await,
+            Err(ReadError::TooLarge)
+        )
+    } else {
+        matches!(
+            reader
+                .get_span(&store, &access(), "trace", "span", "run")
+                .await,
+            Err(ReadError::TooLarge)
+        )
+    };
+    assert!(oversized);
 }

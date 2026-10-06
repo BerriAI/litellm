@@ -76,6 +76,10 @@ class NativeStore(Protocol):
 
     def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str) -> Awaitable[JsonValue]: ...
 
+    def get_spans(
+        self, trace_id: str, span_ids: Sequence[str], scope: TraceScope, trace_ref: str
+    ) -> Awaitable[JsonValue]: ...
+
     def get_span_error(
         self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str, cursor: str | None
     ) -> Awaitable[JsonValue]: ...
@@ -107,6 +111,7 @@ _HELP_RESPONSE: Final = TypeAdapter(TraceQueryHelp)
 _TRACE_PAGE: Final = TypeAdapter(TracePage)
 _TRACE: Final[TypeAdapter[Trace | None]] = TypeAdapter(Trace | None)
 _SPAN_DETAIL: Final[TypeAdapter[SpanDetail | None]] = TypeAdapter(SpanDetail | None)
+_SPAN_DETAILS: Final[TypeAdapter[list[SpanDetail] | None]] = TypeAdapter(list[SpanDetail] | None)
 _SPAN_ERROR_PAGE: Final[TypeAdapter[SpanErrorPage | None]] = TypeAdapter(SpanErrorPage | None)
 _ResponseT: Final = TypeVar("_ResponseT")
 _NATIVE_ADAPTER: Final[TypeAdapter[NativeTraces]] = TypeAdapter(
@@ -208,6 +213,12 @@ class ClickHouseStorage:
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
         result: Final = await self._native.get_span(trace_id, span_id, scope, trace_ref)
         return _validate_query_response(_SPAN_DETAIL, result)
+
+    async def get_spans(
+        self, trace_id: str, span_ids: Sequence[str], scope: TraceScope, trace_ref: str = ""
+    ) -> list[SpanDetail] | None:
+        result: Final = await self._native.get_spans(trace_id, span_ids, scope, trace_ref)
+        return _validate_query_response(_SPAN_DETAILS, result)
 
     async def get_span_error(
         self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "", cursor: str | None = None

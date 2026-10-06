@@ -2,7 +2,7 @@ import { groupBy, orderBy } from "es-toolkit";
 import type { Span, SpanDetail, TraceMessage, TraceToolCall, UIContent } from "../../types";
 import { isFrameworkSpan, parseAssistantSummary, parseMessages, prettyPayload } from "../../utils";
 import { toTraceMessage, toolInput } from "../content/payload";
-import { claudeCaptureWarnings, claudeToolDetails, isClaudeSupplement } from "./nativeClaude";
+import { claudeCaptureWarnings, isClaudeSupplement, unexecutedToolResults } from "./nativeClaude";
 
 export const CONVERSATION_PAGE_SIZE = 20;
 
@@ -121,6 +121,8 @@ export interface ConversationItem {
   messages: TraceMessage[];
   toolCall?: TraceToolCall;
   toolResult?: string;
+  toolAttempt?: { isError: boolean };
+  contentWarning?: string;
   agentId?: string;
   agentName?: string;
   branchId?: string;
@@ -156,7 +158,13 @@ function toolItem(
     detail.output_ui?.kind === "text"
       ? detail.output_ui.text
       : prettyPayload(detail.output) || contentText(detail.output, detail.output_ui);
-  return { id: span.span_id, span, messages: [], toolCall: call, toolResult: result };
+  const status = detail.attributes["lens.content.output_status"];
+  const contentWarning = (() => {
+    if (status === "conflicting") return "Conflicting tool outputs were recorded. Inspect the capture source spans.";
+    if (status === "recorded" && !result) return "The recorded result is empty.";
+    return undefined;
+  })();
+  return { id: span.span_id, span, messages: [], toolCall: call, toolResult: result, contentWarning };
 }
 
 interface ConversationEvent {
@@ -297,17 +305,32 @@ export function buildConversation(
   complete: boolean,
   pendingBranches?: ReadonlySet<string>,
 ): ConversationItem[] {
-  const details = claudeToolDetails(spans, recordedDetails);
+  const details = recordedDetails;
   const byId = new Map(spans.map((span) => [span.span_id, span]));
   const histories = new Map<string, TraceMessage[]>();
   const completedOutputs = new Map<string, TraceMessage[]>();
   const pendingCalls = new Map<string, TraceToolCall[]>();
   const items: ConversationItem[] = [];
+  const attempts = new Set<string>();
   const events = conversationEvents(conversationSteps(spans), byId, details, { complete, pendingBranches });
   const branch = (span: Span): string => conversationBranch(span, byId);
   for (const event of events) {
     const { span } = event;
-    if (isClaudeSupplement(span)) continue;
+    if (isClaudeSupplement(span)) {
+      for (const result of unexecutedToolResults(details.get(span.span_id)!)) {
+        if (attempts.has(result.id)) continue;
+        attempts.add(result.id);
+        items.push({
+          id: `${span.span_id}-${result.id}`,
+          span,
+          messages: [],
+          toolCall: { name: "Tool attempt", args: { tool_call_id: result.id } },
+          toolAttempt: { isError: result.isError },
+          toolResult: result.content,
+        });
+      }
+      continue;
+    }
     const detail = details.get(span.span_id)!;
     if (["generate_session_title", "prompt_suggestion"].includes(detail.attributes["query_source_safe"])) continue;
     const key = branch(span);

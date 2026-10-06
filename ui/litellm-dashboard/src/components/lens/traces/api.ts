@@ -5,6 +5,7 @@ import {
   agentTraceCall,
   agentTraceListCall,
   agentTraceSpanCall,
+  agentTraceSpansCall,
   agentTraceSpanErrorCall,
   apiClient,
   getProxyBaseUrl,
@@ -39,6 +40,7 @@ export interface TracesApi {
   anyRecorded(): Promise<boolean>;
   trace(traceId: string, traceRef?: string, cursor?: string | null): Promise<Trace>;
   span(traceId: string, spanId: string, traceRef?: string): Promise<SpanDetail>;
+  spans(traceId: string, spanIds: string[], traceRef?: string): Promise<SpanDetail[]>;
   spanError(
     traceId: string,
     spanId: string,
@@ -75,6 +77,7 @@ export function liveTracesApi(accessToken: string): TracesApi {
     },
     trace: (traceId, traceRef, cursor) => agentTraceCall(accessToken, traceId, traceRef, cursor),
     span: (traceId, spanId, traceRef) => agentTraceSpanCall(accessToken, traceId, spanId, traceRef),
+    spans: (traceId, spanIds, traceRef) => agentTraceSpansCall(accessToken, traceId, spanIds, traceRef),
     spanError: (traceId, spanId, options) => agentTraceSpanErrorCall(accessToken, traceId, spanId, options),
   };
 }

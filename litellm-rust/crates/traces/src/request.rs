@@ -1,5 +1,6 @@
 pub const TRACE_PAGE_SIZE_MIN: u16 = 1;
 pub const TRACE_PAGE_SIZE_MAX: u16 = 500;
+pub const SPAN_DETAILS_MAX: usize = 100;
 
 #[macro_rules_attribute::apply(request_type)]
 #[derive(Clone, Debug)]
@@ -36,6 +37,16 @@ pub struct TraceDetailRequest {
 pub struct TraceSpanRequest {
     #[serde(default)]
     pub trace_ref: String,
+}
+
+#[macro_rules_attribute::apply(request_type)]
+#[derive(Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TraceSpanDetailsRequest {
+    #[serde(default)]
+    pub trace_ref: String,
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = SPAN_DETAILS_MAX)))]
+    pub span_ids: Vec<String>,
 }
 
 #[macro_rules_attribute::apply(request_type)]

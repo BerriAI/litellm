@@ -10,6 +10,7 @@ export type SpanQuery = NonNullable<paths["/v1/traces/{trace_id}/spans/{span_id}
 export type SpanErrorQuery = NonNullable<
   paths["/v1/traces/{trace_id}/spans/{span_id}/error"]["get"]["parameters"]["query"]
 >;
+export type SpanDetailsBody = components["schemas"]["TraceSpanDetailsRequest"];
 export type TraceQueryBody = components["schemas"]["TraceQueryRequest"];
 export type TraceFindingsRequest = components["schemas"]["TraceFindingsRequest"];
 export type TraceFindingCount = components["schemas"]["TraceFindingCount"];

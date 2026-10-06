@@ -6,8 +6,8 @@ use litellm_traces_cache::{StoreError, TraceStore};
 use crate::{
     Connection, Error,
     query::named::{
-        ListTracesParams, ListTracesRow, SpanDetail as SpanDetailQuery, SpanError, SpanErrorParams,
-        SpendByResponseIdsParams, TraceIdentity, TracePageSpansParams,
+        ListTracesParams, ListTracesRow, SpanDetail as SpanDetailQuery, SpanDetails, SpanError,
+        SpanErrorParams, SpendByResponseIdsParams, TraceIdentity, TracePageSpansParams,
     },
 };
 
@@ -104,6 +104,18 @@ impl TraceStore for ClickHouseTraces {
     ) -> Result<Option<contracts::SpanDetailRow>, StoreError<Self::Error>> {
         match fetch::<SpanDetailQuery>(&self.client, &self.connection, params).await {
             Ok(rows) => Ok(rows.into_iter().next()),
+            Err(StorageError::ResponseTooLarge) => Err(StoreError::TooLarge),
+            Err(error) => Err(failed(error)),
+        }
+    }
+
+    async fn span_details(
+        &self,
+        params: &contracts::SpanDetailsParams,
+    ) -> Result<Vec<contracts::SpanDetailRow>, StoreError<Self::Error>> {
+        match fetch::<SpanDetails>(&self.client, &self.connection, params).await {
+            Ok(rows) => Ok(rows),
+            Err(StorageError::ResponseTooLarge) => Err(StoreError::TooLarge),
             Err(error) => Err(failed(error)),
         }
     }

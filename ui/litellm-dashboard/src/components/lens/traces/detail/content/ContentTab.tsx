@@ -21,7 +21,7 @@ export function useSpanDetail(accessToken: string, traceId: string, spanId: stri
     queryKey: ["agentTraceSpan", traceId, traceRef, spanId, accessToken],
     queryFn: () => traces.span(traceId, spanId as string, traceRef),
     enabled: spanId !== null,
-    staleTime: Infinity,
+    staleTime: 30_000,
   };
   return useQuery(queryOptions);
 }
@@ -95,13 +95,24 @@ export function ContentTab({ accessToken, traceId, traceRef, span }: ContentTabP
       )}
       {detailQuery.isLoading && <div className={STATUS_TEXT}>Loading span…</div>}
       {detailQuery.isError && <div className={STATUS_TEXT}>Could not load span: {detailQuery.error.message}</div>}
+      {detail &&
+        ["input", "output"].map((field) =>
+          detail.attributes[`lens.content.${field}_status`] === "conflicting" ? (
+            <p key={field} role="status" className={STATUS_TEXT}>
+              Conflicting {field} content was recorded. Inspect the capture source spans.
+            </p>
+          ) : null,
+        )}
       {detail?.input ? (
         <PayloadSection title="Input" raw={detail.input} content={detail.input_ui} span={span} role="input" />
       ) : null}
       {detail?.output ? (
         <PayloadSection title="Output" raw={detail.output} content={detail.output_ui} span={span} role="output" />
       ) : null}
-      {empty && span.status !== "error" && (
+      {detail?.attributes["lens.content.output_status"] === "recorded" && !detail.output && (
+        <p className={STATUS_TEXT}>The recorded output is empty.</p>
+      )}
+      {empty && span.status !== "error" && detail.attributes["lens.content.output_status"] !== "recorded" && (
         <div className="py-12 text-center text-sm text-muted-foreground">No content recorded for this span.</div>
       )}
     </div>

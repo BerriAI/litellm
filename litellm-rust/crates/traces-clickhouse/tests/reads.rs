@@ -710,3 +710,203 @@ async fn gateway_ids_resolve_through_detail_and_batch_reads_with_legacy_fallback
     }
     Ok(())
 }
+
+#[rstest]
+#[case::recorded(false)]
+#[case::conflicting(true)]
+#[tokio::test]
+async fn native_tool_content_agrees_between_single_and_bulk_reads(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] conflict: bool,
+) -> TestResult {
+    use litellm_storage_clickhouse::fetch;
+    use litellm_traces::query::named::{SpanDetailParams, SpanDetailsParams};
+    use litellm_traces_clickhouse::query::named::{SpanDetail, SpanDetails};
+    let fixture = migrated_database?;
+    let client = &fixture.database.client;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let rows = [
+        (
+            "tool",
+            "team-a",
+            "key-a",
+            "s",
+            "Bash",
+            "tool",
+            "",
+            r#"{"tool":"Bash"}"#,
+            "",
+        ),
+        (
+            "input",
+            "team-a",
+            "key-a",
+            "s",
+            "claude_code.tool_result",
+            "framework",
+            "",
+            r#"{"command":"exit 7"}"#,
+            "",
+        ),
+        (
+            "output",
+            "team-a",
+            "key-a",
+            "s",
+            "claude_code.api_request_body",
+            "framework",
+            "",
+            "",
+            r#"{"tool_results":[{"id":"call","content":"Exit code 7","is_error":true},{"id":"attempt","content":"Tool permission denied","is_error":true}]}"#,
+        ),
+        (
+            "duplicate",
+            "team-a",
+            "key-a",
+            "s",
+            "claude_code.api_request_body",
+            "framework",
+            "",
+            "",
+            if conflict {
+                r#"{"tool_results":[{"id":"call","content":"different","is_error":false}]}"#
+            } else {
+                r#"{"tool_results":[{"id":"call","content":"Exit code 7","is_error":true},{"id":"attempt","content":"Tool permission denied","is_error":true}]}"#
+            },
+        ),
+        (
+            "other-key",
+            "team-a",
+            "key-b",
+            "s",
+            "claude_code.tool_result",
+            "framework",
+            "",
+            "private-key-input",
+            "",
+        ),
+        (
+            "other-team",
+            "team-b",
+            "key-a",
+            "s",
+            "claude_code.api_request_body",
+            "framework",
+            "",
+            "",
+            r#"{"tool_results":[{"id":"call","content":"private-team-output"}]}"#,
+        ),
+        (
+            "other-session",
+            "team-a",
+            "key-a",
+            "other",
+            "claude_code.tool_result",
+            "framework",
+            "",
+            "other-session-input",
+            "",
+        ),
+        (
+            "agent", "team-a", "key-a", "s", "agent", "agent", "", "", "",
+        ),
+        (
+            "reply",
+            "team-a",
+            "key-a",
+            "s",
+            "model",
+            "llm",
+            "agent",
+            "",
+            "final answer",
+        ),
+    ];
+    insert_rows(
+        client,
+        &writer,
+        DATABASE,
+        InsertTable::OtelTraces,
+        rows.into_iter()
+            .map(
+                |(id, team, key, session, name, kind, parent, input, output)| {
+                    BTreeMap::from([
+                        ("Timestamp".into(), json!(1_790_000_000_000_000_000_i64)),
+                        ("TraceId".into(), json!("content-trace")),
+                        ("SpanId".into(), json!(id)),
+                        ("ParentSpanId".into(), json!(parent)),
+                        ("SpanName".into(), json!(name)),
+                        ("ObservationType".into(), json!(kind)),
+                        ("Framework".into(), json!("claude-code")),
+                        ("Input".into(), json!(input)),
+                        ("Output".into(), json!(output)),
+                        (
+                            "SpanAttributes".into(),
+                            json!({"session.id":session,"tool_use_id":"call"}),
+                        ),
+                        ("TeamId".into(), json!(team)),
+                        ("ApiKeyHash".into(), json!(key)),
+                    ])
+                },
+            )
+            .collect(),
+    )
+    .await?;
+    let connection = fixture
+        .readers
+        .connection(client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let access = ReadAccessParams {
+        all_teams: false,
+        user_id: String::new(),
+        team_ids: vec!["team-a".into()],
+    };
+    let single = fetch::<SpanDetail>(
+        client,
+        &connection,
+        &SpanDetailParams {
+            access: access.clone(),
+            trace_id: "content-trace".into(),
+            trace_ref: String::new(),
+            span_id: "tool".into(),
+        },
+    )
+    .await?;
+    let bulk = fetch::<SpanDetails>(
+        client,
+        &connection,
+        &SpanDetailsParams {
+            access,
+            trace_id: "content-trace".into(),
+            trace_ref: String::new(),
+            span_ids: vec![
+                "tool".into(),
+                "agent".into(),
+                "output".into(),
+                "missing".into(),
+            ],
+        },
+    )
+    .await?;
+    assert_eq!(
+        serde_json::to_value(&single[0])?,
+        serde_json::to_value(&bulk[0])?
+    );
+    assert_eq!(bulk.len(), 3);
+    assert_eq!(bulk[0].input, r#"{"command":"exit 7"}"#);
+    assert_eq!(bulk[0].attributes["lens.content.input_source"], "input");
+    assert_eq!(bulk[0].output, if conflict { "" } else { "Exit code 7" });
+    assert_eq!(
+        bulk[0].attributes["lens.content.output_status"],
+        if conflict { "conflicting" } else { "recorded" }
+    );
+    let attempts: serde_json::Value =
+        serde_json::from_str(&bulk[2].attributes["lens.content.unexecuted_tool_results"])?;
+    assert_eq!(
+        attempts,
+        json!([{"id":"attempt","content":"Tool permission denied","is_error":true}])
+    );
+    assert_eq!(bulk[1].output, "final answer");
+    assert_eq!(bulk[1].attributes["lens.content.output_source"], "reply");
+    Ok(())
+}

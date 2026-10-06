@@ -318,6 +318,29 @@ impl NativeTraceStorage {
         )
     }
 
+    fn get_spans<'py>(
+        &self,
+        py: Python<'py>,
+        trace_id: String,
+        span_ids: Vec<String>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: ReadAccessParams,
+        trace_ref: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().reader().clone();
+        let reader = Arc::clone(&self.reader);
+        crate::execution::run_async(
+            py,
+            async move {
+                let store = ClickHouseTraces::new(client, connection);
+                reader
+                    .get_spans(&store, &scope, &trace_id, &span_ids, &trace_ref)
+                    .await
+            },
+            map_read_error,
+        )
+    }
+
     #[pyo3(signature = (trace_id, span_id, scope, trace_ref, cursor))]
     fn get_span_error<'py>(
         &self,
