@@ -45536,7 +45536,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "duplicate" | "no_content" | "too_large" | "over_limit";
+            reason: "duplicate" | "no_content" | "too_large" | "over_limit" | "invalid";
             source: components["schemas"]["CaseSource"];
         };
         /** Span */
