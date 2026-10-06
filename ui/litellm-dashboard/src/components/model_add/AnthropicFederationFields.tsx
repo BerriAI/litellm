@@ -8,6 +8,7 @@ import {
   identitySourceById,
   identitySourceOptions,
   requiredFederationValue,
+  validateFederationValueStored,
   validateIdentityTokenReference,
   validateIssuerTtlSeconds,
   validateMaskedValueUntouched,
@@ -22,10 +23,12 @@ interface AnthropicFederationFieldsProps {
 }
 
 const IDENTITY_SOURCE_SELECT_ID = "anthropic_federation_identity_source";
+const STORED_VALUE_MESSAGE_FIELD_KEY = FEDERATION_CORE_FIELDS[0].key;
 
-const fieldRules = (field: FederationField, storedValue: unknown) => ({
+const fieldRules = (field: FederationField, storedValue: unknown, identitySource: IdentitySourceId) => ({
   validate: {
     ...(field.required ? { required: requiredFederationValue } : {}),
+    ...(field.key === STORED_VALUE_MESSAGE_FIELD_KEY ? { stored: validateFederationValueStored(identitySource) } : {}),
     ...(field.key === "anthropic_identity_token" ? { reference: validateIdentityTokenReference } : {}),
     ...(field.control === "integer" ? { ttl: validateIssuerTtlSeconds } : {}),
     masked: validateMaskedValueUntouched(storedValue),
@@ -87,7 +90,7 @@ export default function AnthropicFederationFields({
       label={labelWithHint(field.label, field.tooltip)}
       name={field.key}
       required={field.required}
-      rules={fieldRules(field, storedValues[field.key])}
+      rules={fieldRules(field, storedValues[field.key], identitySource)}
       className="mb-4"
     >
       {(control) => renderControl(field, control)}

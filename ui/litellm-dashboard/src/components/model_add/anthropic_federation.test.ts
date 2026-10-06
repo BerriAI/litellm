@@ -9,6 +9,7 @@ import {
   isAnthropicProvider,
   isFederatedCredential,
   MAX_ISSUER_TTL_SECONDS,
+  validateFederationValueStored,
   validateIdentityTokenReference,
   validateIssuerTtlSeconds,
   validateMaskedValueUntouched,
@@ -127,6 +128,19 @@ describe("field validation", () => {
     expect(rule("os.e****")).toBe(true);
     expect(rule("os.environ/NEW_REF")).toBe(true);
     expect(rule("os.e****_NEW")).toEqual(expect.stringContaining("Replace the whole value"));
+  });
+
+  it("refuses the proxy environment source when every id is blank, since the proxy rejects a credential with no values", () => {
+    const rule = validateFederationValueStored("environment");
+    const blankIds = {
+      api_base: "https://gateway.example.com",
+      anthropic_federation_rule_id: "",
+      anthropic_organization_id: " ",
+      anthropic_service_account_id: undefined,
+    };
+    expect(rule("", blankIds)).toEqual(expect.stringContaining("at least one"));
+    expect(rule("", { ...blankIds, anthropic_federation_workspace_id: "wrkspc_1" })).toBe(true);
+    expect(validateFederationValueStored("token_file")("", blankIds)).toBe(true);
   });
 });
 

@@ -402,6 +402,27 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
     );
   });
 
+  it("refuses a proxy environment credential with no ids until the admin enters one", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: "Anthropic", initialAuthMethod: "federation" });
+    await screen.findByLabelText("Upstream API Base");
+    await chooseOption(user, /Identity Source/, "Proxy environment variables");
+    fill("Credential Name:", "anthropic-env");
+
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    expect(await screen.findByText(/Enter at least one of these ids/)).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fill(/Organization ID/, "org-new");
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      { credential_name: "anthropic-env", custom_llm_provider: "Anthropic", anthropic_organization_id: "org-new" },
+      [],
+    );
+  });
+
   it("saves a federated credential that leaves the rule id and organization id to the proxy environment", async () => {
     const user = userEvent.setup();
     const onSubmit = renderModal({ initialProvider: "Anthropic", initialAuthMethod: "federation" });

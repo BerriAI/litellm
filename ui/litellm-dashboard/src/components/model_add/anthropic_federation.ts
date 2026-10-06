@@ -267,6 +267,13 @@ export const identitySourceOptions = (
 
 export const requiredFederationValue = (value: unknown): string | true => (isBlank(value) ? "Required" : true);
 
+export const validateFederationValueStored =
+  (identitySource: IdentitySourceId) =>
+  (_value: unknown, formValues: Record<string, unknown>): string | true =>
+    identitySource === "environment" && FEDERATION_CORE_FIELDS.every((field) => isBlank(formValues[field.key]))
+      ? "Enter at least one of these ids, or pick an identity source that stores a token. The proxy rejects a credential with no values"
+      : true;
+
 export const validateIdentityTokenReference = (value: unknown): string | true => {
   if (typeof value !== "string" || isBlank(value) || isMaskedSecret(value)) {
     return true;
