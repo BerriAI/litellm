@@ -275,6 +275,8 @@ class PartRow(LiteLLMBaseModel):
     parent_span_id: str
     name: str
     kind: str
+    start_time: str
+    end_time: str
     content: str
     truncated: int = Field(..., ge=0, le=1)
 
