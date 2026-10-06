@@ -120,24 +120,24 @@ class SambanovaConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        """
-        Add the X-Integration-Source header SambaNova uses for analytics.
-
-        Priority: `extra_headers["X-Integration-Source"]` > `extra_body["integration_source"]`
-        > SAMBANOVA_INTEGRATION_SOURCE env var > "litellm".
-        """
+        """Send X-Integration-Source: caller header, then extra_body, then env var, then default"""
         extra_headers: Final[dict[str, str]] = dict(optional_params.get("extra_headers") or {})
         extra_body: Final[dict[str, object]] = dict(optional_params.get("extra_body") or {})
-        integration_source: Final[str] = (
-            extra_headers.get(INTEGRATION_SOURCE_HEADER)
-            or extra_body.pop("integration_source", None)
-            or get_secret_str("SAMBANOVA_INTEGRATION_SOURCE")
-            or DEFAULT_INTEGRATION_SOURCE
+        body_source: Final = extra_body.pop("integration_source", None)
+        header_source: Final = next(
+            (value for key, value in extra_headers.items() if key.lower() == INTEGRATION_SOURCE_HEADER.lower()),
+            None,
+        )
+        integration_source: Final = (
+            body_source or get_secret_str("SAMBANOVA_INTEGRATION_SOURCE") or DEFAULT_INTEGRATION_SOURCE
+        )
+        headers_with_source: Final = (
+            extra_headers if header_source else {**extra_headers, INTEGRATION_SOURCE_HEADER: integration_source}
         )
         other_params: Final[dict[str, object]] = {k: v for k, v in optional_params.items() if k != "extra_body"}
         updated_params: Final[dict[str, object]] = {
             **other_params,
-            "extra_headers": {**extra_headers, INTEGRATION_SOURCE_HEADER: integration_source},
+            "extra_headers": headers_with_source,
             **({"extra_body": extra_body} if extra_body else {}),
         }
 
