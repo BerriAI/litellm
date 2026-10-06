@@ -479,10 +479,58 @@ def test_deleted_callback_case_variant_stops_delivery_on_both_workers(
         assert all(
             value.encode() in b"".join(request.body for request in generic_deliveries) for value in absence_markers
         )
-        langfuse_after: Final = rig.langfuse.drain()
-        assert all(
-            value.encode() not in b"".join(request.body for request in langfuse_after) for value in absence_markers
+        langfuse_after: Final[list[Request]] = []  # mutable-ok: preserve batches while the async sink flushes
+
+        def collect_after_langfuse() -> tuple[Request, ...]:
+            langfuse_after.extend(rig.langfuse.drain())
+            return tuple(langfuse_after)
+
+        collect_after_langfuse()
+        readded: Final = rig.first.request(
+            "POST",
+            "/config/update",
+            {
+                "litellm_settings": {"success_callback": ["langfuse"]},
+                "environment_variables": {
+                    "LANGFUSE_HOST": rig.langfuse.url,
+                    "LANGFUSE_PUBLIC_KEY": "public-key-" + marker,
+                    "LANGFUSE_SECRET_KEY": "secret-key-" + marker,
+                },
+            },
         )
+        assert readded.status_code == 200, readded.text
+        expected_readded_callback: Final = {"langfuse": expected_callbacks["langfuse"]}
+        callbacks_peer_readded: Final = eventually(
+            lambda: rig.peer.request("GET", "/get/config/callbacks"),
+            lambda response: (
+                response.status_code == 200 and _callback_entries_match(response, expected_readded_callback)
+            ),
+            seconds=20,
+        )
+        assert _callback_entries_match(callbacks_peer_readded, expected_readded_callback), callbacks_peer_readded.text
+        barrier_markers: Final = (marker + "-barrier-first", marker + "-barrier-peer")
+        for worker, proxy, barrier_marker in zip(
+            ("first", "peer"), (rig.first, rig.peer), barrier_markers, strict=True
+        ):
+            barrier: Final = proxy.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": barrier_marker}], "stream": False},
+                key=api_key,
+            )
+            assert barrier.status_code == 200, barrier.text
+
+        langfuse_deliveries: Final = eventually(
+            collect_after_langfuse,
+            lambda requests: all(
+                value.encode() in b"".join(request.body for request in requests) for value in barrier_markers
+            ),
+            seconds=25,
+        )
+        langfuse_bodies: Final = b"".join(request.body for request in langfuse_deliveries)
+        assert all(value.encode() in langfuse_bodies for value in barrier_markers)
+        leaked_absence_markers: Final = tuple(value for value in absence_markers if value.encode() in langfuse_bodies)
+        assert leaked_absence_markers == (), leaked_absence_markers
 
         missing: Final = rig.first.request("POST", "/config/callback/delete", {"callback_name": "not-a-callback"})
         assert missing.status_code == 404, missing.text
