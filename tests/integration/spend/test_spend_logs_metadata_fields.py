@@ -172,9 +172,13 @@ def test_guardrail_usage_is_tracked_when_guardrail_information_is_not_stored(gat
             lambda values: len(values) == 1,
             seconds=70,
         )
-        metrics: Final = read_rows(
-            'SELECT requests_evaluated, passed_count FROM "LiteLLM_DailyGuardrailMetrics" WHERE guardrail_id=%s',
-            (string_value(indexed[0]["guardrail_id"]),),
+        metrics: Final = eventually(
+            lambda: read_rows(
+                'SELECT requests_evaluated, passed_count FROM "LiteLLM_DailyGuardrailMetrics" WHERE guardrail_id=%s',
+                (string_value(indexed[0]["guardrail_id"]),),
+            ),
+            lambda values: values == [{"requests_evaluated": 1, "passed_count": 1}],
+            seconds=70,
         )
         assert metrics == [{"requests_evaluated": 1, "passed_count": 1}], metrics
 
