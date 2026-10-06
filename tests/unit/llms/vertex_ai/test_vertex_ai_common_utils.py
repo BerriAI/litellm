@@ -1025,7 +1025,7 @@ def test_fix_enum_types():
                 "description": "How to truncate content",
             },
             "maxLength": {
-                "enum": [100, 200, 500],  # This should become string values
+                "enum": [100, 200, 500],
                 "type": "integer",
                 "description": "Maximum length",
             },
@@ -1042,7 +1042,7 @@ def test_fix_enum_types():
                         "type": "string",
                     },
                     "innerNonStringEnum": {
-                        "enum": [1, 2, 3],  # This should become string values
+                        "enum": [1, 2, 3],
                         "type": "integer",
                     },
                 },
@@ -1053,7 +1053,7 @@ def test_fix_enum_types():
                         "type": "string",
                         "enum": ["option1", "option2"],
                     },  # This should be kept
-                    {"type": "integer", "enum": [1, 2, 3]},  # This should become string values
+                    {"type": "integer", "enum": [1, 2, 3]},
                 ]
             },
         },
@@ -1068,7 +1068,7 @@ def test_fix_enum_types():
                 "type": "string",
                 "description": "How to truncate content",
             },
-            "maxLength": {  # enum converted
+            "maxLength": {
                 "enum": ["100", "200", "500"],
                 "format": "enum",
                 "type": "integer",
@@ -1085,7 +1085,7 @@ def test_fix_enum_types():
                         "enum": ["a", "b", "c"],  # Kept - string type
                         "type": "string",
                     },
-                    "innerNonStringEnum": {  # enum converted
+                    "innerNonStringEnum": {
                         "enum": ["1", "2", "3"],
                         "format": "enum",
                         "type": "integer",
@@ -1098,7 +1098,7 @@ def test_fix_enum_types():
                         "type": "string",
                         "enum": ["option1", "option2"],
                     },  # Kept - has string type
-                    {"type": "integer", "format": "enum", "enum": ["1", "2", "3"]},  # enum converted
+                    {"type": "integer", "format": "enum", "enum": ["1", "2", "3"]},
                 ]
             },
         },
@@ -1127,7 +1127,7 @@ def test_fix_enum_types():
         "c",
     ]
 
-    # 2. Integer enums become string values with format "enum", other non-string enums are removed
+    # 2. Integer enums are converted, other non-string enums are removed
     assert input_schema["properties"]["maxLength"]["enum"] == ["100", "200", "500"]
     assert input_schema["properties"]["maxLength"]["format"] == "enum"
     assert "enum" not in input_schema["properties"]["enabled"]
@@ -1162,6 +1162,34 @@ def test_build_vertex_schema_sends_integer_enum_as_format_enum():
     assert result["properties"]["level"]["enum"] == ["1", "2", "5"]
     assert result["properties"]["level"]["type"].lower() == "integer"
     assert "enum" not in result["properties"]["flag"]
+
+
+def test_map_function_keeps_integer_enum_when_tools_are_reused():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "set_priority",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}},
+                    "required": ["level"],
+                },
+            },
+        }
+    ]
+    config = VertexGeminiConfig()
+
+    sent = [
+        config._map_function(tools, {})[0]["function_declarations"][0]["parameters"]["properties"]["level"]
+        for _ in range(2)
+    ]
+
+    assert sent[0]["enum"] == ["1", "2", "5"]
+    assert sent[1]["enum"] == ["1", "2", "5"]
+    assert sent[1]["format"] == "enum"
 
 def test_get_token_url():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
