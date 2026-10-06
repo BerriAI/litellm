@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from litellm.proxy.db import rollup_lock_timeout
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.model_usage_rollup import (
     ModelUsageKey,
@@ -14,11 +15,13 @@ from litellm.proxy.db.model_usage_rollup import (
     flush_model_usage_transactions,
     model_usage_task_type,
 )
+from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
 
 
 class _FakeBatcher:
     def __init__(self) -> None:
         self.litellm_dailymodelusage = MagicMock()
+        self.execute_raw = MagicMock()
 
     async def __aenter__(self) -> "_FakeBatcher":
         return self
@@ -201,3 +204,26 @@ async def test_request_time_path_queues_usage_instead_of_writing_to_the_db() -> 
 
     assert [transaction.key.model for transaction in prisma.model_usage_transactions] == ["openai/gpt-5.4-mini"]
     prisma.db.litellm_dailymodelusage.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rollup_transaction_sets_the_lock_timeout_before_its_first_upsert(monkeypatch) -> None:
+    """The DailyModelUsage rollup shares the DailyToolSpend write shape, so it runs
+    under the same per-transaction lock budget, issued before any upsert queues."""
+    monkeypatch.setattr(rollup_lock_timeout, "SPEND_ROLLUP_LOCK_TIMEOUT_MS", 250)
+    batcher = _FakeBatcher()
+    prisma = _prisma(MagicMock(return_value=batcher))
+    order: list[str] = []
+    batcher.execute_raw.side_effect = lambda *_: order.append("lock_timeout")
+    batcher.litellm_dailymodelusage.upsert.side_effect = lambda **_: order.append("upsert")
+
+    await flush_model_usage_transactions(
+        prisma_client=prisma,
+        transactions=[
+            build_model_usage_transaction(_payload()),
+            build_model_usage_transaction(_payload(model="other")),
+        ],
+    )
+
+    assert batcher.execute_raw.call_args_list == [((ROLLUP_LOCK_TIMEOUT_SQL, "250ms"),)]
+    assert order == ["lock_timeout", "upsert", "upsert"]

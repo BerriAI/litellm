@@ -15,7 +15,7 @@ import json
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime, timezone
-from typing import Any, Dict, Final, List
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -111,15 +111,11 @@ async def test_update_daily_tag_spend_redis_path_when_buffered(
     writer = MagicMock()
     proxy_logging.db_spend_update_writer = writer
     writer.redis_update_buffer = MagicMock()
-    writer.redis_update_buffer._should_commit_spend_updates_to_redis = MagicMock(
-        return_value=True
-    )
+    writer.redis_update_buffer._should_commit_spend_updates_to_redis = MagicMock(return_value=True)
     writer._commit_daily_tag_spend_to_db_with_redis = AsyncMock()
     writer._commit_daily_tag_spend_to_db = AsyncMock()
 
-    await update_daily_tag_spend(
-        prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging
-    )
+    await update_daily_tag_spend(prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging)
     redis_kwargs = writer._commit_daily_tag_spend_to_db_with_redis.await_args.kwargs
     pinned = {
         "redis_calls": writer._commit_daily_tag_spend_to_db_with_redis.await_count,
@@ -130,9 +126,7 @@ async def test_update_daily_tag_spend_redis_path_when_buffered(
     assert pinned == {
         "redis_calls": 1,
         "direct_calls": 0,
-        "redis_kwargs_keys": sorted(
-            ["prisma_client", "n_retry_times", "proxy_logging_obj"]
-        ),
+        "redis_kwargs_keys": sorted(["prisma_client", "n_retry_times", "proxy_logging_obj"]),
         "redis_n_retries": 3,
     }
 
@@ -145,15 +139,11 @@ async def test_update_daily_tag_spend_direct_path_when_no_redis(
     writer = MagicMock()
     proxy_logging.db_spend_update_writer = writer
     writer.redis_update_buffer = MagicMock()
-    writer.redis_update_buffer._should_commit_spend_updates_to_redis = MagicMock(
-        return_value=False
-    )
+    writer.redis_update_buffer._should_commit_spend_updates_to_redis = MagicMock(return_value=False)
     writer._commit_daily_tag_spend_to_db_with_redis = AsyncMock()
     writer._commit_daily_tag_spend_to_db = AsyncMock()
 
-    await update_daily_tag_spend(
-        prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging
-    )
+    await update_daily_tag_spend(prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging)
     assert writer._commit_daily_tag_spend_to_db.await_count == 1
     assert writer._commit_daily_tag_spend_to_db_with_redis.await_count == 0
 
@@ -175,9 +165,7 @@ async def test_update_daily_tag_spend_logs_and_swallows_errors(
     proxy_logging.db_spend_update_writer._commit_daily_tag_spend_to_db = AsyncMock(
         side_effect=RuntimeError("commit boom")
     )
-    await update_daily_tag_spend(
-        prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging
-    )
+    await update_daily_tag_spend(prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging)
 
 
 @pytest.mark.asyncio
@@ -265,15 +253,11 @@ async def test_update_spend_logs_job_processes_and_clears_queue(
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock()
 
     # Stub auxiliary imports so the test focuses on the spend-logs write path.
-    import litellm.proxy.guardrails.usage_tracking as guard_mod
     import litellm.proxy.db.spend_log_tool_index as tool_mod
+    import litellm.proxy.guardrails.usage_tracking as guard_mod
 
-    monkeypatch.setattr(
-        guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False
-    )
-    monkeypatch.setattr(
-        tool_mod, "flush_tool_usage_transactions", AsyncMock(), raising=False
-    )
+    monkeypatch.setattr(guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False)
+    monkeypatch.setattr(tool_mod, "flush_tool_usage_transactions", AsyncMock(), raising=False)
 
     await update_spend_logs_job(
         prisma_client=mock_prisma_client,
@@ -283,12 +267,10 @@ async def test_update_spend_logs_job_processes_and_clears_queue(
     pinned = {
         "create_many_calls": mock_prisma_client.db.litellm_spendlogs.create_many.await_count,
         "queue_after": mock_prisma_client.spend_log_transactions,
-        "first_data_request_id": mock_prisma_client.db.litellm_spendlogs.create_many.await_args.kwargs[
-            "data"
-        ][0]["request_id"],
-        "skip_duplicates_set": mock_prisma_client.db.litellm_spendlogs.create_many.await_args.kwargs[
-            "skip_duplicates"
+        "first_data_request_id": mock_prisma_client.db.litellm_spendlogs.create_many.await_args.kwargs["data"][0][
+            "request_id"
         ],
+        "skip_duplicates_set": mock_prisma_client.db.litellm_spendlogs.create_many.await_args.kwargs["skip_duplicates"],
     }
     assert pinned == {
         "create_many_calls": 1,
@@ -315,9 +297,7 @@ async def test_update_spend_logs_job_requeues_popped_rows_when_write_cancelled(
         mock_prisma_client.spend_log_transactions.append(row_arriving_mid_flush)
         raise asyncio.CancelledError()
 
-    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
-        side_effect=_cancel_mid_write
-    )
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_cancel_mid_write)
 
     with pytest.raises(asyncio.CancelledError):
         await update_spend_logs_job(
@@ -326,9 +306,7 @@ async def test_update_spend_logs_job_requeues_popped_rows_when_write_cancelled(
             proxy_logging_obj=proxy_logging,
         )
 
-    assert [
-        row["request_id"] for row in mock_prisma_client.spend_log_transactions
-    ] == ["r1", "r2", "r3"]
+    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["r1", "r2", "r3"]
 
 
 @pytest.mark.asyncio
@@ -369,12 +347,8 @@ async def test_drain_spend_logs_queue_flushes_rows_queued_while_draining(
     import litellm.proxy.db.spend_log_tool_index as tool_mod
     import litellm.proxy.guardrails.usage_tracking as guard_mod
 
-    monkeypatch.setattr(
-        guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False
-    )
-    monkeypatch.setattr(
-        tool_mod, "process_spend_logs_tool_usage", AsyncMock(), raising=False
-    )
+    monkeypatch.setattr(guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False)
+    monkeypatch.setattr(tool_mod, "process_spend_logs_tool_usage", AsyncMock(), raising=False)
 
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
@@ -385,9 +359,7 @@ async def test_drain_spend_logs_queue_flushes_rows_queued_while_draining(
     async def _write(*args: Any, **kwargs: Any) -> None:
         written.extend(row["request_id"] for row in kwargs["data"])
         if len(written) == 1:
-            mock_prisma_client.spend_log_transactions.append(
-                make_spend_log_row(request_id="r2")
-            )
+            mock_prisma_client.spend_log_transactions.append(make_spend_log_row(request_id="r2"))
 
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_write)
 
@@ -408,12 +380,8 @@ async def test_drain_spend_logs_queue_stops_monitor_and_keeps_its_popped_rows(
     import litellm.proxy.db.spend_log_tool_index as tool_mod
     import litellm.proxy.guardrails.usage_tracking as guard_mod
 
-    monkeypatch.setattr(
-        guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False
-    )
-    monkeypatch.setattr(
-        tool_mod, "process_spend_logs_tool_usage", AsyncMock(), raising=False
-    )
+    monkeypatch.setattr(guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False)
+    monkeypatch.setattr(tool_mod, "process_spend_logs_tool_usage", AsyncMock(), raising=False)
 
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
@@ -460,12 +428,8 @@ async def test_drain_spend_logs_queue_gives_up_after_max_passes(
     import litellm.proxy.db.spend_log_tool_index as tool_mod
     import litellm.proxy.guardrails.usage_tracking as guard_mod
 
-    monkeypatch.setattr(
-        guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False
-    )
-    monkeypatch.setattr(
-        tool_mod, "process_spend_logs_tool_usage", AsyncMock(), raising=False
-    )
+    monkeypatch.setattr(guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False)
+    monkeypatch.setattr(tool_mod, "process_spend_logs_tool_usage", AsyncMock(), raising=False)
 
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
@@ -474,9 +438,7 @@ async def test_drain_spend_logs_queue_gives_up_after_max_passes(
     async def _write_and_refill(*args: Any, **kwargs: Any) -> None:
         mock_prisma_client.spend_log_transactions.append(make_spend_log_row())
 
-    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
-        side_effect=_write_and_refill
-    )
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_write_and_refill)
 
     await drain_spend_logs_queue(
         prisma_client=mock_prisma_client,
@@ -484,10 +446,7 @@ async def test_drain_spend_logs_queue_gives_up_after_max_passes(
         proxy_logging_obj=proxy_logging,
     )
 
-    assert (
-        mock_prisma_client.db.litellm_spendlogs.create_many.await_count
-        == MAX_SPEND_LOG_DRAIN_ITERATIONS
-    )
+    assert mock_prisma_client.db.litellm_spendlogs.create_many.await_count == MAX_SPEND_LOG_DRAIN_ITERATIONS
 
 
 @pytest.mark.asyncio
@@ -496,8 +455,8 @@ async def test_monitor_spend_logs_queue_invokes_job_when_queue_nonempty(
     make_spend_log_row: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import litellm.proxy.utils as utils_mod
     import litellm.constants as constants_mod
+    import litellm.proxy.utils as utils_mod
 
     monkeypatch.setattr(constants_mod, "SPEND_LOG_QUEUE_POLL_INTERVAL", 0.0, raising=False)
     monkeypatch.setattr(constants_mod, "SPEND_LOG_QUEUE_SIZE_THRESHOLD", 1, raising=False)
@@ -530,8 +489,8 @@ async def test_monitor_spend_logs_queue_swallows_errors_and_backs_off(
     """An exception inside the loop is logged with backoff and the loop
     continues running rather than crashing the monitor task.
     """
-    import litellm.proxy.utils as utils_mod
     import litellm.constants as constants_mod
+    import litellm.proxy.utils as utils_mod
 
     monkeypatch.setattr(constants_mod, "SPEND_LOG_QUEUE_POLL_INTERVAL", 0.0, raising=False)
 
@@ -721,8 +680,7 @@ def test_raise_failed_update_spend_exception_emits_failure_handler() -> None:
             else None
         ),
         "non_blocking_in_traceback": (
-            "Non-Blocking"
-            in proxy_logging.failure_handler.call_args.kwargs["traceback_str"]
+            "Non-Blocking" in proxy_logging.failure_handler.call_args.kwargs["traceback_str"]
             if proxy_logging.failure_handler.call_args
             else False
         ),
@@ -1086,3 +1044,152 @@ async def test_tool_usage_flush_still_drops_ambiguous_failures(
     )
 
     assert mock_prisma_client.tool_usage_transactions == []
+
+
+def _postgres_lock_timeout() -> Exception:
+    """prisma's shape for Postgres SQLSTATE 55P03: the rollup upsert waited past
+    ``lock_timeout`` for a row another pod held and was cancelled before it took the lock."""
+    from prisma.errors import DataError
+
+    return DataError(
+        data={
+            "user_facing_error": {
+                "is_panic": False,
+                "message": "Error querying the database: canceling statement due to lock timeout",
+                "meta": {"code": "55P03", "message": "canceling statement due to lock timeout"},
+            }
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_usage_flush_requeues_when_the_rollup_row_lock_times_out(
+    mock_prisma_client: MagicMock,
+) -> None:
+    """A rollup transaction cancelled by ``lock_timeout`` never applied: the waiter
+    gives its connection back instead of pinning it behind the holder, and its
+    increments go back to the queue head for the next flush rather than being dropped.
+    Unlike a full server, one contended row says nothing about the other writers, so the
+    job carries on: the model usage rollup still opens its own transaction and the
+    auto-router drain still runs."""
+    mock_prisma_client.db.litellm_spendlogtoolindex.create_many = AsyncMock()
+    rollup_batch = MagicMock()
+    rollup_batch.__aenter__ = AsyncMock(return_value=MagicMock())
+    rollup_batch.__aexit__ = AsyncMock(side_effect=_postgres_lock_timeout())
+    mock_prisma_client.db.batch_ = MagicMock(return_value=rollup_batch)
+    mock_prisma_client.spend_log_transactions = []
+    first, second = _tool_usage_transaction("r1"), _tool_usage_transaction("r2")
+    mock_prisma_client.tool_usage_transactions = [first, second]
+    mock_prisma_client.model_usage_transactions = [_model_usage_transaction("gpt-4o")]
+    mock_prisma_client.autorouter_turn_transactions = [MagicMock(name="autorouter_turn")]
+
+    await update_spend_logs_job(
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert {
+        "rollup_transactions": mock_prisma_client.db.batch_.call_count,
+        "queue_after": mock_prisma_client.tool_usage_transactions,
+        "autorouter_queue_after": mock_prisma_client.autorouter_turn_transactions,
+    } == {"rollup_transactions": 2, "queue_after": [first, second], "autorouter_queue_after": []}
+
+
+def _model_usage_transaction(model: str) -> object:
+    from litellm.proxy.db.model_usage_rollup import ModelUsageKey, ModelUsageTransaction
+
+    return ModelUsageTransaction(
+        key=ModelUsageKey(
+            date="2026-10-03", model_group="gpt", model=model, custom_llm_provider="openai", task_type="chat"
+        ),
+        spend=0.001,
+        prompt_tokens=1,
+        completion_tokens=1,
+        successful=True,
+    )
+
+
+def _model_usage_batch_failing_with(error: Exception, mock_prisma_client: MagicMock) -> MagicMock:
+    """Point the model usage rollup's ``batch_()`` at a transaction that fails on commit, with
+    no tool usage queued so the tool rollup never opens one."""
+    mock_prisma_client.db.litellm_spendlogtoolindex.create_many = AsyncMock()
+    mock_prisma_client.tool_usage_transactions = []
+    mock_prisma_client.spend_log_transactions = []
+    rollup_batch = MagicMock()
+    rollup_batch.__aenter__ = AsyncMock(return_value=MagicMock())
+    rollup_batch.__aexit__ = AsyncMock(side_effect=error)
+    mock_prisma_client.db.batch_ = MagicMock(return_value=rollup_batch)
+    return rollup_batch
+
+
+@pytest.mark.asyncio
+async def test_model_usage_flush_requeues_and_carries_on_when_its_row_lock_times_out(
+    mock_prisma_client: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The DailyModelUsage rollup shares its rows across every pod exactly like the tool rollup.
+    A batch cancelled under ``lock_timeout`` never applied, so its transactions go back to the
+    queue head for the next flush instead of being dropped, and because only that rollup's row
+    was contended the job still drains the auto-router queue behind it."""
+    monkeypatch.setattr("litellm.proxy.db.model_usage_rollup.asyncio.sleep", AsyncMock(return_value=None))
+    _model_usage_batch_failing_with(_postgres_lock_timeout(), mock_prisma_client)
+    first, second = _model_usage_transaction("gpt-4o"), _model_usage_transaction("gpt-4o-mini")
+    mock_prisma_client.model_usage_transactions = [first, second]
+    mock_prisma_client.autorouter_turn_transactions = [MagicMock(name="autorouter_turn")]
+
+    await update_spend_logs_job(
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert {
+        "queue_after": mock_prisma_client.model_usage_transactions,
+        "autorouter_queue_after": mock_prisma_client.autorouter_turn_transactions,
+    } == {"queue_after": [first, second], "autorouter_queue_after": []}
+
+
+@pytest.mark.asyncio
+async def test_model_usage_flush_requeues_and_stops_the_job_when_postgres_is_out_of_connections(
+    mock_prisma_client: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A batch refused for want of a connection (53300) was never sent either, so it is kept, but
+    a full server will refuse the writers behind it too: the job stops there like the tool
+    rollup does, so the drain loop backs off instead of re-hitting the server."""
+    monkeypatch.setattr("litellm.proxy.db.model_usage_rollup.asyncio.sleep", AsyncMock(return_value=None))
+    _model_usage_batch_failing_with(_postgres_out_of_connections(), mock_prisma_client)
+    first, second = _model_usage_transaction("gpt-4o"), _model_usage_transaction("gpt-4o-mini")
+    mock_prisma_client.model_usage_transactions = [first, second]
+    mock_prisma_client.autorouter_turn_transactions = [MagicMock(name="autorouter_turn")]
+
+    with pytest.raises(Exception, match="too many clients already"):
+        await update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert {
+        "queue_after": mock_prisma_client.model_usage_transactions,
+        "autorouter_queue_after": len(mock_prisma_client.autorouter_turn_transactions),
+    } == {"queue_after": [first, second], "autorouter_queue_after": 1}
+
+
+@pytest.mark.asyncio
+async def test_model_usage_flush_still_drops_a_batch_that_may_have_applied(
+    mock_prisma_client: MagicMock,
+) -> None:
+    """Any other failure is ambiguous about whether the increments landed, so replaying it could
+    double-count: the batch is logged and dropped, and the job carries on."""
+    _model_usage_batch_failing_with(RuntimeError("engine lost mid-commit"), mock_prisma_client)
+    mock_prisma_client.model_usage_transactions = [_model_usage_transaction("gpt-4o")]
+
+    await update_spend_logs_job(
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert mock_prisma_client.model_usage_transactions == []

@@ -39,6 +39,7 @@ _ROOT_FIELD: Final = re.compile(r"result:\s*(\w+)")
 _RAW_SQL: Final = re.compile(r'query:\s*"((?:[^"\\]|\\.)*)"')
 _LEADING_KEYWORD: Final = re.compile(r"(?:\\[nrt]|\s|\()*(\w+)")
 _SETTING: Final = re.compile(r"(?:\\[nrt]|\s)*SET\s+(?:LOCAL\s+|SESSION\s+)?([A-Za-z_.]+)", re.IGNORECASE)
+_SET_CONFIG: Final = re.compile(r"(?:\\[nrt]|\s)*SELECT\s+set_config\(\s*'([A-Za-z_.]+)'", re.IGNORECASE)
 _CATALOG: Final = re.compile(r"\bpg_\w+|\bto_regclass\b|\binformation_schema\b|\bcurrent_setting\s*\(|^\s*SHOW\b")
 _PROBE: Final = re.compile(r"(?:\\[nrt]|\s)*SELECT\s+\d+\s*;?(?:\\[nrt]|\s)*$", re.IGNORECASE)
 _CTE_WRITE: Final = re.compile(r"\b(UPDATE|INSERT|DELETE)\s+(?:INTO\s+|FROM\s+)?(?:\\?\")", re.IGNORECASE)
@@ -90,9 +91,13 @@ def sql_relation(sql: str) -> str | None:
 
 def sql_operation(sql: str) -> tuple[str | None, str | None]:
     """``(verb, target)`` for a raw statement: the SQL verb from its leading keyword and the
-    relation it names, or for ``SET`` the setting it changes."""
+    relation it names, or for ``SET`` (and its parameterizable twin ``SELECT set_config``)
+    the setting it changes."""
     if _PROBE.match(sql):
         return "ping", None
+    set_config: Final = _SET_CONFIG.match(sql)
+    if set_config is not None:
+        return "set", set_config.group(1).lower()
     keyword: Final = _LEADING_KEYWORD.match(sql)
     leading: Final = keyword.group(1).upper() if keyword is not None else ""
     cte_write: Final = _CTE_WRITE.search(sql) if leading == "WITH" else None

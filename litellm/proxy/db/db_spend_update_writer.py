@@ -75,6 +75,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
+from litellm.proxy.db.rollup_lock_timeout import apply_rollup_lock_timeout
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
@@ -292,6 +293,7 @@ async def _spend_update_tx(
 ) -> AsyncGenerator[_SpendTransaction]:
     tx: Final[_SpendTransactionManager] = prisma_client.db.tx(timeout=timedelta(seconds=60))
     async with db_span(call_type, table), tx as transaction:
+        await apply_rollup_lock_timeout(transaction)
         yield transaction
 
 
@@ -2032,11 +2034,17 @@ class DBSpendUpdateWriter:
         start_time: float,
         proxy_logging_obj: ProxyLogging,
     ) -> None:
-        """Retry a failed spend-update transaction on connection errors or deadlocks, else re-raise."""
+        """Retry a failed spend-update transaction on connection errors, deadlocks or a rollup
+        ``lock_timeout`` (55P03), else re-raise. All three roll the transaction back before any
+        increment applied, so re-sending the same batch cannot double-count."""
         from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
         from litellm.proxy.utils import _raise_failed_update_spend_exception
 
-        is_retryable = isinstance(e, DB_RETRY_SAFE_ERROR_TYPES) or PrismaDBExceptionHandler.is_deadlock_error(e)
+        is_retryable = (
+            isinstance(e, DB_RETRY_SAFE_ERROR_TYPES)
+            or PrismaDBExceptionHandler.is_deadlock_error(e)
+            or PrismaDBExceptionHandler.is_lock_timeout_error(e)
+        )
         if not is_retryable or attempt >= n_retry_times:
             _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
         verbose_proxy_logger.warning(
