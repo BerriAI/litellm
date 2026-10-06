@@ -15,6 +15,7 @@ from .models import Claim, Finding, ModelMessage, ModelRequest, Record, TracePar
 from .python_tool import execute_python
 
 ResponseT: Final = TypeVar("ResponseT", bound=Record)
+MAX_RESULT_RETRIES: Final = 3
 
 
 class AgentTurn(Record, Generic[ResponseT]):
@@ -271,6 +272,8 @@ async def run_agent(
                 *journal,
                 DialogueTurn(response=responded[-1].content, tool_results=(), validation_error=invalid),
             )
+            if sum(bool(turn.validation_error) for turn in journal) > MAX_RESULT_RETRIES:
+                raise AnalysisResponseError(f"Result validation failed after {MAX_RESULT_RETRIES} retries.\n{invalid}")
             messages = (
                 *responded,
                 ModelMessage(role="user", content=json.dumps({"journal_turns": len(journal)})),

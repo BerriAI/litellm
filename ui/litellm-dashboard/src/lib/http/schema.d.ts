@@ -30762,6 +30762,11 @@ export interface components {
              */
             eligible: number;
             /**
+             * Failed Tasks
+             * @default 0
+             */
+            failed_tasks: number;
+            /**
              * Grouped Batches
              * @default 0
              */
@@ -33380,6 +33385,7 @@ export interface components {
              * @default {
              *       "candidates": 0,
              *       "eligible": 0,
+             *       "failed_tasks": 0,
              *       "grouped_batches": 0,
              *       "grouping_batches": 0,
              *       "inconclusive": 0,

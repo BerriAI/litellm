@@ -155,6 +155,7 @@ class Coverage(Record):
     candidates: int = 0
     partial: int = 0
     unassessable: int = 0
+    failed_tasks: int = Field(default=0, ge=0)
 
 
 class Execution(Record):

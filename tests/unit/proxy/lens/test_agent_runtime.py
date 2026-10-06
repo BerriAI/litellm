@@ -1,6 +1,7 @@
 import asyncio
+from itertools import chain
 from queue import SimpleQueue
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 from pydantic import JsonValue, TypeAdapter
@@ -407,6 +408,63 @@ async def test_unfit_task_fails_without_an_endless_compaction_loop() -> None:
             model=model,
             schema=Extraction,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recover", (False, True))
+@pytest.mark.parametrize("between", ("none", "read", "checkpoint", "compaction"))
+async def test_result_validation_allows_three_retries_without_resetting_after_other_turns(
+    recover: bool, between: Literal["none", "read", "checkpoint", "compaction"]
+) -> None:
+    from litellm.proxy.lens.agent_context import Checkpoint
+
+    rejected: Final = ModelResult(
+        content=AgentTurn[Extraction](result=Extraction(reasoning="unsupported")).model_dump_json(), cost=0
+    )
+    accepted: Final = ModelResult(content=AgentTurn[Extraction](result=Extraction()).model_dump_json(), cost=0)
+    continuation: Final = {
+        "none": (),
+        "read": (
+            ModelResult(
+                content=AgentTurn[Extraction](tools=(EvidenceRequest(action="read"),)).model_dump_json(), cost=0
+            ),
+        ),
+        "checkpoint": (
+            ModelResult(content=AgentTurn[Extraction](checkpoint="Recheck the evidence").model_dump_json(), cost=0),
+        ),
+        "compaction": (
+            ModelResult(content="", cost=0, context_exceeded=True),
+            ModelResult(content=Checkpoint(working_notes="Recheck the evidence").model_dump_json(), cost=0),
+        ),
+    }[between]
+    responses: Final = iter(
+        (*chain.from_iterable((rejected, *continuation) for _ in range(3)), accepted if recover else rejected, accepted)
+    )
+    calls: Final = SimpleQueue[ModelRequest]()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        calls.put(request)
+        return next(responses)
+
+    async def run() -> Extraction:
+        return await run_agent(
+            stage="review",
+            task="Review",
+            purpose="extract",
+            claim=Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=()),
+            workspace=EvidenceWorkspace(),
+            model=model,
+            schema=Extraction,
+            validate=lambda result: "Unsupported evidence" if result.reasoning else None,
+        )
+
+    if recover:
+        assert await run() == Extraction()
+    else:
+        with pytest.raises(AnalysisResponseError, match="Result validation failed after 3 retries") as error:
+            await run()
+        assert "Unsupported evidence" in str(error.value)
+    assert calls.qsize() == 4 + 3 * len(continuation)
 
 
 @pytest.mark.asyncio

@@ -262,6 +262,7 @@ async def analyze_context(
                     review.partial or review.execution.id in workspace.partial_sessions for review in examined
                 ),
                 "unassessable": sum(review.cannot_assess for review in examined),
+                "failed_tasks": sum(bool(review.error) for review in examined),
             }
         )
     )
@@ -340,6 +341,7 @@ async def analyze_context(
                         {
                             "investigated": next(completed),
                             "inconclusive": sum(not item.findings for _, item in investigated),
+                            "failed_tasks": coverage.failed_tasks + sum(bool(item.error) for _, item in investigated),
                         }
                     )
                 ),
@@ -358,6 +360,7 @@ async def analyze_context(
                 {
                     "investigated": len(ordered),
                     "inconclusive": sum(not item.findings for item in ordered),
+                    "failed_tasks": coverage.failed_tasks + sum(bool(item.error) for item in ordered),
                     "partial": sum(
                         review.partial or review.execution.id in workspace.partial_sessions for review in examined
                     ),
