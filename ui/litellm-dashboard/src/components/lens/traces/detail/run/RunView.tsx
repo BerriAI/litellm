@@ -155,7 +155,12 @@ function LoadedRun({
       {traceQuery.isRefetchError && (
         <div role="alert" className="flex items-center gap-3 border-b p-3 text-xs text-muted-foreground">
           Could not refresh this run. Previously received steps are still shown.
-          <Button variant="outline" size="sm" disabled={traceQuery.isFetching} onClick={() => void traceQuery.refetch()}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={traceQuery.isFetching}
+            onClick={() => void traceQuery.refetch()}
+          >
             Retry refresh
           </Button>
         </div>

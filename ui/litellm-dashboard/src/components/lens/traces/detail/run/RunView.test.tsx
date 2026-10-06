@@ -466,11 +466,18 @@ describe("RunView", () => {
     try {
       let completeRefresh!: (trace: Trace) => void;
       vi.mocked(agentTraceCall).mockReset();
-      vi.mocked(agentTraceCall).mockResolvedValueOnce(research).mockImplementationOnce(
-        () => new Promise<Trace>((resolve) => { completeRefresh = resolve; }),
-      );
+      vi.mocked(agentTraceCall)
+        .mockResolvedValueOnce(research)
+        .mockImplementationOnce(
+          () =>
+            new Promise<Trace>((resolve) => {
+              completeRefresh = resolve;
+            }),
+        );
       renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
-      await act(async () => { await vi.advanceTimersByTimeAsync(30_100); });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_100);
+      });
       expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(2);
       fireEvent.click(screen.getByRole("button", { name: "Live updates" }));
       await act(async () => {
@@ -486,7 +493,10 @@ describe("RunView", () => {
 
   it("retries a failed refresh without calling the next-page operation", async () => {
     vi.mocked(agentTraceCall).mockReset();
-    vi.mocked(agentTraceCall).mockResolvedValueOnce(research).mockRejectedValueOnce(new Error("refresh unavailable")).mockResolvedValue(research);
+    vi.mocked(agentTraceCall)
+      .mockResolvedValueOnce(research)
+      .mockRejectedValueOnce(new Error("refresh unavailable"))
+      .mockResolvedValue(research);
     renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
     await screen.findByTestId("detail-pane");
     fireEvent.click(screen.getByRole("button", { name: "Refresh run" }));
@@ -501,8 +511,11 @@ describe("RunView", () => {
     const first = { ...research, spans: research.spans.slice(0, 1), next_cursor: "old-page" };
     const second = { ...research, spans: research.spans.slice(1), next_cursor: null };
     vi.mocked(agentTraceCall).mockReset();
-    vi.mocked(agentTraceCall).mockResolvedValueOnce(first).mockResolvedValueOnce(second)
-      .mockResolvedValueOnce({ ...first, next_cursor: "new-page" }).mockImplementationOnce(async (_token, _id, _ref, cursor) => {
+    vi.mocked(agentTraceCall)
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(second)
+      .mockResolvedValueOnce({ ...first, next_cursor: "new-page" })
+      .mockImplementationOnce(async (_token, _id, _ref, cursor) => {
         if (cursor !== "new-page") throw new Error("stale cursor");
         return second;
       });
