@@ -1308,7 +1308,7 @@ def _call_type_for_route(route: str | None) -> str | None:
 
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
-    {"model", "messages", "input", "prompt", "user", "stream", "metadata", "litellm_metadata", "litellm_call_id"}
+    {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
 )
 
 
