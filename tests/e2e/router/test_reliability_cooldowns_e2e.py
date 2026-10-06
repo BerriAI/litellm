@@ -31,35 +31,38 @@ that emits a plain proxy_pass to the Service with no upstream block and no
 keepalive, so every request opens a fresh upstream connection and the Service
 picks the pod per connection: each call is an independent draw over the two
 routers, with seven other xdist workers sharing them. The cell first sends
-COOLDOWN_WARM_CALLS healthy calls to CHEAP_OPENAI_MODEL, all at once, and sends
-the trip right behind them without waiting for their answers: a router reads
-the cooldown keys when it picks the deployment, at the start of a call, so
-every pod's read of the failing deployment's key, and the read interval that
-starts with it, lands a few hundred milliseconds before the trip's bench is
-written, however long the warm's answers take. A pod the warm never reached
-(odds 2^(1-COOLDOWN_WARM_CALLS) at two pods) would read Redis on its first
-touch of the key and pass even under a regressed interval, and so would a pod
-whose warm read fell further before the trip than the regressed interval, its
-timer having lapsed before the first probe, which is why the warm's reads are
-pinned to the trip instead of spread across ten live latencies. The warm
-follows the registrations because their
-propagation wait is what puts the group on every pod, and a pod that has not
-loaded the deployment holds no read timer for it. The trip is one call,
-retries off, that surfaces the deployment's own 500; the cell then waits the
-interval plus a margin and sends SIBLING_PROBES calls, checking the warm's
-answers only after the probes so they never delay them, and every probe has to
-come back from the backup: a
-pod that has not seen the bench answers a 500 to any probe it takes, and the
-odds that no probe reaches it are 2^-SIBLING_PROBES, 0.1% at ten. That is the
-miss rate for a pod that never catches up. A pod whose interval regressed to I
+COOLDOWN_WARM_CALLS calls, all at once, to a warm group it registers whose one
+deployment answers from a canned reply, and waits for all of their answers
+before it trips: a router reads the cooldown keys when it picks the
+deployment, at the start of a call, and the pick happens whatever the
+deployment then answers with, so every pod's read of the failing deployment's
+key, and the read interval that starts with it, is over before the trip is
+even sent, a few hundred milliseconds before its bench is written. A pod the
+warm never reached (odds 2^(1-COOLDOWN_WARM_CALLS) at two pods) would read
+Redis on its first touch of the key and pass even under a regressed interval,
+and so would a pod whose warm read fell further before the trip than the
+regressed interval, its timer having lapsed before the first probe, which is
+why the warm answers from a canned reply instead of a live model: ten live
+answers would spread the reads across their latencies, and tripping before the
+answers would leave a warm call free to reach a pod after the bench and hand
+it a fresh read of the bench itself. The warm follows the registrations
+because their propagation wait is what puts the groups on every pod, and a pod
+that has not loaded the deployment holds no read timer for it. The trip is one
+call, retries off, that surfaces the deployment's own 500; the cell then waits
+the interval plus a margin and sends SIBLING_PROBES calls, and every probe has
+to come back from the backup: a pod that has not seen the bench answers a 500
+to any probe it takes, and the odds that no probe reaches it are
+2^-SIBLING_PROBES, 0.1% at ten. That is the miss rate for a pod that never
+catches up. A pod whose interval regressed to I
 seconds catches up on its own at its next Redis read, which other workers'
 traffic schedules anywhere within I of the trip, so under the full suite such a
 regression is caught on the runs whose first probe lands on the stale pod
 before that read, while the per-file run (loadfile keeps this file on one
 worker, so nothing else touches the key meanwhile) catches every regression
-wider than the wait plus the time a probe takes to reach the stale pod, about
-four seconds at two pods, as the two-process rig the cell was proven on did at
-ten seconds. The bench for this cell is
+wider than the span from the warm's reads to the first probe the stale pod
+takes: the warm, the trip, the wait, and a probe or two, about six seconds at
+two pods on the two-process rig the cell was proven on, which caught ten. The
+bench for this cell is
 SIBLING_COOLDOWN_SECONDS rather than COOLDOWN_SECONDS because it never waits
 for the recovery and its probes, ten live calls to the backup, have to land
 before the bench can lapse. Pinning the tripping and the sibling gateway by
@@ -78,7 +81,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Final
 
@@ -97,6 +100,7 @@ from reliability_support import (
     create_always_timing_out_deployment,
     create_always_unauthorized_deployment,
     create_bad_base_deployment,
+    create_canned_deployment,
     create_zero_weight_backup_deployment,
     model_id_of,
     spend_only_request_of,
@@ -120,15 +124,17 @@ def _call_without_retries(client: ComplexityRouterClient, key: str, group: str) 
     )
 
 
-def _warm_call(client: ComplexityRouterClient, key: str) -> StreamingResponse:
-    return chat_override(client.proxy, key, CHEAP_OPENAI_MODEL, f"say hi {unique_marker()}")
+def _warm_call(client: ComplexityRouterClient, key: str, warm_group: str) -> StreamingResponse:
+    return chat_override(client.proxy, key, warm_group, f"say hi {unique_marker()}")
 
 
-def _assert_warm_answered(warm: tuple[Future[StreamingResponse], ...]) -> None:
-    answered: Final = tuple(future.result() for future in warm)
+def _warm_every_pod(client: ComplexityRouterClient, key: str, warm_group: str) -> None:
+    with ThreadPoolExecutor(max_workers=COOLDOWN_WARM_CALLS) as pool:
+        warm: Final = tuple(pool.submit(_warm_call, client, key, warm_group) for _ in range(COOLDOWN_WARM_CALLS))
+        answered: Final = tuple(future.result() for future in warm)
     for call, resp in enumerate(answered, start=1):
         assert resp.status_code == 200, (
-            f"warm call {call} of {COOLDOWN_WARM_CALLS} to {CHEAP_OPENAI_MODEL} should have answered 200, "
+            f"warm call {call} of {COOLDOWN_WARM_CALLS} to {warm_group} should have answered 200, "
             f"got {resp.status_code}: {resp.body[:300]}"
         )
 
@@ -245,41 +251,43 @@ class TestReliabilityCooldowns:
     def test_sibling_replica_serves_backup_within_redis_read_interval(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        upstream = f"reliability-cooldown-sibling-upstream-{unique_marker()}"
-        upstream_id = create_bad_base_deployment(client.proxy, upstream)
+        upstream: Final = f"reliability-cooldown-sibling-upstream-{unique_marker()}"
+        upstream_id: Final = create_bad_base_deployment(client.proxy, upstream)
         resources.defer(lambda: client.proxy.delete_model(upstream_id))
 
-        group = f"reliability-cooldown-sibling-{unique_marker()}"
-        failing = create_always_5xx_deployment(
+        group: Final = f"reliability-cooldown-sibling-{unique_marker()}"
+        failing: Final = create_always_5xx_deployment(
             client.proxy, group, upstream, scoped_key, cooldown_time=SIBLING_COOLDOWN_SECONDS
         )
         resources.defer(lambda: client.proxy.delete_model(failing))
-        backup = create_zero_weight_backup_deployment(client.proxy, group)
+        backup: Final = create_zero_weight_backup_deployment(client.proxy, group)
         resources.defer(lambda: client.proxy.delete_model(backup))
 
-        with ThreadPoolExecutor(max_workers=COOLDOWN_WARM_CALLS) as pool:
-            warm: Final = tuple(pool.submit(_warm_call, client, scoped_key) for _ in range(COOLDOWN_WARM_CALLS))
-            tripped = _call_without_retries(client, scoped_key, group)
-            assert tripped.status_code == 500, (
-                f"the first call should have surfaced the deployment's own 500, got {tripped.status_code}: "
-                f"{tripped.body[:300]}"
-            )
-            tripped_at = time.monotonic()
+        warm_group: Final = f"reliability-cooldown-sibling-warm-{unique_marker()}"
+        warm_id: Final = create_canned_deployment(client.proxy, warm_group)
+        resources.defer(lambda: client.proxy.delete_model(warm_id))
 
-            time.sleep(COOLDOWN_REDIS_READ_INTERVAL_SECONDS + SIBLING_READ_MARGIN_SECONDS)
-            bench_lapses_at = tripped_at + SIBLING_COOLDOWN_SECONDS - BENCH_MARGIN_SECONDS
-            for probe in range(1, SIBLING_PROBES + 1):
-                assert time.monotonic() < bench_lapses_at, (
-                    f"probe {probe} of {SIBLING_PROBES} would start after the {SIBLING_COOLDOWN_SECONDS:.0f}s bench can "
-                    "lapse, so the earlier probes answered too slowly for this run to say anything about the read interval"
-                )
-                _assert_served_by_backup(
-                    _call_without_retries(client, scoped_key, group),
-                    backup,
-                    f"probe {probe} of {SIBLING_PROBES}, {time.monotonic() - tripped_at:.1f}s after the trip benched "
-                    f"{failing},",
-                )
-            _assert_warm_answered(warm)
+        _warm_every_pod(client, scoped_key, warm_group)
+        tripped: Final = _call_without_retries(client, scoped_key, group)
+        assert tripped.status_code == 500, (
+            f"the first call should have surfaced the deployment's own 500, got {tripped.status_code}: "
+            f"{tripped.body[:300]}"
+        )
+        tripped_at: Final = time.monotonic()
+
+        time.sleep(COOLDOWN_REDIS_READ_INTERVAL_SECONDS + SIBLING_READ_MARGIN_SECONDS)
+        bench_lapses_at: Final = tripped_at + SIBLING_COOLDOWN_SECONDS - BENCH_MARGIN_SECONDS
+        for probe in range(1, SIBLING_PROBES + 1):
+            assert time.monotonic() < bench_lapses_at, (
+                f"probe {probe} of {SIBLING_PROBES} would start after the {SIBLING_COOLDOWN_SECONDS:.0f}s bench can "
+                "lapse, so the earlier probes answered too slowly for this run to say anything about the read interval"
+            )
+            _assert_served_by_backup(
+                _call_without_retries(client, scoped_key, group),
+                backup,
+                f"probe {probe} of {SIBLING_PROBES}, {time.monotonic() - tripped_at:.1f}s after the trip benched "
+                f"{failing},",
+            )
 
     @pytest.mark.covers("reliability.cooldown.429.trips_then_recovers")
     def test_429_trips_cooldown_then_recovers(

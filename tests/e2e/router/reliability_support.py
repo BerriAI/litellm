@@ -253,6 +253,12 @@ def create_always_picked_small_context_deployment(proxy: ProxyClient, name: str)
     )
 
 
+def create_canned_deployment(proxy: ProxyClient, name: str) -> str:
+    """A deployment that answers from a canned reply, so a call to it goes through the
+    router's deployment pick like any other but never reaches a provider."""
+    return proxy.create_model(name, LiteLLMParamsBody(model=REAL_MODEL, mock_response="ok"))
+
+
 def create_zero_weight_backup_deployment(proxy: ProxyClient, name: str) -> str:
     """The other half of a retry pair: healthy, but weight 0, so the weighted shuffle
     never opens on it. It is reachable only once its sibling is out of the running,
