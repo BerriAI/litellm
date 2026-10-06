@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import threading
 import uuid
 from typing import Final
@@ -44,6 +45,13 @@ def _peer_card(url: str, name: str, version: str = "0.3") -> dict[str, JsonValue
         "defaultOutputModes": ["text"],
         "skills": [],
     }
+
+
+def _is_uuid(value: str) -> bool:
+    return (
+        re.fullmatch(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", value) is not None
+        and str(uuid.UUID(value)) == value
+    )
 
 
 def _register_agent(gateway: Gateway, scenario: Scenario, body: dict[str, JsonValue]) -> str:
@@ -326,6 +334,20 @@ _STREAM_RESULTS: Final = {
 }
 
 
+_TRANSPORT_HEADERS: Final = frozenset(
+    {
+        "host",
+        "accept",
+        "accept-encoding",
+        "connection",
+        "content-length",
+        "content-type",
+        "user-agent",
+        "cache-control",
+    }
+)
+
+
 @pytest.mark.parametrize(
     ("version", "method", "message"),
     (("0.3", "message/stream", _MESSAGE_V03), ("1.0", "SendStreamingMessage", _MESSAGE_V10)),
@@ -348,13 +370,26 @@ def test_a2a_stream_relays_each_upstream_event_as_its_own_sse_frame_in_the_pinne
         return Reply(content_type="text/event-stream", chunks=frames, gate_after_first=first_frame_seen)
 
     with wire_server(upstream) as wire, gateway.scenario() as scenario:
+        user: Final = scenario.user()
+        key: Final = scenario.key(user_id=user)
         identity: Final = _register_agent(
-            gateway, scenario, {"agent_name": marker, "agent_card_params": _peer_card(wire.url, marker, version)}
+            gateway,
+            scenario,
+            {
+                "agent_name": marker,
+                "agent_card_params": _peer_card(wire.url, marker, version),
+                "static_headers": {"Authorization": "Bearer stream-server-token"},
+            },
         )
         with gateway.client.stream(
             "POST",
             f"/a2a/{identity}",
-            headers={"Authorization": f"Bearer {gateway.key}", "a2a-version": version, "Accept": "text/event-stream"},
+            headers={
+                "Authorization": f"Bearer {key}",
+                "a2a-version": version,
+                "x-litellm-trace-id": marker + "-trace",
+                "Accept": "text/event-stream",
+            },
             json={"jsonrpc": "2.0", "id": marker, "method": method, "params": {"message": message}},
         ) as response:
             assert response.status_code == 200, response.read().decode()
@@ -376,6 +411,14 @@ def test_a2a_stream_relays_each_upstream_event_as_its_own_sse_frame_in_the_pinne
         assert len(posts) == 1, posts
         assert posts[0].target == "/", posts[0].target
         assert posts[0].headers["accept"] == "text/event-stream", posts[0].headers
+        forwarded: Final = {name: value for name, value in posts[0].headers.items() if name not in _TRANSPORT_HEADERS}
+        assert forwarded == {
+            "authorization": "Bearer stream-server-token",
+            "a2a-version": "0.3",
+            "x-litellm-trace-id": marker + "-trace",
+            "x-litellm-user-id": user,
+            "x-litellm-agent-id": identity,
+        }, posts[0].headers
         body: Final = json.loads(posts[0].body)
         assert str(uuid.UUID(body["id"])) == body["id"] and body["id"] != marker, posts[0].body
         assert body == {
@@ -384,20 +427,6 @@ def test_a2a_stream_relays_each_upstream_event_as_its_own_sse_frame_in_the_pinne
             "method": "message/stream",
             "params": {"configuration": {"blocking": True}, "message": _MESSAGE_V03},
         }, posts[0].body
-
-
-_TRANSPORT_HEADERS: Final = frozenset(
-    {
-        "host",
-        "accept",
-        "accept-encoding",
-        "connection",
-        "content-length",
-        "content-type",
-        "user-agent",
-        "cache-control",
-    }
-)
 
 
 def test_a2a_send_forwards_configured_headers_and_minted_identity_but_never_spoofed_or_proxy_credentials(
@@ -438,7 +467,7 @@ def test_a2a_send_forwards_configured_headers_and_minted_identity_but_never_spoo
             "X-LiteLLM-Team-Id": "spoofed-team",
         }
         for headers in (
-            {"Authorization": f"Bearer {team_key}", **spoofs},
+            {"Authorization": f"Bearer {team_key}", "x-litellm-trace-id": marker + "-trace", **spoofs},
             {"x-litellm-api-key": solo_key, "Authorization": "Bearer backend-token", **spoofs},
         ):
             response = gateway.client.post(f"/a2a/{identity}", headers=headers, json=payload)
@@ -451,9 +480,10 @@ def test_a2a_send_forwards_configured_headers_and_minted_identity_but_never_spoo
         for post, (user, team_header, key) in zip(
             posts, ((member, team, team_key), (solo_user, None, solo_key)), strict=True
         ):
-            forwarded = {
-                name: value for name, value in post.headers.items() if name not in _TRANSPORT_HEADERS
-            }
+            forwarded = {name: value for name, value in post.headers.items() if name not in _TRANSPORT_HEADERS}
+            minted: Final = forwarded.get("x-litellm-trace-id", "")
+            if team_header is None:
+                assert _is_uuid(minted), post.headers
             expected = {
                 "authorization": "Bearer server-token",
                 "x-api-key": "client-secret",
@@ -461,7 +491,7 @@ def test_a2a_send_forwards_configured_headers_and_minted_identity_but_never_spoo
                 "x-region": "eu-1",
                 "a2a-version": "0.3",
                 "x-litellm-agent-id": identity,
-                "x-litellm-trace-id": forwarded.get("x-litellm-trace-id", "<missing>"),
+                "x-litellm-trace-id": marker + "-trace" if team_header is not None else minted,
                 "x-litellm-user-id": user,
                 **({} if team_header is None else {"x-litellm-team-id": team_header}),
             }
@@ -474,10 +504,8 @@ def test_a2a_send_forwards_configured_headers_and_minted_identity_but_never_spoo
                 "method": "message/send",
                 "params": {"configuration": {"blocking": True}, "message": _MESSAGE_V03},
             }, post.body
-            assert forwarded["x-litellm-trace-id"] != "<missing>", post.headers
             assert all(
-                key not in value and gateway.key not in value and "leak" not in value
-                for value in post.headers.values()
+                key not in value and gateway.key not in value and "leak" not in value for value in post.headers.values()
             ), post.headers
 
 
@@ -514,8 +542,16 @@ def test_a2a_card_routes_front_the_agent_with_the_proxy_url_and_sdk_clients_call
         return Reply(body=json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": {"message": message}}).encode())
 
     with wire_server(upstream) as wire, gateway.scenario() as scenario:
+        user: Final = scenario.user()
+        key: Final = scenario.key(user_id=user)
         identity: Final = _register_agent(
-            gateway, scenario, {"agent_name": marker, "agent_card_params": upstream_card()}
+            gateway,
+            scenario,
+            {
+                "agent_name": marker,
+                "agent_card_params": upstream_card(),
+                "static_headers": {"Authorization": "Bearer card-server-token"},
+            },
         )
         proxy_url: Final = f"{_proxy_base(gateway)}/a2a/{identity}"
         cards: Final = tuple(
@@ -534,7 +570,7 @@ def test_a2a_card_routes_front_the_agent_with_the_proxy_url_and_sdk_clients_call
         assert served["name"] == marker, cards[0].text
 
         async def call_through_sdk() -> tuple[a2a_pb2.AgentCard, tuple[a2a_pb2.StreamResponse, ...]]:
-            async with httpx.AsyncClient(headers={"Authorization": f"Bearer {gateway.key}"}, timeout=30) as http:
+            async with httpx.AsyncClient(headers={"Authorization": f"Bearer {key}"}, timeout=30) as http:
                 resolved = await A2ACardResolver(httpx_client=http, base_url=proxy_url).get_agent_card()
                 client = await create_client(resolved, ClientConfig(httpx_client=http, streaming=False))
                 request = a2a_pb2.SendMessageRequest(
@@ -549,7 +585,7 @@ def test_a2a_card_routes_front_the_agent_with_the_proxy_url_and_sdk_clients_call
         assert [event.message.parts[0].text for event in events] == ["via proxy"], events
 
         async def stream_through_sdk() -> tuple[a2a_pb2.StreamResponse, ...]:
-            async with httpx.AsyncClient(headers={"Authorization": f"Bearer {gateway.key}"}, timeout=30) as http:
+            async with httpx.AsyncClient(headers={"Authorization": f"Bearer {key}"}, timeout=30) as http:
                 client = await create_client(resolved, ClientConfig(httpx_client=http, streaming=True))
                 request = a2a_pb2.SendMessageRequest(
                     message=a2a_pb2.Message(
@@ -572,13 +608,22 @@ def test_a2a_card_routes_front_the_agent_with_the_proxy_url_and_sdk_clients_call
         ], stream_events
         posts: Final = tuple(item for item in wire.drain() if item.method == "POST")
         assert len(posts) == 2, posts
-        assert all(post.headers["x-litellm-agent-id"] == identity for post in posts), [
-            dict(post.headers) for post in posts
-        ]
+        sdk_transport_headers: Final = _TRANSPORT_HEADERS | frozenset({"a2a-version"})
+        forwarded_headers: Final = tuple(
+            {name: value for name, value in post.headers.items() if name not in sdk_transport_headers} for post in posts
+        )
+        assert all(_is_uuid(headers.get("x-litellm-trace-id", "")) for headers in forwarded_headers), forwarded_headers
+        assert forwarded_headers == tuple(
+            {
+                "authorization": "Bearer card-server-token",
+                "x-litellm-user-id": user,
+                "x-litellm-agent-id": identity,
+                "x-litellm-trace-id": headers.get("x-litellm-trace-id", ""),
+            }
+            for headers in forwarded_headers
+        ), [post.headers for post in posts]
         forwarded: Final = tuple(json.loads(post.body) for post in posts)
-        assert all(
-            str(uuid.UUID(post["id"])) == post["id"] for post in forwarded
-        ), [post.body for post in posts]
+        assert all(str(uuid.UUID(post["id"])) == post["id"] for post in forwarded), [post.body for post in posts]
         assert forwarded == (
             {
                 "0.3": {

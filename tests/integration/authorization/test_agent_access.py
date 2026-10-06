@@ -3,6 +3,7 @@ import uuid
 from collections.abc import Callable
 from typing import Final
 
+import pytest
 from integration._support.client import Gateway, Scenario
 from integration._support.database import read_rows, write_rows
 from integration._support.wire import Reply, Request, wire_server
@@ -166,7 +167,40 @@ def test_agent_permissions_on_keys_teams_and_access_groups_gate_a2a_send_and_car
             ("send by id", lambda agent, name: f"/a2a/{agent}", send_payload, "message/send"),
             ("send by name", lambda agent, name: f"/a2a/{name}", send_payload, "message/send"),
             ("send v1 alias", lambda agent, name: f"/v1/a2a/{agent}/message/send", send_payload, "message/send"),
+            ("send alias", lambda agent, name: f"/a2a/{agent}/message/send", send_payload, "message/send"),
             ("stream", lambda agent, name: f"/a2a/{agent}", stream_payload, "message/stream"),
+        )
+        denied_tasks: Final = (
+            (
+                "tasks/get",
+                {
+                    "jsonrpc": "2.0",
+                    "id": marker,
+                    "method": "tasks/get",
+                    "params": {"id": "t1"},
+                },
+            ),
+            (
+                "GetTask",
+                {
+                    "jsonrpc": "2.0",
+                    "id": marker,
+                    "method": "GetTask",
+                    "params": {"id": "t1"},
+                },
+            ),
+            (
+                "tasks/pushNotificationConfig/set",
+                {
+                    "jsonrpc": "2.0",
+                    "id": marker,
+                    "method": "tasks/pushNotificationConfig/set",
+                    "params": {
+                        "taskId": "t1",
+                        "pushNotificationConfig": {"url": "https://callback.example.com/hook"},
+                    },
+                },
+            ),
         )
 
         def attempt(key: str, agent: str, name: str) -> tuple[tuple[str, int, str], ...]:
@@ -192,6 +226,13 @@ def test_agent_permissions_on_keys_teams_and_access_groups_gate_a2a_send_and_car
             for spelling, status, text in attempt(key, denied, denied_name):
                 refused: Final = refusal(denied_name if "by name" in spelling else denied)
                 assert (status, text) == (403, refused), f"{label} {spelling}: {status} {text}"
+            for spelling, payload in denied_tasks:
+                response: Final = gateway.client.post(
+                    f"/a2a/{denied}", headers={"Authorization": f"Bearer {key}"}, json=payload
+                )
+                assert (response.status_code, response.text) == (403, refusal(denied)), (
+                    f"{label} {spelling}: {response.status_code} {response.text}"
+                )
             assert card(key, denied) == (403, refusal(denied)), label
             assert wire.drain() == (), label
             for spelling, status, text in attempt(key, allowed, allowed_name):
@@ -232,9 +273,7 @@ def test_agent_permissions_on_keys_teams_and_access_groups_gate_a2a_send_and_car
                 }
                 for index, wire_method in enumerate(wire_methods)
             ), f"{label}: {forwarded}"
-            assert all(
-                item["id"] != marker and str(uuid.UUID(item["id"])) == item["id"] for item in forwarded
-            ), label
+            assert all(item["id"] != marker and str(uuid.UUID(item["id"])) == item["id"] for item in forwarded), label
 
         emptied: Final = gateway.request("PUT", f"/v1/access_group/{group_id}", {"access_agent_ids": []})
         assert emptied.status_code == 200, emptied.text
@@ -244,3 +283,52 @@ def test_agent_permissions_on_keys_teams_and_access_groups_gate_a2a_send_and_car
             for spelling, _, _ in emptied_outcomes
         ), emptied_outcomes
         assert wire.drain() == (), emptied_outcomes
+
+
+def test_legacy_agent_json_card_path_applies_agent_permissions_to_non_admin_keys(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: GET /a2a/{agent_id}/.well-known/agent.json returns 401 'Only proxy admin can be used' for non-admin keys because agent_inference_routes lists only agent-card.json"
+    )
+    marker: Final = "a2alegacy" + uuid.uuid4().hex[:12]
+
+    def upstream(request: Request) -> Reply:
+        assert request.method == "GET", request.method
+        return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
+
+    def refusal(identity: str) -> str:
+        return json.dumps(
+            {"detail": f"Agent '{identity}' is not allowed for your key/team. Contact proxy admin for access."},
+            separators=(",", ":"),
+        )
+
+    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+        allowed_name: Final = marker + "-allowed"
+        denied_name: Final = marker + "-denied"
+        allowed: Final = _register_agent(gateway, scenario, allowed_name, wire.url)
+        denied: Final = _register_agent(gateway, scenario, denied_name, wire.url)
+        granted_key: Final = scenario.key(object_permission={"agents": [allowed]})
+        unrestricted_key: Final = scenario.key()
+        proxy_base: Final = str(gateway.client.base_url).rstrip("/")
+
+        granted_legacy: Final = gateway.client.get(
+            f"/a2a/{allowed}/.well-known/agent.json", headers={"Authorization": f"Bearer {granted_key}"}
+        )
+        granted_card: Final = gateway.client.get(
+            f"/a2a/{allowed}/.well-known/agent-card.json", headers={"Authorization": f"Bearer {granted_key}"}
+        )
+        assert granted_legacy.status_code == 200, granted_legacy.text
+        assert granted_legacy.json()["url"] == f"{proxy_base}/a2a/{allowed}", granted_legacy.text
+        assert granted_legacy.json() == granted_card.json(), granted_legacy.text
+
+        unrestricted_legacy: Final = gateway.client.get(
+            f"/a2a/{allowed}/.well-known/agent.json", headers={"Authorization": f"Bearer {unrestricted_key}"}
+        )
+        assert unrestricted_legacy.status_code == 200, unrestricted_legacy.text
+        assert unrestricted_legacy.json()["url"] == f"{proxy_base}/a2a/{allowed}", unrestricted_legacy.text
+        wire.drain()
+
+        denied_legacy: Final = gateway.client.get(
+            f"/a2a/{denied}/.well-known/agent.json", headers={"Authorization": f"Bearer {granted_key}"}
+        )
+        assert (denied_legacy.status_code, denied_legacy.text) == (403, refusal(denied)), denied_legacy.text
+        assert wire.drain() == ()
