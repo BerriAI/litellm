@@ -915,13 +915,14 @@ jobs:
           command: |
             mkdir -p test-results
             TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
+            TEST_FILES="$TEST_FILES tests/unit/llms/openai/test_openai.py"
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -v \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
-                -k \"assistants\""
+                -k \"assistants or test_aarun_thread_litellm or test_add_message_litellm or test_create_thread_litellm or test_get_thread_litellm\""
           no_output_timeout: 15m
       # Store test results
       - store_test_results:
