@@ -570,8 +570,8 @@ class BaseResponsesAPIStreamingIterator:
         Used to rebuild a terminal response.completed payload whose output array is empty.
         """
         if not self._streamed_output_items:
-            return []  # mutable-ok: response.output takes a real list
-        return [  # mutable-ok: response.output takes a real list
+            return []
+        return [
             item for _, item in sorted(self._streamed_output_items.items())
         ]
 
