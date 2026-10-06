@@ -1,12 +1,11 @@
 """Tests for the repo's git hook scripts in ``.githooks/``.
 
-The hooks enforce Conventional Commits 1.0.0 on the commit-msg path and
-Conventional Branches on the pre-push path. Each hook is exercised here as a
+The commit-msg hook enforces Conventional Commits. It is exercised as a
 subprocess against representative valid / invalid inputs so that any future
 regex change or accidental edit gets caught by ``make test-unit``.
 
-The hooks are POSIX-ish bash scripts; the test is skipped on Windows where
-``bash`` may not be on PATH.
+The hook is a bash script; the test is skipped on Windows where ``bash`` may
+not be on PATH.
 """
 
 import os
@@ -19,10 +18,6 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HOOKS_DIR = _REPO_ROOT / ".githooks"
 _COMMIT_MSG_HOOK = _HOOKS_DIR / "commit-msg"
-_PRE_PUSH_HOOK = _HOOKS_DIR / "pre-push"
-
-_ZERO_OID = "0" * 40
-_NONZERO_OID = "abc123abc123abc123abc123abc123abc123abc1"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("bash") is None,
@@ -33,14 +28,12 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture(autouse=True)
 def _ensure_hooks_exist():
     assert _COMMIT_MSG_HOOK.exists(), f"missing hook: {_COMMIT_MSG_HOOK}"
-    assert _PRE_PUSH_HOOK.exists(), f"missing hook: {_PRE_PUSH_HOOK}"
     # Exec bit may be missing on a fresh clone on case-preserving filesystems;
     # the installer normalizes this, but the test shouldn't depend on having
     # run it.
-    for hook in (_COMMIT_MSG_HOOK, _PRE_PUSH_HOOK):
-        mode = hook.stat().st_mode
-        if not (mode & 0o100):
-            hook.chmod(mode | 0o755)
+    mode = _COMMIT_MSG_HOOK.stat().st_mode
+    if not (mode & 0o100):
+        _COMMIT_MSG_HOOK.chmod(mode | 0o755)
 
 
 def _run_commit_msg(subject: str, tmp_path: Path) -> subprocess.CompletedProcess:
@@ -52,21 +45,6 @@ def _run_commit_msg(subject: str, tmp_path: Path) -> subprocess.CompletedProcess
         text=True,
         check=False,
     )
-
-
-def _run_pre_push(stdin: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["bash", str(_PRE_PUSH_HOOK)],
-        input=stdin,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-def _ref_line(branch: str, local_oid: str = _NONZERO_OID, remote_oid: str = _ZERO_OID) -> str:
-    ref = f"refs/heads/{branch}"
-    return f"{ref} {local_oid} {ref} {remote_oid}\n"
 
 
 # ----- commit-msg -----------------------------------------------------------
@@ -197,89 +175,4 @@ def test_commit_msg_uses_first_non_comment_line(tmp_path):
         text=True,
         check=False,
     )
-    assert result.returncode == 0, result.stderr
-
-
-# ----- pre-push -------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "branch",
-    [
-        "feature/weighted-round-robin",
-        "bugfix/streaming-empty-chunks",
-        "hotfix/auth-bypass",
-        "release/v1.45.0",
-        "chore/bump-deps",
-        "feature/nested/path/ok",  # nested slashes after type are fine
-    ],
-)
-def test_pre_push_accepts_conventional_branches(branch):
-    result = _run_pre_push(_ref_line(branch))
-    assert result.returncode == 0, (
-        f"hook rejected a valid branch:\n  branch: {branch!r}\n"
-        f"  stderr: {result.stderr}"
-    )
-
-
-@pytest.mark.parametrize(
-    "branch",
-    [
-        "random-branch-name",
-        "litellm_fix/optimize-streaming",  # legacy pattern is now rejected
-        "ui/navbar-notifications",         # not in the allow list
-        "feature/",                        # empty description
-        "Feature/foo",                     # type is case-sensitive
-        "feat/foo",                        # angular commit type, not branch type
-    ],
-)
-def test_pre_push_rejects_non_conventional_branches(branch):
-    result = _run_pre_push(_ref_line(branch))
-    assert result.returncode == 1, (
-        f"hook accepted an invalid branch:\n  branch: {branch!r}\n"
-        f"  stderr: {result.stderr}"
-    )
-    assert "Conventional Branches" in result.stderr
-
-
-@pytest.mark.parametrize(
-    "branch",
-    [
-        "main",
-        "dependabot/github_actions/foo",
-        "gh-readonly-queue/main/abc123",
-    ],
-)
-def test_pre_push_bypasses_protected_branches(branch):
-    result = _run_pre_push(_ref_line(branch))
-    assert result.returncode == 0, (
-        f"protected branch was rejected:\n  branch: {branch!r}\n"
-        f"  stderr: {result.stderr}"
-    )
-
-
-def test_pre_push_skips_tag_pushes():
-    line = f"refs/tags/v1 {_NONZERO_OID} refs/tags/v1 {_ZERO_OID}\n"
-    result = _run_pre_push(line)
-    assert result.returncode == 0, result.stderr
-
-
-def test_pre_push_skips_branch_deletions():
-    # local oid all zeros = deletion
-    line = f"refs/heads/whatever {_ZERO_OID} refs/heads/whatever {_NONZERO_OID}\n"
-    result = _run_pre_push(line)
-    assert result.returncode == 0, result.stderr
-
-
-def test_pre_push_fails_if_any_ref_is_invalid():
-    # Mixed batch: one valid, one invalid — entire push should fail.
-    stdin = _ref_line("feature/ok") + _ref_line("random-bad")
-    result = _run_pre_push(stdin)
-    assert result.returncode == 1
-    assert "random-bad" in result.stderr
-
-
-def test_pre_push_no_refs_passes():
-    # Empty stdin (no refs being pushed) should pass.
-    result = _run_pre_push("")
     assert result.returncode == 0, result.stderr
