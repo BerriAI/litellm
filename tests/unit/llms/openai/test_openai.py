@@ -1,7 +1,7 @@
 import asyncio
 import json
 from typing import Final
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
@@ -409,3 +409,62 @@ async def test_aembedding_honors_explicit_retry_limit(max_retries: int | None, e
 
     assert client.max_retries == expected_retries
     assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}]
+
+
+def _unavailable_embedding_response(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(503, json={"error": {"message": "temporarily unavailable"}}, request=request)
+
+
+@pytest.mark.parametrize("max_retries,expected_retries", [(0, 0), (3, 3), (None, litellm.DEFAULT_MAX_RETRIES)])
+def test_embedding_limits_requests_after_retryable_failure(max_retries: int | None, expected_retries: int) -> None:
+    requests: Final = Mock(side_effect=_unavailable_embedding_response)
+    with (
+        patch("openai._base_client.time.sleep"),
+        OpenAI(
+            api_key="transport-only",
+            base_url="https://embedding.example/v1",
+            max_retries=7,
+            http_client=httpx.Client(transport=httpx.MockTransport(requests)),
+        ) as client,
+        pytest.raises(litellm.ServiceUnavailableError) as error,
+    ):
+        litellm.embedding(
+            model="openai/embedding-test",
+            input=["retry control"],
+            client=client,
+            max_retries=max_retries,
+            num_retries=0,
+            api_key="transport-only",
+            api_base=str(client.base_url),
+        )
+
+    assert error.value.status_code == 503
+    assert requests.call_count == expected_retries + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_retries,expected_retries", [(0, 0), (3, 3), (None, litellm.DEFAULT_MAX_RETRIES)])
+async def test_aembedding_limits_requests_after_retryable_failure(
+    max_retries: int | None, expected_retries: int
+) -> None:
+    requests: Final = Mock(side_effect=_unavailable_embedding_response)
+    with patch("openai._base_client.anyio.sleep", new_callable=AsyncMock):
+        async with AsyncOpenAI(
+            api_key="transport-only",
+            base_url="https://embedding.example/v1",
+            max_retries=7,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(requests)),
+        ) as client:
+            with pytest.raises(litellm.ServiceUnavailableError) as error:
+                await litellm.aembedding(
+                    model="openai/embedding-test",
+                    input=["retry control"],
+                    client=client,
+                    max_retries=max_retries,
+                    num_retries=0,
+                    api_key="transport-only",
+                    api_base=str(client.base_url),
+                )
+
+    assert error.value.status_code == 503
+    assert requests.call_count == expected_retries + 1
