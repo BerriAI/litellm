@@ -20,8 +20,12 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
+)
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.identity_filter import (
+    IdentitySkipFilter,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -170,6 +174,10 @@ def _structured_rows_to_write_back(
     )
 
 
+def _passthrough_inputs(inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
+    return GenericGuardrailAPIInputs(**inputs)
+
+
 class GenericGuardrailAPI(CustomGuardrail):
     """
     Generic Guardrail API integration for LiteLLM.
@@ -204,9 +212,14 @@ class GenericGuardrailAPI(CustomGuardrail):
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
+        skip_if_key_alias_in: Sequence[str] | None = None,
+        skip_if_team_id_in: Sequence[str] | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.headers = headers or {}
         self.extra_headers = extra_headers or []
 
@@ -251,6 +264,8 @@ class GenericGuardrailAPI(CustomGuardrail):
             "block_only" if streaming_transform_mode is None else streaming_transform_mode
         )
 
+        self.identity_skip_filter: Final = IdentitySkipFilter.from_config(skip_if_key_alias_in, skip_if_team_id_in)
+
         # Set supported event hooks
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
@@ -292,9 +307,8 @@ class GenericGuardrailAPI(CustomGuardrail):
             if value is not None:
                 result_metadata[field_name] = value
 
-        # handle user_api_key_token = user_api_key_hash
-        if metadata_dict.get("user_api_key_token") is not None:
-            result_metadata["user_api_key_hash"] = metadata_dict.get("user_api_key_token")
+        if litellm_metadata.get("user_api_key_token") is not None and "user_api_key_hash" not in result_metadata:
+            result_metadata["user_api_key_hash"] = litellm_metadata["user_api_key_token"]
 
         verbose_proxy_logger.debug(
             "Generic Guardrail API: Extracted user metadata: %s",
@@ -432,6 +446,19 @@ class GenericGuardrailAPI(CustomGuardrail):
         if request_data is None:
             request_data = {}
 
+        user_metadata: Final = self._extract_user_api_key_metadata(request_data)
+        skip_option: Final = self.identity_skip_filter.matched_option(user_metadata)
+        if skip_option is not None:
+            verbose_proxy_logger.debug(
+                "Generic Guardrail API: skipping exempt caller per %s (input_type=%s)", skip_option, input_type
+            )
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=f"skipped: {skip_option}",
+                request_data=request_data,
+                guardrail_status="not_run",
+            )
+            return _passthrough_inputs(inputs)
+
         request_body: Final = request_data.get("body") or {}
 
         # Merge additional provider specific params from config and dynamic params
@@ -442,8 +469,6 @@ class GenericGuardrailAPI(CustomGuardrail):
         if dynamic_params:
             additional_params.update(dynamic_params)
 
-        # Extract user API key metadata
-        user_metadata: Final = self._extract_user_api_key_metadata(request_data)
         extra_allowlist = {h.lower() for h in self.extra_headers if isinstance(h, str)} if self.extra_headers else None
         inbound_headers: Final = _extract_inbound_headers(
             request_data=request_data,
