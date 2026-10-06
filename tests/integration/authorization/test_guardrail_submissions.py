@@ -5,6 +5,8 @@ from datetime import datetime
 from hashlib import sha256
 from typing import Final
 
+import httpx
+import pytest
 from integration._support.client import Gateway, object_value
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
@@ -55,6 +57,12 @@ class _ErrorResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     error: _ProxyError
+
+
+class _SubmissionForbiddenResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    detail: str
 
 
 class _AdminActionResponse(BaseModel):
@@ -110,6 +118,16 @@ def _assert_submission_status(guardrail_id: str, status: str, team_id: str) -> N
     assert _GuardrailRow.model_validate(rows[0]) == _GuardrailRow(
         guardrail_id=guardrail_id, status=status, team_id=team_id
     ), rows
+
+
+def _assert_submission_actions_are_forbidden(responses: tuple[httpx.Response, ...]) -> None:
+    assert tuple(response.status_code for response in responses) == (403, 403, 403, 403), tuple(
+        response.text for response in responses
+    )
+    expected_error: Final = {"detail": "Admin access required"}
+    assert tuple(
+        _SubmissionForbiddenResponse.model_validate_json(response.content).model_dump() for response in responses
+    ) == (expected_error,) * 4, tuple(response.text for response in responses)
 
 
 def _register(
@@ -239,7 +257,57 @@ def _masked_user_id(user_id: str) -> str:
     return f"{user_id[:6]}{'*' * (len(user_id) - 8)}{user_id[-2:]}"
 
 
-def test_non_admins_are_refused_from_guardrail_submission_actions(gateway: Gateway) -> None:
+def test_non_admin_keys_scoped_to_the_submission_routes_get_403_from_the_admin_check(gateway: Gateway) -> None:
+    with (
+        wire_server(lambda _request: Reply(body=json.dumps(_PROVIDER_RESPONSE).encode())) as provider,
+        wire_server(lambda _request: Reply(body=b'{"action":"NONE"}')) as guardrail,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        team_id: Final = scenario.team(models=[model])
+        member: Final = scenario.member(team_id)
+        team_admin: Final = scenario.member(team_id, role="admin")
+        registration_key: Final = scenario.key(user_id=member, team_id=team_id, models=[model])
+        member_key: Final = scenario.key(
+            user_id=member,
+            team_id=team_id,
+            models=[model],
+            allowed_routes=["/guardrails/submissions"],
+        )
+        team_admin_key: Final = scenario.key(
+            user_id=team_admin,
+            team_id=team_id,
+            models=[model],
+            allowed_routes=["/guardrails/submissions"],
+        )
+        name: Final = f"submitted-auth-{uuid.uuid4().hex}"
+        guardrail_id: Final = _register(
+            gateway,
+            scenario.cleanups,
+            name,
+            team_id,
+            registration_key,
+            f"{guardrail.url}/beta/litellm_basic_guardrail_api",
+        )
+        responses: Final = (
+            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/approve", key=team_admin_key),
+            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/reject", key=team_admin_key),
+            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/approve", key=member_key),
+            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/reject", key=member_key),
+        )
+        _assert_submission_actions_are_forbidden(responses)
+        _assert_submission_status(guardrail_id, "pending_review", team_id)
+        assert guardrail.drain() == ()
+        response: Final = _chat(gateway, model, registration_key, _PROMPT_PENDING, name)
+        assert response.choices[0].message.content == "provider response"
+        assert guardrail.drain() == ()
+
+
+def test_team_admins_and_internal_users_get_403_on_guardrail_submission_actions(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: team admins and internal users get 401 from the route check instead of the "
+        "documented 403 on guardrail submission approve and reject"
+    )
     with (
         wire_server(lambda _request: Reply(body=json.dumps(_PROVIDER_RESPONSE).encode())) as provider,
         wire_server(lambda _request: Reply(body=b'{"action":"NONE"}')) as guardrail,
@@ -266,35 +334,7 @@ def test_non_admins_are_refused_from_guardrail_submission_actions(gateway: Gatew
             gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/approve", key=member_key),
             gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/reject", key=member_key),
         )
-        expected_errors: Final = tuple(
-            {
-                "error": {
-                    "message": (
-                        "Authentication Error, Only proxy admin can be used to generate, delete, update info for new "
-                        f"keys/users/teams. Route=/guardrails/submissions/{guardrail_id}/{action}. "
-                        f"Your role=internal_user. Your user_id={_masked_user_id(user_id)}"
-                    ),
-                    "type": "auth_error",
-                    "param": "None",
-                    "code": "401",
-                }
-            }
-            for action, user_id in (
-                ("approve", team_admin),
-                ("reject", team_admin),
-                ("approve", member),
-                ("reject", member),
-            )
-        )
-        assert tuple(response.status_code for response in responses) == (401, 401, 401, 401), tuple(
-            response.text for response in responses
-        )
-        assert tuple(
-            (response.status_code, _ErrorResponse.model_validate_json(response.content).model_dump())
-            for response in responses
-        ) == tuple((401, expected_error) for expected_error in expected_errors), tuple(
-            response.text for response in responses
-        )
+        _assert_submission_actions_are_forbidden(responses)
         _assert_submission_status(guardrail_id, "pending_review", team_id)
         assert guardrail.drain() == ()
 

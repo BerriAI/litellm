@@ -266,6 +266,14 @@ def _mask_policy_prompt(request: Request, mask: str) -> str:
     return f"{mask}: {string_value(texts[0])}"
 
 
+def _policy_guardrail_reply(request: Request) -> Reply:
+    body: Final = {
+        "action": "GUARDRAIL_INTERVENED",
+        "texts": [_mask_policy_prompt(request, _MASKED)],
+    }
+    return Reply(body=json.dumps(body).encode())
+
+
 def _chat(
     gateway: Gateway,
     model: str,
@@ -290,6 +298,74 @@ def _chat(
     assert response.status_code == 200, response.text
     _ChatResponse.model_validate_json(response.content)
     return response
+
+
+def _sse(events: tuple[dict[str, JsonValue], ...]) -> tuple[bytes, ...]:
+    return tuple(f"data: {json.dumps(event)}\n\n".encode() for event in events) + (b"data: [DONE]\n\n",)
+
+
+def _streaming_chat_reply(_request: Request) -> Reply:
+    identity: Final = f"chatcmpl-policy-{uuid.uuid4().hex}"
+    chunk: Final[dict[str, JsonValue]] = {
+        "id": identity,
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-4o-mini",
+    }
+    events: Final[tuple[dict[str, JsonValue], ...]] = (
+        {**chunk, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "provider "}}]},
+        {**chunk, "choices": [{"index": 0, "delta": {"content": "response"}}]},
+        {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+    )
+    return Reply(content_type="text/event-stream", chunks=_sse(events))
+
+
+def _stream_chat(
+    gateway: Gateway,
+    model: str,
+    key: str,
+    text: str,
+    *,
+    policy_name: str | None = None,
+) -> tuple[httpx.Headers, str]:
+    with httpx.Client(trust_env=False, timeout=15) as http_client:
+        with OpenAI(
+            base_url=f"{str(gateway.client.base_url).rstrip('/')}/v1",
+            api_key=key,
+            http_client=http_client,
+        ) as client:
+            raw_response: Final = (
+                client.chat.completions.with_raw_response.create(
+                    model=model,
+                    messages=[{"role": "user", "content": text}],
+                    stream=True,
+                )
+                if policy_name is None
+                else client.chat.completions.with_raw_response.create(
+                    model=model,
+                    messages=[{"role": "user", "content": text}],
+                    stream=True,
+                    extra_body={"policies": [policy_name]},
+                )
+            )
+            assert raw_response.status_code == 200, raw_response.text
+            with raw_response.parse() as stream:
+                response_text: Final = "".join(
+                    chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices
+                )
+            return raw_response.headers, response_text
+
+
+def _assert_streaming_provider_request(request: Request, text: str) -> None:
+    assert request.method == "POST"
+    assert request.target == "/v1/chat/completions"
+    payload: Final = _JSON_OBJECT.validate_json(request.body)
+    assert payload == {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": text}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }, payload
 
 
 def _attachment_scope(
@@ -895,3 +971,168 @@ def test_default_policy_attachment_applies_only_when_no_other_attachment_matches
         ]
         _assert_provider_request(provider_requests[0], "masked default policy prompt")
         _assert_provider_request(provider_requests[1], "masked scoped policy prompt")
+
+
+def test_policy_attachment_tag_scope_matches_tags_from_the_key_and_team(gateway: Gateway) -> None:
+    with (
+        wire_server(lambda _request: Reply(body=json.dumps(_PROVIDER_RESPONSE).encode())) as provider,
+        wire_server(_policy_guardrail_reply) as guardrail,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        prefix: Final = f"attachment-{uuid.uuid4().hex}"
+        tag: Final = f"{prefix}-prod"
+        guardrail_name: Final = _create_guardrail(
+            gateway,
+            scenario.cleanups,
+            f"guardrail-{prefix}",
+            f"{guardrail.url}/beta/litellm_basic_guardrail_api",
+            "synthetic-guardrail-key",
+        )
+        policy_name: Final = f"policy-{prefix}"
+        _create_policy(gateway, scenario.cleanups, policy_name, guardrail_name)
+        attachment: Final = gateway.request(
+            "POST",
+            "/policies/attachments",
+            {"policy_name": policy_name, "tags": [tag]},
+        )
+        assert attachment.status_code == 200, attachment.text
+        created_attachment: Final = _AttachmentResponse.model_validate_json(attachment.content)
+        scenario.cleanups.callback(_delete_attachment, gateway, created_attachment.attachment_id)
+        assert created_attachment.model_dump() == {
+            "attachment_id": created_attachment.attachment_id,
+            "policy_name": policy_name,
+            "scope": None,
+            "teams": [],
+            "keys": [],
+            "models": [],
+            "tags": [tag],
+            "priority": None,
+            "default": False,
+        }, attachment.text
+
+        key_tagged: Final = scenario.key(models=[model], metadata={"tags": [tag]})
+        team_tagged: Final = scenario.team(models=[model], metadata={"tags": [tag]})
+        team_key: Final = scenario.key(team_id=team_tagged, models=[model])
+        untagged_team: Final = scenario.team(models=[model])
+        untagged_key: Final = scenario.key(team_id=untagged_team, models=[model])
+        assert guardrail.drain() == ()
+        assert provider.drain() == ()
+
+        key_prompt: Final = f"{_PROMPT} key metadata"
+        team_prompt: Final = f"{_PROMPT} team metadata"
+        control_prompt: Final = f"{_PROMPT} untagged control"
+        key_response: Final = _chat(gateway, model, key_tagged, key_prompt)
+        assert key_response.headers.get("x-litellm-applied-policies") == policy_name, key_response.text
+        team_response: Final = _chat(gateway, model, team_key, team_prompt)
+        assert team_response.headers.get("x-litellm-applied-policies") == policy_name, team_response.text
+        guardrail_requests: Final = guardrail.drain()
+        assert len(guardrail_requests) == 2
+        _assert_guardrail_request(guardrail_requests[0], key_prompt, model, key_tagged, response=key_response)
+        _assert_guardrail_request(guardrail_requests[1], team_prompt, model, team_key, response=team_response)
+        provider_requests: Final = provider.drain()
+        assert len(provider_requests) == 2
+        _assert_provider_request(provider_requests[0], f"{_MASKED}: {key_prompt}")
+        _assert_provider_request(provider_requests[1], f"{_MASKED}: {team_prompt}")
+
+        control_response: Final = _chat(gateway, model, untagged_key, control_prompt)
+        assert control_response.headers.get("x-litellm-applied-policies") is None, control_response.text
+        assert guardrail.drain() == ()
+        control_provider_requests: Final = provider.drain()
+        assert len(control_provider_requests) == 1
+        _assert_provider_request(control_provider_requests[0], control_prompt)
+
+
+def test_streaming_chat_on_an_attached_model_runs_the_policy_guardrail(gateway: Gateway) -> None:
+    with (
+        wire_server(_streaming_chat_reply) as provider,
+        wire_server(_policy_guardrail_reply) as guardrail,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        second_model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        key: Final = scenario.key(models=[model, second_model])
+        prefix: Final = f"attachment-{uuid.uuid4().hex}"
+        guardrail_name: Final = _create_guardrail(
+            gateway,
+            scenario.cleanups,
+            f"guardrail-{prefix}",
+            f"{guardrail.url}/beta/litellm_basic_guardrail_api",
+            "synthetic-guardrail-key",
+        )
+        policy_name: Final = f"policy-{prefix}"
+        _create_policy(gateway, scenario.cleanups, policy_name, guardrail_name)
+        attachment: Final = gateway.request(
+            "POST",
+            "/policies/attachments",
+            {"policy_name": policy_name, "models": [model]},
+        )
+        assert attachment.status_code == 200, attachment.text
+        created_attachment: Final = _AttachmentResponse.model_validate_json(attachment.content)
+        scenario.cleanups.callback(_delete_attachment, gateway, created_attachment.attachment_id)
+        assert created_attachment.model_dump() == {
+            "attachment_id": created_attachment.attachment_id,
+            "policy_name": policy_name,
+            "scope": None,
+            "teams": [],
+            "keys": [],
+            "models": [model],
+            "tags": [],
+            "priority": None,
+            "default": False,
+        }, attachment.text
+        assert guardrail.drain() == ()
+        assert provider.drain() == ()
+
+        attached_headers, attached_text = _stream_chat(gateway, model, key, _PROMPT)
+        assert attached_headers.get("x-litellm-applied-policies") == policy_name, attached_text
+        assert attached_text == "provider response"
+        guardrail_requests: Final = guardrail.drain()
+        assert len(guardrail_requests) == 1
+        _assert_guardrail_request(guardrail_requests[0], _PROMPT, model, key)
+        provider_requests: Final = provider.drain()
+        assert len(provider_requests) == 1
+        _assert_streaming_provider_request(provider_requests[0], f"{_MASKED}: {_PROMPT}")
+
+        assert guardrail.drain() == ()
+        unattached_headers, unattached_text = _stream_chat(gateway, second_model, key, _PROMPT)
+        assert unattached_headers.get("x-litellm-applied-policies") is None, unattached_text
+        assert unattached_text == "provider response"
+        assert guardrail.drain() == ()
+        unattached_provider_requests: Final = provider.drain()
+        assert len(unattached_provider_requests) == 1
+        _assert_streaming_provider_request(unattached_provider_requests[0], _PROMPT)
+
+
+def test_streaming_request_body_policies_run_the_guardrail_and_are_removed_from_the_provider_body(
+    gateway: Gateway,
+) -> None:
+    with (
+        wire_server(_streaming_chat_reply) as provider,
+        wire_server(_policy_guardrail_reply) as guardrail,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        key: Final = scenario.key(models=[model])
+        prefix: Final = f"attachment-{uuid.uuid4().hex}"
+        guardrail_name: Final = _create_guardrail(
+            gateway,
+            scenario.cleanups,
+            f"guardrail-{prefix}",
+            f"{guardrail.url}/beta/litellm_basic_guardrail_api",
+            "synthetic-guardrail-key",
+        )
+        policy_name: Final = f"policy-{prefix}"
+        _create_policy(gateway, scenario.cleanups, policy_name, guardrail_name)
+        assert guardrail.drain() == ()
+        assert provider.drain() == ()
+
+        response_headers, response_text = _stream_chat(gateway, model, key, _PROMPT, policy_name=policy_name)
+        assert response_headers.get("x-litellm-applied-policies") == policy_name, response_text
+        assert response_text == "provider response"
+        guardrail_requests: Final = guardrail.drain()
+        assert len(guardrail_requests) == 1
+        _assert_guardrail_request(guardrail_requests[0], _PROMPT, model, key)
+        provider_requests: Final = provider.drain()
+        assert len(provider_requests) == 1
+        _assert_streaming_provider_request(provider_requests[0], f"{_MASKED}: {_PROMPT}")

@@ -30,6 +30,21 @@ class _ApplyGuardrailResponse(BaseModel):
     response_text: str
 
 
+class _ApplyGuardrailErrorBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str
+    type: str
+    param: str | None
+    code: str
+
+
+class _ApplyGuardrailError(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    error: _ApplyGuardrailErrorBody
+
+
 def _detect(entity: str, text: str) -> tuple[dict[str, JsonValue], ...]:
     return tuple(
         {"entity_type": entity, "start": match.start(), "end": match.end(), "score": 0.95}
@@ -95,6 +110,56 @@ def _presidio(gateway: Gateway, mode: str, entities: Mapping[str, str] | None) -
 
 def _requested_entities(analyzer: Wire) -> list[JsonValue]:
     return [json.loads(request.body).get("entities") for request in analyzer.drain()]
+
+
+def _assert_apply_guardrail_successes(
+    presidio: Presidio,
+    text: str,
+    responses: tuple[httpx.Response, ...],
+) -> None:
+    assert tuple(response.status_code for response in responses) == (200,) * len(responses), tuple(
+        response.text for response in responses
+    )
+    expected_response: Final = {"response_text": f"alias contract <CREDIT_CARD> and <EMAIL_ADDRESS>"}
+    assert tuple(
+        _ApplyGuardrailResponse.model_validate_json(response.content).model_dump() for response in responses
+    ) == (expected_response,) * len(responses), tuple(response.text for response in responses)
+
+    analyzer_requests: Final = presidio.analyzer.drain()
+    assert len(analyzer_requests) == len(responses)
+    assert tuple((request.method, request.target) for request in analyzer_requests) == (
+        ("POST", "/analyze"),
+    ) * len(responses)
+    expected_analyzer_body: Final = {"text": text, "language": "en"}
+    assert tuple(json.loads(request.body) for request in analyzer_requests) == (
+        expected_analyzer_body,
+    ) * len(responses)
+
+    anonymizer_requests: Final = presidio.anonymizer.drain()
+    assert len(anonymizer_requests) == len(responses)
+    assert tuple((request.method, request.target) for request in anonymizer_requests) == (
+        ("POST", "/anonymize"),
+    ) * len(responses)
+    expected_anonymizer_body: Final = {
+        "text": text,
+        "analyzer_results": [
+            {
+                "entity_type": "CREDIT_CARD",
+                "start": text.index(CARD),
+                "end": text.index(CARD) + len(CARD),
+                "score": 0.95,
+            },
+            {
+                "entity_type": "EMAIL_ADDRESS",
+                "start": text.index(EMAIL),
+                "end": text.index(EMAIL) + len(EMAIL),
+                "score": 0.95,
+            },
+        ],
+    }
+    assert tuple(json.loads(request.body) for request in anonymizer_requests) == (
+        expected_anonymizer_body,
+    ) * len(responses)
 
 
 def test_pre_call_masks_only_the_configured_entities_before_the_provider_sees_the_prompt(gateway: Gateway) -> None:
@@ -230,6 +295,69 @@ def test_apply_guardrail_aliases_accept_admin_auth(gateway: Gateway) -> None:
                 },
             ],
         }, anonymizer_requests[0].body
+
+
+def test_long_apply_guardrail_alias_accepts_an_llm_api_scoped_key(gateway: Gateway) -> None:
+    with (
+        _presidio(gateway, "pre_call", None) as presidio,
+        gateway.scenario() as scenario,
+    ):
+        proxy_admin: Final = scenario.user(user_role="proxy_admin")
+        key: Final = scenario.key(user_id=proxy_admin, key_type="llm_api")
+        text: Final = f"alias contract {CARD} and {EMAIL}"
+        body: Final = {"guardrail_name": presidio.name, "text": text}
+        path: Final = "/guardrails/apply_guardrail"
+
+        assert presidio.analyzer.drain() == ()
+        assert presidio.anonymizer.drain() == ()
+        responses: Final = tuple(
+            gateway.client.post(path, json=body, headers=headers)
+            for headers in (
+                {"Authorization": f"Bearer {key}"},
+                {"x-litellm-api-key": key},
+            )
+        )
+        _assert_apply_guardrail_successes(presidio, text, responses)
+
+        unauthenticated: Final = gateway.client.post(path, json=body)
+        assert unauthenticated.status_code == 401, unauthenticated.text
+        assert _ApplyGuardrailError.model_validate_json(unauthenticated.content).model_dump() == {
+            "error": {
+                "message": "Authentication Error, No api key passed in.",
+                "type": "auth_error",
+                "param": "None",
+                "code": "401",
+            }
+        }, unauthenticated.text
+        assert presidio.analyzer.drain() == ()
+        assert presidio.anonymizer.drain() == ()
+
+
+def test_short_apply_guardrail_alias_accepts_an_llm_api_scoped_key(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: llm_api scoped keys are refused on /apply_guardrail while "
+        "/guardrails/apply_guardrail serves them"
+    )
+    with (
+        _presidio(gateway, "pre_call", None) as presidio,
+        gateway.scenario() as scenario,
+    ):
+        proxy_admin: Final = scenario.user(user_role="proxy_admin")
+        key: Final = scenario.key(user_id=proxy_admin, key_type="llm_api")
+        text: Final = f"alias contract {CARD} and {EMAIL}"
+        body: Final = {"guardrail_name": presidio.name, "text": text}
+        path: Final = "/apply_guardrail"
+
+        assert presidio.analyzer.drain() == ()
+        assert presidio.anonymizer.drain() == ()
+        responses: Final = tuple(
+            gateway.client.post(path, json=body, headers=headers)
+            for headers in (
+                {"Authorization": f"Bearer {key}"},
+                {"x-litellm-api-key": key},
+            )
+        )
+        _assert_apply_guardrail_successes(presidio, text, responses)
 
 
 def test_apply_guardrail_aliases_accept_internal_user_auth(gateway: Gateway) -> None:
