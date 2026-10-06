@@ -160,8 +160,7 @@ function DatasetTable({ datasets, onOpen }: { datasets: readonly DatasetSummary[
           </InspectorTable.Grid>
         </InspectorTable.Root>
         <footer className="flex h-8 shrink-0 items-center border-t bg-muted/30 px-3 text-xs text-muted-foreground">
-          {datasets.length} {datasets.length === 1 ? "dataset" : "datasets"} · {cases}{" "}
-          {cases === 1 ? "case" : "cases"}
+          {datasets.length} {datasets.length === 1 ? "dataset" : "datasets"} · {cases} {cases === 1 ? "case" : "cases"}
         </footer>
       </div>
     </Inspector.Root>
