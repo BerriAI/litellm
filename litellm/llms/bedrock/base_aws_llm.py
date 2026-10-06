@@ -20,6 +20,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
+from litellm._version import get_distribution_name
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
@@ -1609,7 +1610,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 from botocore.awsrequest import AWSRequest
                 from botocore.exceptions import NoCredentialsError
             except ImportError:
-                raise ImportError('Install AWS support with pip install "litellm[aws]"')
+                raise ImportError(f'Install AWS support with pip install "{get_distribution_name()}[aws]"')
 
             if credentials is None:
                 raise NoCredentialsError()
@@ -1707,7 +1708,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
         except ImportError:
-            raise ImportError('Install AWS support with pip install "litellm[aws]"')
+            raise ImportError(f'Install AWS support with pip install "{get_distribution_name()}[aws]"')
 
         auth_params: Final = AwsAuthParams.model_validate(optional_params)
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)

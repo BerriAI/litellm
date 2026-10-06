@@ -1,10 +1,10 @@
-from collections.abc import Callable
 import copy
 import os
 import pickle
 import subprocess
 import sys
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final, Literal
 
@@ -13,11 +13,11 @@ import tiktoken
 from tokenizers import Tokenizer as ReferenceTokenizer
 
 import litellm
+from litellm._version import get_distribution_name
 from litellm.caching._embedding_router import truncate_embedding_input
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
 from litellm.utils import claude_json_str
 from tests.unit.litellm_core_utils.test_decode_special_tokens import TOKENIZER_JSON
-
 
 ENCODINGS: Final = ("cl100k_base", "o200k_base", "p50k_base", "p50k_edit", "o200k_harmony")
 UNICODE_TEXTS: Final = ("hello world", "café 漢字 🙂", "", "a\ud800b", "\ud83d\ude42", "🙂\ud83d\ude42\udfff", " " * 64)
@@ -35,7 +35,7 @@ def test_added_token_metadata_reports_only_missing_tokenizer_extra(
         tokenizer.get_added_tokens_decoder()
 
     if missing == "tokenizers":
-        assert "litellm[tokenizers]" in str(error.value)
+        assert f"{get_distribution_name()}[tokenizers]" in str(error.value)
         assert error.value.__cause__ is failure
     else:
         assert error.value is failure
@@ -476,7 +476,7 @@ def test_missing_tokenizer_extra_warns_once_and_preserves_fallback(
         second: Final = _select_tokenizer("llama-3")
     assert first["type"] == second["type"] == "openai_tokenizer"
     assert len(caught) == 1
-    assert "litellm[tokenizers]" in str(caught[0].message)
+    assert f"{get_distribution_name()}[tokenizers]" in str(caught[0].message)
     assert "token limits" in str(caught[0].message)
 
 

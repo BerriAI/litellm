@@ -1,3 +1,4 @@
+from litellm._version import get_distribution_name
 import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -54,7 +55,7 @@ def test_aws_signing_missing_dependency_explains_extra(
             service_name=service_name, headers={}, optional_params={}, request_data={}, api_base="https://example.com"
         )
 
-    assert str(caught.value) == 'Install AWS support with pip install "litellm[aws]"'
+    assert str(caught.value) == f'Install AWS support with pip install "{get_distribution_name()}[aws]"'
 
 
 def test_credential_discovery_missing_dependency_explains_extra(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -76,7 +77,7 @@ def test_bedrock_request_preparation_missing_dependency_explains_extra(
             endpoint_url="https://example.com", data="{}", headers={}, api_key=api_key,
         )
 
-    assert str(caught.value) == 'Install AWS support with pip install "litellm[aws]"'
+    assert str(caught.value) == f'Install AWS support with pip install "{get_distribution_name()}[aws]"'
 
 
 def test_json_post_signing_missing_dependency_explains_extra(monkeypatch: pytest.MonkeyPatch) -> None:

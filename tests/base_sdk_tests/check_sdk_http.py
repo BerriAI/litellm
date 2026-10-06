@@ -1,5 +1,6 @@
 """Exercise an installed SDK against a local HTTP server, without test dependencies."""
 
+from litellm._version import get_distribution_name
 import asyncio
 import importlib.util
 import json
@@ -216,7 +217,7 @@ def check_http(base: str) -> None:
         )
         content: Final = "".join(c.choices[0].delta.content or "" for c in streamed)
     except (ImportError, litellm.APIConnectionError) as error:
-        if importlib.util.find_spec("botocore") is not None or "litellm[aws]" not in str(error):
+        if importlib.util.find_spec("botocore") is not None or f"{get_distribution_name()}[aws]" not in str(error):
             raise AssertionError("unexpected Bedrock streaming failure") from error
     else:
         assert content == "pong"

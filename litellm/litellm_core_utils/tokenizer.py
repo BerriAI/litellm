@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_c
 
 import tiktoken
 
+from litellm._version import get_distribution_name
+
 if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
@@ -276,7 +278,7 @@ class HuggingFaceTokenizer:
             if error.name != "tokenizers":
                 raise
             raise ImportError(
-                'Install Hugging Face tokenizer support with pip install "litellm[tokenizers]"'
+                f'Install Hugging Face tokenizer support with pip install "{get_distribution_name()}[tokenizers]"'
             ) from error
 
         return {

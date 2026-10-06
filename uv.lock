@@ -4517,14 +4517,20 @@ dependencies = [
     { name = "packaging" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "python-dateutil" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "tenacity" },
     { name = "tiktoken" },
     { name = "tokenizers" },
     { name = "typing-extensions" },
 ]
 
 [package.optional-dependencies]
+aws = [
+    { name = "boto3" },
+    { name = "botocore" },
+]
 bedrock-realtime = [
     { name = "aws-sdk-bedrock-runtime", extra = ["awscrt"], marker = "python_full_version >= '3.12'" },
 ]
@@ -4573,6 +4579,7 @@ proxy = [
     { name = "azure-storage-blob" },
     { name = "backoff" },
     { name = "boto3" },
+    { name = "botocore" },
     { name = "click" },
     { name = "cryptography" },
     { name = "expression" },
@@ -4583,7 +4590,9 @@ proxy = [
     { name = "gunicorn" },
     { name = "hiredis" },
     { name = "httpx2" },
+    { name = "huggingface-hub" },
     { name = "inquirerpy" },
+    { name = "jsonschema" },
     { name = "litellm-enterprise" },
     { name = "litellm-proxy-extras" },
     { name = "mcp" },
@@ -4600,6 +4609,7 @@ proxy = [
     { name = "rq" },
     { name = "soundfile" },
     { name = "starlette" },
+    { name = "tokenizers" },
     { name = "tomlkit" },
     { name = "uvicorn" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
@@ -4629,6 +4639,13 @@ proxy-runtime = [
 saml = [
     { name = "python3-saml" },
 ]
+sdk-extras = [
+    { name = "boto3" },
+    { name = "botocore" },
+    { name = "huggingface-hub" },
+    { name = "jsonschema" },
+    { name = "tokenizers" },
+]
 semantic-router = [
     { name = "aurelio-sdk", marker = "python_full_version < '3.14'" },
     { name = "semantic-router", marker = "python_full_version < '3.14'" },
@@ -4643,8 +4660,15 @@ stt-nvidia-riva = [
 stt-vertex-chirp = [
     { name = "google-cloud-speech" },
 ]
+tokenizers = [
+    { name = "huggingface-hub" },
+    { name = "tokenizers" },
+]
 utils = [
     { name = "numpydoc" },
+]
+validation = [
+    { name = "jsonschema" },
 ]
 
 [package.dev-dependencies]
@@ -4698,6 +4722,7 @@ dev = [
     { name = "hypothesis" },
     { name = "keyring" },
     { name = "langfuse" },
+    { name = "litellm", extra = ["sdk-extras"] },
     { name = "mypy" },
     { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -4774,7 +4799,8 @@ requires-dist = [
     { name = "azure-storage-file-datalake", marker = "extra == 'proxy-runtime'", specifier = ">=12.20.0,<13.0" },
     { name = "backoff", marker = "extra == 'proxy'", specifier = ">=2.2.1,<3.0" },
     { name = "boto3", specifier = ">=1.43.1,<2.0" },
-    { name = "boto3", marker = "extra == 'proxy'", specifier = ">=1.43.1,<2.0" },
+    { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.43.1,<2.0" },
+    { name = "botocore", marker = "extra == 'aws'", specifier = ">=1.43.1,<2.0" },
     { name = "click", specifier = ">=8.0.0,<9.0" },
     { name = "click", marker = "extra == 'cli'", specifier = ">=8.0.0,<9.0" },
     { name = "click", marker = "extra == 'proxy'", specifier = ">=8.0.0,<9.0" },
@@ -4805,13 +4831,17 @@ requires-dist = [
     { name = "httpx2", marker = "extra == 'mcp'", specifier = ">=2.5.0,<3" },
     { name = "httpx2", marker = "extra == 'proxy'", specifier = ">=2.5.0,<3" },
     { name = "huggingface-hub", specifier = ">=0.34.0,<2.0" },
+    { name = "huggingface-hub", marker = "extra == 'tokenizers'", specifier = ">=0.34.0,<2.0" },
     { name = "importlib-metadata", specifier = ">=8.0.0,<9.0" },
     { name = "inquirerpy", marker = "extra == 'cli'", specifier = ">=0.3.4,<1.0" },
     { name = "inquirerpy", marker = "extra == 'proxy'", specifier = ">=0.3.4,<1.0" },
     { name = "jinja2", specifier = ">=3.1.6,<4.0" },
     { name = "jsonschema", specifier = ">=4.0.0,<5.0" },
+    { name = "jsonschema", marker = "extra == 'validation'", specifier = ">=4.0.0,<5.0" },
     { name = "keyring", marker = "extra == 'cli'", specifier = ">=25.6.0,<26.0" },
     { name = "langfuse", marker = "extra == 'proxy-runtime'", specifier = ">=4.7,<5.0" },
+    { name = "litellm", extras = ["aws", "tokenizers", "validation"], marker = "extra == 'sdk-extras'" },
+    { name = "litellm", extras = ["sdk-extras"], marker = "extra == 'proxy'" },
     { name = "litellm-enterprise", marker = "extra == 'proxy'", editable = "enterprise" },
     { name = "litellm-proxy-extras", marker = "extra == 'proxy'", editable = "litellm-proxy-extras" },
     { name = "llm-sandbox", marker = "extra == 'proxy-runtime'", specifier = ">=0.3.39,<1.0" },
@@ -4843,6 +4873,7 @@ requires-dist = [
     { name = "pynacl", marker = "extra == 'proxy'", specifier = ">=1.6.2,<2.0" },
     { name = "pypdf", marker = "extra == 'proxy-runtime'", specifier = ">=6.16.1,<7.0" },
     { name = "pyroscope-io", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.8.16,<1.0" },
+    { name = "python-dateutil", specifier = ">=2.9.0,<3.0" },
     { name = "python-dotenv", specifier = ">=1.0.0,<2.0" },
     { name = "python-multipart", marker = "extra == 'proxy'", specifier = ">=0.0.27,<1.0" },
     { name = "python3-saml", marker = "extra == 'saml'", specifier = ">=1.16.0,<2.0" },
@@ -4861,9 +4892,11 @@ requires-dist = [
     { name = "soundfile", marker = "extra == 'proxy'", specifier = ">=0.12.1,<1.0" },
     { name = "soundfile", marker = "extra == 'stt-nvidia-riva'", specifier = ">=0.12.1" },
     { name = "starlette", marker = "extra == 'proxy'", specifier = ">=1.0.1,<2.0" },
+    { name = "tenacity", specifier = ">=8.5.0,<10.0" },
     { name = "tiktoken", marker = "python_full_version < '3.14'", specifier = ">=0.8.0,<1.0" },
     { name = "tiktoken", marker = "python_full_version >= '3.14'", specifier = ">=0.12.0,<1.0" },
     { name = "tokenizers", specifier = ">=0.21.0,<1.0" },
+    { name = "tokenizers", marker = "extra == 'tokenizers'", specifier = ">=0.21.0,<1.0" },
     { name = "tomlkit", marker = "extra == 'cli'", specifier = ">=0.13.3,<1.0" },
     { name = "tomlkit", marker = "extra == 'proxy'", specifier = ">=0.13.3,<1.0" },
     { name = "typing-extensions", specifier = ">=4.13.0,<5.0" },
@@ -4871,7 +4904,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.22.1,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
 ]
-provides-extras = ["proxy", "cli", "extra-proxy", "utils", "caching", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
+provides-extras = ["aws", "tokenizers", "validation", "sdk-extras", "proxy", "cli", "extra-proxy", "utils", "caching", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
 
 [package.metadata.requires-dev]
 admin-mcp = [{ name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'", url = "https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz" }]
@@ -4922,6 +4955,7 @@ dev = [
     { name = "hypothesis", specifier = "==6.165.10" },
     { name = "keyring", specifier = "==25.7.0" },
     { name = "langfuse", specifier = ">=4.7,<5.0" },
+    { name = "litellm", extras = ["sdk-extras"] },
     { name = "mypy", specifier = "==1.20.1" },
     { name = "numpy", specifier = ">=1.26.0,<3.0" },
     { name = "openapi-core", specifier = "==0.22.0" },

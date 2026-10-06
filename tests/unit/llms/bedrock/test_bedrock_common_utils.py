@@ -1,3 +1,4 @@
+from litellm._version import get_distribution_name
 from collections.abc import Callable
 from typing import Final
 
@@ -1066,7 +1067,7 @@ def test_event_stream_missing_dependency_guidance(
     if missing == "unrelated_dependency":
         assert error.value is failure
     else:
-        assert "litellm[aws]" in str(error.value)
+        assert f"{get_distribution_name()}[aws]" in str(error.value)
         assert error.value.__cause__ is failure
 
 

@@ -5,6 +5,7 @@ Bedrock Mantle is Amazon Bedrock's OpenAI-compatible inference engine (Project M
 API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 """
 
+from litellm._version import get_distribution_name
 from collections.abc import Callable
 
 import json
@@ -41,7 +42,7 @@ def test_mantle_signing_reports_only_missing_aws_extra(
         )
 
     if missing == "botocore":
-        assert "litellm[aws]" in str(error.value)
+        assert f"{get_distribution_name()}[aws]" in str(error.value)
         assert error.value.__cause__ is failure
     else:
         assert error.value is failure

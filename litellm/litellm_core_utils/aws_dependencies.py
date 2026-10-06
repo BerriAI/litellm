@@ -1,5 +1,7 @@
 from importlib import import_module
 
+from litellm._version import get_distribution_name
+
 
 def require_aws_sdk() -> None:
     try:
@@ -8,4 +10,4 @@ def require_aws_sdk() -> None:
     except ModuleNotFoundError as error:
         if error.name not in ("boto3", "botocore"):
             raise
-        raise ImportError('Install AWS support with pip install "litellm[aws]"') from error
+        raise ImportError(f'Install AWS support with pip install "{get_distribution_name()}[aws]"') from error

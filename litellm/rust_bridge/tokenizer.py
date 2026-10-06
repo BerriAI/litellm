@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # native class is
 
 import tiktoken
 
+from litellm._version import get_distribution_name
 from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFaceTokenizer, OpenAIEncoding
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.bindings import NativeBinding
@@ -84,7 +85,7 @@ def _python_huggingface_tokenizer() -> type[PythonHuggingFaceTokenizer]:
     except ModuleNotFoundError as error:
         if error.name != "tokenizers":
             raise
-        raise ImportError('Install Hugging Face tokenizer support with pip install "litellm[tokenizers]"') from error
+        raise ImportError(f'Install Hugging Face tokenizer support with pip install "{get_distribution_name()}[tokenizers]"') from error
     return PythonHuggingFaceTokenizer
 
 

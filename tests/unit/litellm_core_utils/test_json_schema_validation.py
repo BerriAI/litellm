@@ -14,6 +14,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm._version import get_distribution_name
 from litellm.types.utils import ModelResponse
 from litellm.utils import Rules, post_call_processing
 
@@ -149,7 +150,7 @@ def test_validation_requires_extra_without_hiding_other_import_errors(
     with pytest.raises(ImportError) as error:
         validate_schema({"type": "object"}, "{}")
     if missing == "jsonschema":
-        assert "litellm[validation]" in str(error.value)
+        assert f"{get_distribution_name()}[validation]" in str(error.value)
         assert error.value.__cause__ is failure
     else:
         assert error.value is failure

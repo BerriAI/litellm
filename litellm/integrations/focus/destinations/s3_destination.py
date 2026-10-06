@@ -9,6 +9,8 @@ from typing import Final, TypedDict
 
 from typing_extensions import ReadOnly
 
+from litellm._version import get_distribution_name
+
 from .base import FocusDestination, FocusTimeWindow
 
 
@@ -79,7 +81,7 @@ class FocusS3Destination(FocusDestination):
         except ModuleNotFoundError as error:
             if error.name != "boto3":
                 raise
-            raise ImportError('Install S3 support with pip install "litellm[aws]"') from error
+            raise ImportError(f'Install S3 support with pip install "{get_distribution_name()}[aws]"') from error
 
         s3_client: Final = boto3.client("s3", **self._client_kwargs())
         s3_client.put_object(

@@ -90,13 +90,13 @@ Managing LLM calls across providers gets complicated fast — different SDKs, au
 uv add litellm
 ```
 
-Optional features have separate installation extras. Use `litellm[aws]` for AWS SDK authentication and signing, `litellm[tokenizers]` for Hugging Face tokenizers, or `litellm[validation]` for local JSON Schema response validation. `litellm[sdk-extras]` includes all three
+Core has optional installation extras. Use `litellm-core[aws]` for AWS SDK authentication and signing, `litellm-core[tokenizers]` for Hugging Face tokenizers, or `litellm-core[validation]` for local JSON Schema response validation. `litellm-core[sdk-extras]` includes all three
 
 Install `litellm[cli]` for the `lite` and `litellm-proxy` client commands, or `litellm[proxy]` for the gateway, its `litellm` command, and dashboard. The proxy extra includes SDK extras and client CLI dependencies
 
-When upgrading, select the extras your application uses. An ordinary upgrade leaves previously installed dependencies in place; use a fresh environment or re-sync your environment to realize the smaller core installation
+Ordinary legacy upgrades retain AWS, tokenizer and validation dependencies. To adopt core, use a fresh environment and select the extras your application uses
 
-Bedrock signing and AWS credential discovery require `litellm[aws]`; non-streaming Converse and Mantle bearer-token inference work without it. Bedrock binary event streaming still requires `[aws]` for its decoder. Without `litellm[tokenizers]`, automatic token counting for models that use Hugging Face tokenizers falls back to tiktoken with a warning. Local counts, estimated costs and token-limit decisions can change, so install that extra when you depend on the previous tokenizer behavior. Provider-reported usage is unaffected
+Bedrock signing and AWS credential discovery require `litellm-core[aws]`; non-streaming Converse and Mantle bearer-token inference work without it. Bedrock binary event streaming still requires `[aws]` for its decoder. Without `litellm-core[tokenizers]`, automatic token counting for models that use Hugging Face tokenizers falls back to tiktoken with a warning. Local counts, estimated costs and token-limit decisions can change, so install that extra when you depend on the previous tokenizer behavior. Provider-reported usage is unaffected
 
 For a lean SDK installation, create a fresh environment and install `litellm-core`. It uses the same `import litellm` API and implementation, with optional capabilities supplied by its extras, such as `litellm-core[cli]` and `litellm-core[proxy]`. Ordinary `litellm` installs and upgrades retain legacy dependencies
 

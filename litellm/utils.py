@@ -61,6 +61,7 @@ from litellm._lazy_imports import (
     _get_token_counter_new,
 )
 from litellm._uuid import uuid
+from litellm._version import get_distribution_name
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
     DEFAULT_EMBEDDING_PARAM_VALUES,
@@ -2409,7 +2410,7 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
             warnings.warn(
                 "Hugging Face tokenizers are unavailable; falling back to tiktoken. Local token counts, "
                 "cost estimates and token limits may differ. Install model-specific tokenizers with "
-                'pip install "litellm[tokenizers]".',
+                f'pip install "{get_distribution_name()}[tokenizers]".',
                 RuntimeWarning,
             )
         verbose_logger.debug("Error selecting tokenizer: %s", e)

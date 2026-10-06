@@ -16,6 +16,7 @@ import re
 from collections.abc import Mapping
 from typing import Final, Literal
 
+from litellm._version import get_distribution_name
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
 from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
 from litellm.secret_managers.main import get_secret_str
@@ -103,7 +104,7 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         except ModuleNotFoundError as error:
             if error.name != "botocore":
                 raise
-            raise ImportError('Install AWS signing support with pip install "litellm[aws]"') from error
+            raise ImportError(f'Install AWS signing support with pip install "{get_distribution_name()}[aws]"') from error
 
         # Pin the credential-scope region to the region of the actual signing URL
         # so the SigV4 scope and URL host can never disagree, even when a stale

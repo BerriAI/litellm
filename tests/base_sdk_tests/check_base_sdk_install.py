@@ -11,8 +11,8 @@ import asyncio
 import importlib.util
 import json
 import os
-import sys
 import subprocess
+import sys
 import traceback
 import warnings
 from collections.abc import Callable
@@ -22,6 +22,8 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Final
 from unittest.mock import patch
+
+from litellm._version import get_distribution_name
 
 EXTRAS_ONLY_MODULES = ("fastapi", "uvicorn", "keyring", "mcp", "mcp_types", "httpx2", "httpcore2")
 AWS_MODULES: Final = ("boto3", "botocore", "s3transfer", "jmespath")
@@ -52,7 +54,7 @@ def check_validation(profile: str) -> str:
         try:
             validate_schema({"type": "object"}, "{}")
         except ImportError as error:
-            _require("litellm[validation]" in str(error), f"missing validation guidance: {error}")
+            _require(f"{get_distribution_name()}[validation]" in str(error), f"missing validation guidance: {error}")
             return "requested validation requires its extra"
         raise AssertionError("requested validation silently succeeded without its extra")
     validate_schema({"type": "object"}, "{}")
@@ -67,6 +69,7 @@ def check_validation(profile: str) -> str:
 
 def check_aws_signed_requests() -> str:
     from botocore.credentials import Credentials
+
     from litellm.llms.aws_polly.text_to_speech.transformation import AWSPollyTextToSpeechConfig
     from litellm.llms.sagemaker.chat.handler import SagemakerChatHandler
     from litellm.llms.sagemaker.completion.handler import SagemakerLLM
@@ -122,7 +125,7 @@ def check_aws_feature_guidance() -> str:
         try:
             action()
         except ImportError as error:
-            _require("litellm[aws]" in str(error), f"{label}: missing guidance: {error}")
+            _require(f"{get_distribution_name()}[aws]" in str(error), f"{label}: missing guidance: {error}")
         else:
             raise AssertionError(f"{label}: silently accepted missing AWS dependencies")
     for callback in ("s3_v2", "aws_sqs"):
@@ -130,7 +133,7 @@ def check_aws_feature_guidance() -> str:
             try:
                 litellm.completion(model="openai/test", messages=[{"role": "user", "content": "test"}], mock_response="ok")
             except Exception as error:
-                _require("litellm[aws]" in str(error), f"{callback}: missing public guidance: {error}")
+                _require(f"{get_distribution_name()}[aws]" in str(error), f"{callback}: missing public guidance: {error}")
             else:
                 raise AssertionError(f"{callback}: completion silently skipped logging")
     common: Final = {"api_key": "", "aws_access_key_id": "test", "aws_secret_access_key": "test", "aws_region_name": "us-east-1", "num_retries": 0}
@@ -150,7 +153,7 @@ def check_aws_feature_guidance() -> str:
             action()
         except litellm.APIConnectionError as error:
             _require(
-                'Install AWS support with pip install "litellm[aws]"' in str(error),
+                f'Install AWS support with pip install "{get_distribution_name()}[aws]"' in str(error),
                 "provider wrapper lost consistent installation guidance",
             )
             _require(isinstance(error.__cause__ or error.__context__, ImportError), "provider wrapper lost the import failure")
@@ -174,9 +177,8 @@ def check_environment_is_base_only() -> str:
 
 
 def check_import() -> str:
-    from litellm._version import get_distribution
-
     import litellm
+    from litellm._version import get_distribution
 
     _require(bool(litellm.__file__), "litellm has no __file__")
     from litellm._version import version as reported_version
@@ -324,8 +326,8 @@ def check_aws_install_guidance() -> str:
             api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
         )
     except ImportError as error:
-        _require("litellm[aws]" in str(error), f"missing AWS installation guidance: {error}")
-        return "AWS signing explains how to install litellm[aws]"
+        _require(f"{get_distribution_name()}[aws]" in str(error), f"missing AWS installation guidance: {error}")
+        return f"AWS signing explains how to install {get_distribution_name()}[aws]"
     raise AssertionError("AWS signing succeeded without the AWS extra")
 
 
@@ -358,9 +360,8 @@ def check_mantle_bearer_authentication() -> str:
 
 def check_tokenizer_fallback() -> str:
     import litellm
-    from litellm.rust_bridge import tokenizer
-
     from litellm.litellm_core_utils.tokenizer import HuggingFace, HuggingFaceTokenizer, OpenAIEncoding, Tokenizer
+    from litellm.rust_bridge import tokenizer
 
     _require(isinstance(litellm.encoding, Tokenizer), "core encoding is excluded from runtime Tokenizer alias")
     _require(isinstance(OpenAIEncoding.from_tiktoken("cl100k_base"), Tokenizer), "native encoding is excluded from runtime alias")
@@ -376,14 +377,14 @@ def check_tokenizer_fallback() -> str:
     try:
         tokenizer._python_huggingface_tokenizer()
     except ImportError as error:
-        _require("litellm[tokenizers]" in str(error), f"missing tokenizer installation guidance: {error}")
+        _require(f"{get_distribution_name()}[tokenizers]" in str(error), f"missing tokenizer installation guidance: {error}")
     else:
         raise AssertionError("Python Hugging Face tokenizer loaded without its extra")
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("default", RuntimeWarning)
         for _ in range(2):
             _require(litellm.token_counter(model="llama-3", text="hello world") > 0, "token counting fallback failed")
-    _require(len(caught) == 1 and "litellm[tokenizers]" in str(caught[0].message), "fallback must warn once")
+    _require(len(caught) == 1 and f"{get_distribution_name()}[tokenizers]" in str(caught[0].message), "fallback must warn once")
     return "missing Python tokenizer explains installation and automatic counting falls back"
 
 

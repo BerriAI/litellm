@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from litellm._version import get_distribution_name
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, Final
@@ -26,7 +27,7 @@ def test_s3_upload_reports_only_missing_aws_extra(missing: str, fail_optional_im
         destination._upload(content=b"payload", object_key="file.bin")
 
     if missing == "boto3":
-        assert "litellm[aws]" in str(error.value)
+        assert f"{get_distribution_name()}[aws]" in str(error.value)
         assert error.value.__cause__ is failure
     else:
         assert error.value is failure

@@ -1,6 +1,7 @@
 import json
 from typing import Any, Final
 
+from litellm._version import get_distribution_name
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 
@@ -109,7 +110,7 @@ def validate_schema(schema: dict, response: str):
     except ModuleNotFoundError as error:
         if error.name != "jsonschema":
             raise
-        raise ImportError('Install response validation with pip install "litellm[validation]"') from error
+        raise ImportError(f'Install response validation with pip install "{get_distribution_name()}[validation]"') from error
 
     from litellm import JSONSchemaValidationError
 

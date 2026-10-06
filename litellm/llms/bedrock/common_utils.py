@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm._version import get_distribution_name
+
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
     from botocore.model import ServiceModel, Shape
@@ -1825,7 +1827,7 @@ def create_event_stream_parser() -> EventStreamJSONParser:
     except ModuleNotFoundError as error:
         if error.name not in ("botocore", "botocore.parsers"):
             raise
-        raise ImportError('Install Bedrock event-stream support with pip install "litellm[aws]"') from error
+        raise ImportError(f'Install Bedrock event-stream support with pip install "{get_distribution_name()}[aws]"') from error
     return EventStreamJSONParser()
 
 
