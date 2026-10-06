@@ -2081,7 +2081,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     @staticmethod
     def _sanitize_invoke_checks_response_for_logging(
         response: BedrockGuardrailChecksResponse,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Strip PII location offsets from a checks response before it is logged."""
         sanitized: Final[dict[str, Any]] = copy.deepcopy(dict(response))
         sensitive: Final = (sanitized.get("results") or {}).get("sensitiveInformation") or {}
