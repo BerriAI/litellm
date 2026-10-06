@@ -86,6 +86,7 @@ impl Actors {
             let row = &rows[index];
             if let Some(parent) = graph.parent(index)
                 && rows[parent].name == "claude_code.tool.execution"
+                && rows[parent].session_id == row.session_id
             {
                 boundaries.entry(parent).or_default().insert(owner);
             }
@@ -104,9 +105,9 @@ impl Actors {
         let candidates: Vec<_> = (0..rows.len())
             .map(|index| unique(boundaries.get(&index)).or_else(|| direct[index].clone()))
             .collect();
-        let inherited =
-            graph.nearest_ancestors(&candidates.iter().map(Option::is_some).collect::<Vec<_>>());
-        let inherited_child = graph.nearest_ancestors(
+        let inherited = graph
+            .nearest_session_ancestors(&candidates.iter().map(Option::is_some).collect::<Vec<_>>());
+        let inherited_child = graph.nearest_session_ancestors(
             &candidates
                 .iter()
                 .enumerate()
