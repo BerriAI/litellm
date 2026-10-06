@@ -2,6 +2,7 @@ import base64
 import io
 import math
 import struct
+import sys
 import wave
 from pathlib import Path
 from typing import Final
@@ -9,6 +10,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
+import soundfile
 from pydantic import ValidationError
 
 import litellm
@@ -509,8 +511,8 @@ def test_transform_text_to_speech_response_leaves_unknown_bytes_unlabeled():
     assert result.response.content == raw_pcm
 
 
-@pytest.mark.parametrize("encoding", ["LINEAR16", "PCM", "MP3", "OGG_OPUS", "ALAW", "MULAW"])
-def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str):
+@pytest.mark.parametrize("encoding", ["LINEAR16", "PCM", "MP3", "OGG_OPUS", "ALAW", "MULAW", "FLAC"])
+def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str, monkeypatch: pytest.MonkeyPatch) -> None:
     model: Final = "gemini-3.1-flash-tts-preview"
     input_text: Final = "Hello from Gemini text to speech"
     pcm_audio: Final = b"\x00\x00" * 24000
@@ -520,6 +522,8 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str):
         wav_file.setsampwidth(2)
         wav_file.setframerate(24000)
         wav_file.writeframes(pcm_audio)
+    flac_buffer: Final = io.BytesIO()
+    soundfile.write(flac_buffer, (0.0,) * 24000, 48000, format="FLAC", subtype="PCM_16")
     g711_audio: Final = (
         struct.pack(
             "<4sI4s4sIHHIIHH4sI",
@@ -547,6 +551,7 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str):
         "OGG_OPUS": (fixture_dir / "gemini_tts_speech.ogg").read_bytes(),
         "ALAW": g711_audio,
         "MULAW": g711_audio,
+        "FLAC": flac_buffer.getvalue(),
     }
     audio_bytes: Final = audio_by_encoding[encoding]
     logger: Final = MagicMock()
@@ -571,6 +576,7 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str):
         "Google Cloud AudioEncoding and RFC 7845, checked 2026-09-23: "
         "https://cloud.google.com/text-to-speech/docs/reference/rest/v1/AudioEncoding "
         "https://www.rfc-editor.org/rfc/rfc7845.html"
+        " https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2, checked 2026-10-06"
     )
     assert usage.completion_tokens == math.ceil(duration * 25), (
         "Google Cloud TTS pricing, 2026-09-23: https://cloud.google.com/text-to-speech/pricing"
@@ -579,7 +585,8 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str):
     assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.audio_tokens == usage.completion_tokens
-    with patch("litellm.llms.vertex_ai.text_to_speech.transformation.calculate_request_duration", return_value=None):
+    with monkeypatch.context() as dependencies:
+        dependencies.setitem(sys.modules, "soundfile", None)
         sdk_result: Final = VertexAITextToSpeechConfig().transform_text_to_speech_response(model, raw_response, logger)
     assert sdk_result.usage == usage
 

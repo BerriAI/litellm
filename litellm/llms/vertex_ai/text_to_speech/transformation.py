@@ -68,6 +68,14 @@ def _fallback_gemini_tts_audio_duration(audio: bytes, encoding: str, sample_rate
             if byte_rate > 0 and data_size <= len(audio) - data_offset - 8:
                 return data_size / byte_rate
 
+    if encoding == "FLAC" and audio[:4] == b"fLaC" and len(audio) >= 42:
+        if audio[4] & 0x7F != 0 or int.from_bytes(audio[5:8], "big") != 34:
+            return None
+        stream_info: Final = int.from_bytes(audio[18:26], "big")
+        flac_sample_rate: Final = stream_info >> 44
+        total_samples: Final = stream_info & ((1 << 36) - 1)
+        return total_samples / flac_sample_rate if flac_sample_rate > 0 and total_samples > 0 else None
+
     if encoding == "MP3" and speech_media_type_from_audio_bytes(audio) == "audio/mpeg":
         return len(audio) / 4000
 
