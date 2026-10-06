@@ -4,6 +4,8 @@ import types
 
 from litellm.integrations.helicone import HeliconeLogger
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Final
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -157,35 +159,46 @@ def setup_and_teardown():
     yield
 
 @pytest.fixture
-def helicone_global_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    root_logger = logging.getLogger()
-    monkeypatch.setattr(root_logger, "handlers", list(root_logger.handlers))
-    monkeypatch.setattr(root_logger, "level", root_logger.level)
-    logging.basicConfig(level=logging.DEBUG)
-    monkeypatch.setattr(litellm, "num_retries", 3)
-    monkeypatch.setattr(litellm, "success_callback", ["helicone"])
-    monkeypatch.setenv("HELICONE_DEBUG", "True")
-    monkeypatch.setenv("LITELLM_LOG", "DEBUG")
-    yield
+def helicone_global_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Iterator[Path]:
+    root_logger: Final = logging.getLogger()
+    original_handlers: Final = tuple(root_logger.handlers)
+    original_level: Final = root_logger.level
+    try:
+        root_logger.setLevel(logging.DEBUG)
+        logging.basicConfig(level=logging.DEBUG)
+        monkeypatch.setattr(litellm, "num_retries", 3)
+        monkeypatch.setattr(litellm, "success_callback", ["helicone"])
+        monkeypatch.setenv("HELICONE_DEBUG", "True")
+        monkeypatch.setenv("LITELLM_LOG", "DEBUG")
+        yield tmp_path
+    finally:
+        added_handlers: Final = tuple(
+            handler for handler in root_logger.handlers if handler not in original_handlers
+        )
+        root_logger.handlers = list(original_handlers)
+        root_logger.setLevel(original_level)
+        for handler in added_handlers:
+            handler.close()
 
-def pre_helicone_setup():
+def pre_helicone_setup(log_path: Path) -> None:
     """
     Set up the logging for the 'pre_helicone_setup' function.
     """
     import logging
 
-    logging.basicConfig(filename="helicone.log", level=logging.DEBUG)
+    logging.basicConfig(filename=log_path, level=logging.DEBUG)
     logger = logging.getLogger()
 
-    file_handler = logging.FileHandler("helicone.log", mode="w")
+    file_handler = logging.FileHandler(log_path, mode="w")
     file_handler.setLevel(logging.DEBUG)
     logger.addHandler(file_handler)
-    return
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown", "helicone_global_state")
-def test_helicone_logging_async():
+def test_helicone_logging_async(helicone_global_state: Path):
     try:
-        pre_helicone_setup()
+        pre_helicone_setup(helicone_global_state / "helicone.log")
         litellm.success_callback = []
         start_time_empty_callback = asyncio.run(make_async_calls())
         print("done with no callback test")
