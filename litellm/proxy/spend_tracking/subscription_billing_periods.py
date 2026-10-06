@@ -10,11 +10,24 @@ class BillingPeriodRange:
     end: date
 
 
+def _month_index(anchor: date, months_after_anchor: int) -> int:
+    return anchor.year * 12 + (anchor.month - 1) + months_after_anchor
+
+
+_LAST_MONTH_INDEX: Final = _month_index(date.max, 0)
+
+
 def _month_start(anchor: date, months_after_anchor: int) -> date:
-    month_index: Final = anchor.year * 12 + (anchor.month - 1) + months_after_anchor
+    month_index: Final = _month_index(anchor, months_after_anchor)
     year: Final = month_index // 12
     month: Final = month_index % 12 + 1
     return date(year, month, min(anchor.day, monthrange(year, month)[1]))
+
+
+def _period_end(anchor: date, months_after_anchor: int) -> date:
+    if _month_index(anchor, months_after_anchor + 1) > _LAST_MONTH_INDEX:
+        return date.max
+    return _month_start(anchor, months_after_anchor + 1) - timedelta(days=1)
 
 
 def _first_candidate_index(anchor: date, start_date: date) -> int:
@@ -27,9 +40,12 @@ def billing_periods_starting_within(anchor: date, start_date: date, end_date: da
     if end_date < start_date or end_date < anchor:
         return ()
     first_index: Final = _first_candidate_index(anchor, start_date)
+    last_index: Final = min(
+        first_index + _month_span(start_date, end_date) + 1, _LAST_MONTH_INDEX - _month_index(anchor, 0)
+    )
     candidates: Final = (
-        BillingPeriodRange(start=_month_start(anchor, index), end=_month_start(anchor, index + 1) - timedelta(days=1))
-        for index in range(first_index, first_index + _month_span(start_date, end_date) + 2)
+        BillingPeriodRange(start=_month_start(anchor, index), end=_period_end(anchor, index))
+        for index in range(first_index, last_index + 1)
     )
     return tuple(period for period in candidates if start_date <= period.start <= end_date)
 

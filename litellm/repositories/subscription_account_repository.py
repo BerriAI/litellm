@@ -2,8 +2,10 @@
 Subscription account repository for database operations on LiteLLM_SubscriptionAccountTable.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Protocol
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from litellm.models.subscription_account import LiteLLM_SubscriptionAccountTable
 from litellm.repositories.base_repository import BaseRepository, is_unique_violation
@@ -28,6 +30,40 @@ class SubscriptionAccountFeeFields:
     label: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class KeepLabel:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class SetLabel:
+    value: str | None
+
+
+LabelChange: TypeAlias = KeepLabel | SetLabel
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriptionAccountFeeChanges:
+    monthly_fee: float | None = None
+    currency: str | None = None
+    billing_period_start: str | None = None
+    label: LabelChange = KeepLabel()
+
+    def columns(self) -> Mapping[str, float | str | None]:
+        named: Final = {
+            "monthly_fee": self.monthly_fee,
+            "currency": self.currency,
+            "billing_period_start": self.billing_period_start,
+        }
+        present: Final = {column: value for column, value in named.items() if value is not None}
+        match self.label:
+            case SetLabel(value):
+                return MappingProxyType({**present, "label": value})
+            case KeepLabel():
+                return MappingProxyType(present)
+
+
 class SubscriptionAccountStore(Protocol):
     async def list_all(self) -> list[LiteLLM_SubscriptionAccountTable]: ...
 
@@ -38,7 +74,7 @@ class SubscriptionAccountStore(Protocol):
     ) -> LiteLLM_SubscriptionAccountTable | DuplicateSubscriptionAccount: ...
 
     async def update_fee(
-        self, subscription_account_id: str, fee: SubscriptionAccountFeeFields, updated_by: str
+        self, subscription_account_id: str, changes: SubscriptionAccountFeeChanges, updated_by: str
     ) -> LiteLLM_SubscriptionAccountTable | None: ...
 
     async def delete_account(self, subscription_account_id: str) -> LiteLLM_SubscriptionAccountTable | None: ...
@@ -91,18 +127,10 @@ class SubscriptionAccountRepository(BaseRepository[LiteLLM_SubscriptionAccountTa
             raise
 
     async def update_fee(
-        self, subscription_account_id: str, fee: SubscriptionAccountFeeFields, updated_by: str
+        self, subscription_account_id: str, changes: SubscriptionAccountFeeChanges, updated_by: str
     ) -> LiteLLM_SubscriptionAccountTable | None:
         return await self.update(
-            subscription_account_id,
-            {
-                "monthly_fee": fee.monthly_fee,
-                "currency": fee.currency,
-                "billing_period_start": fee.billing_period_start,
-                "label": fee.label,
-                "updated_by": updated_by,
-            },
-            id_field="subscription_account_id",
+            subscription_account_id, {**changes.columns(), "updated_by": updated_by}, id_field="subscription_account_id"
         )
 
     async def delete_account(self, subscription_account_id: str) -> LiteLLM_SubscriptionAccountTable | None:

@@ -21,6 +21,9 @@ from litellm.proxy.spend_tracking.subscription_billing_periods import billing_pe
 from litellm.proxy.utils import get_prisma_client_or_throw
 from litellm.repositories.subscription_account_repository import (
     DuplicateSubscriptionAccount,
+    KeepLabel,
+    SetLabel,
+    SubscriptionAccountFeeChanges,
     SubscriptionAccountFeeFields,
     SubscriptionAccountRepository,
     SubscriptionAccountStore,
@@ -50,11 +53,7 @@ AccountIdResolver = Callable[[str], str | None]
 
 
 def resolve_subscription_account_id(custom_llm_provider: str) -> str | None:
-    match custom_llm_provider:
-        case "chatgpt":
-            return Authenticator().get_account_id()
-        case _:
-            return None
+    return Authenticator().get_account_id() if custom_llm_provider == "chatgpt" else None
 
 
 def _declared_provider(litellm_params: Mapping[str, object]) -> str | None:
@@ -260,30 +259,31 @@ async def new_subscription_account(
     return created
 
 
+def _fee_changes(request: UpdateSubscriptionAccountFeeRequest) -> SubscriptionAccountFeeChanges:
+    return SubscriptionAccountFeeChanges(
+        monthly_fee=request.monthly_fee,
+        currency=request.currency,
+        billing_period_start=(
+            request.billing_period_start.isoformat() if request.billing_period_start is not None else None
+        ),
+        label=SetLabel(request.label) if "label" in request.model_fields_set else KeepLabel(),
+    )
+
+
 @router.post("/update", response_model=LiteLLM_SubscriptionAccountTable, dependencies=[Depends(user_api_key_auth)])
 async def update_subscription_account(
     request: UpdateSubscriptionAccountFeeRequest,
     user_api_key_dict: Auth,
     repository: Store,
 ) -> LiteLLM_SubscriptionAccountTable:
-    """Change the fee, currency, billing period start, or label of a subscription account."""
+    """
+    Change the fee, currency, billing period start, or label of a subscription account.
+    Only the fields named in the request are written, so two admins changing different
+    fields at the same time both land.
+    """
     _require_proxy_admin(user_api_key_dict)
-    existing: Final = await repository.find_by_id(request.subscription_account_id)
-    if existing is None:
-        raise _not_found(request.subscription_account_id)
     updated: Final = await repository.update_fee(
-        request.subscription_account_id,
-        SubscriptionAccountFeeFields(
-            monthly_fee=request.monthly_fee if request.monthly_fee is not None else existing.monthly_fee,
-            currency=request.currency if request.currency is not None else existing.currency,
-            billing_period_start=(
-                request.billing_period_start.isoformat()
-                if request.billing_period_start is not None
-                else existing.billing_period_start
-            ),
-            label=request.label if "label" in request.model_fields_set else existing.label,
-        ),
-        _actor(user_api_key_dict),
+        request.subscription_account_id, _fee_changes(request), _actor(user_api_key_dict)
     )
     if updated is None:
         raise _not_found(request.subscription_account_id)

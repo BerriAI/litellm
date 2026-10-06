@@ -19,6 +19,7 @@ from litellm.proxy.management_endpoints.subscription_accounts import (
 )
 from litellm.repositories.subscription_account_repository import (
     DuplicateSubscriptionAccount,
+    SubscriptionAccountFeeChanges,
     SubscriptionAccountFeeFields,
 )
 
@@ -40,6 +41,7 @@ _TWO_DEPLOYMENTS_ONE_ACCOUNT: Final = (
 class _FakeStore:
     def __init__(self) -> None:
         self.rows: dict[str, LiteLLM_SubscriptionAccountTable] = {}
+        self.written_columns: list[dict[str, float | str | None]] = []
 
     async def list_all(self) -> list[LiteLLM_SubscriptionAccountTable]:
         return sorted(self.rows.values(), key=lambda row: row.created_at)
@@ -71,20 +73,15 @@ class _FakeStore:
         return row
 
     async def update_fee(
-        self, subscription_account_id: str, fee: SubscriptionAccountFeeFields, updated_by: str
+        self, subscription_account_id: str, changes: SubscriptionAccountFeeChanges, updated_by: str
     ) -> LiteLLM_SubscriptionAccountTable | None:
+        columns = dict(changes.columns())
+        self.written_columns.append(columns)
         existing = self.rows.get(subscription_account_id)
         if existing is None:
             return None
         updated = existing.model_copy(
-            update={
-                "monthly_fee": fee.monthly_fee,
-                "currency": fee.currency,
-                "billing_period_start": fee.billing_period_start,
-                "label": fee.label,
-                "updated_by": updated_by,
-                "updated_at": datetime.now(timezone.utc),
-            }
+            update={**columns, "updated_by": updated_by, "updated_at": datetime.now(timezone.utc)}
         )
         self.rows[subscription_account_id] = updated
         return updated
@@ -218,6 +215,12 @@ def test_update_changes_the_fee_and_delete_returns_the_account_to_untracked(clie
     assert cleared.status_code == 200, cleared.text
     assert cleared.json()["label"] is None
     assert cleared.json()["monthly_fee"] == 30.0
+    assert store.written_columns == [{"monthly_fee": 30.0, "billing_period_start": "2026-10-05"}, {"label": None}]
+
+    unknown = test_client.post(
+        "/subscription_accounts/update", json={"subscription_account_id": "no-such-account", "monthly_fee": 1.0}
+    )
+    assert unknown.status_code == 404
 
     deleted = test_client.post("/subscription_accounts/delete", json={"subscription_account_id": account_id})
     assert deleted.status_code == 200, deleted.text

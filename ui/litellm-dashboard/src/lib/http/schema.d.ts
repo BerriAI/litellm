@@ -16077,6 +16077,8 @@ export interface paths {
         /**
          * Update Subscription Account
          * @description Change the fee, currency, billing period start, or label of a subscription account.
+         *     Only the fields named in the request are written, so two admins changing different
+         *     fields at the same time both land.
          */
         post: operations["update_subscription_account_subscription_accounts_update_post"];
         delete?: never;

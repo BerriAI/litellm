@@ -61,3 +61,13 @@ def test_period_ends_the_day_before_the_next_start_across_a_year_boundary():
 
 def test_inverted_filter_is_empty():
     assert billing_periods_starting_within(date(2026, 1, 1), date(2026, 3, 1), date(2026, 2, 1)) == ()
+
+
+def test_the_calendar_s_last_month_ends_on_its_last_day_instead_of_failing():
+    assert billing_periods_starting_within(date(9999, 11, 15), date(9999, 11, 1), date(9999, 12, 31)) == (
+        BillingPeriodRange(start=date(9999, 11, 15), end=date(9999, 12, 14)),
+        BillingPeriodRange(start=date(9999, 12, 15), end=date(9999, 12, 31)),
+    )
+    assert billing_periods_starting_within(date(9999, 12, 1), date(9999, 12, 1), date(9999, 12, 31)) == (
+        BillingPeriodRange(start=date(9999, 12, 1), end=date(9999, 12, 31)),
+    )

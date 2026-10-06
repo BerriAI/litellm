@@ -5,7 +5,12 @@ import {
   subscriptionAccountUpdateCall,
 } from "@/components/networking";
 import { toast } from "@/lib/toast";
-import type { SubscriptionAccountUsage, SubscriptionFeeFormValues } from "./types";
+import type {
+  SubscriptionAccountUpdateRequest,
+  SubscriptionAccountUsage,
+  SubscriptionFee,
+  SubscriptionFeeFormValues,
+} from "./types";
 
 interface Options {
   accessToken: string | null;
@@ -20,16 +25,23 @@ interface Result {
   removeFee: (account: SubscriptionAccountUsage) => Promise<void>;
 }
 
+const changedFields = (fee: SubscriptionFee, values: SubscriptionFeeFormValues): SubscriptionAccountUpdateRequest => ({
+  subscription_account_id: fee.subscription_account_id,
+  ...(values.monthly_fee !== fee.monthly_fee && { monthly_fee: values.monthly_fee }),
+  ...(values.currency !== fee.currency && { currency: values.currency }),
+  ...(values.billing_period_start !== fee.billing_period_start && {
+    billing_period_start: values.billing_period_start,
+  }),
+  ...(values.label !== fee.label && { label: values.label }),
+});
+
 const saveFee = (
   accessToken: string,
   account: SubscriptionAccountUsage,
   values: SubscriptionFeeFormValues,
 ): Promise<unknown> | null => {
   if (account.fee) {
-    return subscriptionAccountUpdateCall(accessToken, {
-      subscription_account_id: account.fee.subscription_account_id,
-      ...values,
-    });
+    return subscriptionAccountUpdateCall(accessToken, changedFields(account.fee, values));
   }
   if (account.account_id === null) return null;
   return subscriptionAccountCreateCall(accessToken, {
