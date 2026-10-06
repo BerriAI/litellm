@@ -69,6 +69,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.llms.vertex_ai import GcsBucketResponse, GeminiEmbeddingInput
 from litellm.types.utils import (
+    CallTypes,
     Embedding,
     EmbeddingResponse,
     LlmProviders,
@@ -553,6 +554,10 @@ def _is_embeddings_batch_entry(openai_entry: Mapping[str, object]) -> bool:
 def _is_responses_batch_entry(openai_entry: Mapping[str, object]) -> bool:
     path: Final = _batch_entry_route_path(openai_entry)
     return path == "responses" or path.endswith("/responses")
+
+
+def batch_record_call_type(openai_entry: Mapping[str, object]) -> CallTypes:
+    return CallTypes.aembedding if _is_embeddings_batch_entry(openai_entry) else CallTypes.acompletion
 
 
 def _openai_embedding_input_elements(

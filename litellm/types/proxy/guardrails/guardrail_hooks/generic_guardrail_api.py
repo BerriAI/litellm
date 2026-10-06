@@ -104,6 +104,41 @@ class GenericGuardrailAPIOptionalParams(LiteLLMBaseModel):
         ),
     )
 
+    run_only_on_call_types: tuple[str, ...] | None = Field(
+        default=None,
+        json_schema_extra={"ui_hidden": True},
+        description=(
+            "Config only, not shown in the Admin UI form. If set, the guardrail runs only for these call "
+            "types and every other call type is passed through without calling the guardrail endpoint, so "
+            "a caller can reach the same model unscanned through any endpoint left off the list (e.g. "
+            "/v1/completions when only acompletion is listed). Prefer skip_call_types to exempt known "
+            "call types. Takes precedence over skip_call_types, even when invalid. Values are CallTypes "
+            "values, the strings logged as call_type (e.g. ['acompletion', 'anthropic_messages', "
+            "'aresponses']). An invalid "
+            "value or an unknown call type is ignored with a warning and every call type is scanned. A "
+            "sync name such as completion counts as unknown, since the proxy logs acompletion, and so does "
+            "avideo_generation, since /v1/videos resolves to acreate_video. The call "
+            "type comes from the authenticated request route: /anthropic/v1/messages "
+            "pass-through calls are anthropic_messages, other pass-through calls are "
+            "pass_through_endpoint, and a batch-file record is classified by its own endpoint when Bedrock "
+            "and Vertex, which run record urls themselves, run it as that call type and its body agrees. "
+            "A call whose type cannot be resolved, including any other batch-file record, still runs "
+            "the guardrail."
+        ),
+    )
+
+    skip_call_types: tuple[str, ...] | None = Field(
+        default=None,
+        json_schema_extra={"ui_hidden": True},
+        description=(
+            "Config only, not shown in the Admin UI form. Call types that are passed through without "
+            "calling the guardrail endpoint, e.g. ['aembedding', 'aimage_generation']. Same values and "
+            "resolution as run_only_on_call_types. An invalid value is ignored with a warning, and an "
+            "unknown call type is dropped with a warning and stays scanned. Ignored when "
+            "run_only_on_call_types is set."
+        ),
+    )
+
 
 class GenericGuardrailAPIConfigModel(
     GuardrailConfigModel[GenericGuardrailAPIOptionalParams],

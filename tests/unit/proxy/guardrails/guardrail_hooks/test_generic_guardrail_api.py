@@ -416,6 +416,22 @@ class TestMetadataExtraction:
             assert request_metadata["user_api_key_hash"] == "hashed-token-value"
             assert request_metadata["user_api_key_user_id"] == "test-user"
 
+    @pytest.mark.parametrize(
+        "request_data, expected_hash",
+        [
+            pytest.param({"metadata": {"user_api_key_token": "caller-token"}}, None, id="caller-bucket-token-ignored"),
+            pytest.param(
+                {"litellm_metadata": {"user_api_key_token": "proxy-token", "user_api_key_hash": "logged-key"}},
+                "logged-key",
+                id="hash-wins-over-token",
+            ),
+        ],
+    )
+    def test_token_fallback_only_from_litellm_metadata_and_only_without_hash(
+        self, generic_guardrail, request_data, expected_hash
+    ):
+        assert generic_guardrail._extract_user_api_key_metadata(request_data).get("user_api_key_hash") == expected_hash
+
     @pytest.mark.asyncio
     async def test_metadata_extraction_empty_when_no_metadata(self, generic_guardrail):
         """Test metadata extraction returns empty dict when no metadata available"""

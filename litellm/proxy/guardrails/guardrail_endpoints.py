@@ -41,6 +41,7 @@ from litellm.proxy.guardrails.guardrail_registry import (
     encrypt_guardrail_litellm_params,
 )
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
+from litellm.proxy.litellm_pre_call_utils import caller_metadata_with_authenticated_identity
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import GuardrailsRepository
@@ -1791,6 +1792,11 @@ def _should_skip_optional_params(field_name: str, field_annotation: object) -> b
     return False
 
 
+def _is_ui_hidden(field: "FieldInfo") -> bool:
+    extra: Final = field.json_schema_extra
+    return isinstance(extra, dict) and extra.get("ui_hidden") is True
+
+
 def _unwrap_optional_type(field_annotation: object) -> object:
     """Unwrap Optional types to get the actual type."""
     if get_origin(field_annotation) is Union or get_origin(field_annotation) is UnionType:
@@ -1886,6 +1892,9 @@ def _extract_fields_recursive(
 
         # Skip optional_params if it's not meaningfully overridden
         if _should_skip_optional_params(field_name=field_name, field_annotation=field_annotation):
+            continue
+
+        if _is_ui_hidden(field):
             continue
 
         # Handle Optional types and get the actual type
@@ -2426,9 +2435,14 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
+        processed_metadata: Final = data.get("metadata")
+        inbound_headers: Final = processed_metadata.get("headers") if isinstance(processed_metadata, dict) else None
         request_data: Final[dict] = {
             **({"messages": request.messages} if request.messages is not None else {}),
-            **({"metadata": request.metadata} if request.metadata is not None else {}),
+            "metadata": {
+                **caller_metadata_with_authenticated_identity(request.metadata, user_api_key_dict),
+                **({"headers": inbound_headers} if inbound_headers is not None else {}),
+            },
         }
         _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(

@@ -81,43 +81,18 @@ class BaseTranslation(ABC):
 
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
-        user_api_key_dict: Any | None,
+        user_api_key_dict: "UserAPIKeyAuth | None",
     ) -> dict[str, object]:
-        """
-        Transform user_api_key_dict to a metadata dict with prefixed keys.
-
-        Converts keys like 'user_id' to 'user_api_key_user_id' to clearly indicate
-        the source of the metadata.
-
-        Args:
-            user_api_key_dict: UserAPIKeyAuth object or dict with user information
-
-        Returns:
-            Dict with keys prefixed with 'user_api_key_'
-        """
+        """The authenticated key's identity as prefixed metadata, an allowlist safe to hand to guardrail vendors."""
         if user_api_key_dict is None:
             return {}
+        # Lazy: `import litellm` loads this module before litellm.Router exists, and litellm_pre_call_utils imports it
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-        # Convert to dict if it's a Pydantic object
-        user_dict = user_api_key_dict.model_dump() if hasattr(user_api_key_dict, "model_dump") else user_api_key_dict
-
-        if not isinstance(user_dict, dict):
-            return {}
-
-        # Transform keys to be prefixed with 'user_api_key_'
-        transformed: Final[dict[str, object]] = {}
-        for key, value in user_dict.items():
-            # Skip None values and internal fields
-            if value is None or key.startswith("_"):
-                continue
-
-            # If key already has the prefix, use as-is, otherwise add prefix
-            if key.startswith("user_api_key_"):
-                transformed[key] = value
-            else:
-                transformed[f"user_api_key_{key}"] = value
-
-        return transformed
+        return {
+            **LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(user_api_key_dict),
+            "user_api_key_key_alias": user_api_key_dict.key_alias,
+        }
 
     @staticmethod
     def merge_user_api_key_metadata_into_request(

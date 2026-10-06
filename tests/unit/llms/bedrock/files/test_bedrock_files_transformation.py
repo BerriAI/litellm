@@ -17,7 +17,8 @@ from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
 from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
-from litellm.llms.bedrock.files.transformation import BedrockJsonlFilesTransformation
+from litellm.llms.bedrock.files.transformation import BedrockFilesConfig, BedrockJsonlFilesTransformation
+from litellm.types.utils import CallTypes
 
 
 class TestBedrockFilesTransformation:
@@ -4107,3 +4108,19 @@ def test_transform_file_content_request_signs_with_the_s3_pair_from_litellm_para
     assert _authorization(litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]).startswith(
         "AWS4-HMAC-SHA256 Credential=AKIAS3ONLY/"
     )
+
+
+@pytest.mark.parametrize(
+    ("record", "call_type"),
+    [
+        ({"url": "/v1/chat/completions", "body": {"messages": []}}, CallTypes.acompletion),
+        ({"url": "/v1/completions", "body": {"prompt": "x"}}, CallTypes.atext_completion),
+        ({"url": "/v1/responses", "body": {"input": "x"}}, CallTypes.aresponses),
+        ({"url": "/v1/embeddings", "body": {"input": "x"}}, CallTypes.aembedding),
+        ({"url": "/v1/messages", "body": {"input": "x"}}, CallTypes.acompletion),
+        ({"body": {"input": "x"}}, CallTypes.aembedding),
+    ],
+    ids=["chat", "text_completion", "responses", "embeddings", "unrecognized_url_runs_as_chat", "url_less_input"],
+)
+def test_a_batch_record_reports_the_call_type_bedrock_runs_it_as(record: Mapping[str, object], call_type: CallTypes):
+    assert BedrockFilesConfig.batch_record_call_type(record) is call_type
