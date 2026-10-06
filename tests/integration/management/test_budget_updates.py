@@ -74,6 +74,16 @@ def test_partial_update_keeps_sibling_budget_fields(gateway: Gateway) -> None:
         assert object_value(info["model_max_budget"]) == model_budget, info
         assert float(str(info["soft_budget"])) == 5.0, info
 
+        updated_model_budget: Final = {"openai/gpt-4o-mini": {"max_budget": 2, "budget_duration": "1d"}}
+        model_budget_response: Final = gateway.request(
+            "POST", "/budget/update", {"budget_id": budget_id, "model_max_budget": updated_model_budget}
+        )
+        assert model_budget_response.status_code == 200, model_budget_response.text
+        row = _budget_row(budget_id)
+        assert object_value(row["model_max_budget"]) == updated_model_budget, row
+        info = _budget_info(gateway, budget_id)
+        assert object_value(info["model_max_budget"]) == updated_model_budget, info
+
         cleared: Final = gateway.request("POST", "/budget/update", {"budget_id": budget_id, "soft_budget": None})
         assert cleared.status_code == 200, cleared.text
         row = _budget_row(budget_id)
@@ -81,14 +91,12 @@ def test_partial_update_keeps_sibling_budget_fields(gateway: Gateway) -> None:
         assert float(str(row["max_budget"])) == 20.0, row
         assert int(str(row["tpm_limit"])) == 1000, row
 
-        # clearing the duration drops the recomputed reset time
         response = gateway.request("POST", "/budget/update", {"budget_id": budget_id, "budget_duration": None})
         assert response.status_code == 200, response.text
         row = _budget_row(budget_id)
         assert row["budget_duration"] is None, row
         assert row["reset_at"] is None, row
 
-        # a caller-pinned reset time is kept as sent
         pinned: Final = "2030-01-01T00:00:00+00:00"
         response = gateway.request(
             "POST",
@@ -100,11 +108,20 @@ def test_partial_update_keeps_sibling_budget_fields(gateway: Gateway) -> None:
         assert row["budget_duration"] is None, row
         assert row["reset_at"] is not None and str(row["reset_at"]).startswith("2030-01-01"), row
 
-        # invalid model_max_budget is rejected and leaves the row untouched
+        unchanged_model_budget: Final = object_value(_budget_row(budget_id)["model_max_budget"])
         rejected: Final = gateway.request(
             "POST",
             "/budget/update",
             {"budget_id": budget_id, "model_max_budget": {"openai/gpt-4o-mini": {"max_budget": "lots"}}},
         )
         assert rejected.status_code == 422, rejected.text
-        assert object_value(_budget_row(budget_id)["model_max_budget"]) == model_budget
+        assert rejected.json() == {
+            "detail": [
+                {
+                    "type": "float_parsing",
+                    "loc": ["body", "model_max_budget", "openai/gpt-4o-mini", "max_budget"],
+                    "msg": "Input should be a valid number, unable to parse string as a number",
+                }
+            ]
+        }, rejected.text
+        assert object_value(_budget_row(budget_id)["model_max_budget"]) == unchanged_model_budget

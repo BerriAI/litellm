@@ -417,6 +417,12 @@ def test_block_requests_for_models_without_pricing_refuses_unpriced_deployments(
         disabled: Final = _block_unpriced(gateway, False)
         assert disabled.status_code == 200, disabled.text
         assert disabled.json() == {"enabled": False}, disabled.text
+        assert gateway.get("/config/block_requests_for_models_without_pricing") == {"enabled": False}
+        settings_rows: Final = read_rows(
+            'SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s', ("litellm_settings",)
+        )
+        disabled_settings: Final = object_value(settings_rows[0]["param_value"])
+        assert disabled_settings["block_requests_for_models_without_pricing"] is False, disabled_settings
         upstream.get("/__observations").raise_for_status()
         now_served: Final = _bounded_chat(gateway, unpriced, key)
         assert now_served.status_code == 200, now_served.text

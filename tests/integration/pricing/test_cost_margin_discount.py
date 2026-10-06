@@ -32,7 +32,7 @@ def _patch(gateway: Gateway, path: str, body: Mapping[str, JsonValue], message: 
     return parsed
 
 
-def _chat_cost(gateway: Gateway, model: str, key: str) -> tuple[str, float]:
+def _chat_cost(gateway: Gateway, model: str, key: str, expected: float) -> str:
     response: Final = gateway.request(
         "POST",
         "/v1/chat/completions",
@@ -41,16 +41,22 @@ def _chat_cost(gateway: Gateway, model: str, key: str) -> tuple[str, float]:
     )
     assert response.status_code == 200, response.text
     request_id: Final = string_value(object_value(response.json())["id"])
-    return request_id, float(response.headers["x-litellm-response-cost"])
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected), response.text
+    return request_id
 
 
-def _logged_spend(request_id: str) -> float:
+def _assert_logged_spends(expectations: tuple[tuple[str, float], ...]) -> None:
+    placeholders: Final = ", ".join("%s" for _ in expectations)
+    request_ids: Final = tuple(request_id for request_id, _ in expectations)
     rows: Final = eventually(
-        lambda: read_rows('SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (request_id,)),
-        lambda values: len(values) == 1,
-        seconds=70,
+        lambda: read_rows(
+            f'SELECT request_id, spend FROM "LiteLLM_SpendLogs" WHERE request_id IN ({placeholders})', request_ids
+        ),
+        lambda values: len(values) == len(expectations),
+        seconds=40,
     )
-    return float(str(rows[0]["spend"]))
+    actual: Final = {string_value(row["request_id"]): float(str(row["spend"])) for row in rows}
+    assert actual == pytest.approx(dict(expectations)), rows
 
 
 def _estimated(gateway: Gateway, model: str) -> CostEstimate:
@@ -84,19 +90,47 @@ def test_discount_and_margin_reprice_a_request_and_survive_rejection(gateway: Ga
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
         key: Final = scenario.key(models=[model])
 
-        # Phase A: 5% openai discount, openai margin of 10% + $0.001 fixed, 5% global margin
+        _patch(gateway, "/config/cost_discount_config", {}, "Cost discount configuration updated successfully")
+        _patch(
+            gateway,
+            "/config/cost_margin_config",
+            {},
+            "Cost margin configuration updated successfully",
+        )
+        base_request_id: Final = _chat_cost(gateway, model, key, 0.06)
+
         _patch(
             gateway,
             "/config/cost_discount_config",
             {"openai": 0.05},
             "Cost discount configuration updated successfully",
         )
+        discounted_request_id: Final = _chat_cost(gateway, model, key, 0.057)
+
+        _patch(
+            gateway,
+            "/config/cost_margin_config",
+            {"openai": 0.05},
+            "Cost margin configuration updated successfully",
+        )
+        bare_margin_request_id: Final = _chat_cost(gateway, model, key, 0.06 * 0.95 * 1.05)
+
+        _patch(
+            gateway,
+            "/config/cost_margin_config",
+            {"openai": {"fixed_amount": 0.001}},
+            "Cost margin configuration updated successfully",
+        )
+        fixed_margin_request_id: Final = _chat_cost(gateway, model, key, 0.057 + 0.001)
+
         _patch(
             gateway,
             "/config/cost_margin_config",
             {"openai": {"percentage": 0.1, "fixed_amount": 0.001}, "global": 0.05},
             "Cost margin configuration updated successfully",
         )
+        provider_margin_request_id: Final = _chat_cost(gateway, model, key, 0.057 * 1.1 + 0.001)
+
         assert gateway.get("/config/cost_discount_config")["values"] == {"openai": 0.05}
         assert gateway.get("/config/cost_margin_config")["values"] == {
             "openai": {"percentage": 0.1, "fixed_amount": 0.001},
@@ -109,15 +143,10 @@ def test_discount_and_margin_reprice_a_request_and_survive_rejection(gateway: Ga
             "global": 0.05,
         }, persisted
 
-        expected: Final = 0.06 * 0.95 * 1.1 + 0.001
-        request_id, header_cost = _chat_cost(gateway, model, key)
-        assert header_cost == pytest.approx(expected)
-        assert _logged_spend(request_id) == pytest.approx(expected)
+        expected: Final = 0.057 * 1.1 + 0.001
         estimate: Final = _estimated(gateway, model)
         assert estimate.model == model
         assert estimate.cost_per_request == pytest.approx(expected), estimate
-        # the estimate reports raw token shares; the 5% discount is the gap between them and the
-        # discounted subtotal the margin was applied to: 0.06 - 0.057 = 0.06 * 0.05
         assert estimate.input_cost_per_request == pytest.approx(0.02), estimate
         assert estimate.output_cost_per_request == pytest.approx(0.04), estimate
         discounted_subtotal: Final = estimate.cost_per_request - estimate.margin_cost_per_request
@@ -127,19 +156,29 @@ def test_discount_and_margin_reprice_a_request_and_survive_rejection(gateway: Ga
         ), estimate
         assert estimate.margin_cost_per_request == pytest.approx(0.06 * 0.95 * 0.1 + 0.001), estimate
 
-        # Phase B: no discount, 100% global margin doubles the base cost
         _patch(gateway, "/config/cost_discount_config", {}, "Cost discount configuration updated successfully")
+        no_discount_request_id: Final = _chat_cost(gateway, model, key, 0.06 * 1.1 + 0.001)
+
         _patch(
             gateway,
             "/config/cost_margin_config",
             {"global": 1},
             "Cost margin configuration updated successfully",
         )
-        request_id, header_cost = _chat_cost(gateway, model, key)
-        assert header_cost == pytest.approx(0.12)
-        assert _logged_spend(request_id) == pytest.approx(0.12)
+        global_margin_request_id: Final = _chat_cost(gateway, model, key, 0.12)
 
-        # Rejected writes leave the GET surface and the DB row untouched
+        _assert_logged_spends(
+            (
+                (base_request_id, 0.06),
+                (discounted_request_id, 0.057),
+                (bare_margin_request_id, 0.06 * 0.95 * 1.05),
+                (fixed_margin_request_id, 0.057 + 0.001),
+                (provider_margin_request_id, 0.057 * 1.1 + 0.001),
+                (no_discount_request_id, 0.06 * 1.1 + 0.001),
+                (global_margin_request_id, 0.12),
+            )
+        )
+
         margin_response: Final = gateway.request("PATCH", "/config/cost_margin_config", {"not_a_provider": 0.1})
         assert margin_response.status_code == 400, margin_response.text
         discount_response: Final = gateway.request("PATCH", "/config/cost_discount_config", {"openai": 1.5})

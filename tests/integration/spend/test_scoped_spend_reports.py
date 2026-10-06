@@ -1,6 +1,6 @@
 import uuid
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta
 from hashlib import sha256
 from typing import Final
 
@@ -37,10 +37,6 @@ def _chat(gateway: Gateway, model: str, key: str) -> None:
     assert response.status_code == 200, response.text
 
 
-def _today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
 def _report(
     gateway: Gateway, path: str, *, key: str | None = None, params: Mapping[str, str] | None = None
 ) -> httpx.Response:
@@ -55,11 +51,20 @@ def _rows(
     return [ReportRow.model_validate(row) for row in response.json()]
 
 
-def _logged(scope_column: str, scope_value: str) -> list[dict[str, object]]:
+def _logged(scope_column: str, scope_value: str, start: datetime, end: datetime) -> list[dict[str, object]]:
     return read_rows(
         f'SELECT api_key, model, spend, prompt_tokens, completion_tokens, team_id FROM "LiteLLM_SpendLogs" '
-        f"WHERE \"startTime\" >= (CURRENT_DATE AT TIME ZONE 'UTC') AND {scope_column} = %s",
-        (scope_value,),
+        f'WHERE "startTime" >= %s AND "startTime" < %s AND {scope_column} = %s',
+        (start, end, scope_value),
+    )
+
+
+def _logged_keys(keys: tuple[str, ...], start: datetime, end: datetime) -> list[dict[str, object]]:
+    placeholders: Final = ", ".join("%s" for _ in keys)
+    return read_rows(
+        'SELECT api_key, model, spend, prompt_tokens, completion_tokens, team_id FROM "LiteLLM_SpendLogs" '
+        f'WHERE "startTime" >= %s AND "startTime" < %s AND api_key IN ({placeholders})',
+        (start, end, *keys),
     )
 
 
@@ -88,7 +93,6 @@ def _assert_report_matches_db(report: list[ReportRow], logged: list[dict[str, ob
 
 
 def test_scoped_spend_reports_match_sql_and_enforce_caller_scope(gateway: Gateway) -> None:
-    window: Final = {"start_date": _today(), "end_date": _today()}
     with gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
         org1: Final = scenario.organization()
@@ -99,61 +103,111 @@ def test_scoped_spend_reports_match_sql_and_enforce_caller_scope(gateway: Gatewa
         user2: Final = scenario.member(team2, role="user")
         k1: Final = scenario.key(user_id=user1, team_id=team1, models=[model])
         k2: Final = scenario.key(user_id=user2, team_id=team2, models=[model])
+        direct_org_key: Final = scenario.key(organization_id=org2, models=[model])
         _chat(gateway, model, k1)
         _chat(gateway, model, k2)
+        _chat(gateway, model, direct_org_key)
         k1_hash: Final = sha256(k1.encode()).hexdigest()
         k2_hash: Final = sha256(k2.encode()).hexdigest()
-        for column, value in (("api_key", k1_hash), ("api_key", k2_hash)):
-            eventually(
-                lambda column=column, value=value: _logged(column, value), lambda rows: len(rows) == 1, seconds=70
-            )
+        direct_org_key_hash: Final = sha256(direct_org_key.encode()).hexdigest()
+        logged: Final = eventually(
+            lambda: read_rows(
+                "SELECT api_key, to_char(\"startTime\", 'YYYY-MM-DD') AS day "
+                'FROM "LiteLLM_SpendLogs" WHERE api_key IN (%s, %s, %s)',
+                (k1_hash, k2_hash, direct_org_key_hash),
+            ),
+            lambda rows: len(rows) == 3,
+            seconds=30,
+        )
+        dates: Final = {date.fromisoformat(str(row["day"])) for row in logged}
+        assert len(dates) == 1, logged
+        spend_date: Final[date] = next(iter(dates))
+        start: Final = datetime.combine(spend_date, time.min)
+        end: Final = start + timedelta(days=1)
+        window: Final = {"start_date": spend_date.isoformat(), "end_date": spend_date.isoformat()}
 
-        # k1's own scopes, no filter: key, user, team reports return only its rows
         _assert_report_matches_db(
-            _rows(gateway, "/key/spend/report", key=k1, params=window), _logged("api_key", k1_hash)
+            _rows(gateway, "/key/spend/report", key=k1, params=window), _logged("api_key", k1_hash, start, end)
         )
-        _assert_report_matches_db(_rows(gateway, "/user/spend/report", key=k1, params=window), _logged('"user"', user1))
         _assert_report_matches_db(
-            _rows(gateway, "/team/spend/report", key=k1, params=window), _logged("team_id", team1)
+            _rows(gateway, "/user/spend/report", key=k1, params=window), _logged('"user"', user1, start, end)
         )
-        # a key in a team under org1 has no org scope of its own: own-org reads are also refused
+        _assert_report_matches_db(
+            _rows(gateway, "/team/spend/report", key=k1, params=window), _logged("team_id", team1, start, end)
+        )
         own_org: Final = _report(gateway, "/organization/spend/report", key=k1, params=window)
         assert own_org.status_code == 403, own_org.text
         assert own_org.json() == {"detail": "You do not have access to this organization"}, own_org.text
 
-        # raw key works like its hash
         assert _rows(gateway, "/key/spend/report", key=k1, params={**window, "api_key": k1}) == _rows(
             gateway, "/key/spend/report", key=k1, params={**window, "api_key": k1_hash}
         )
 
-        # k1 cannot read k2's scopes
-        for path, param, value in (
-            ("/key/spend/report", "api_key", k2_hash),
-            ("/user/spend/report", "internal_user_id", user2),
-            ("/team/spend/report", "team_id", team2),
-            ("/organization/spend/report", "organization_id", org2),
+        for path, param, value, detail in (
+            (
+                "/key/spend/report",
+                "api_key",
+                k2_hash,
+                "Not authorized to view spend for a api_key other than your own",
+            ),
+            (
+                "/user/spend/report",
+                "internal_user_id",
+                user2,
+                "Not authorized to view spend for a internal_user_id other than your own",
+            ),
+            (
+                "/team/spend/report",
+                "team_id",
+                team2,
+                "Not authorized to view spend for a team_id other than your own",
+            ),
+            ("/organization/spend/report", "organization_id", org2, "You do not have access to this organization"),
         ):
             refused: Final = _report(gateway, path, key=k1, params={**window, param: value})
-            assert refused.status_code == 403, (path, refused.text)
+            assert refused.status_code == 403, refused.text
+            assert refused.json() == {"detail": detail}, refused.text
 
-        # master may read any scope with matching totals
         _assert_report_matches_db(
-            _rows(gateway, "/key/spend/report", params={**window, "api_key": k2_hash}), _logged("api_key", k2_hash)
+            _rows(gateway, "/key/spend/report", params={**window, "api_key": k2_hash}),
+            _logged("api_key", k2_hash, start, end),
         )
         _assert_report_matches_db(
             _rows(gateway, "/user/spend/report", params={**window, "internal_user_id": user2}),
-            _logged('"user"', user2),
+            _logged('"user"', user2, start, end),
         )
         _assert_report_matches_db(
-            _rows(gateway, "/team/spend/report", params={**window, "team_id": team2}), _logged("team_id", team2)
+            _rows(gateway, "/team/spend/report", params={**window, "team_id": team2}),
+            _logged("team_id", team2, start, end),
         )
         org_report: Final = _rows(gateway, "/organization/spend/report", params={**window, "organization_id": org2})
-        _assert_report_matches_db(org_report, _logged("team_id", team2))
-        assert {detail.team_id for entry in org_report for detail in entry.model_details} == {team2}, org_report
+        _assert_report_matches_db(org_report, _logged_keys((k2_hash, direct_org_key_hash), start, end))
+        assert {detail.team_id for entry in org_report for detail in entry.model_details} == {team2, ""}, org_report
 
 
-def test_spend_report_rejects_missing_and_malformed_dates(gateway: Gateway) -> None:
-    missing: Final = _report(gateway, "/key/spend/report")
-    assert missing.status_code == 400, missing.text
-    malformed: Final = _report(gateway, "/key/spend/report", params={"start_date": "2026-13-45", "end_date": _today()})
-    assert malformed.status_code == 400, malformed.text
+@pytest.mark.parametrize(
+    "path",
+    (
+        "/key/spend/report",
+        "/user/spend/report",
+        "/team/spend/report",
+        "/organization/spend/report",
+    ),
+)
+@pytest.mark.parametrize(
+    ("date_kind", "params", "detail"),
+    (
+        ("missing", None, "Please provide start_date and end_date"),
+        (
+            "malformed",
+            {"start_date": "2026-13-45", "end_date": "2026-01-01"},
+            "start_date and end_date must be in YYYY-MM-DD format",
+        ),
+    ),
+)
+def test_spend_report_rejects_missing_and_malformed_dates(
+    gateway: Gateway, path: str, date_kind: str, params: Mapping[str, str] | None, detail: str
+) -> None:
+    response: Final = _report(gateway, path, params=params)
+    assert response.status_code == 400, response.text
+    assert response.json() == {"detail": detail}, response.text
