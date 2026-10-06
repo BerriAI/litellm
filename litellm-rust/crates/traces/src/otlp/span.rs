@@ -20,12 +20,19 @@ pub(super) fn flatten(
     request: ExportTraceServiceRequest,
     limits: DecodeLimits,
 ) -> Result<Vec<DecodedSpan>, Error> {
+    flatten_with_budget(request, limits).map(|(spans, _)| spans)
+}
+
+pub(super) fn flatten_with_budget(
+    request: ExportTraceServiceRequest,
+    limits: DecodeLimits,
+) -> Result<(Vec<DecodedSpan>, Budget), Error> {
     let mut budget = Budget::new(limits);
     let mut spans = Vec::new();
     for resource in request.resource_spans {
         append_resource(resource, &mut budget, &mut spans)?;
     }
-    Ok(spans)
+    Ok((spans, budget))
 }
 
 fn append_resource(

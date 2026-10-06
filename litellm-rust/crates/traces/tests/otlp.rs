@@ -1693,18 +1693,29 @@ fn native_logs_reject_invalid_context(
 }
 
 #[rstest]
-#[case::json_empty(true, false)]
-#[case::protobuf_empty(false, false)]
-#[case::json_zero(true, true)]
-#[case::protobuf_zero(false, true)]
-fn contextless_native_logs_preserve_the_entire_batch(#[case] json: bool, #[case] zero: bool) {
+#[case::json_empty(true, false, true, true)]
+#[case::protobuf_empty(false, false, true, true)]
+#[case::json_zero(true, true, true, true)]
+#[case::protobuf_zero(false, true, true, true)]
+#[case::trace_only(true, false, true, false)]
+#[case::parent_only(false, false, false, true)]
+fn contextless_native_logs_preserve_the_entire_batch(
+    #[case] json: bool,
+    #[case] zero: bool,
+    #[case] missing_trace: bool,
+    #[case] missing_parent: bool,
+) {
     use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value::Value};
     use prost::Message;
     let mut request = log_request("repl_main_thread");
     let valid = request.resource_logs[0].scope_logs[0].log_records[0].clone();
     let mut uncorrelated = valid.clone();
-    uncorrelated.trace_id = if zero { vec![0; 16] } else { Vec::new() };
-    uncorrelated.span_id = if zero { vec![0; 8] } else { Vec::new() };
+    if missing_trace {
+        uncorrelated.trace_id = if zero { vec![0; 16] } else { Vec::new() };
+    }
+    if missing_parent {
+        uncorrelated.span_id = if zero { vec![0; 8] } else { Vec::new() };
+    }
     let mut standalone = uncorrelated.clone();
     standalone
         .attributes
@@ -1726,8 +1737,12 @@ fn contextless_native_logs_preserve_the_entire_batch(#[case] json: bool, #[case]
         request.encode_to_vec()
     };
     let media = json.then_some("application/json");
-    let spans = litellm_traces::decode_otlp_logs(&bytes, media).unwrap();
-    let replayed = litellm_traces::decode_otlp_logs(&bytes, media).unwrap();
+    let limits = litellm_traces::DecodeLimits {
+        attributes: 6,
+        ..Default::default()
+    };
+    let spans = litellm_traces::decode_otlp_logs_with_limits(&bytes, media, limits).unwrap();
+    let replayed = litellm_traces::decode_otlp_logs_with_limits(&bytes, media, limits).unwrap();
     assert_eq!(spans.len(), 3);
     assert_eq!(
         serde_json::to_value(&spans).unwrap(),
@@ -1736,7 +1751,10 @@ fn contextless_native_logs_preserve_the_entire_batch(#[case] json: bool, #[case]
     assert_eq!(spans[0].trace_id, spans[1].trace_id);
     assert_ne!(spans[1].trace_id, spans[2].trace_id);
     assert_ne!(spans[0].span_id, spans[1].span_id);
-    assert_ne!(spans[1].span_id, spans[2].span_id);
+    if missing_trace {
+        assert_ne!(spans[1].span_id, spans[2].span_id);
+        assert!(!spans[1].attributes.contains_key("lens.original_trace_id"));
+    }
     assert_eq!(spans[0].parent_span_id, "02".repeat(8));
     assert!(spans[1].parent_span_id.is_empty());
     assert!(spans[2].parent_span_id.is_empty());
