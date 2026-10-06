@@ -53,9 +53,10 @@ export function TraceConversation({
   const details = new Map(
     queries.slice(0, loadedCount).map((query, index) => [visible[index].span_id, query.data!] as const),
   );
-  const complete = loadedCount === steps.length && !trace.next_cursor;
+  const complete = loadedCount === steps.length;
+  const traceComplete = complete && !trace.next_cursor;
   const items = buildConversation(trace.spans, details, complete);
-  const warnings = conversationWarnings(details, complete);
+  const warnings = conversationWarnings(details, traceComplete);
   const multipleAgents = new Set(items.map((item) => item.agentId).filter(Boolean)).size > 1;
   const inlineErrorIds = new Set(items.filter((item) => item.showError).map((item) => item.span.span_id));
   const rootErrors = trace.spans.filter((span) => {
@@ -94,11 +95,11 @@ export function TraceConversation({
             Loading conversation…
           </p>
         )}
-        {complete && items.length === 0 && (
+        {traceComplete && items.length === 0 && (
           <p className="text-sm text-muted-foreground">No conversation content recorded.</p>
         )}
         <div className="flex items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">
-          <span>{complete ? "End of conversation" : `${loadedCount} of ${steps.length} steps loaded`}</span>
+          <span>{traceComplete ? "End of conversation" : `${loadedCount} of ${steps.length} steps loaded`}</span>
           {visible.length < steps.length && (
             <Button
               variant="outline"

@@ -138,6 +138,18 @@ describe("TraceConversation", () => {
     expect(screen.queryByRole("button", { name: /Load next/ })).not.toBeInTheDocument();
   });
 
+  it("shows a loaded agent reply while later trace pages remain available", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceCall).mockResolvedValue({ ...trace, spans: [root], next_cursor: "next-page" });
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Conversation" }));
+    expect(await screen.findByText("The release is ready")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Load more steps" })).toBeVisible();
+    expect(screen.queryByText("End of conversation")).not.toBeInTheDocument();
+  });
+
   it.each([false, true])(
     "checks for missing replies after the final trace page and details load (reply: %s)",
     async (hasReply) => {
