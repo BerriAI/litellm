@@ -535,7 +535,7 @@ class DatasetCase(Record):
 
 class SkippedCase(Record):
     source: CaseSource
-    reason: Literal["duplicate", "no_content", "too_large", "over_limit"]
+    reason: Literal["duplicate", "no_content", "too_large", "over_limit", "invalid"]
 
 
 class TraceSource(Record):
