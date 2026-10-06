@@ -36,6 +36,7 @@ from litellm.constants import (
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
     MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
+    REGISTRY_LOAD_TIMEOUT_SECONDS,
     TAG_REGISTRY_MAX_SIZE,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -1825,19 +1826,20 @@ async def _fetch_and_cache_registry(
     cache_key: str,
     overflow_sentinel: str,
     max_size: int,
+    load_timeout: float,
     fetch_ids: Callable[[], Awaitable[tuple[str, ...]]],
     user_api_key_cache: UserApiKeyCache,
 ) -> frozenset[str] | None:
     """The registry as the database has it, cached whole, or ``None`` when it is unusable."""
     try:
-        registry_ids: Final = await fetch_ids()
+        registry_ids: Final = await asyncio.wait_for(fetch_ids(), timeout=load_timeout)
     except Exception as e:  # noqa: BLE001  # fail-safe: any registry load error must degrade to per-id lookups, never break auth
         verbose_proxy_logger.warning(
             "Registry %s could not be loaded from the database, so per-id lookups will run and the "
             "registry query is suppressed for %ss: %s",
             cache_key,
             REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
-            e,
+            f"timed out after {load_timeout}s" if isinstance(e, asyncio.TimeoutError) else e,
         )
         await _cache_registry_answer(
             cache_key=cache_key,
@@ -1870,33 +1872,59 @@ async def _load_bounded_registry(
     overflow_sentinel: str,
     max_size: int,
     load_lock: asyncio.Lock,
+    load_timeout: float,
     fetch_ids: Callable[[], Awaitable[tuple[str, ...]]],
     user_api_key_cache: UserApiKeyCache,
 ) -> frozenset[str] | None:
     """
     A bounded id set under one cache key, so an id outside it costs no DB read.
 
-    ``None`` = unusable (overflow or recent DB error): fall back to per-id lookups. An empty
-    frozenset is a real, cacheable answer. Loads are single-flighted to stop TTL-expiry stampedes.
+    ``None`` = unusable (overflow, recent DB error or a load that outran ``load_timeout``): fall
+    back to per-id lookups. An empty frozenset is a real, cacheable answer. Loads are single-flighted
+    to stop TTL-expiry stampedes, and both the wait for the lock and the scan are bounded so one
+    stuck load cannot hold every later request.
     """
     cached: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
     if not isinstance(cached, _RegistryNotCached):
         return cached
 
-    waited_for_another_load: Final = load_lock.locked()
-    async with load_lock:
-        if waited_for_another_load:
-            cached_after_wait: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
-            if not isinstance(cached_after_wait, _RegistryNotCached):
-                return cached_after_wait
+    try:
+        await asyncio.wait_for(load_lock.acquire(), timeout=load_timeout)
+    except asyncio.TimeoutError:
+        cached_after_timeout: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
+        if not isinstance(cached_after_timeout, _RegistryNotCached):
+            return cached_after_timeout
+
+        verbose_proxy_logger.warning(
+            "Registry %s is still being loaded by another request after %ss, so per-id lookups will "
+            "run and the registry query is suppressed for %ss",
+            cache_key,
+            load_timeout,
+            REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
+        )
+        await _cache_registry_answer(
+            cache_key=cache_key,
+            value=overflow_sentinel,
+            ttl=REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
+            user_api_key_cache=user_api_key_cache,
+        )
+        return None
+
+    try:
+        cached_after_wait: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
+        if not isinstance(cached_after_wait, _RegistryNotCached):
+            return cached_after_wait
 
         return await _fetch_and_cache_registry(
             cache_key=cache_key,
             overflow_sentinel=overflow_sentinel,
             max_size=max_size,
+            load_timeout=load_timeout,
             fetch_ids=fetch_ids,
             user_api_key_cache=user_api_key_cache,
         )
+    finally:
+        load_lock.release()
 
 
 async def _load_end_user_restricted_registry(
@@ -1917,6 +1945,7 @@ async def _load_end_user_restricted_registry(
         overflow_sentinel=END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
         max_size=END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
         load_lock=_END_USER_REGISTRY_LOAD_LOCK,
+        load_timeout=REGISTRY_LOAD_TIMEOUT_SECONDS,
         fetch_ids=fetch_ids,
         user_api_key_cache=user_api_key_cache,
     )
@@ -2185,6 +2214,7 @@ async def _load_tag_registry(
         overflow_sentinel=TAG_REGISTRY_OVERFLOW_SENTINEL,
         max_size=TAG_REGISTRY_MAX_SIZE,
         load_lock=_TAG_REGISTRY_LOAD_LOCK,
+        load_timeout=REGISTRY_LOAD_TIMEOUT_SECONDS,
         fetch_ids=fetch_ids,
         user_api_key_cache=user_api_key_cache,
     )
@@ -2207,6 +2237,7 @@ async def _load_model_access_group_registry(
         overflow_sentinel=MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
         max_size=MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
         load_lock=_MODEL_ACCESS_GROUP_REGISTRY_LOAD_LOCK,
+        load_timeout=REGISTRY_LOAD_TIMEOUT_SECONDS,
         fetch_ids=fetch_ids,
         user_api_key_cache=user_api_key_cache,
     )

@@ -1,6 +1,7 @@
 import ast
 import inspect
 import json
+import logging
 from unittest import mock
 
 import httpx
@@ -100,4 +101,50 @@ def test_cli_jwt_expiration_hours_from_environment(
     finally:
         monkeypatch.delenv("CLI_JWT_EXPIRATION_HOURS", raising=False)
         monkeypatch.delenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", raising=False)
+        importlib.reload(litellm.constants)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "warns"),
+    [
+        (None, 5.0, False),
+        ("2.5", 2.5, False),
+        (" 12 ", 12.0, False),
+        ("inf", 5.0, True),
+        ("-inf", 5.0, True),
+        ("nan", 5.0, True),
+        ("0", 5.0, True),
+        ("-1", 5.0, True),
+        ("five", 5.0, True),
+        ("", 5.0, True),
+    ],
+    ids=("unset", "override", "padded-override", "inf", "negative-inf", "nan", "zero", "negative", "text", "empty"),
+)
+def test_registry_load_timeout_accepts_only_finite_positive_values(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    raw: str | None,
+    expected: float,
+    warns: bool,
+) -> None:
+    """A timeout of inf never fires and one of zero always does, so neither may reach the registry loads."""
+    litellm_logger = logging.getLogger("LiteLLM")
+    litellm_logger.addHandler(caplog.handler)
+    monkeypatch.delenv("REGISTRY_LOAD_TIMEOUT_SECONDS", raising=False)
+
+    try:
+        if raw is not None:
+            monkeypatch.setenv("REGISTRY_LOAD_TIMEOUT_SECONDS", raw)
+
+        importlib.reload(litellm.constants)
+        assert litellm.constants.REGISTRY_LOAD_TIMEOUT_SECONDS == expected
+        warned = [
+            record
+            for record in caplog.records
+            if record.levelno == logging.WARNING and "REGISTRY_LOAD_TIMEOUT_SECONDS" in record.getMessage()
+        ]
+        assert bool(warned) is warns
+    finally:
+        litellm_logger.removeHandler(caplog.handler)
+        monkeypatch.delenv("REGISTRY_LOAD_TIMEOUT_SECONDS", raising=False)
         importlib.reload(litellm.constants)

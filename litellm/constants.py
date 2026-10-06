@@ -3,7 +3,12 @@ import sys
 from types import MappingProxyType
 from typing import Final, Literal
 
-from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_in_range, get_env_int_or_none
+from litellm.litellm_core_utils.env_utils import (
+    get_env_int,
+    get_env_int_in_range,
+    get_env_int_or_none,
+    get_env_positive_float,
+)
 
 DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
@@ -1948,6 +1953,9 @@ END_USER_RESTRICTED_REGISTRY_MAX_SIZE: Final = 5000
 # How long a failed registry load is remembered as "unusable", so a degraded Postgres
 # is not re-scanned on every request on top of the per-id lookups it falls back to.
 REGISTRY_ERROR_NEGATIVE_CACHE_TTL: Final = 30
+# Ceiling, in seconds, on each wait a registry load makes: for the single-flight lock and for the
+# scan itself. Past it the request falls back to per-id lookups instead of queueing behind a stuck load.
+REGISTRY_LOAD_TIMEOUT_SECONDS: Final = get_env_positive_float("REGISTRY_LOAD_TIMEOUT_SECONDS", 5.0)
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST: Final = [

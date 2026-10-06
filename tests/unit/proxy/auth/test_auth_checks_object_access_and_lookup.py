@@ -5,6 +5,7 @@ import re
 import sys
 import time
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -39,6 +40,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling, CeilingResolver
 from litellm.types.agents import AgentCaller
+from litellm.proxy.auth import auth_checks
 from litellm.proxy.auth.auth_checks import (
     LITELLM_SESSION_TOKEN_PREFIX,
     ExperimentalUIJWTToken,
@@ -86,10 +88,12 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from prisma.errors import DataError
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
+    MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
+    model_access_group_registry_cache_key,
     tag_cache_key,
     tag_registry_cache_key,
 )
@@ -10530,3 +10534,247 @@ async def test_authoritative_group_grants_propagate_policy_outages(
             await _get_agent_ids_from_access_groups(["group"], check_db_only=True)
     else:
         assert await _get_agent_ids_from_access_groups(["group"]) == []
+
+
+@dataclass(frozen=True, slots=True)
+class _RegistryCase:
+    loader: str
+    lock: str
+    table: str
+    id_column: str
+    cache_key: str
+    unusable_sentinel: str
+
+
+_REGISTRY_CASES = (
+    _RegistryCase(
+        loader="_load_tag_registry",
+        lock="_TAG_REGISTRY_LOAD_LOCK",
+        table="litellm_tagtable",
+        id_column="tag_name",
+        cache_key=tag_registry_cache_key(),
+        unusable_sentinel=TAG_REGISTRY_OVERFLOW_SENTINEL,
+    ),
+    _RegistryCase(
+        loader="_load_end_user_restricted_registry",
+        lock="_END_USER_REGISTRY_LOAD_LOCK",
+        table="litellm_endusertable",
+        id_column="user_id",
+        cache_key=end_user_restricted_registry_cache_key(),
+        unusable_sentinel=END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
+    ),
+    _RegistryCase(
+        loader="_load_model_access_group_registry",
+        lock="_MODEL_ACCESS_GROUP_REGISTRY_LOAD_LOCK",
+        table="litellm_modelaccessgroupbudgettable",
+        id_column="access_group_name",
+        cache_key=model_access_group_registry_cache_key(),
+        unusable_sentinel=MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
+    ),
+)
+
+_SHORT_LOAD_TIMEOUT = 0.05
+_TEST_DEADLINE = 2
+
+
+@pytest.fixture(params=_REGISTRY_CASES, ids=lambda case: case.loader)
+def registry_case(request, monkeypatch):
+    """One of the three registries, with a lock of its own so tests never share a held lock."""
+    monkeypatch.setattr(auth_checks, request.param.lock, asyncio.Lock())
+    return request.param
+
+
+def _registry_prisma(case: _RegistryCase, find_many):
+    prisma = MagicMock()
+    getattr(prisma.db, case.table).find_many = AsyncMock(side_effect=find_many)
+    return prisma
+
+
+def _registry_find_many(case: _RegistryCase, prisma):
+    return getattr(prisma.db, case.table).find_many
+
+
+def _registry_lock(case: _RegistryCase) -> asyncio.Lock:
+    return getattr(auth_checks, case.lock)
+
+
+async def _load_registry(case: _RegistryCase, prisma, cache):
+    return await asyncio.wait_for(
+        getattr(auth_checks, case.loader)(prisma_client=prisma, user_api_key_cache=cache),
+        timeout=_TEST_DEADLINE,
+    )
+
+
+def _scan_that_hangs_once(case: _RegistryCase):
+    """A registry scan that never returns the first time and answers with one row afterwards."""
+    calls = []
+
+    async def find_many(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            await asyncio.Event().wait()
+        return [SimpleNamespace(**{case.id_column: "registered-id"})]
+
+    return find_many
+
+
+@pytest.mark.asyncio
+async def test_hung_registry_scan_times_out_into_negative_cached_per_id_fallback(registry_case, monkeypatch):
+    """
+    Regression for #44047: a registry scan that never returns must cost one request the load
+    timeout, not hold the load lock forever with every later request queued behind it.
+    """
+    monkeypatch.setattr(auth_checks, "REGISTRY_LOAD_TIMEOUT_SECONDS", _SHORT_LOAD_TIMEOUT)
+    prisma = _registry_prisma(registry_case, _scan_that_hangs_once(registry_case))
+    cache = _TtlRecordingCache()
+
+    with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
+        assert await _load_registry(registry_case, prisma, cache) is None
+
+    assert not _registry_lock(registry_case).locked()
+    assert await cache.async_get_cache(key=registry_case.cache_key) == registry_case.unusable_sentinel
+    assert cache.writes == [(registry_case.cache_key, REGISTRY_ERROR_NEGATIVE_CACHE_TTL)]
+    warnings = [_rendered_log_message(call) for call in mock_logger.warning.call_args_list]
+    assert any(registry_case.cache_key in message and "timed out" in message for message in warnings)
+
+    assert await _load_registry(registry_case, prisma, cache) is None
+    assert _registry_find_many(registry_case, prisma).await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_requests_behind_a_hung_tag_registry_scan_complete_through_per_tag_reads(monkeypatch):
+    """Regression for #44047: one hung scan used to block every concurrent and later tagged request."""
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
+    monkeypatch.setattr(auth_checks, "REGISTRY_LOAD_TIMEOUT_SECONDS", _SHORT_LOAD_TIMEOUT)
+    monkeypatch.setattr(auth_checks, "_TAG_REGISTRY_LOAD_LOCK", asyncio.Lock())
+
+    async def fake_find_many(**kwargs):
+        if "where" not in kwargs:
+            await asyncio.Event().wait()
+        return [_tag_db_row(name) for name in kwargs["where"]["tag_name"]["in"]]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+    cache = UserApiKeyCache()
+
+    results = await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                get_tag_objects_batch(
+                    tag_names=[f"tag-{index}"],
+                    prisma_client=mock_prisma,
+                    user_api_key_cache=cache,
+                )
+                for index in range(6)
+            )
+        ),
+        timeout=_TEST_DEADLINE,
+    )
+
+    assert [list(result) for result in results] == [[f"tag-{index}"] for index in range(6)]
+    assert len(_registry_calls(mock_prisma.db.litellm_tagtable.find_many)) == 1
+    assert len(_batch_calls(mock_prisma.db.litellm_tagtable.find_many)) == 6
+
+
+@pytest.mark.asyncio
+async def test_waiter_behind_a_stuck_registry_load_falls_back_without_touching_the_lock(registry_case, monkeypatch):
+    """
+    A holder stuck past the fetch timeout must not be waited on forever, and the waiter that gives
+    up must neither run the scan nor release a lock it never held.
+    """
+    monkeypatch.setattr(auth_checks, "REGISTRY_LOAD_TIMEOUT_SECONDS", _SHORT_LOAD_TIMEOUT)
+    lock = _registry_lock(registry_case)
+    prisma = _registry_prisma(registry_case, _scan_that_hangs_once(registry_case))
+    cache = _TtlRecordingCache()
+    await lock.acquire()
+
+    with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
+        assert await _load_registry(registry_case, prisma, cache) is None
+
+    assert lock.locked()
+    _registry_find_many(registry_case, prisma).assert_not_awaited()
+    assert cache.writes == [(registry_case.cache_key, REGISTRY_ERROR_NEGATIVE_CACHE_TTL)]
+    assert await cache.async_get_cache(key=registry_case.cache_key) == registry_case.unusable_sentinel
+    warnings = [_rendered_log_message(call) for call in mock_logger.warning.call_args_list]
+    assert any(registry_case.cache_key in message for message in warnings)
+
+    lock.release()
+    assert not lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_waiter_timing_out_as_the_load_completes_uses_the_registry_instead_of_overwriting_it(
+    registry_case, monkeypatch
+):
+    """
+    A load can land in the cache while a waiter's lock timeout is firing. The waiter must serve
+    that registry, not replace it with the "unusable" marker and push every request onto per-id
+    reads for the negative-cache window.
+    """
+    monkeypatch.setattr(auth_checks, "REGISTRY_LOAD_TIMEOUT_SECONDS", _SHORT_LOAD_TIMEOUT)
+    lock = _registry_lock(registry_case)
+    prisma = _registry_prisma(registry_case, _scan_that_hangs_once(registry_case))
+    cache = _TtlRecordingCache()
+    await lock.acquire()
+
+    waiter = asyncio.create_task(_load_registry(registry_case, prisma, cache))
+    await asyncio.sleep(_SHORT_LOAD_TIMEOUT / 5)
+    await cache.async_set_cache(key=registry_case.cache_key, value=("registered-id",), ttl=60)
+
+    assert await waiter == frozenset({"registered-id"})
+    assert tuple(await cache.async_get_cache(key=registry_case.cache_key)) == ("registered-id",)
+    assert cache.writes == [(registry_case.cache_key, 60)]
+    _registry_find_many(registry_case, prisma).assert_not_awaited()
+    lock.release()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_request_waiting_for_the_registry_lock_leaves_lock_and_cache_untouched(
+    registry_case, monkeypatch
+):
+    monkeypatch.setattr(auth_checks, "REGISTRY_LOAD_TIMEOUT_SECONDS", 30.0)
+    lock = _registry_lock(registry_case)
+
+    async def find_many(**kwargs):
+        return [SimpleNamespace(**{registry_case.id_column: "registered-id"})]
+
+    prisma = _registry_prisma(registry_case, find_many)
+    cache = UserApiKeyCache()
+    await lock.acquire()
+
+    waiter = asyncio.create_task(_load_registry(registry_case, prisma, cache))
+    await asyncio.sleep(0.01)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    assert lock.locked()
+    assert await cache.async_get_cache(key=registry_case.cache_key) is None
+    _registry_find_many(registry_case, prisma).assert_not_awaited()
+
+    lock.release()
+    assert not lock.locked()
+    assert await _load_registry(registry_case, prisma, cache) == frozenset({"registered-id"})
+    assert not lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_request_mid_registry_scan_frees_the_lock_and_caches_nothing(registry_case, monkeypatch):
+    monkeypatch.setattr(auth_checks, "REGISTRY_LOAD_TIMEOUT_SECONDS", 30.0)
+    lock = _registry_lock(registry_case)
+    prisma = _registry_prisma(registry_case, _scan_that_hangs_once(registry_case))
+    cache = UserApiKeyCache()
+
+    holder = asyncio.create_task(_load_registry(registry_case, prisma, cache))
+    await asyncio.sleep(0.01)
+    assert lock.locked()
+    holder.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await holder
+
+    assert not lock.locked()
+    assert await cache.async_get_cache(key=registry_case.cache_key) is None
+
+    assert await _load_registry(registry_case, prisma, cache) == frozenset({"registered-id"})
+    assert not lock.locked()
