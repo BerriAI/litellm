@@ -335,6 +335,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self._message_id: str = f"msg_{uuid.uuid4()}"
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
+        # Kept so the mid-stream error boundary below can tell a proxy-managed
+        # stream (failure bookkeeping owned by the proxy) from standalone SDK
+        # consumption (no proxy boundary downstream).
+        self.litellm_logging_obj = litellm_logging_obj
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
         # Polyfill applied_edits on final message_delta.
@@ -1040,7 +1044,33 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 else:
                     yield chunk
         except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
-            verbose_logger.exception("Anthropic Adapter - mid-stream error, emitting Anthropic error event: %s", e)
+            verbose_logger.exception("Anthropic Adapter - mid-stream error: %s", e)
+            detached_failure_hook: Final = (
+                getattr(self.litellm_logging_obj, "_on_detached_stream_failure", None)
+                if self.litellm_logging_obj is not None
+                else None
+            )
+            if detached_failure_hook is not None:
+                # Proxy-managed stream: the proxy's streaming boundary owns
+                # failure bookkeeping (post_call_failure_hook writes the
+                # failure spend row and runs the failure callbacks) and
+                # serializes the error frame. Re-raise so it runs exactly once
+                # instead of being swallowed here.
+                raise
+            # Standalone consumption (SDK litellm.messages path): no proxy
+            # boundary downstream, so run the logging object's failure handler
+            # and keep the client-facing Anthropic error frame.
+            if self.litellm_logging_obj is not None:
+                try:
+                    await self.litellm_logging_obj.async_failure_handler(
+                        exception=e,
+                        traceback_exception=traceback.format_exc(),
+                    )
+                except Exception as failure_handler_error:
+                    verbose_logger.exception(
+                        "Anthropic Adapter - failure handler raised while reporting a mid-stream error: %s",
+                        failure_handler_error,
+                    )
             yield _mid_stream_error_sse_event(e)
 
     def _increment_content_block_index(self):
