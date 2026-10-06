@@ -667,7 +667,7 @@ def _fix_enum_types(schema, depth=0):
                             break
 
         if not keep_enum:
-            enum_values: Final = cast("Sequence[object]", schema["enum"])  # cast-ok: the schema is an untyped JSON dict
+            enum_values: Final = cast(Sequence[object], schema["enum"])  # cast-ok: the schema is an untyped JSON dict
             is_integer_type: Final = isinstance(schema_type, str) and schema_type.lower() == "integer"
             is_integer_enum: Final = is_integer_type and all(
                 isinstance(value, int) and not isinstance(value, bool) for value in enum_values
