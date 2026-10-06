@@ -9673,3 +9673,62 @@ async def test_concurrent_async_success_handler_logs_when_first_is_cancelled_bef
     await second
 
     assert counting_logger.logged_results == [outer_result]
+
+
+@pytest.mark.asyncio
+async def test_background_interaction_completion_logs_while_in_progress_handler_is_parked(monkeypatch):
+    """
+    The create's in_progress success handler can still be parked on awaited work when
+    the settlement arrives. The dedupe reset has to wait for the same per-object lock
+    the emission uses, or the in_progress handler claims the flag back and the
+    completed result, the only event carrying usage and cost, is skipped as a
+    duplicate while the settlement is still marked billed.
+    """
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    class CountingLogger(CustomLogger):
+        def __init__(self):
+            super().__init__()
+            self.logged_results: list[object] = []
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.logged_results.append(response_obj)
+
+    counting_logger: Final = CountingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [counting_logger])
+
+    in_progress_parked: Final = asyncio.Event()
+    release_in_progress: Final = asyncio.Event()
+    real_truncate: Final = litellm_logging.truncate_base64_in_messages_async
+    calls: list[int] = []
+
+    async def parked_then_real_truncate(messages):
+        calls.append(1)
+        if len(calls) == 1:
+            in_progress_parked.set()
+            await release_in_progress.wait()
+        return await real_truncate(messages)
+
+    monkeypatch.setattr(litellm_logging, "truncate_base64_in_messages_async", parked_then_real_truncate)
+
+    logging_obj: Final = _interactions_logging_obj(stream=False)
+    in_progress: Final = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
+    completed: Final = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+
+    first: Final = asyncio.create_task(logging_obj.async_success_handler(result=in_progress))
+    await in_progress_parked.wait()
+    completion: Final = asyncio.create_task(logging_obj.async_log_background_interaction_completion(result=completed))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    release_in_progress.set()
+    await first
+    await completion
+
+    assert [result is completed for result in counting_logger.logged_results] == [False, True]

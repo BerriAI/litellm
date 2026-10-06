@@ -2688,8 +2688,13 @@ class Logging(LiteLLMLoggingBaseClass):
         if isinstance(settled_hidden_params, dict):
             for poll_scoped_key in ("response_cost", "model_id", "litellm_model_name"):
                 settled_hidden_params.pop(poll_scoped_key, None)
-        self._reset_success_emission_dedupe()
-        await self.async_success_handler(result=result)
+        try:
+            with post_response_phase():
+                async with self._async_success_dedup_lock():
+                    self._reset_success_emission_dedupe()
+                    await self._async_success_handler_body(result=result)
+        finally:
+            self._restore_correlation_context()
 
     def _reset_success_emission_dedupe(self) -> None:
         """
@@ -3224,13 +3229,15 @@ class Logging(LiteLLMLoggingBaseClass):
                     return await self._async_success_handler_body(
                         result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
                     )
-                dedup_lock: Final = _async_success_dedup_locks.setdefault(self, asyncio.Lock())
-                async with dedup_lock:
+                async with self._async_success_dedup_lock():
                     return await self._async_success_handler_body(
                         result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
                     )
         finally:
             self._restore_correlation_context()
+
+    def _async_success_dedup_lock(self) -> asyncio.Lock:
+        return _async_success_dedup_locks.setdefault(self, asyncio.Lock())
 
     async def _async_success_handler_body(
         self,
