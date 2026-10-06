@@ -306,7 +306,7 @@ class XAIChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def fold_reasoning_tokens_into_completion(
-        target: ModelResponse | Usage | dict[str, object] | None,
+        target: ModelResponse | Usage | dict[str, Any] | None,
     ) -> None:
         """Reconcile xAI Usage to the OpenAI invariant.
 

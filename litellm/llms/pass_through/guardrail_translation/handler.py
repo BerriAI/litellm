@@ -7,7 +7,7 @@ to extract specific fields for guardrail processing.
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -220,7 +220,7 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> object:
+    ) -> Any:
         provider: Final = data.get("custom_llm_provider")
         handler_cls: Final = _get_provider_handlers().get(provider or "")
         if handler_cls is None:

@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Any, Final
 
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.types.rerank import OptionalRerankParams, RerankRequest
@@ -42,7 +42,7 @@ class CohereRerankV2Config(CohereRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, object]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,

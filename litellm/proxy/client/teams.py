@@ -80,7 +80,7 @@ class TeamsManagementClient:
         page_size: int = 10,
         sort_by: str | None = None,
         sort_order: str = "asc",
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         """
         Get a paginated list of teams with filtering and sorting options.
 
@@ -127,7 +127,7 @@ class TeamsManagementClient:
         response.raise_for_status()
         return response.json()
 
-    def get_available(self) -> builtins.list[dict[str, object]]:
+    def get_available(self) -> builtins.list[dict[str, Any]]:
         """
         Get list of available teams that the user can join.
 

@@ -78,7 +78,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         self,
         generate_content_config_dict: GenerateContentConfigDict,
         model: str,
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         """
         Map Google GenAI parameters to provider-specific format.
 
@@ -161,7 +161,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         contents: GenerateContentContentListUnionDict,
         tools: ToolConfigDict | None,
         generate_content_config_dict: dict,
-        system_instruction: object | None = None,
+        system_instruction: Any | None = None,
     ) -> dict:
         """
         Transform the request parameters for the generate content API.

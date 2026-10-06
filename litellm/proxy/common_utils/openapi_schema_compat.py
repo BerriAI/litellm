@@ -5,7 +5,7 @@ FastAPI 0.120+ has stricter schema generation that fails on certain types like o
 This module provides a compatibility layer to handle these cases gracefully.
 """
 
-from typing import Final
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 
@@ -16,7 +16,7 @@ def get_openapi_schema_with_compat(
     version: str,
     description: str,
     routes: list,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """
     Generate OpenAPI schema with compatibility handling for FastAPI 0.120+.
 

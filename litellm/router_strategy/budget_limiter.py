@@ -905,7 +905,7 @@ class RouterBudgetLimiting(CustomLogger):
 
     def register_deployment_budget(
         self,
-        deployment: dict[str, object] | DeploymentTypedDict,
+        deployment: dict[str, Any] | DeploymentTypedDict,
     ) -> None:
         """
         Register or refresh deployment-level budget config for a runtime-added deployment.

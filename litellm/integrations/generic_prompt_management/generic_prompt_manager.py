@@ -132,7 +132,7 @@ class GenericPromptManager(CustomPromptManagement):
 
     async def async_fetch_prompt_from_api(
         self, prompt_id: str | None, prompt_spec: PromptSpec | None
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         """
         Fetch a prompt from the API asynchronously.
         """

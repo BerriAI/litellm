@@ -63,7 +63,7 @@ class ChatGPTConfig(OpenAIConfig):
         default_headers: Final = get_chatgpt_default_headers(api_key or "", account_id, session_id)
         return {**default_headers, **validated_headers}
 
-    def post_stream_processing(self, stream: Any) -> ChatGPTToolCallNormalizer:
+    def post_stream_processing(self, stream: Any) -> Any:
         return ChatGPTToolCallNormalizer(stream)
 
     def map_openai_params(

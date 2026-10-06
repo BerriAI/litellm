@@ -322,7 +322,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         data: MutableRequest,
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
-    ) -> object:
+    ) -> Any:
         """Restores the original values in a copy of a non-streaming response.
 
         The copy is what keeps plaintext out of the response cache. LiteLLM caches the

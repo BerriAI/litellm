@@ -1393,9 +1393,7 @@ class LiteLLMProxyRequestSetup:
         return user
 
     @staticmethod
-    def get_openai_org_id_from_headers(
-        headers: dict, general_settings: Mapping[str, object] | None = None
-    ) -> str | None:
+    def get_openai_org_id_from_headers(headers: dict, general_settings: dict | None = None) -> str | None:
         """
         Get the OpenAI Org ID from the headers.
         """
@@ -1486,7 +1484,7 @@ class LiteLLMProxyRequestSetup:
         headers: dict,
         request_data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        general_settings: Mapping[str, object] | None = None,
+        general_settings: dict[str, Any] | None = None,
     ) -> LitellmDataForBackendLLMCall:
         """
         - Adds user from headers

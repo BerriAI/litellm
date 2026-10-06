@@ -88,7 +88,7 @@ class AWSKeyManagementService_V2:
         except Exception as e:
             raise e
 
-    def decrypt_value(self, secret_name: str) -> object:
+    def decrypt_value(self, secret_name: str) -> Any:
         if self.kms_client is None:
             raise ValueError("kms_client is None")
         encrypted_value = os.getenv(secret_name, None)

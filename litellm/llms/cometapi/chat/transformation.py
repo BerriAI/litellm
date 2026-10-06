@@ -6,7 +6,7 @@ Documentation: [CometAPI Documentation Link]
 """
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Final
+from typing import Any, Final
 
 import httpx
 
@@ -138,7 +138,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> object:
+    ) -> Any:
         """
         Get model response iterator for streaming responses
         """

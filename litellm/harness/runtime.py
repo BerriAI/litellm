@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Generator, Mappi
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import (
+    Any,
     Final,
     get_args,
 )
@@ -748,7 +749,7 @@ class AsyncSession:
 
     async def history(
         self,
-    ) -> list[dict[str, object]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
+    ) -> list[dict[str, Any]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
         if not self.harness_config.capabilities.history:
             raise CapabilityUnsupported(f"Harness.{self.config.harness.name} does not expose history")
         await self._ensure_ready()

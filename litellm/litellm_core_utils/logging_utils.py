@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     )
 
     LiteLLMModelResponse = _ModelResponse
-    Span = _Span
+    Span = _Span | Any
 else:
     LiteLLMModelResponse = Any
     LiteLLMLoggingObject = Any
@@ -232,7 +232,7 @@ def _assemble_complete_response_from_streaming_chunks(
     start_time: datetime,
     end_time: datetime,
     request_kwargs: dict,
-    streaming_chunks: list[ModelResponse | TextCompletionResponse | ModelResponseStream],
+    streaming_chunks: list[Any],
     is_async: bool,
 ):
     """

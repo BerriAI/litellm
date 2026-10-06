@@ -2,7 +2,7 @@
 Transformation for Calling Google models in their native format.
 """
 
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -70,10 +70,10 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
     def transform_generate_content_request(
         self,
         model: str,
-        contents: object,
-        tools: object | None,
+        contents: Any,
+        tools: Any | None,
         generate_content_config_dict: dict,
-        system_instruction: object | None = None,
+        system_instruction: Any | None = None,
     ) -> dict:
         """
         Transform the generate content request for Vertex AI.

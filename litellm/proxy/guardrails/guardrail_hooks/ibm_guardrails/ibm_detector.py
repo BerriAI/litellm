@@ -40,7 +40,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         base_url: str | None = None,
         detector_id: str | None = None,
         is_detector_server: bool = True,
-        detector_params: dict[str, object] | None = None,
+        detector_params: dict[str, Any] | None = None,
         extra_headers: dict[str, str] | None = None,
         score_threshold: float | None = None,
         block_on_detection: bool = True,

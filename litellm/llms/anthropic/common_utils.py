@@ -1631,7 +1631,7 @@ def strip_encrypted_reasoning_blocks_from_anthropic_messages(
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
-    data: dict[str, object],
+    data: dict[str, Any],
 ) -> None:
     """
     Mutate an Anthropic Messages-style request dict: strip thinking blocks from

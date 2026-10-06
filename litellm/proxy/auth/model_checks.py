@@ -2,7 +2,7 @@
 ## Common checks for /v1/models and `/model/info`
 import copy
 from collections.abc import Sequence
-from typing import Final
+from typing import Any, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -324,8 +324,8 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
 
 
 def expand_wildcard_deployments_for_model_info(
-    deployments: list[dict[str, object]],
-) -> list[dict[str, object]]:
+    deployments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Expand wildcard deployments into one row per known provider model.
 
     PR #30025 changed /model/info to read from llm_router.model_list (correct,

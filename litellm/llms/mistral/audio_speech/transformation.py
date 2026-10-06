@@ -11,7 +11,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.text_to_speech.transformation import (
@@ -23,8 +22,6 @@ from litellm.secret_managers.main import get_secret_str
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import HttpxBinaryResponseContent
-
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class MistralTextToSpeechException(BaseLLMException):
@@ -146,7 +143,7 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
         return request_data
 
     def _requested_content_type(self, request: httpx.Request) -> str:
-        request_body: Final = _JSON_OBJECT.validate_python(json.loads(request.content or b"{}"))
+        request_body: Final = json.loads(request.content or b"{}")
         requested_format: Final = request_body.get("response_format")
         if not isinstance(requested_format, str):
             return "audio/mpeg"
@@ -168,12 +165,11 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
                 message=f"Non-JSON response from Mistral speech API: {raw_response.text[:500]}",
                 headers=raw_response.headers,
             )
-        response_object: Final = _JSON_OBJECT.validate_python(response_json)
-        audio_b64: Final = response_object.get("audio_data")
+        audio_b64: Final = response_json.get("audio_data")
         if not isinstance(audio_b64, str) or not audio_b64:
             raise MistralTextToSpeechException(
                 status_code=500,
-                message=f"No audio_data in Mistral speech response. Response keys: {tuple(response_object.keys())}",
+                message=f"No audio_data in Mistral speech response. Response keys: {tuple(response_json.keys())}",
                 headers=raw_response.headers,
             )
         try:

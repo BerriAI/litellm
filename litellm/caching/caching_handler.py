@@ -45,7 +45,6 @@ from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
     ModelResponse,
-    ModelResponseStream,
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
@@ -213,8 +212,8 @@ class LLMCachingHandler:
     ):
         from litellm.caching import DualCache, RedisCache
 
-        self.async_streaming_chunks: list[ModelResponse | TextCompletionResponse | ModelResponseStream] = []
-        self.sync_streaming_chunks: list[ModelResponse | TextCompletionResponse | ModelResponseStream] = []
+        self.async_streaming_chunks: list[ModelResponse] = []
+        self.sync_streaming_chunks: list[ModelResponse] = []
         self.request_kwargs = _drop_logging_obj_from_kwargs(request_kwargs)
         self.preset_cache_key: str | None = None
         self.original_function = original_function

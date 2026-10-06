@@ -99,7 +99,7 @@ class ContainerRequestUtils:
         response_obj: T,
         custom_llm_provider: str | None,
         litellm_metadata: dict[str, Any] | None = None,
-        extra_body: dict[str, object] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> T:
         """
         Encode container_id in response object with provider/model metadata for routing.

@@ -69,6 +69,6 @@ class DynamicLoggingCache:
         response: Final = self.cache.get_cache(key=key_name)
         return response
 
-    def set_cache(self, credentials: dict, service_name: str, logging_obj: object) -> None:
+    def set_cache(self, credentials: dict, service_name: str, logging_obj: Any) -> None:
         key_name: Final = self.get_cache_key(args={**credentials, "service_name": service_name})
         self.cache.set_cache(key=key_name, value=logging_obj)

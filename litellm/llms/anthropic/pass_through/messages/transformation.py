@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import ClassVar, Final
+from typing import Any, ClassVar, Final
 
 import httpx
 
@@ -261,7 +261,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[object],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -289,7 +289,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         model: str,
-        messages: list[object],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         api_key: str | None = None,

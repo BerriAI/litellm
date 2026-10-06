@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from litellm.types.utils import ModelResponseStream
 
-    Span = _Span
+    Span = _Span | Any
 else:
     Span = Any
 

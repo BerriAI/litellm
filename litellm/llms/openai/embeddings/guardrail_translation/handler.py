@@ -5,7 +5,7 @@ This module provides guardrail translation support for OpenAI's embeddings endpo
 The handler processes the 'input' parameter for guardrails.
 """
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -37,7 +37,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> object:
+    ) -> Any:
         """
         Process input text by applying guardrails to text content.
 
@@ -146,9 +146,9 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         response: "EmbeddingResponse",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-        user_api_key_dict: object | None = None,
+        user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
-    ) -> "EmbeddingResponse":
+    ) -> Any:
         """
         Process output response - embeddings responses contain vectors, not text.
 

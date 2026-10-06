@@ -1,5 +1,5 @@
 from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from pydantic import BaseModel
@@ -38,7 +38,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         atranscription: bool = False,
         litellm_params: dict | None = None,
         custom_llm_provider: str = "azure",
-    ) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
+    ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
         data: Final = {"model": model, "file": audio_file, **optional_params}
 
         if atranscription is True:

@@ -835,7 +835,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> object:
+    ) -> Any:
         return OpenAIChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,

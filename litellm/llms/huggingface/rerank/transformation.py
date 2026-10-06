@@ -93,7 +93,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, object]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,

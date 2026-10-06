@@ -93,7 +93,7 @@ if TYPE_CHECKING:
     from litellm.types.agents import AgentResponse
     from litellm.types.caching import RedisPipelineIncrementOperation
 
-    Span = _Span
+    Span = _Span | Any
     InternalUsageCache = _InternalUsageCache
 else:
     Span = Any

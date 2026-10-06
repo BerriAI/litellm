@@ -17,10 +17,10 @@ secret manager, which is what makes that resolution work. Returns the resolved
 from __future__ import annotations
 
 import asyncio
-from typing import Final
+from typing import Any, Final
 
 
-def read_model_list(config_path: str) -> list[dict[str, object]]:
+def read_model_list(config_path: str) -> list[dict[str, Any]]:
     """Load ``config_path`` via the proxy's own reader and return its
     resolved ``model_list``."""
     from litellm.proxy.proxy_server import ProxyConfig

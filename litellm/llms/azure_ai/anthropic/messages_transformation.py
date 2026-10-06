@@ -29,7 +29,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[object],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

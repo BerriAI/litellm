@@ -80,7 +80,7 @@ class AttachmentRegistry:
         self._config_attachments: tuple[PolicyAttachment, ...] = ()
         self._initialized: bool = False
 
-    def load_attachments(self, attachments_config: list[dict[str, object]]) -> None:
+    def load_attachments(self, attachments_config: list[dict[str, Any]]) -> None:
         """
         Load attachments from a configuration list.
 

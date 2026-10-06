@@ -195,7 +195,7 @@ class VertexAIBatchTransformation:
     @classmethod
     def transform_vertex_ai_batch_list_response_to_openai_list_response(
         cls, response: dict[str, Any]
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         """
         Transforms Vertex AI batch list response into OpenAI-compatible list response.
         """

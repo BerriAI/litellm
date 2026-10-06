@@ -759,7 +759,7 @@ class OCIStreamWrapper(CustomStreamWrapper):
                 self.sent_last_chunk = True
         return self.model_response_creator(chunk={"choices": parsed.choices})
 
-    def chunk_creator(self, chunk: object) -> ModelResponseStream | None:
+    def chunk_creator(self, chunk: Any) -> ModelResponseStream | None:
         if not isinstance(chunk, str):
             raise ValueError(f"Chunk is not a string: {chunk}")
         if not chunk.startswith("data:"):

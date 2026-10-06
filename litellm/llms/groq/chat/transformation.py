@@ -3,7 +3,7 @@ Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
 
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
-from typing import TYPE_CHECKING, Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -89,7 +89,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> object:
+    ) -> Any:
         return GroqChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,

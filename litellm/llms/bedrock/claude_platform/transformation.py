@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Any, Final
 
 import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -91,10 +91,10 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: object,
+        streaming_response: Any,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> object:
+    ) -> Any:
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
         return ModelResponseIterator(

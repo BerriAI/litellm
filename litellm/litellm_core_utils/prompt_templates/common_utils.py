@@ -1774,7 +1774,7 @@ def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessa
     )
 
 
-def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> object:
+def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
     """
     Filters a value from a dictionary
 

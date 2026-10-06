@@ -132,7 +132,7 @@ class AnthropicBatchesHandler:
         max_retries: int | None,
         logging_obj: LiteLLMLoggingObj | None = None,
         litellm_params: dict | None = None,  # mutable-ok: handed straight to validate_environment
-    ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
+    ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
         """
         Retrieve a batch from Anthropic.
 

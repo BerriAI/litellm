@@ -7,7 +7,7 @@ import asyncio
 import contextvars
 from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final
+from typing import Any, Final
 
 import httpx
 
@@ -27,9 +27,6 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, client
 
-if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
-
 # Initialize HTTP handler
 base_llm_http_handler = BaseLLMHTTPHandler()
 DEFAULT_ANTHROPIC_API_BASE: Final = "https://api.anthropic.com/v1"
@@ -38,7 +35,7 @@ DEFAULT_ANTHROPIC_API_BASE: Final = "https://api.anthropic.com/v1"
 _litellm_skills_handler = None
 
 
-def _get_user_api_key_auth_from_kwargs(kwargs: Mapping[str, object]) -> "UserAPIKeyAuth | None":
+def _get_user_api_key_auth_from_kwargs(kwargs: Mapping[str, object]) -> Any | None:
     for metadata_key in ("metadata", "litellm_metadata"):
         metadata = kwargs.get(metadata_key)
         if isinstance(metadata, dict) and metadata.get("user_api_key_auth") is not None:

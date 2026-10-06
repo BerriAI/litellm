@@ -1,8 +1,6 @@
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
 
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageObject, ImageResponse
@@ -16,8 +14,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class FalAIBriaConfig(FalAIBaseConfig):
@@ -222,8 +218,7 @@ class FalAIBriaConfig(FalAIBaseConfig):
             model_response.data = []
 
         # Handle Bria response format - uses "image" (singular) not "images"
-        response_object: Final = _JSON_OBJECT.validate_python(response_data)
-        image_data: Final = response_object.get("image")
+        image_data: Final = response_data.get("image")
         if image_data and isinstance(image_data, dict):
             model_response.data.append(
                 ImageObject(

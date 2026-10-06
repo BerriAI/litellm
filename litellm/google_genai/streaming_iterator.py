@@ -67,7 +67,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         request_body: dict,
         model: str,
         custom_llm_provider: str,
-        hidden_params: dict[str, object] | None = None,
+        hidden_params: dict[str, Any] | None = None,
     ):
         self.litellm_logging_obj = litellm_logging_obj
         self.request_body = request_body
@@ -118,7 +118,7 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
         litellm_metadata: dict,
         custom_llm_provider: str,
         request_body: dict | None = None,
-        hidden_params: dict[str, object] | None = None,
+        hidden_params: dict[str, Any] | None = None,
     ):
         super().__init__(
             litellm_logging_obj=logging_obj,
@@ -169,7 +169,7 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
         litellm_metadata: dict,
         custom_llm_provider: str,
         request_body: dict | None = None,
-        hidden_params: dict[str, object] | None = None,
+        hidden_params: dict[str, Any] | None = None,
     ):
         super().__init__(
             litellm_logging_obj=logging_obj,

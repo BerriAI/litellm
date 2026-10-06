@@ -133,7 +133,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> object:
+    ) -> Any:
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
         return ModelResponseIterator(

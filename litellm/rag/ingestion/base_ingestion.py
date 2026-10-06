@@ -56,7 +56,7 @@ class BaseRAGIngestion(ABC):
 
         # Extract configs from options
         self.ocr_config = ingest_options.get("ocr")
-        self.chunking_strategy: dict[str, object] = cast(
+        self.chunking_strategy: dict[str, Any] = cast(
             dict[str, Any],
             ingest_options.get("chunking_strategy") or {"type": "auto"},
         )

@@ -2,7 +2,7 @@ import re
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Final
+from typing import Any, Final
 
 from litellm.types.utils import OTEL_SPAN_SCOPES, TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
 
@@ -22,8 +22,8 @@ def inherit_message_logging_privacy(disabled: bool) -> Generator[None]:
 
 
 def iter_client_callback_metadata_dicts(
-    kwargs: dict[str, object],
-) -> Iterator[tuple[str, dict[str, object]]]:
+    kwargs: dict[str, Any],
+) -> Iterator[tuple[str, dict[str, Any]]]:
     litellm_params: Final = kwargs.get("litellm_params")
     if isinstance(litellm_params, dict):
         nested: Final = litellm_params.get("metadata")

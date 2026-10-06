@@ -312,7 +312,7 @@ async def _missing_models_after_read_through(
     return tuple(still_missing)
 
 
-def add_access_group_to_deployment(model_info: dict[str, Any], access_group: str) -> tuple[dict[str, object], bool]:
+def add_access_group_to_deployment(model_info: dict[str, Any], access_group: str) -> tuple[dict[str, Any], bool]:
     """
     Add an access group to a deployment's model_info.
 
@@ -503,9 +503,7 @@ async def _find_deployment_or_400(model_id: str, prisma_client: PrismaClient) ->
     return deployment.model_info
 
 
-def remove_access_group_from_deployment(
-    model_info: dict[str, Any], access_group: str
-) -> tuple[dict[str, object], bool]:
+def remove_access_group_from_deployment(model_info: dict[str, Any], access_group: str) -> tuple[dict[str, Any], bool]:
     """
     Remove an access group from a deployment's model_info.
 

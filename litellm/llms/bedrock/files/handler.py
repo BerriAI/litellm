@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Coroutine, Mapping
-from typing import Final
+from typing import Any, Final
 
 import httpx
 
@@ -139,7 +139,7 @@ class BedrockFilesHandler(BaseAWSLLM):
         optional_params: dict,
         timeout: float | httpx.Timeout,
         max_retries: int | None,
-    ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
+    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
         """
         Download file content from S3 bucket for Bedrock files.
         Supports both sync and async operations.

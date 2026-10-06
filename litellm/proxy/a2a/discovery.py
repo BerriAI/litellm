@@ -16,7 +16,7 @@ fetcher dispatches by ``discovery_mode``:
 
 from collections.abc import Mapping
 from enum import Enum
-from typing import Final
+from typing import Any, Final
 from urllib.parse import urlencode
 
 from litellm._logging import verbose_proxy_logger
@@ -87,7 +87,7 @@ async def fetch_well_known_card(
     params: Mapping[str, object] | None = None,
     timeout: float = DEFAULT_DISCOVERY_TIMEOUT_SECONDS,
     headers: dict[str, str] | None = None,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """
     Fetch an agent card from ``base_url`` using the strategy chosen by
     ``discovery_mode``. Returns the parsed JSON from the first path that

@@ -20,7 +20,7 @@ HEALTH_CHECKS_TARGET: Final = "health_checks"
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = _Span | Any
 else:
     Span = Any
 

@@ -1,5 +1,5 @@
 import json
-from typing import Final
+from typing import Any, Final
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
@@ -72,7 +72,7 @@ def normalize_json_schema_types(
     return schema
 
 
-def normalize_tool_schema(tool: dict[str, object]) -> dict[str, object]:
+def normalize_tool_schema(tool: dict[str, Any]) -> dict[str, Any]:
     """
     Normalize a tool's parameter schema to use standard JSON Schema lowercase types.
 

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
     pipeline = Pipeline
     async_redis_client = Redis
-    Span = _Span
+    Span = _Span | Any
 else:
     pipeline = Any
     async_redis_client = Any

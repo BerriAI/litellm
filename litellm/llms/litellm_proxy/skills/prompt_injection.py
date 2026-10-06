@@ -183,7 +183,7 @@ class SkillPromptInjectionHandler:
         data["messages"] = messages
         return data
 
-    def create_execute_code_tool(self, skill_modules: list[str]) -> dict[str, object]:
+    def create_execute_code_tool(self, skill_modules: list[str]) -> dict[str, Any]:
         """
         Create the execute_code tool definition.
 
@@ -226,7 +226,7 @@ class SkillPromptInjectionHandler:
             },
         }
 
-    def convert_skill_to_tool(self, skill: LiteLLM_SkillsTable) -> dict[str, object]:
+    def convert_skill_to_tool(self, skill: LiteLLM_SkillsTable) -> dict[str, Any]:
         """
         Convert a LiteLLM skill to an OpenAI-style tool.
 
@@ -271,7 +271,7 @@ class SkillPromptInjectionHandler:
 
         return tool
 
-    def convert_skill_to_anthropic_tool(self, skill: LiteLLM_SkillsTable) -> dict[str, object]:
+    def convert_skill_to_anthropic_tool(self, skill: LiteLLM_SkillsTable) -> dict[str, Any]:
         """
         Convert a LiteLLM skill to an Anthropic-style tool (messages API format).
 

@@ -1,4 +1,4 @@
-from typing import Final, cast
+from typing import Any, Final, cast
 
 import litellm
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
@@ -46,7 +46,7 @@ class VideoGenerationRequestUtils:
 
     @staticmethod
     def get_requested_video_generation_optional_param(
-        params: dict[str, object],
+        params: dict[str, Any],
     ) -> VideoCreateOptionalRequestParams:
         """
         Filter parameters to only include those defined in VideoCreateOptionalRequestParams.

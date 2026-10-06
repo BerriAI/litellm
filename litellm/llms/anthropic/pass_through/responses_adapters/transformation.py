@@ -499,7 +499,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         self,
         anthropic_request: AnthropicMessagesRequest,
         include_encrypted_reasoning: bool = True,
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
         litellm.responses() / litellm.aresponses() kwargs.

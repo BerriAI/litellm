@@ -4,7 +4,7 @@ This file is used to store the state variables of the proxy server.
 Example: `spend_logs_row_count` is used to store the number of rows in the `LiteLLM_SpendLogs` table.
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 from litellm.proxy._types import ProxyStateVariables
 
@@ -25,12 +25,12 @@ class ProxyState:
     def get_proxy_state_variable(
         self,
         variable_name: valid_keys_literal,
-    ) -> int:
-        return self.proxy_state_variables[variable_name]
+    ) -> Any:
+        return self.proxy_state_variables.get(variable_name, None)
 
     def set_proxy_state_variable(
         self,
         variable_name: valid_keys_literal,
-        value: int,
+        value: Any,
     ) -> None:
         self.proxy_state_variables[variable_name] = value
