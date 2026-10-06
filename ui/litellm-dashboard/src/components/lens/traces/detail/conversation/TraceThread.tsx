@@ -31,7 +31,7 @@ interface TraceThreadProps {
 
 /** One turn per user prompt: the prompt, a folded "Worked" bar for everything the agent did, and its reply. */
 export function TraceThread({ trace, accessToken, onOpenStep, paging }: TraceThreadProps) {
-  const { details, complete, loading, failed, hasMore, loadMore } = useConversationDetails(trace, accessToken);
+  const { details, entries, complete, loading, failed, hasMore, loadMore } = useConversationDetails(trace, accessToken);
   const pending = pendingConversationBranches(trace.spans, details, Boolean(trace.next_cursor));
   const groups = groupConversation(buildConversation(trace.spans, details, complete, pending), trace.spans);
   const turns = buildThread(groups);
@@ -62,31 +62,61 @@ export function TraceThread({ trace, accessToken, onOpenStep, paging }: TraceThr
         {turns.map((turn) => (
           <ThreadTurnView key={turn.id} turn={turn} onOpenStep={onOpenStep} />
         ))}
-        {busy && (
-          <p role="status" className="text-sm text-muted-foreground">
-            Loading thread…
-          </p>
-        )}
-        {blocked && (
-          <p role="alert" className="text-sm text-destructive">
-            Could not load the rest of this thread. Use Retry or Refresh trace above.
-          </p>
-        )}
-        {traceComplete && !turns.length && (
-          <p className="text-sm text-muted-foreground">No conversation content recorded.</p>
-        )}
-        <div className="flex items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">
-          <span>
-            {traceComplete ? "End of thread" : `${turns.length} ${turns.length === 1 ? "turn" : "turns"} loaded`}
-          </span>
-          {canLoad && !autoLoad && (
-            <Button variant="outline" size="sm" onClick={loadNext}>
-              Load more
-            </Button>
-          )}
-        </div>
+        <ThreadFooter
+          turnCount={turns.length}
+          busy={busy}
+          stepsFailed={failed}
+          traceFailed={Boolean(paging?.failed)}
+          complete={traceComplete}
+          onRetry={() => entries.forEach(({ query }) => query.isError && void query.refetch())}
+          onLoadMore={canLoad && !autoLoad ? loadNext : undefined}
+        />
       </div>
     </section>
+  );
+}
+
+interface ThreadFooterProps {
+  turnCount: number;
+  busy: boolean;
+  stepsFailed: boolean;
+  traceFailed: boolean;
+  complete: boolean;
+  onRetry: () => void;
+  onLoadMore?: () => void;
+}
+
+function ThreadFooter({ turnCount, busy, stepsFailed, traceFailed, complete, onRetry, onLoadMore }: ThreadFooterProps) {
+  return (
+    <>
+      {busy && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading thread…
+        </p>
+      )}
+      {stepsFailed && (
+        <div role="alert" className="flex items-center justify-between gap-3 text-sm text-destructive">
+          Could not load some steps of this thread.
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            Retry
+          </Button>
+        </div>
+      )}
+      {traceFailed && (
+        <p role="alert" className="text-sm text-destructive">
+          Could not load more of this trace. Use Retry or Refresh trace above.
+        </p>
+      )}
+      {complete && !turnCount && <p className="text-sm text-muted-foreground">No conversation content recorded.</p>}
+      <div className="flex items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">
+        <span>{complete ? "End of thread" : `${turnCount} ${turnCount === 1 ? "turn" : "turns"} loaded`}</span>
+        {onLoadMore && (
+          <Button variant="outline" size="sm" onClick={onLoadMore}>
+            Load more
+          </Button>
+        )}
+      </div>
+    </>
   );
 }
 
