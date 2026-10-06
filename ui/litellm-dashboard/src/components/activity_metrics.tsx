@@ -201,7 +201,10 @@ export const ModelSection = ({
             <p className="text-sm text-muted-foreground">Total Tokens</p>
             <h3 className="text-lg font-medium text-foreground">{metrics.total_tokens.toLocaleString()}</h3>
             <p className="text-sm text-muted-foreground">
-              {Math.round(metrics.total_tokens / metrics.total_successful_requests)} avg per successful request
+              {metrics.total_successful_requests > 0
+                ? Math.round(metrics.total_tokens / metrics.total_successful_requests)
+                : "N/A"}{" "}
+              avg per successful request
             </p>
           </CardContent>
         </Card>
@@ -210,8 +213,10 @@ export const ModelSection = ({
             <p className="text-sm text-muted-foreground">Total Spend</p>
             <h3 className="text-lg font-medium text-foreground">${formatNumberWithCommas(metrics.total_spend, 2)}</h3>
             <p className="text-sm text-muted-foreground">
-              ${formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3)} per successful
-              request
+              {metrics.total_successful_requests > 0
+                ? `$${formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3)}`
+                : "N/A"}{" "}
+              per successful request
             </p>
           </CardContent>
         </Card>
@@ -227,6 +232,10 @@ export const ModelSection = ({
           </CardContent>
         </Card>
       </div>
+      <p className="text-sm text-muted-foreground">
+        Request counts exclude internal calls, such as shadow evaluations. Spend and tokens include them. Daily usage is
+        grouped by UTC day.
+      </p>
 
       {fetchTopApiKeys && <ModelTopKeys modelName={modelName} fetchTopApiKeys={fetchTopApiKeys} />}
 

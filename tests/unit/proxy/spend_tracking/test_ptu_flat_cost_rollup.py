@@ -1,16 +1,18 @@
 """Tests for the per-model PTU flat-cost daily rollup."""
 
+import asyncio
 import json
 import types
 from datetime import date, datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 
 import litellm.proxy.spend_tracking.ptu_flat_cost_rollup as ptu_rollup
 from litellm.constants import PTU_ROLLUP_MAX_BACKFILL_DAYS, PTU_SENTINEL_API_KEY
+from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
-from litellm.types.router import ModelInfo
 from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
     PTUModel,
     _active_hours_on_day,
@@ -20,6 +22,7 @@ from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
     run_ptu_flat_cost_rollup,
     run_scheduled_ptu_rollup,
 )
+from litellm.types.router import ModelInfo
 
 DAY = date(2026, 7, 30)
 TODAY = date(2026, 7, 31)
@@ -166,6 +169,7 @@ def _prisma_with_models(rows, existing_sentinel_rows=()):
     model_table = MagicMock()
     model_table.find_many = AsyncMock(return_value=rows)
     daily = MagicMock()
+    daily.find_first = AsyncMock(return_value=None)
     daily.find_many = AsyncMock(return_value=list(existing_sentinel_rows))
     daily.upsert = AsyncMock()
     daily.delete_many = AsyncMock()
@@ -174,25 +178,28 @@ def _prisma_with_models(rows, existing_sentinel_rows=()):
 
 
 @pytest.mark.asyncio
-async def test_rollup_writes_sentinel_row_with_hourly_cost():
+@pytest.mark.parametrize("legacy_value", [None, ""])
+@pytest.mark.parametrize("writer_unavailable", [False, True])
+async def test_rollup_writes_hourly_cost_to_the_legacy_primary_row(legacy_value, writer_unavailable):
     rows = [_model_row(model_info={"ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "team_id": "team_x"})]
-    prisma, table = _prisma_with_models(rows)
+    table = _FakeSentinelTable()
+    table.seed("team_x", DAY, "m1", 1.0)
+    legacy = table.rows[("team_x", DAY.isoformat(), PTU_SENTINEL_API_KEY, "m1")]
+    legacy.update(
+        {field: legacy_value for field in ("model_group", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint")}
+    )
+    prisma = _prisma_for(rows, table)
+    replica = _prisma_for(rows, _FakeSentinelTable())
+    prisma.db = RoutingPrismaWrapper(writer=prisma.db, reader=replica.db)
+    prisma.db._writer_unavailable = writer_unavailable
 
     result = await run_ptu_flat_cost_rollup(prisma, target_date=DAY)
 
     assert result.models_processed == 1
     assert result.rows_written == 1
-    created = table.upsert.await_args.kwargs["data"]["create"]
-    assert created["api_key"] == PTU_SENTINEL_API_KEY
-    assert created["ptu_flat_cost"] == pytest.approx(240.0)
-    assert created["team_id"] == "team_x"
-    # identity in the key, display beside it, so a rename cannot move the row
-    assert created["model"] == "m1"
-    assert created["model_group"] == "gpt-4o-mini-ptu"
-    keyed = table.upsert.await_args.kwargs["where"][
-        "team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint"
+    assert list(table.rows.values()) == [
+        {**legacy, "model_group": "gpt-4o-mini-ptu", "ptu_flat_cost": pytest.approx(240.0), "updated_at": ANY}
     ]
-    assert keyed["model"] == "m1"
 
 
 @pytest.mark.asyncio
@@ -689,20 +696,31 @@ class _FakeSentinelTable:
         self.rows = {}
         self._upsert_gate = upsert_gate
         self.upsert_keys = []
+        self.upsert_ids = []
         self.delete_many_calls = []
         self.find_many_calls = []
+        self.create = AsyncMock()
 
     async def upsert(self, where, data):
+        await asyncio.sleep(0)
         if self._upsert_gate is not None:
             await self._upsert_gate.wait()
-        key = where["team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint"]
+        key = data["create"]
         row_key = (key["team_id"], key["date"], key["api_key"], key["model"])
         self.upsert_keys.append(row_key)
+        self.upsert_ids.append(where["id"])
+        existing = self.rows.get(row_key)
         self.rows[row_key] = {
-            "ptu_flat_cost": data["create"]["ptu_flat_cost"],
-            "model_group": data["create"]["model_group"],
             "updated_at": datetime.now(timezone.utc),
+            **({**existing, **data["update"]} if existing and existing["id"] == where["id"] else key),
         }
+
+    async def find_first(self, where):
+        for key, value in self.rows.items():
+            row = {**dict(zip(("team_id", "date", "api_key", "model"), key)), **value}
+            if all(row.get(field) == expected for field, expected in where.items()):
+                return types.SimpleNamespace(**row)
+        return None
 
     async def delete_many(self, where):
         self.delete_many_calls.append(where)
@@ -737,6 +755,7 @@ class _FakeSentinelTable:
     def seed(self, team_id, day, model_id, flat_cost, updated_at=None, model_group=None):
         """Seed a row the way the rollup writes one: keyed on the deployment id."""
         self.rows[(team_id, day.isoformat(), PTU_SENTINEL_API_KEY, model_id)] = {
+            "id": str(uuid4()),
             "ptu_flat_cost": flat_cost,
             "model_group": model_group or model_id,
             "updated_at": updated_at or datetime.now(timezone.utc),
@@ -1683,6 +1702,7 @@ async def test_concurrent_runs_straddling_a_rename_write_one_row():
         per_day[day] = per_day.get(day, 0) + 1
     assert set(per_day.values()) == {1}, f"a day carries more than one charge: {per_day}"
     assert {key[3] for key in table.rows} == {"dep-1"}
+    assert len(set(table.upsert_ids)) == len(table.rows) == len(set(zip(table.upsert_keys, table.upsert_ids)))
 
 
 @pytest.mark.asyncio
