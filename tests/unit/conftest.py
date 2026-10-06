@@ -12,44 +12,9 @@ import httpx
 import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
 
-WINDOWS_HOST_ENVIRONMENT: Final = frozenset(
-    (
-        "SYSTEMROOT",
-        "SYSTEMDRIVE",
-        "WINDIR",
-        "COMSPEC",
-        "PATHEXT",
-        "USERPROFILE",
-        "HOMEDRIVE",
-        "HOMEPATH",
-        "APPDATA",
-        "LOCALAPPDATA",
-    )
-)
-HOST_ENVIRONMENT_ALLOWLIST: Final = frozenset(
-    (
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "TMPDIR",
-        "TEMP",
-        "TMP",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "TZ",
-        "VIRTUAL_ENV",
-        "LITELLM_LOCAL_MODEL_COST_MAP",
-        "TIKTOKEN_CACHE_DIR",
-    )
-) | (WINDOWS_HOST_ENVIRONMENT if os.name == "nt" else frozenset())
-HOST_ENVIRONMENT_ALLOWED_PREFIXES: Final = ("PYTEST_", "PYTHON", "COV_CORE_", "COVERAGE_")
-HOST_ONLY_ENVIRONMENT: Final = frozenset(
-    name
-    for name in os.environ
-    if name not in HOST_ENVIRONMENT_ALLOWLIST and not name.startswith(HOST_ENVIRONMENT_ALLOWED_PREFIXES)
-)
+from tests.unit.host_environment import is_host_only
+
+HOST_ONLY_ENVIRONMENT: Final = frozenset(name for name in os.environ if is_host_only(name))
 
 os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
