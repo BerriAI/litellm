@@ -121,11 +121,16 @@ def response_pattern(rows: tuple[SpendLogRecord, ...]) -> re.Pattern[str]:
     return re.compile("|".join(re.escape(identity) for identity in identities) or r"(?!)")
 
 
+def seeded_identity(value: str, namespace: str) -> str:
+    prefix: Final = "msg_" if value.startswith("msg_") else ""
+    return f"{prefix}seed-{namespace}-{value.removeprefix(prefix)}"
+
+
 def rebased_response(value: str, namespace: str, pattern: re.Pattern[str]) -> str:
     decoded: Final = managed_response(value)
     if decoded is None:
-        return f"seed-{namespace}-{value}"
-    payload: Final = pattern.sub(lambda match: f"seed-{namespace}-{match.group()}", decoded)
+        return seeded_identity(value, namespace)
+    payload: Final = pattern.sub(lambda match: seeded_identity(match.group(), namespace), decoded)
     return "resp_" + base64.b64encode(payload.encode()).decode()
 
 
