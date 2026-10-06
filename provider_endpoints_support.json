@@ -2450,7 +2450,8 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "realtime": true
       }
     },
     "synthetic": {

@@ -3180,7 +3180,7 @@
         "key": "api_key",
         "label": "Soniox API Key",
         "placeholder": null,
-        "tooltip": "Currently only the async Speech-to-Text REST API (api.soniox.com) is supported. Realtime STT (stt-rt.soniox.com) and TTS (tts-rt.soniox.com) are not yet available.",
+        "tooltip": "Supports async Speech-to-Text (api.soniox.com) on /v1/audio/transcriptions and realtime Speech-to-Text (stt-rt.soniox.com) on /v1/realtime. TTS (tts-rt.soniox.com) is not yet available.",
         "required": true,
         "field_type": "password",
         "options": null,

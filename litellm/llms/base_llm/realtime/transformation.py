@@ -100,6 +100,9 @@ class BaseRealtimeConfig(ABC):
     async def open_backend(self, url: str, headers: Mapping[str, str]) -> RealtimeBackend | None:
         return None
 
+    def wrap_backend(self, backend: RealtimeBackend) -> RealtimeBackend:
+        return backend
+
     def transform_session_created_event(
         self,
         model: str,

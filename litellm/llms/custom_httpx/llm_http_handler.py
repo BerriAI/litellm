@@ -6309,7 +6309,7 @@ class BaseLLMHTTPHandler:
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
             provider_backend: Final = await provider_config.open_backend(url, headers)
-            backend_ws: Final = (
+            backend_ws: Final = provider_config.wrap_backend(
                 provider_backend
                 if provider_backend is not None
                 else await self._open_realtime_backend_ws(websockets, url, headers, ssl_context)

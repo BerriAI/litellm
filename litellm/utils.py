@@ -9694,6 +9694,7 @@ class ProviderConfigManager:
     def get_provider_realtime_config(
         model: str,
         provider: LlmProviders,
+        litellm_params: Mapping[str, object] = MappingProxyType({}),
     ) -> BaseRealtimeConfig | None:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
@@ -9703,6 +9704,10 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig()
+        if LlmProviders.SONIOX == provider:
+            from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig, SonioxRealtimeOptions
+
+            return SonioxRealtimeConfig(options=SonioxRealtimeOptions.model_validate(dict(litellm_params)))
         return None
 
     @staticmethod

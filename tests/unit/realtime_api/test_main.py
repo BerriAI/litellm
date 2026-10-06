@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from types import TracebackType
 from typing import Final
@@ -651,3 +652,32 @@ async def test_arealtime_drops_model_from_the_upstream_url_only_for_transcriptio
             query_params=client_query_params,
         )
     assert connect.url == expected_backend_url
+
+
+@pytest.mark.asyncio
+async def test_arealtime_routes_soniox_with_the_deployment_options(monkeypatch):
+    from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
+
+    captured: dict[str, object] = {}
+
+    async def mock_async_realtime(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(realtime_main.base_llm_http_handler, "async_realtime", mock_async_realtime)
+    await realtime_main._arealtime.__wrapped__(
+        model="soniox/stt-rt-v5",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        query_params={"model": "soniox/stt-rt-v5", "intent": "transcription"},
+        api_key="deployment-key",
+        language_hints=["de"],
+    )
+
+    provider_config = captured["provider_config"]
+    assert isinstance(provider_config, SonioxRealtimeConfig)
+    assert captured["model"] == "stt-rt-v5"
+    assert captured["api_key"] == "deployment-key"
+    start_request = provider_config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.commit"}), "stt-rt-v5"
+    )[0]
+    assert json.loads(start_request)["language_hints"] == ["de"]
