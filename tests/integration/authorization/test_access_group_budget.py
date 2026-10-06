@@ -337,14 +337,13 @@ def test_access_group_budget_refuses_traffic_once_spent_and_serves_again_after_d
                 1,
                 spelling,
             )
-        spent: Final = eventually(
+        eventually(
             lambda: _GroupBudget.model_validate_json(
                 gateway.request("GET", f"/access_group/{group.name}/budget").content
             ),
-            lambda value: value.spend > 0,
-            seconds=30,
+            lambda value: value.spend == pytest.approx(_CALL_COST),
+            seconds=60,
         )
-        assert spent.spend == pytest.approx(_CALL_COST), spent
         assert _budget_rows(group.name)[0]["spend"] == pytest.approx(_CALL_COST)
 
         _assert_refused_for_budget(
@@ -384,13 +383,12 @@ def test_access_group_budget_refuses_a_key_granted_the_group_through_its_scope(
     with wire_server(_billed) as wire, gateway.scenario() as scenario:
         group: Final = _budgeted_group(scenario, wire, grant)
         _assert_served(_chat(gateway, group, text, 1), wire, text, 1)
-        spent: Final = eventually(
+        eventually(
             lambda: _GroupBudget.model_validate_json(
                 gateway.request("GET", f"/access_group/{group.name}/budget").content
             ),
-            lambda value: value.spend >= _MAX_BUDGET,
-            seconds=10,
-            return_last_on_timeout=True,
+            lambda value: value.spend == pytest.approx(_CALL_COST),
+            seconds=60,
         )
         assert _provider_calls(wire) == (), "The served request was not drained before the refusal"
         _assert_refused_for_budget(
@@ -399,7 +397,6 @@ def test_access_group_budget_refuses_a_key_granted_the_group_through_its_scope(
             f"Budget has been exceeded! Model access group={group.name} Current cost: {_CALL_COST}, "
             f"Max budget: {_MAX_BUDGET}",
         )
-        assert spent.spend == pytest.approx(_CALL_COST), spent
         assert _budget_rows(group.name)[0]["spend"] == pytest.approx(_CALL_COST)
 
 

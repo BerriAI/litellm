@@ -151,7 +151,17 @@ def _expected_provider_body(text: str) -> dict[str, JsonValue]:
     return {"model": _PROVIDER_MODEL, "messages": [{"role": "user", "content": text}]}
 
 
+def _is_model_discovery(request: Request) -> bool:
+    return (request.method, request.target) == ("GET", "/v1/models")
+
+
+def _provider_calls(wire: Wire) -> tuple[Request, ...]:
+    return tuple(entry for entry in wire.drain() if not _is_model_discovery(entry))
+
+
 def _rename_reply(request: Request) -> Reply:
+    if _is_model_discovery(request):
+        return Reply(body=json.dumps({"object": "list", "data": []}).encode())
     assert (request.method, request.target) == ("POST", "/v1/chat/completions"), request
     assert request.headers["authorization"] == f"Bearer {_PROVIDER_API_KEY}", request
     assert _JSON_BODY.validate_json(request.body) in tuple(
@@ -209,7 +219,7 @@ def _baseline_call(gateway: Gateway, model: str, caller: _Holder, wire: Wire) ->
         f"{caller.kind}: {served.text}"
     )
     _assert_listing(gateway, caller, served=model, gone=None)
-    requests: Final = wire.drain()
+    requests: Final = _provider_calls(wire)
     assert len(requests) == 1, f"{caller.kind}: expected one provider request, received {requests!r}"
     return requests
 
@@ -225,12 +235,12 @@ def _renamed_call(
     assert _Completion.model_validate_json(served.content) == _Completion(model=new, usage=_Usage(total_tokens=40)), (
         f"{caller.kind}: {served.text}"
     )
-    requests: Final = wire.drain()
+    requests: Final = _provider_calls(wire)
     assert len(requests) == 1, f"{caller.kind}: expected one provider request, received {requests!r}"
     refused: Final = _chat(gateway, old, caller)
     assert refused.status_code == 403, f"{caller.kind}: {refused.text}"
     error: Final = _Error.model_validate(object_value(refused.json())["error"])
-    assert wire.drain() == (), f"{caller.kind}: the old name reached the provider"
+    assert _provider_calls(wire) == (), f"{caller.kind}: the old name reached the provider"
     _assert_listing(gateway, caller, served=new, gone=old)
     return _RenameCall(caller.kind, refused.status_code, error, requests)
 

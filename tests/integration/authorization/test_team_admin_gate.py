@@ -721,15 +721,20 @@ def _credential_row(name: str) -> list[dict[str, object]]:
     )
 
 
+@pytest.mark.parametrize("contains_slash", (False, True), ids=("plain-name", "slash-name"))
 @pytest.mark.parametrize(("fixture", "caller"), ADMIN_ONLY_CALLERS, ids=ADMIN_ONLY_IDS)
 def test_only_proxy_admin_reads_or_changes_credentials(
-    request: pytest.FixtureRequest, fixture: str, caller: Caller
+    request: pytest.FixtureRequest, fixture: str, caller: Caller, contains_slash: bool
 ) -> None:
     secret: Final = f"synthetic-shared-credential-{uuid.uuid4().hex}"
     with gateway_from_environment() as gateway, gateway.scenario() as scenario:
         s: Final = _admin_only_team(request, fixture, scenario)
-        name: Final = f"credential-{uuid.uuid4().hex}"
-        attempted: Final = f"credential-{uuid.uuid4().hex}"
+        name: Final = (
+            f"credential/{uuid.uuid4().hex}" if contains_slash else f"credential-{uuid.uuid4().hex}"
+        )
+        attempted: Final = (
+            f"credential/{uuid.uuid4().hex}" if contains_slash else f"credential-{uuid.uuid4().hex}"
+        )
         s.gateway.post(
             "/credentials",
             {"credential_name": name, "credential_values": {"api_key": secret}, "credential_info": {"team": "shared"}},
