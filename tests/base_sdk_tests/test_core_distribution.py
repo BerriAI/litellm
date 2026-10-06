@@ -57,3 +57,17 @@ def test_invalid_core_metadata_fails_before_writing(tmp_path: Path, source: str,
 def test_preparing_core_twice_is_rejected() -> None:
     with pytest.raises(ValueError, match="unmodified litellm"):
         core_metadata(core_metadata(METADATA))
+
+
+def test_core_build_command_stages_a_buildable_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import runpy
+    import sys
+
+    path: Final = tmp_path / "pyproject.toml"
+    path.write_text(METADATA)
+    script: Final = Path(__file__).resolve().parents[2] / "scripts/prepare_core_distribution.py"
+    monkeypatch.setattr(sys, "argv", [str(script), str(path)])
+    runpy.run_path(str(script), run_name="__main__")
+    selected: Final = tomllib.loads(path.read_text())
+    assert selected["project"]["name"] == "litellm-core"
+    assert selected["project"]["optional-dependencies"]["sdk-extras"] == ["litellm-core[aws]"]

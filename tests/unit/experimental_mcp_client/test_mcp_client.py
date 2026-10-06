@@ -3417,3 +3417,18 @@ async def test_cancelled_modern_catalog_load_prevents_tool_execution() -> None:
 def test_modern_upstream_rejects_legacy_sse_transport() -> None:
     with pytest.raises(ValueError, match="transport"):
         MCPClient(protocol_version="2026-07-28", transport_type=MCPTransport.sse)
+
+
+def test_missing_mcp_extra_names_the_installed_distribution(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+    import sys
+
+    from litellm._version import get_distribution_name
+
+    for module in ("litellm.experimental_mcp_client", "litellm.experimental_mcp_client.tools", "litellm.experimental_mcp_client.client"):
+        monkeypatch.delitem(sys.modules, module, raising=False)
+    monkeypatch.setitem(sys.modules, "mcp", None)
+    with pytest.raises(ImportError, match="MCP client dependencies are missing") as caught:
+        importlib.import_module("litellm.experimental_mcp_client")
+    assert get_distribution_name() + "[mcp]" in str(caught.value)
+    assert isinstance(caught.value.__cause__, ModuleNotFoundError)

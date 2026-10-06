@@ -119,7 +119,7 @@ jobs:
               uv pip check --python "$python"
             fi
             (cd "$RUNNER_TEMP" && "$python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_distribution_install.py" litellm)
-            (cd "$RUNNER_TEMP" && "$python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_sdk_http.py")
+            (cd "$RUNNER_TEMP" && "$python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_cli_install.py" --profile core)
           done
 
       - name: Select the independent core dependency profile

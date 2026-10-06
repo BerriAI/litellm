@@ -1,5 +1,7 @@
 """Unit tests for litellm.setup_wizard — pure functions only, no network calls."""
 
+import pytest
+
 from litellm.setup_wizard import SetupWizard, _yaml_escape
 
 # ---------------------------------------------------------------------------
@@ -186,3 +188,10 @@ def test_build_config_internal_sentinel_keys_excluded():
     }
     config = SetupWizard._build_config([_OPENAI], env_vars, "sk-master")
     assert "_LITELLM_" not in config
+
+
+def test_welcome_displays_installed_distribution_version(capsys: pytest.CaptureFixture[str]) -> None:
+    from litellm._version import get_version
+
+    SetupWizard._print_welcome()
+    assert "v" + get_version() in capsys.readouterr().out
