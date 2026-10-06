@@ -289,7 +289,7 @@ class SkillPromptInjectionHandler:
         if len(description) > max_desc_length:
             description = description[: max_desc_length - 3] + "..."
 
-        input_schema: dict[str, Any] = {
+        input_schema: dict[str, object] = {
             "type": "object",
             "properties": {},
             "required": [],

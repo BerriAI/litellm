@@ -1,5 +1,5 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -218,7 +218,7 @@ def initialize_tool_permission(litellm_params: LitellmParams, guardrail: Guardra
         ToolPermissionGuardrail,
     )
 
-    rules: list[dict[str, Any]] | None = None
+    rules: list[dict[str, object]] | None = None
     if litellm_params.rules:
         rules = []
         for rule in litellm_params.rules:

@@ -2,7 +2,7 @@ import asyncio
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -291,7 +291,7 @@ class _ProxyDBLogger(CustomLogger):
     async def _PROXY_track_cost_callback(
         self,
         kwargs,  # kwargs to completion
-        completion_response: litellm.ModelResponse | Any | None,  # response from completion
+        completion_response: litellm.ModelResponse | object | None,  # response from completion
         start_time=None,
         end_time=None,  # start/end time for completion
     ):

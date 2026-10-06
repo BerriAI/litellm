@@ -6,7 +6,7 @@ this is OpenAI compatible - no translation needed / occurs
 
 import os
 from collections.abc import Coroutine
-from typing import Any, Literal, overload
+from typing import Literal, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -24,7 +24,7 @@ class HerokuChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -36,7 +36,7 @@ class HerokuChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         Heroku does not support content in list format.
         See: https://devcenter.heroku.com/articles/heroku-inference-api-v1-chat-completions#content-object

@@ -1,6 +1,7 @@
 import json
 import os
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -177,8 +178,8 @@ class GithubCopilotConfig(OpenAIConfig):
 
     @staticmethod
     def _parse_anthropic_native_content(
-        content_blocks: list[Any],
-    ) -> tuple[str, list[ChatCompletionToolCallChunk], list[Any] | None]:
+        content_blocks: list[object],
+    ) -> tuple[str, list[ChatCompletionToolCallChunk], Sequence[object] | None]:
         """
         Parse Anthropic-native content blocks into OpenAI-compatible fields.
 
@@ -225,7 +226,7 @@ class GithubCopilotConfig(OpenAIConfig):
 
         content = ""
         tool_calls: list[ChatCompletionToolCallChunk] = []
-        thinking_blocks: list[Any] | None = None
+        thinking_blocks: Sequence[object] | None = None
         raw_content: Final = response_json.get("content")
         if isinstance(raw_content, list):
             content, tool_calls, thinking_blocks = cls._parse_anthropic_native_content(raw_content)

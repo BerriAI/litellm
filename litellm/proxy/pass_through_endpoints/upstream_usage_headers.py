@@ -96,8 +96,8 @@ def parse_upstream_reported_usage(headers: httpx.Headers) -> UpstreamReportedUsa
     for a target that does not speak this contract (e.g. Anthropic or Vertex,
     whose cost LiteLLM derives from the response body instead).
     """
-    raw_response_cost: Final = headers.get(UPSTREAM_RESPONSE_COST_HEADER)
-    raw_total_tokens: Final = headers.get(UPSTREAM_TOTAL_TOKENS_HEADER)
+    raw_response_cost: Final[str | None] = headers.get(UPSTREAM_RESPONSE_COST_HEADER)
+    raw_total_tokens: Final[str | None] = headers.get(UPSTREAM_TOTAL_TOKENS_HEADER)
     if raw_response_cost is None and raw_total_tokens is None:
         return None
     return UpstreamReportedUsage(

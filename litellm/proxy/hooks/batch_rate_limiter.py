@@ -524,7 +524,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         )
         from litellm.proxy.proxy_server import llm_router
 
-        fetch_kwargs: Final[dict[str, Any]] = {
+        fetch_kwargs: Final[dict[str, object]] = {
             "custom_llm_provider": custom_llm_provider,
         }
 

@@ -1133,3 +1133,21 @@ def test_build_bedrock_stream_error_resolves_status_from_the_exception_type(
 
     assert error.status_code == expected_status
     assert error.message == expected_message
+
+
+@pytest.mark.parametrize(
+    ("header_value", "expected"),
+    [
+        (
+            '["interleaved-thinking-2025-05-14", "claude-code-20250219"]',
+            ["interleaved-thinking-2025-05-14", "claude-code-20250219"],
+        ),
+        (' [" context-1m-2025-08-07 "] ', ["context-1m-2025-08-07"]),
+        ("[]", []),
+        ("[not-json]", ["[not-json]"]),
+    ],
+)
+def test_get_anthropic_beta_from_headers_reads_a_json_array_header(header_value: str, expected: list[str]):
+    from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+
+    assert get_anthropic_beta_from_headers({"anthropic-beta": header_value}) == expected

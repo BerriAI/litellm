@@ -426,7 +426,7 @@ async def parse_rag_ingest_request(
     file_data: tuple[str, bytes, str] | None = None
     file_url: str | None = None
     file_id: str | None = None
-    ingest_options: dict[str, Any] = {}
+    ingest_options: dict[str, object] = {}
 
     if "multipart/form-data" in content_type:
         # Form upload

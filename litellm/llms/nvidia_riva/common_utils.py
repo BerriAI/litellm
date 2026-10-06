@@ -2,7 +2,7 @@
 Common utilities and exceptions for the NVIDIA Riva STT provider
 """
 
-from typing import Any, Final
+from typing import Final
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -41,7 +41,7 @@ _GRPC_STATUS_CODE_TO_HTTP: Final[dict] = {
 }
 
 
-def _extract_grpc_status_name(error: Any) -> str | None:
+def _extract_grpc_status_name(error: object) -> str | None:
     """
     Best-effort extraction of a gRPC StatusCode name from an arbitrary error.
 
@@ -60,7 +60,7 @@ def _extract_grpc_status_name(error: Any) -> str | None:
     return None
 
 
-def _extract_grpc_details(error: Any) -> str | None:
+def _extract_grpc_details(error: object) -> str | None:
     """Best-effort extraction of a human-readable detail string from a gRPC error."""
     details_fn: Final = getattr(error, "details", None)
     if callable(details_fn):

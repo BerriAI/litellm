@@ -189,7 +189,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             top_p=top_p,
             response_format=response_format,
         )
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

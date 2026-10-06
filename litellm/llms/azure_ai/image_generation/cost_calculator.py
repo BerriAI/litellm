@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
@@ -23,7 +23,7 @@ def _input_cost_per_pixel(resolved: ModelInfo) -> float:
 
 def cost_calculator(
     model: str,
-    image_response: Any,
+    image_response: object,
     size: str | None = None,
     n: int | None = None,
     optional_params: Mapping[str, object] | None = None,

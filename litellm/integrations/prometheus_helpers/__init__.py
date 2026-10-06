@@ -6,7 +6,7 @@ Helpers for the Prometheus integration (extracted to keep ``prometheus.py`` smal
 
 from __future__ import annotations
 
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from litellm.types.integrations.prometheus import (
     UserAPIKeyLabelValues,
@@ -66,7 +66,7 @@ class PrometheusLabelFactoryContext:
             for k, v in get_custom_labels_from_tags(enum_values.tags).items():
                 self._tag_labels[k] = _sanitize_prometheus_label_value(v)
         # Use a dedicated sentinel so `None` can be cached as a computed result.
-        self._resolved_end_user: Any = self._END_USER_NOT_COMPUTED
+        self._resolved_end_user: object = self._END_USER_NOT_COMPUTED
 
     def get_resolved_end_user(self) -> str | None:
         if self._resolved_end_user is self._END_USER_NOT_COMPUTED:

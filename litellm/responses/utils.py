@@ -312,17 +312,17 @@ class ResponsesAPIRequestUtils:
     def _update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse,
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: dict[str, object] | None = None,
     ) -> ResponsesAPIResponse: 
         ...
 
     @overload
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
-        responses_api_response: dict[str, Any],
+        responses_api_response: dict[str, object],
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]: 
+        litellm_metadata: dict[str, object] | None = None,
+    ) -> dict[str, object]: 
         ...
 
     # fmt: on
@@ -332,7 +332,7 @@ class ResponsesAPIRequestUtils:
         responses_api_response: ResponsesAPIResponse | dict[str, Any],
         custom_llm_provider: str | None,
         litellm_metadata: dict[str, Any] | None = None,
-    ) -> ResponsesAPIResponse | dict[str, Any]:
+    ) -> ResponsesAPIResponse | dict[str, object]:
         """Update the responses_api_response_id with model_id and custom_llm_provider.
 
         Handles both ``ResponsesAPIResponse`` objects and plain dictionaries returned
@@ -1004,7 +1004,7 @@ class ResponsesAPIRequestUtils:
         responses_api_response: ResponsesAPIResponse | dict[str, Any],
         custom_llm_provider: str | None,
         litellm_metadata: dict[str, Any] | None = None,
-    ) -> ResponsesAPIResponse | dict[str, Any]:
+    ) -> ResponsesAPIResponse | dict[str, object]:
         """Encode container IDs in the response output with provider/model info.
 
         This walks through all output items and encodes any container_id fields

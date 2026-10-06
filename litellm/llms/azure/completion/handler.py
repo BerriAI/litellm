@@ -180,7 +180,7 @@ class AzureTextCompletion(BaseAzureLLM):
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(status_code=status_code, message=str(e), headers=error_headers)
@@ -241,7 +241,7 @@ class AzureTextCompletion(BaseAzureLLM):
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(status_code=status_code, message=str(e), headers=error_headers)
@@ -352,7 +352,7 @@ class AzureTextCompletion(BaseAzureLLM):
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(status_code=status_code, message=str(e), headers=error_headers)

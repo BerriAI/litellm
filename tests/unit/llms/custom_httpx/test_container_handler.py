@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -7,6 +8,7 @@ import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.container_handler import generic_container_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.containers.main import DeleteContainerFileResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager
 
@@ -100,3 +102,25 @@ def test_json_endpoint_still_raises_provider_error_message():
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.message == "File not found."
+
+
+def test_json_endpoint_sends_the_configured_route_and_parses_its_response_model():
+    handler: Final = HTTPHandler()
+    handler.client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "id": request.url.path,
+                    "object": "container.file.deleted",
+                    "deleted": request.method == "DELETE",
+                },
+            )
+        )
+    )
+
+    response: Final = _handle("delete_container_file", handler)
+
+    assert type(response) is DeleteContainerFileResponse
+    assert response.id.endswith("/containers/cntr_real/files/cfile_nonexistent")
+    assert response.deleted is True

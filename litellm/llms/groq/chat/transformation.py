@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
@@ -72,7 +72,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         tools: list | None = None,
         tool_choice: str | dict | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -125,7 +125,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -137,7 +137,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         for idx, message in enumerate(messages):
             """
             1. Don't pass 'null' function_call assistant message to groq - https://github.com/BerriAI/litellm/issues/5839

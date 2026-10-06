@@ -135,7 +135,7 @@ class LangGraphConfig(BaseConfig):
                 return parts[1]
         return model
 
-    def _convert_messages_to_langgraph_format(self, messages: list[AllMessageValues]) -> list[dict[str, Any]]:
+    def _convert_messages_to_langgraph_format(self, messages: list[AllMessageValues]) -> list[dict[str, object]]:
         """
         Convert OpenAI-format messages to LangGraph format.
 
@@ -144,7 +144,7 @@ class LangGraphConfig(BaseConfig):
 
         Preserves per-message ``metadata`` when present (e.g. A2A ``skillId``).
         """
-        langgraph_messages: Final[list[dict[str, Any]]] = []
+        langgraph_messages: Final[list[dict[str, object]]] = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -167,7 +167,7 @@ class LangGraphConfig(BaseConfig):
             if not isinstance(content, str):
                 content = str(content)
 
-            langgraph_message: dict[str, Any] = {
+            langgraph_message: dict[str, object] = {
                 "role": langgraph_role,
                 "content": content,
             }
@@ -202,7 +202,7 @@ class LangGraphConfig(BaseConfig):
         assistant_id: Final = self._get_assistant_id(model, optional_params)
         langgraph_messages: Final = self._convert_messages_to_langgraph_format(messages)
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "assistant_id": assistant_id,
             "input": {"messages": langgraph_messages},
         }

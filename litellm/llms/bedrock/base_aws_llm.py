@@ -283,7 +283,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         self,
         credential_args: Mapping[str, str | bool | tuple[AwsSessionTag, ...] | None],
         credential_fetcher: Callable[[], tuple[Credentials, int | None]],
-    ) -> Any:
+    ) -> Credentials:
         """
         Read-through IAM cache on the process-wide ``DualCache``.
 

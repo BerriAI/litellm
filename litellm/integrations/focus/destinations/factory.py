@@ -39,7 +39,7 @@ class FocusDestinationFactory:
     def _resolve_config(
         *,
         provider: str,
-        overrides: dict[str, Any],
+        overrides: dict[str, object],
     ) -> dict[str, Any]:
         if provider == "s3":
             resolved = {

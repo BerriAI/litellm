@@ -259,7 +259,7 @@ def _route_has_translation(request_data: dict) -> bool:
     return any(call_type in mappings for call_type in get_call_types_for_route(route) or ())
 
 
-def _request_structured_messages(request_data: dict) -> list[dict[str, Any]] | None:
+def _request_structured_messages(request_data: dict) -> list[dict[str, object]] | None:
     messages: Final = request_data.get("messages")
     if messages:
         return messages if isinstance(messages, list) else None
@@ -1083,7 +1083,7 @@ class StraikerGuardrail(CustomGuardrail):
             if last_failure is None or not last_failure.retryable:
                 return parsed, last_failure
             if attempt < attempts - 1:
-                backoff = min(self.initial_backoff * (2**attempt), self.max_backoff)
+                backoff: float = min(self.initial_backoff * (2**attempt), self.max_backoff)
                 await asyncio.sleep(random.uniform(0, backoff))
 
         return None, last_failure or _WebhookFailure("unknown error", is_unreachable=True)

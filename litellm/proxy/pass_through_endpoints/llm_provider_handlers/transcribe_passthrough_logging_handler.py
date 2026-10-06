@@ -592,7 +592,7 @@ class TranscribePassthroughLoggingHandler:
     @staticmethod
     def _operation_from_response(httpx_response: httpx.Response) -> str:
         headers: Final[Mapping[str, str]] = httpx_response.request.headers
-        target: Final = headers.get("x-amz-target", "")
+        target: Final[str] = headers.get("x-amz-target", "")
         return target.split(".")[-1]
 
     @staticmethod

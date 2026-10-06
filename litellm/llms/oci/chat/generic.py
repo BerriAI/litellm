@@ -8,7 +8,7 @@ parsing, and streaming chunk parsing for models served with
 
 import datetime
 import hashlib
-from typing import Any, Final
+from typing import Final
 
 import httpx
 from pydantic import ValidationError
@@ -404,7 +404,7 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     # same minimal ``{"id", "type", "function": {"name", "arguments"}}``
     # shape keeps downstream stream-mergers behaving identically across
     # GENERIC and Cohere chunks.
-    tool_calls: list[dict[str, Any]] | None = None
+    tool_calls: list[dict[str, object]] | None = None
     if typed_chunk.message and typed_chunk.message.toolCalls:
         tool_calls = [
             {

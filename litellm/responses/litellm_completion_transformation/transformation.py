@@ -266,7 +266,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_tool_choice(
         tool_choice: Any,
-    ) -> str | dict[str, Any] | None:
+    ) -> str | dict[str, object] | None:
         """
         Transform tool_choice from various formats to OpenAI Chat Completion format.
 

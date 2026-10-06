@@ -92,7 +92,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
 
         return optional_params
 
-    def _map_image_size(self, size: Any) -> Any:
+    def _map_image_size(self, size: Any) -> object:
         if isinstance(size, dict):
             width = size.get("width")
             height = size.get("height")

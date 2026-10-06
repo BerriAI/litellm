@@ -1,6 +1,6 @@
 import asyncio
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import urlparse
@@ -39,6 +39,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    ModelResponseStream,
     SpecialEnums,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
@@ -629,7 +630,7 @@ class VertexPassthroughLoggingHandler:
                 sync_stream=False,
                 logging_obj=litellm_logging_obj,
             )
-            chunk_parsing_logic: Any = vertex_iterator._common_chunk_parsing_logic
+            chunk_parsing_logic: Callable[..., ModelResponseStream | None] = vertex_iterator._common_chunk_parsing_logic
             parsed_chunks = [chunk_parsing_logic(chunk) for chunk in all_chunks]
         elif "rawPredict" in url_route or "streamRawPredict" in url_route:
             from litellm.llms.anthropic.chat.handler import ModelResponseIterator

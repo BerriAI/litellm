@@ -357,7 +357,7 @@ class BaseResponsesAPIConfig(ABC):
         """
         if not isinstance(input, list):
             return input
-        out: Final[list[Any]] = []
+        out: Final[list[object]] = []
         for item in input:
             if isinstance(item, dict) and item.get("type") == "custom_tool_call":
                 out.append({k: v for k, v in item.items() if k != "namespace"})

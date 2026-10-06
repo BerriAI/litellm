@@ -353,7 +353,7 @@ class LazyFeatureMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Short-circuit once every feature has loaded.
         if scope["type"] in ("http", "websocket") and len(self._loaded) < len(self._features):
-            path = scope.get("path", "")
+            path: str = scope.get("path", "")
             # Strip the request's root_path so prefix matching works under a
             # server root path. Without this, requests like /api/v1/policies/...
             # never match the registered prefixes (/policies/...) and lazy

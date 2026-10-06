@@ -93,7 +93,7 @@ class GenericPromptManager(CustomPromptManagement):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def _fetch_prompt_from_api(self, prompt_id: str | None, prompt_spec: PromptSpec | None) -> dict[str, Any]:
+    def _fetch_prompt_from_api(self, prompt_id: str | None, prompt_spec: PromptSpec | None) -> dict[str, object]:
         """
         Fetch a prompt from the API.
 

@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -128,9 +129,12 @@ def is_gemini_image_model(model: str) -> bool:
     return "gemini" in base_model
 
 
+_JSON_VALUE: Final = TypeAdapter(object)
+
+
 def _parse_image_config_string(raw_image_config: str, model: str) -> object:
     try:
-        return json.loads(raw_image_config)
+        return _JSON_VALUE.validate_python(json.loads(raw_image_config))
     except json.JSONDecodeError as exc:
         raise litellm.UnsupportedParamsError(
             model=model,

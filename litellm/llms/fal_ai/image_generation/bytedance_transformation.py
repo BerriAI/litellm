@@ -60,7 +60,7 @@ class FalAIBytedanceBaseConfig(FalAIFluxProV11UltraConfig):
 
         return optional_params
 
-    def _map_image_size(self, size: Any) -> Any:
+    def _map_image_size(self, size: Any) -> object:
         if isinstance(size, dict):
             return size
 

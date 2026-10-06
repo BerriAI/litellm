@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -76,7 +76,7 @@ def _load_vcap() -> dict[str, Any]:
     return _load_json_env(VCAP_SERVICES_ENV_VAR) or {}
 
 
-def _get_vcap_service(label: str) -> dict[str, Any] | None:
+def _get_vcap_service(label: str) -> Mapping[str, object] | None:
     for services in _load_vcap().values():
         for svc in services:
             if svc.get("label") == label:

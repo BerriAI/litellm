@@ -12,7 +12,7 @@ from litellm.proxy.auth.network import (
 TRUSTED_PROXY_RANGES_KEY: Final = "trusted_proxy_ranges"
 
 
-def _get_proxy_general_settings() -> dict[str, Any]:
+def _get_proxy_general_settings() -> dict[str, object]:
     try:
         from litellm.proxy.proxy_server import general_settings
 
