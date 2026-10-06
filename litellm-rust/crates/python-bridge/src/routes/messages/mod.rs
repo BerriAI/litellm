@@ -46,7 +46,7 @@ fn run_messages(
                         .execute(
                             call,
                             &interceptors,
-                            litellm_core::CallOptions {
+                            litellm_inference::CallOptions {
                                 cache: options,
                                 model_group: None,
                                 observers,

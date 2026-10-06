@@ -2,11 +2,11 @@ use super::python;
 use std::sync::Arc;
 
 use litellm_cache_response::{CacheOptions, CachePolicy, ResponseCacheService};
-use litellm_core::caching::Cachable;
 use litellm_host::{
     machine::{HostServices, MachineFault},
     protocol::Protocol,
 };
+use litellm_inference::caching::Cachable;
 use pyo3::{prelude::*, types::PyDict};
 
 pub(crate) struct PythonCached<P>(std::marker::PhantomData<P>);

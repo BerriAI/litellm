@@ -26,7 +26,7 @@ impl CachePlan {
         })
     }
 
-    pub(crate) fn for_request(
+    pub fn for_request(
         service: Option<&Arc<dyn ResponseCacheService>>,
         options: Option<CacheOptions>,
         request: &impl CacheKeyProjection,
@@ -45,7 +45,7 @@ impl CachePlan {
         }))
     }
 
-    pub(crate) fn guard(self, outbound: &WireRequest) -> GuardedPlan {
+    pub fn guard(self, outbound: &WireRequest) -> GuardedPlan {
         GuardedPlan {
             sent: SentRequest::of(outbound),
             plan: self,
@@ -53,13 +53,13 @@ impl CachePlan {
     }
 }
 
-pub(crate) struct GuardedPlan {
+pub struct GuardedPlan {
     plan: CachePlan,
     sent: SentRequest,
 }
 
 impl GuardedPlan {
-    pub(crate) fn confirm(self, wire: &WireRequest) -> Option<CachePlan> {
+    pub fn confirm(self, wire: &WireRequest) -> Option<CachePlan> {
         if self.sent.matches(wire) {
             return Some(self.plan);
         }

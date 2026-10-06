@@ -4,7 +4,7 @@
 - This crate is the shared base every format crate builds on
   - `RouteError` (`src/error.rs`), `CallOptions` (`src/lib.rs`), `CallContext` (`src/context.rs`)
   - diagnostic spans (`src/diagnostic.rs`), outbound send and signing (`src/outbound.rs`), provider resolution (`src/provider.rs`), `CoreResources` (`src/resources.rs`)
-  - response caching (`src/caching.rs`): `Cachable`, `StreamCachable`, `CacheRequest`, `CallCache`, `execute_unary`, `execute_streaming`, stream capture
+  - response caching (`src/caching/`): `Cachable`, `StreamCachable`, `CacheKeyProjection`, `CachePlan`, `CacheSession`, `execute_unary`, `execute_streaming`, stream capture
   - shared test helpers behind the `test-support` feature (`src/test_support.rs`)
 - Nothing here names an API format; format-specific code, constants, tests and test builders live in their `inference-<fmt>` crate
 - Never depend on an `inference-*` crate from here
@@ -64,12 +64,12 @@
 
 ## Response caching and accounting
 
-- Attach a `litellm_cache_response::ScopedCache` with `route.with_cache(cache)`; cached and uncached routes use the same `execute` and `machine` methods
-- `CallOptions` carries a scope-free `CachePolicy` and observation; per-call policy never replaces the attached scope or service
-- Provider transport does not own cache orchestration; stream capture stays in `src/caching.rs`
+- Attach a long-lived `ResponseCacheService` with `route.with_cache(service)`; cached and uncached routes use the same `execute` and `machine` methods
+- `CallOptions` carries per-call `CacheOptions` (policy and caller scope) and observation; per-call options never replace the attached service
+- Provider transport does not own cache orchestration; stream capture stays in `src/caching/`
 - This crate and the format crates own request identity, typed response reconstruction, and stream capture and replay
 - `cache-response` owns cache policy, namespacing, scope encoding, versioned envelopes, and freshness
-- The SDK explicitly chooses shared scope; the gateway derives isolated scope from authenticated identity before attaching its service
+- The SDK explicitly chooses shared scope; the gateway derives isolated scope from authenticated identity per request
 - `ExecutionFacts` are delivered through the awaited `ResultReady` host operation for both provider and cached results, before public response processing or stream opening
   - facts carry resolved model/provider and result source, including the hit key
   - usage remains in the typed response or delivered stream, where completion and cancellation determine what was actually reported
@@ -79,5 +79,5 @@
   - native gateway accounting belongs to gateway dependencies, independently of `host-python`
   - response-cache services expose no coordination counters or reservation APIs; a shared Redis deployment does not make response storage and accounting coordination the same dependency
 - Cache lookup follows provider preparation, credential resolution, and the request interceptor
-  - keys describe the effective provider URL, authenticated headers, and rewritten body
+  - keys describe the caller request, forwarded headers, and logical model group or deployment identity; request rewrites bypass caching
   - signed requests bypass caching until the signing identity has a stable cache representation

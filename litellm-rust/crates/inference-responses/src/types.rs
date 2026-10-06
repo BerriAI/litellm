@@ -1,3 +1,8 @@
+use litellm_cache_response::{CacheKeyInput, CacheTarget, extra_headers};
+use litellm_inference::{
+    RouteError,
+    caching::{Cachable, CacheKeyProjection},
+};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -34,4 +39,23 @@ pub(super) struct ProviderResponsesRequest {
     pub body: Value,
     pub context: litellm_host::interceptors::RequestContext,
     pub timeout: Option<Duration>,
+}
+
+impl CacheKeyProjection for ResponsesCall {
+    fn cache_key_input(&self, model_group: Option<&str>) -> Result<CacheKeyInput, RouteError> {
+        Ok(CacheKeyInput::forwarded(
+            <crate::route::Responses as Cachable>::SURFACE,
+            CacheTarget::resolve(
+                model_group,
+                &self.model,
+                self.custom_llm_provider.as_deref(),
+                self.api_base.as_deref(),
+            ),
+            self.optional_params
+                .clone()
+                .into_iter()
+                .chain([("input".into(), self.input.clone())]),
+            extra_headers(self.extra_headers.as_ref()),
+        ))
+    }
 }

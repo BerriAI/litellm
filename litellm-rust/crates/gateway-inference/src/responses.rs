@@ -34,7 +34,7 @@ pub(crate) async fn create(
     };
     let machine = route.machine(
         call,
-        litellm_core::CallOptions {
+        litellm_inference::CallOptions {
             cache: Some(cache_options),
             model_group: Some(model_group),
             observers: None,

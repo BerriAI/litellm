@@ -1,7 +1,6 @@
-use crate::caching::CachePlan;
-pub use crate::error::RouteError as Error;
 use litellm_host::observation::ObservationSender;
 pub use litellm_inference::RouteError as Error;
+use litellm_inference::caching::CachePlan;
 
 pub mod route;
 pub mod types;

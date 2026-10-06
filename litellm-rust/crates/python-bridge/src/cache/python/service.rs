@@ -6,15 +6,12 @@ use litellm_cache_response::{
     CacheKey, CacheKeyInput, CacheScope, ResponseCacheConfig, ResponseCacheService,
     ResponseEnvelope,
 };
-use litellm_core::{
-    caching::{Cachable, CachedOutput},
-    messages::route::Messages,
-};
 use litellm_host::{
     machine::{HostServices, MachineFault},
     protocol::{Protocol, Reply},
 };
-use litellm_inference::caching::CachedOutput;
+use litellm_inference::caching::{Cachable, CachedOutput};
+use litellm_inference_messages::route::Messages;
 use serde_json::Value;
 
 const STREAM_EVENTS_KEY: &str = "litellm_cached_anthropic_sse_events";

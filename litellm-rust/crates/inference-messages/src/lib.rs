@@ -9,14 +9,14 @@ use futures_util::FutureExt;
 use litellm_auth::AuthServices;
 use litellm_host::interceptors::{ExecutionFacts, Interceptors, ResultSource};
 
-use crate::{
+use litellm_inference::{
     caching::{CachePlan, CacheSession},
     context::CallContext,
 };
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 
-pub use crate::error::RouteError as Error;
+pub use litellm_inference::RouteError as Error;
 pub use types::{MessagesCall, MessagesCallResponse, MessagesShaping, messages_body};
 
 #[derive(Clone)]
@@ -76,7 +76,7 @@ impl MessagesRoute {
         call: MessagesCall,
         context: CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<MessagesCallResponse, Error> {
-        crate::diagnostic::call(async {
+        litellm_inference::diagnostic::call(async {
             let cache = CachePlan::for_request(
                 self.cache.as_ref(),
                 context.cache.clone(),
@@ -84,7 +84,10 @@ impl MessagesRoute {
                 context.model_group.as_deref(),
             )?;
             let prepared = prepare::prepare(call, self.secrets.as_ref()).await?;
-            crate::diagnostic::provider(&prepared.body.model, prepared.provider.as_str());
+            litellm_inference::diagnostic::provider(
+                &prepared.body.model,
+                prepared.provider.as_str(),
+            );
             let mut request = self
                 .prepare_outbound(prepared, cache, &context)
                 .boxed()

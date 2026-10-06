@@ -18,7 +18,7 @@ pub(super) async fn execute(
     http: &Client,
     auth: &AuthServices,
     request: ProviderChatCompletionsRequest,
-    cache: Option<crate::caching::CachePlan>,
+    cache: Option<litellm_inference::caching::CachePlan>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<ChatCompletionsResponse, Error> {
@@ -57,7 +57,7 @@ pub(super) async fn execute(
     let wire = interceptors
         .before_provider_request(outbound, context)
         .await?;
-    crate::caching::execute_unary::<super::route::ChatCompletions, _, _>(
+    litellm_inference::caching::execute_unary::<super::route::ChatCompletions, _, _>(
         identity,
         cache.and_then(|cache| cache.confirm(&wire)),
         interceptors,

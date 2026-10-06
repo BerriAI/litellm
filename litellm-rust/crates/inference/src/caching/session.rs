@@ -26,7 +26,7 @@ pub enum CachedOutput<R> {
     Stream(String),
 }
 
-pub(crate) struct CacheSession<P> {
+pub struct CacheSession<P> {
     service: Arc<dyn ResponseCacheService>,
     policy: CachePolicy,
     key: CacheKey,
@@ -34,7 +34,7 @@ pub(crate) struct CacheSession<P> {
 }
 
 impl<P: Cachable> CacheSession<P> {
-    pub(crate) async fn open(plan: Option<CachePlan>) -> Option<Self> {
+    pub async fn open(plan: Option<CachePlan>) -> Option<Self> {
         let CachePlan {
             service,
             options,
@@ -123,7 +123,7 @@ impl<P: Cachable> CacheSession<P> {
 }
 
 impl<P: StreamCachable> CacheSession<P> {
-    pub(crate) async fn replay(session: Option<&Self>) -> Option<(OutputOf<P>, ResultSource)>
+    pub async fn replay(session: Option<&Self>) -> Option<(OutputOf<P>, ResultSource)>
     where
         P::Response: DeserializeOwned,
     {
@@ -135,7 +135,7 @@ impl<P: StreamCachable> CacheSession<P> {
         Some((output, session.hit()))
     }
 
-    pub(crate) async fn finish(
+    pub async fn finish(
         session: Option<Self>,
         output: OutputOf<P>,
         source: &ResultSource,

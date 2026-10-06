@@ -15,7 +15,7 @@ pub(super) async fn execute(
     http: &litellm_http::Client,
     auth: &litellm_auth::AuthServices,
     request: ProviderResponsesRequest,
-    cache: Option<crate::caching::CachePlan>,
+    cache: Option<litellm_inference::caching::CachePlan>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<ResponsesOutput, Error> {
@@ -35,7 +35,7 @@ pub(super) async fn execute(
     let wire = interceptors
         .before_provider_request(outbound, request.context)
         .await?;
-    crate::caching::execute_streaming::<super::route::Responses, _, _>(
+    litellm_inference::caching::execute_streaming::<super::route::Responses, _, _>(
         identity,
         cache.and_then(|cache| cache.confirm(&wire)),
         interceptors,

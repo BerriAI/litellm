@@ -10,14 +10,11 @@ mod prepare;
 use litellm_auth::AuthServices;
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
-use types::ChatCompletionsRequest;
 
-use litellm_auth::AuthServices;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
-use litellm_secrets::source::SecretSource;
 
-use crate::caching::CachePlan;
-use crate::chat_completions::types::{ChatCompletionsCall, ChatCompletionsRequest};
+use crate::types::{ChatCompletionsCall, ChatCompletionsRequest};
+use litellm_inference::caching::CachePlan;
 use prepare::{prepare_provider_request, resolve_request};
 
 #[derive(Clone)]

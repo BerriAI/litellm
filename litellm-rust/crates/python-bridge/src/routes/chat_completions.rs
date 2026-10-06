@@ -169,7 +169,7 @@ fn run_public(
                 request,
                 None,
                 move |(call, config): (
-                    litellm_core::chat_completions::types::ChatCompletionsCall,
+                    litellm_inference_chat::types::ChatCompletionsCall,
                     Option<crate::cache::PythonCacheConfig>,
                 ),
                       services,
@@ -181,7 +181,7 @@ fn run_public(
                         .execute(
                             call,
                             &interceptors,
-                            litellm_core::CallOptions {
+                            litellm_inference::CallOptions {
                                 cache: options,
                                 model_group: None,
                                 observers,

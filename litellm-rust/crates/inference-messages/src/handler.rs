@@ -1,3 +1,4 @@
+use crate::constants::MESSAGES_TIMEOUT_SECS;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -19,10 +20,7 @@ use super::{
     Error, MessagesCallResponse, MessagesRoute, common_utils::truncate_error_body,
     prepare::ProviderMessagesRequest,
 };
-use crate::{
-    caching::CachePlan, constants::MESSAGES_TIMEOUT_SECS, context::CallContext,
-    outbound::outbound_request,
-};
+use litellm_inference::{caching::CachePlan, context::CallContext, outbound::outbound_request};
 
 pub(super) struct ProviderCall {
     pub identity: ProviderIdentity,

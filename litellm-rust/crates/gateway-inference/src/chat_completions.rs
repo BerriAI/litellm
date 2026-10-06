@@ -63,7 +63,7 @@ async fn handle(
                 extra_headers: None,
                 timeout: deployment.timeout,
             },
-            litellm_core::CallOptions {
+            litellm_inference::CallOptions {
                 cache: Some(cache_options),
                 model_group: Some(model_group),
                 observers: None,

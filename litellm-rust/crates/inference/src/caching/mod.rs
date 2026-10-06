@@ -9,7 +9,7 @@ use crate::RouteError;
 
 pub use key::CacheKeyProjection;
 pub use plan::CachePlan;
-pub(crate) use session::CacheSession;
+pub use session::CacheSession;
 pub use session::{CachedOutput, execute_streaming, execute_unary};
 pub use stream::StreamCachable;
 
