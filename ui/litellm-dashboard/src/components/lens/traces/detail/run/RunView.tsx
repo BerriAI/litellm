@@ -186,7 +186,7 @@ function LoadedRun({
         embedded={embedded}
         stale={switching}
         conversationPaging={{
-          loading: traceQuery.isFetchingNextPage,
+          loading: traceQuery.isFetching,
           failed: isFetchNextPageError,
           loadMore: fetchNextPage,
         }}
