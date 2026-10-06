@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -37,6 +37,7 @@ from ..common_utils import OpenAIError
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
+_RAW_RESPONSE_JSON: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -577,7 +578,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _RAW_RESPONSE_JSON.validate_python(raw_response.json())
             raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
@@ -977,7 +978,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _RAW_RESPONSE_JSON.validate_python(raw_response.json())
             raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)

@@ -63,7 +63,7 @@ class DeepAgentsDeps:
     chat_litellm: Any
     checkpointer_cls: Any
     command_cls: Any
-    subagent_defaults: Mapping[str, Any]
+    subagent_defaults: Mapping[str, object]
     convert_to_openai_messages: Any
     backend: ModuleType
 
@@ -174,7 +174,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
                 yield event
             if not state.interrupts:
                 break
-            resume: dict[str, Any] = {}  # mutable-ok: Command(resume=) payload, filled per answered approval
+            resume: dict[str, object] = {}  # mutable-ok: Command(resume=) payload, filled per answered approval
             for interrupt in state.interrupts:
                 decisions: list[dict[str, Any]] = []  # mutable-ok: HITL decisions collected across awaited approvals
                 for request in approval_requests(getattr(interrupt, "value", None)):
@@ -236,13 +236,13 @@ class DeepAgentsHandler(BaseHarnessHandler):
         return run_config
 
     @staticmethod
-    def _middleware(deps: DeepAgentsDeps, blocked: frozenset[str]) -> list[Any]:  # mutable-ok: deepagents API
+    def _middleware(deps: DeepAgentsDeps, blocked: frozenset[str]) -> list[object]:  # mutable-ok: deepagents API
         filters = (deps.backend.ToolFilterMiddleware(blocked),) if blocked else ()
         return list(filters)  # mutable-ok: deepagents create_deep_agent(middleware=) takes a list
 
     def _subagents(
         self, ctx: SessionContext, deps: DeepAgentsDeps, blocked: frozenset[str]
-    ) -> list[Any]:  # mutable-ok: deepagents create_deep_agent(subagents=) takes a list
+    ) -> list[object]:  # mutable-ok: deepagents create_deep_agent(subagents=) takes a list
         """User subagents, plus a general-purpose one that honours disable_tools when set."""
         options = ctx.options if isinstance(ctx.options, DeepAgentsOptions) else None
         user_subagents = tuple(options.subagents) if options is not None else ()
