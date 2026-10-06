@@ -54,6 +54,11 @@ class ServerListFault(LiteLLMBaseModel):
     status_code: int | None = None
     www_authenticate: str | None = Field(default=None, exclude=True, repr=False)
     server_name: str | None = Field(default=None, exclude=True, repr=False)
+    relayable: bool = Field(default=False, exclude=True, repr=False)
+    """True when the caller can clear this auth fault by re-authenticating: the rejected bearer was
+    the caller's own forwarded token, or the gateway's own credential resolver challenged. An
+    upstream rejecting a static or gateway-minted credential is the gateway's problem to fix, so
+    that fault stays an outcome and never escalates the whole listing to a challenge."""
 
 
 ServerOutcome: TypeAlias = ServerListOk | ServerListFault
@@ -72,7 +77,7 @@ def listing_auth_error(outcomes: Mapping[str, ServerOutcome]) -> MCPUpstreamAuth
     blocked: Final = tuple(
         (name, outcome)
         for name, outcome in outcomes.items()
-        if isinstance(outcome, ServerListFault) and outcome.tag in ("auth_required", "forbidden")
+        if isinstance(outcome, ServerListFault) and outcome.relayable
     )
     if not blocked or any(isinstance(outcome, ServerListOk) for outcome in outcomes.values()):
         return None
@@ -147,6 +152,33 @@ def upstream_auth_error(
         return None
     status_code, challenge = auth
     return MCPUpstreamAuthError(status_code, None if suppress_challenge else challenge, server_name)
+
+
+def gateway_challenged(exc: BaseException) -> bool:
+    """True when the gateway's own credential resolver raised the 401/403 (its front door asking the
+    caller to connect), as opposed to the upstream rejecting whatever credential was sent."""
+    return any(
+        isinstance(current, HTTPException) and current.status_code in (401, 403) for current in iter_exception_tree(exc)
+    )
+
+
+def caller_auth_failure(
+    exc: BaseException, server_name: str, *, caller_owns_credential: bool, suppress_challenge: bool
+) -> MCPUpstreamAuthError | None:
+    """The auth failure to relay to the caller, or None when re-authenticating could not clear it:
+    an upstream rejecting the gateway's static or minted credential is not the caller's to fix."""
+    if not caller_owns_credential and not gateway_challenged(exc):
+        return None
+    return upstream_auth_error(exc, server_name, suppress_challenge=suppress_challenge)
+
+
+def classify_listing_outcome(exc: BaseException, *, caller_owns_credential: bool) -> ServerListFault:
+    """Classify one server's failure for the aggregate listing, marking an auth fault relayable only
+    when the caller can clear it (see ``ServerListFault.relayable``)."""
+    fault: Final = classify_list_exception(exc)
+    if fault.tag not in ("auth_required", "forbidden"):
+        return fault
+    return fault.model_copy(update={"relayable": caller_owns_credential or gateway_challenged(exc)})
 
 
 def classify_list_exception(exc: BaseException) -> ServerListFault:

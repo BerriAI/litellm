@@ -78,7 +78,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     AggregateToolListing,
     ServerListOk,
     ServerOutcome,
-    classify_list_exception,
+    classify_listing_outcome,
     listing_auth_error,
     outcome_wire_value,
 )
@@ -1187,10 +1187,10 @@ async def _get_tools_from_mcp_servers(
                 # error). Single-server routes surface it via the request-scope preemptive
                 # check in _raise_preemptive_401_for_unauthenticated_servers instead.
                 verbose_logger.debug("MCP list_tools: omitting %s; it needs upstream auth", server.name)
-                return [], classify_list_exception(e)
+                return [], classify_listing_outcome(e, caller_owns_credential=server.is_client_forwarded_token)
             except Exception as e:
                 verbose_logger.exception("Error getting tools from server %s: %s", server.name, e)
-                return [], classify_list_exception(e)
+                return [], classify_listing_outcome(e, caller_owns_credential=server.is_client_forwarded_token)
 
         # Fetch tools from all servers in parallel
         tasks: Final = [_fetch_and_filter_server_tools(server) for server in allowed_mcp_servers]
@@ -1274,7 +1274,7 @@ async def _collect_mcp_listing(
             items: Final = await fetch(server)
             return items, ServerListOk(tool_count=len(items))
         except Exception as exc:
-            return [], classify_list_exception(exc)
+            return [], classify_listing_outcome(exc, caller_owns_credential=server.is_client_forwarded_token)
 
     results: Final = await asyncio.gather(*(fetch_one(server) for server in servers))
     failure: Final = listing_auth_error({server.server_id: result[1] for server, result in zip(servers, results)})

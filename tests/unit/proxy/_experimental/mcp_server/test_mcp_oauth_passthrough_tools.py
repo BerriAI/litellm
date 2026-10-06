@@ -511,7 +511,7 @@ async def test_listing_transport_preserves_auth_challenge_before_sse_success() -
     await response.send(
         {"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]}
     )
-    await response.send({"type": "http.response.body", "body": b": ping\r\n\r\n", "more_body": True})
+    send.assert_not_awaited()
     response.challenge = HTTPException(
         401, "Unauthorized", headers={"WWW-Authenticate": 'Bearer resource_metadata="http://localhost/mcp-metadata"'}
     )
@@ -562,7 +562,9 @@ async def test_protocol_listing_does_not_report_success_when_every_server_requir
     from litellm.proxy._types import UserAPIKeyAuth
 
     context: Final = OperationContext(_caller=UserAPIKeyAuth(user_id="reader"))
-    listing: Final = AggregateToolListing([], {"github": ServerListFault(tag="auth_required", status_code=401)})
+    listing: Final = AggregateToolListing(
+        [], {"github": ServerListFault(tag="auth_required", status_code=401, relayable=True)}
+    )
     with patch.object(operations, "_list_mcp_tools", AsyncMock(return_value=listing)):
         with pytest.raises(MCPUpstreamAuthError) as caught:
             await operations.GatewayOperations().execute(ListToolsRequest(), context)
@@ -597,6 +599,7 @@ async def test_streamable_http_listing_returns_late_oauth_challenge(
                     tag="auth_required",
                     status_code=401,
                     www_authenticate='Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp/github"',
+                    relayable=True,
                 )
             },
         )
@@ -703,7 +706,7 @@ async def test_optional_listing_propagates_auth_without_discarding_healthy_serve
 ) -> None:
     from litellm.proxy._experimental.mcp_server import operations
 
-    blocked: Final = _http_server("blocked", "blocked")
+    blocked: Final = _http_server("blocked", "blocked", auth_type=MCPAuth.true_passthrough)
     healthy: Final = _http_server("healthy", "healthy")
     fetch: Final = AsyncMock(side_effect=MCPUpstreamAuthError(401, "Bearer", "blocked"))
     manager: Final = MagicMock()
@@ -798,24 +801,29 @@ async def test_prompt_and_resource_calls_preserve_static_headers_and_non_auth_fa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("preamble", (b"id: resume-token\r\ndata: \r\n\r\n", b": ping\r\n\r\n"))
-async def test_transport_preserves_sse_priming_event_on_success(preamble: bytes) -> None:
+async def test_transport_keepalive_ping_commits_the_stream_before_the_result() -> None:
+    """A keepalive ping reaches the client the moment the SDK writes it, carrying the 200 with it:
+    holding it would let the upstream header wait time out a slow tool call. A challenge raised
+    after that point can no longer rewrite the committed stream, so the SDK's own in-band error
+    result is what the client sees, as before this wrapper existed."""
+    from starlette.exceptions import HTTPException
     from litellm.proxy._experimental.mcp_server.server import MCPAuthResponse
 
     send: Final = AsyncMock()
     response: Final = MCPAuthResponse(send)
     start: Final = {"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]}
-    priming: Final = {"type": "http.response.body", "body": preamble, "more_body": True}
-    tools: Final = {
+    ping: Final = {"type": "http.response.body", "body": b": ping\r\n\r\n", "more_body": True}
+    result: Final = {
         "type": "http.response.body",
-        "body": b'data: {"jsonrpc":"2.0","id":1,"result":{"tools":[]}}\n\n',
+        "body": b'data: {"jsonrpc":"2.0","id":1,"result":{"isError":true,"content":[]}}\n\n',
         "more_body": True,
     }
     await response.send(start)
-    await response.send(priming)
-    send.assert_not_awaited()
-    await response.send(tools)
-    assert tuple(call.args[0] for call in send.await_args_list) == (start, priming, tools)
+    await response.send(ping)
+    assert tuple(call.args[0] for call in send.await_args_list) == (start, ping)
+    response.challenge = HTTPException(401, "Unauthorized", headers={"WWW-Authenticate": "Bearer"})
+    await response.send(result)
+    assert tuple(call.args[0] for call in send.await_args_list) == (start, ping, result)
 
 
 @pytest.mark.asyncio
@@ -932,12 +940,18 @@ async def test_initialize_challenges_missing_upstream_credentials_before_creatin
 async def test_optional_listing_challenges_auth_when_other_server_times_out(
     kind: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The gateway's own credential resolver challenging at client-build time (its front door asking
+    the caller to connect) escalates the listing whatever the server's auth mode, and a sibling
+    server timing out cannot mask it."""
+    from fastapi import HTTPException
     from litellm.proxy._experimental.mcp_server import operations
 
     blocked: Final = _http_server("blocked", "blocked")
     unavailable: Final = _http_server("unavailable", "unavailable")
     manager: Final = MCPServerManager()
-    create: Final = AsyncMock(side_effect=[MCPUpstreamAuthError(401, "Bearer", "blocked"), TimeoutError()])
+    create: Final = AsyncMock(
+        side_effect=[HTTPException(401, "connect first", headers={"WWW-Authenticate": "Bearer"}), TimeoutError()]
+    )
     monkeypatch.setattr(manager, "_create_mcp_client", create)
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     monkeypatch.setattr(operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None)))
@@ -948,6 +962,34 @@ async def test_optional_listing_challenges_auth_when_other_server_times_out(
     assert caught.value.www_authenticate == "Bearer"
     assert caught.value.server_name == "blocked"
     assert create.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "resource_templates"))
+async def test_optional_listing_absorbs_upstream_rejecting_the_gateway_credential(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An upstream rejecting the static key the gateway sent is not something the caller can fix by
+    re-authenticating, so the listing stays a success with that server absent instead of answering
+    a 401 that points the caller at an upstream it never authenticated to."""
+    from litellm.proxy._experimental.mcp_server import operations
+
+    rejected: Final = _http_server("rejected", "rejected", auth_type=MCPAuth.api_key, authentication_token="k")
+    client: Final = MagicMock()
+    upstream_401: Final = httpx.HTTPStatusError(
+        "401",
+        request=httpx.Request("POST", "https://rejected/mcp"),
+        response=httpx.Response(401, headers={"www-authenticate": "Bearer realm=upstream"}),
+    )
+    for method in ("list_prompts", "list_resources", "list_resource_templates"):
+        setattr(client, method, AsyncMock(side_effect=upstream_401))
+    client.discovery_auth_fingerprint = AsyncMock(return_value="static-key-fingerprint")
+    manager: Final = MCPServerManager()
+    monkeypatch.setattr(manager, "_create_mcp_client", AsyncMock(return_value=client))
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None)))
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[rejected]))
+    assert await getattr(operations, f"_list_mcp_{kind}")() == []
 
 
 @pytest.mark.asyncio

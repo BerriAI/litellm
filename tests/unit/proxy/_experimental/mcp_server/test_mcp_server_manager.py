@@ -2233,36 +2233,65 @@ class TestMCPServerManager:
         # raise_on_error demoted the client-layer error log to debug.
         assert mock_log.warning.called
 
+    def _masking_call_tool(self, failure: Exception):
+        """Mirror MCPClient.call_tool's contract: a transport failure is masked into an isError result
+        unless the caller opts into raise_on_error."""
+
+        from litellm.experimental_mcp_client.client import MCPClient
+
+        async def call_tool(params, host_progress_callback=None, allow_input_required=False, raise_on_error=False):
+            if raise_on_error:
+                raise failure
+            return MCPClient.error_tool_result(failure)
+
+        return AsyncMock(side_effect=call_tool)
+
     @pytest.mark.asyncio
-    async def test_call_static_auth_preserves_success_with_transport_errors_enabled(self):
-        """A static credential uses the same transport-auth error channel while preserving tool results."""
+    @pytest.mark.parametrize(
+        "server_kwargs",
+        [
+            {"auth_type": MCPAuth.api_key, "authentication_token": "static-key"},
+            {"auth_type": MCPAuth.none},
+            {"auth_type": MCPAuth.oauth2, "oauth2_flow": "authorization_code"},
+        ],
+        ids=["api_key", "none", "gateway_managed_oauth2"],
+    )
+    async def test_call_non_client_forwarded_upstream_401_stays_iserror(self, server_kwargs):
+        """An upstream 401 against a credential the caller did not supply (a static key, no auth, or a
+        gateway-vaulted OAuth token) is not the caller's to fix, so it keeps the default isError
+        degradation (which still writes the failure spend row) instead of relaying as an HTTP 401
+        challenge that would point the caller at an upstream it never authenticated to."""
         server = MCPServer(
-            server_id="ak-call",
-            name="ak-call-server",
+            server_id="static-call",
+            name="static-call-server",
             url="https://up.example.com/mcp",
             transport=MCPTransport.http,
-            auth_type=MCPAuth.api_key,
-            authentication_token="static-key",
+            **server_kwargs,
         )
         manager = MCPServerManager()
         mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        mock_client.call_tool = self._masking_call_tool(self._upstream_status_error(401, "Bearer realm=upstream"))
         manager._create_mcp_client = AsyncMock(return_value=mock_client)
 
-        result = await manager._call_regular_mcp_tool(
-            mcp_server=server,
-            original_tool_name="tool",
-            arguments={},
-            tasks=[],
-            mcp_auth_header=None,
-            mcp_server_auth_headers=None,
-            oauth2_headers=None,
-            raw_headers=None,
-            proxy_logging_obj=None,
-        )
+        result = await self._run_call_regular(manager, server)
 
-        assert result.is_error is False
-        assert mock_client.call_tool.call_args.kwargs.get("raise_on_error") is True
+        assert result.is_error is True
+        assert "401" in result.content[0].text
+
+    @pytest.mark.asyncio
+    async def test_call_client_forwarded_upstream_401_relays_through_masking_client(self):
+        """The same masking client relays a 401 for a client-forwarded server, so the two tests above
+        and below pin the gate itself and not the mock."""
+        server = self._passthrough_call_server(MCPAuth.true_passthrough, server_id="pt-masking")
+        manager = MCPServerManager()
+        mock_client = AsyncMock()
+        mock_client.call_tool = self._masking_call_tool(self._upstream_status_error(401, "Bearer realm=upstream"))
+        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+
+        with pytest.raises(MCPUpstreamAuthError) as exc_info:
+            await self._run_call_regular(manager, server)
+
+        assert exc_info.value.www_authenticate == "Bearer realm=upstream"
 
     def _token_exchange_server(self, server_id: str) -> "MCPServer":
         return MCPServer(

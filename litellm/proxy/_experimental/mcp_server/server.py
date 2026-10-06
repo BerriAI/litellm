@@ -103,15 +103,17 @@ _MCP_AUTH_RESPONSE_SCOPE_KEY: Final = "litellm_mcp_auth_response"
 
 
 class MCPAuthResponse:
-    """Defer HTTP success until the SDK produces data, preserving late auth challenges."""
+    """Hold the SDK's 200 response start until its first body frame so an auth challenge raised while
+    the request runs can still replace it. Every body frame commits, keepalive pings included: the
+    gateway's session managers mint no SSE priming event (``event_store=None``), so the only frame
+    before the first event is a ping, and holding it would turn a tool call longer than the
+    upstream header wait into a 504 and starve any idle timeout in front of the gateway."""
 
     def __init__(self, send: Send) -> None:
         self._send = send
         self._start: Message | None = None
-        self._preamble: tuple[Message, ...] = ()
         self._committed = False
         self._replaced = False
-        self._sse = False
         self.challenge: HTTPException | None = None
 
     async def send(self, message: Message) -> None:
@@ -119,21 +121,9 @@ class MCPAuthResponse:
             return
         if message["type"] == "http.response.start" and message["status"] == 200:
             self._start = message
-            self._sse = any(
-                name.lower() == b"content-type" and b"text/event-stream" in value
-                for name, value in message.get("headers", ())
-            )
             return
         if self._start is None or self._committed:
             await self._send(message)
-            return
-        body: Final = message.get("body", b"")
-        if (
-            self._sse
-            and message.get("more_body", False)
-            and not any(line.startswith(b"data:") and line[5:].strip() for line in body.splitlines())
-        ):
-            self._preamble = (*self._preamble, message)
             return
         self._committed = True
         if self.challenge is not None:
@@ -149,8 +139,6 @@ class MCPAuthResponse:
             await self._send({"type": "http.response.body", "body": response.body, "more_body": False})
             return
         await self._send(self._start)
-        for preamble in self._preamble:
-            await self._send(preamble)
         await self._send(message)
 
 

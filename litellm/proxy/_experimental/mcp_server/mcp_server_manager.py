@@ -83,9 +83,9 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 )
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     ServerListFault,
+    caller_auth_failure,
     raise_classified_list_failure,
     upstream_auth_challenge,
-    upstream_auth_error,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import describe_upstream_http_failure, record_auth_resolution
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
@@ -4753,7 +4753,12 @@ class MCPServerManager:
 
             return await client.read_resource(url)
         except Exception as exc:
-            auth_failure: Final = upstream_auth_error(exc, server.name, suppress_challenge=server.is_dcr_bridge)
+            auth_failure: Final = caller_auth_failure(
+                exc,
+                server.name,
+                caller_owns_credential=server.is_client_forwarded_token,
+                suppress_challenge=server.is_dcr_bridge,
+            )
             if auth_failure is not None:
                 raise auth_failure from exc
             raise
@@ -4800,7 +4805,12 @@ class MCPServerManager:
             )
             return await client.get_prompt(get_prompt_request_params)
         except Exception as exc:
-            auth_failure: Final = upstream_auth_error(exc, server.name, suppress_challenge=server.is_dcr_bridge)
+            auth_failure: Final = caller_auth_failure(
+                exc,
+                server.name,
+                caller_owns_credential=server.is_client_forwarded_token,
+                suppress_challenge=server.is_dcr_bridge,
+            )
             if auth_failure is not None:
                 raise auth_failure from exc
             raise
@@ -6172,6 +6182,12 @@ class MCPServerManager:
 
             async def _call_tool_via_client(client, params):
                 async with self._limit_outbound_concurrency(mcp_server):
+                    if not mcp_server.is_client_forwarded_token:
+                        return await client.call_tool(
+                            params,
+                            host_progress_callback=host_progress_callback,
+                            allow_input_required=allow_input_required,
+                        )
                     try:
                         return await client.call_tool(
                             params,
