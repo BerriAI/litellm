@@ -146,7 +146,7 @@ class SonioxEventTransformer:
         self._item_id: str | None = None
         self._final_text: str = ""
         self._processed_ms: int = 0
-        self._unbilled_seconds: float = 0.0
+        self._billed_ms: int = 0
 
     def transform(self, payload: str) -> tuple[OpenAIRealtimeEvents, ...]:
         try:
@@ -159,17 +159,15 @@ class SonioxEventTransformer:
         return tuple(event for token in response.tokens for event in self._token_events(token))
 
     def take_unbilled_usage(self) -> RealtimeInputAudioTranscriptionUsage | None:
-        seconds: Final = self._unbilled_seconds
-        if seconds <= 0:
+        unbilled_ms: Final = self._processed_ms - self._billed_ms
+        if unbilled_ms <= 0:
             return None
-        self._unbilled_seconds = 0.0
-        return duration_usage(seconds)
+        self._billed_ms = self._processed_ms
+        return duration_usage(unbilled_ms / 1000)
 
     def _bill(self, total_audio_proc_ms: int | None) -> None:
-        if total_audio_proc_ms is None or total_audio_proc_ms <= self._processed_ms:
-            return
-        self._unbilled_seconds += (total_audio_proc_ms - self._processed_ms) / 1000
-        self._processed_ms = total_audio_proc_ms
+        if total_audio_proc_ms is not None and total_audio_proc_ms > self._processed_ms:
+            self._processed_ms = total_audio_proc_ms
 
     def _token_events(self, token: _SonioxToken) -> tuple[OpenAIRealtimeEvents, ...]:
         if token.text in (_ENDPOINT_TOKEN, _FINALIZED_TOKEN):
