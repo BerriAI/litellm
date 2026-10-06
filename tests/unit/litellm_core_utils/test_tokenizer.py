@@ -469,17 +469,21 @@ def test_added_token_return_annotation_resolves_without_optional_import(python_i
 
 
 def test_tokenizer_fallback_logs_safe_diagnostic_context(caplog, monkeypatch):
+    from types import SimpleNamespace
     from unittest.mock import patch
     from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper
 
     monkeypatch.setenv("LITELLM_RUST", "false")
     _load_huggingface_tokenizer.cache_clear()
-    model = "llama-2\r\nforged-model\x1b[31m"
+    model = "llama-2\r\nforged-model\x1b[31m\u2028\u2029"
     secret = "sk-" + "x" * 48
     failure = OSError("download failed\r\nforged-error\x1b[31m api_key=" + secret)
-    with caplog.at_level("WARNING", logger="LiteLLM"), patch.object(
-        ReferenceTokenizer, "from_pretrained", side_effect=failure
-    ):
+
+    def fail_download(*args, **kwargs):
+        raise failure
+
+    dependency = SimpleNamespace(Tokenizer=SimpleNamespace(from_pretrained=fail_download))
+    with caplog.at_level("WARNING", logger="LiteLLM"), patch.dict(sys.modules, {"tokenizers": dependency}):
         result = _select_tokenizer_helper(model)
     assert result["type"] == "openai_tokenizer"
     assert result["tokenizer"].encode("hello")
@@ -487,7 +491,7 @@ def test_tokenizer_fallback_logs_safe_diagnostic_context(caplog, monkeypatch):
     assert "llama-2" in message
     assert "download failed" in message
     assert "forged-model" in message and "forged-error" in message
-    assert not any(character in message for character in ("\r", "\n", "\x1b"))
+    assert message.isascii() and message.isprintable()
     assert secret not in message
     assert "REDACTED" in message
     assert "install tokenizers and huggingface-hub" in message
