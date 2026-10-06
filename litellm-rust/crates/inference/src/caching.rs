@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     future::Future,
     marker::PhantomData,
     sync::Arc,
@@ -37,31 +38,54 @@ pub trait CacheKeyProjection {
 }
 
 fn key_input(
-    model: &str,
-    model_group: Option<&str>,
-    parameters: Map<String, Value>,
+    target: CacheTarget,
+    parameters: impl IntoIterator<Item = (String, Value)>,
+    headers: impl IntoIterator<Item = (&'static str, Value)>,
 ) -> CacheKeyInput {
     CacheKeyInput::request(
-        CacheTarget::resolve(model, model_group),
+        target,
         Value::Object(
             parameters
                 .into_iter()
                 .filter(|(name, _)| name != "model")
+                .chain(
+                    headers
+                        .into_iter()
+                        .map(|(name, value)| (name.to_owned(), value)),
+                )
                 .collect(),
         ),
     )
 }
 
+fn extra_headers(headers: Option<&Map<String, Value>>) -> Option<(&'static str, Value)> {
+    headers.map(|headers| {
+        (
+            "extra_headers",
+            Value::Object(
+                headers
+                    .iter()
+                    .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+                    .collect(),
+            ),
+        )
+    })
+}
+
 impl CacheKeyProjection for crate::chat_completions::types::ChatCompletionsRequest<'_> {
     fn cache_key_input(&self, model_group: Option<&str>) -> Result<CacheKeyInput, RouteError> {
         Ok(key_input(
-            self.model,
-            model_group,
+            CacheTarget::resolve(
+                model_group,
+                self.model,
+                self.custom_llm_provider,
+                self.api_base,
+            ),
             self.optional_params
                 .clone()
                 .into_iter()
-                .chain([("messages".into(), self.messages.clone())])
-                .collect(),
+                .chain([("messages".into(), self.messages.clone())]),
+            extra_headers(self.extra_headers.as_ref()),
         ))
     }
 }
@@ -69,26 +93,49 @@ impl CacheKeyProjection for crate::chat_completions::types::ChatCompletionsReque
 impl CacheKeyProjection for crate::responses::types::ResponsesCall {
     fn cache_key_input(&self, model_group: Option<&str>) -> Result<CacheKeyInput, RouteError> {
         Ok(key_input(
-            &self.model,
-            model_group,
+            CacheTarget::resolve(
+                model_group,
+                &self.model,
+                self.custom_llm_provider.as_deref(),
+                self.api_base.as_deref(),
+            ),
             self.optional_params
                 .clone()
                 .into_iter()
-                .chain([("input".into(), self.input.clone())])
-                .collect(),
+                .chain([("input".into(), self.input.clone())]),
+            extra_headers(self.extra_headers.as_ref()),
         ))
     }
 }
 
 impl CacheKeyProjection for crate::messages::MessagesCall {
     fn cache_key_input(&self, model_group: Option<&str>) -> Result<CacheKeyInput, RouteError> {
-        match serde_json::to_value(&self.body) {
-            Ok(Value::Object(body)) => Ok(key_input(&self.body.model, model_group, body)),
-            Ok(_) => Err(RouteError::InvalidRequest(
+        let invalid =
+            |error: serde_json::Error| RouteError::InvalidRequest(error.to_string().into());
+        let Value::Object(body) = serde_json::to_value(&self.body).map_err(invalid)? else {
+            return Err(RouteError::InvalidRequest(
                 "messages body must be an object".into(),
-            )),
-            Err(error) => Err(RouteError::InvalidRequest(error.to_string().into())),
-        }
+            ));
+        };
+        let provider_specific_header = self
+            .provider_specific_header
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(invalid)?
+            .map(|header| ("provider_specific_header", header));
+        Ok(key_input(
+            CacheTarget::resolve(
+                model_group,
+                &self.body.model,
+                self.custom_llm_provider.as_deref(),
+                self.api_base.as_deref(),
+            ),
+            body,
+            extra_headers(self.extra_headers.as_ref())
+                .into_iter()
+                .chain(provider_specific_header),
+        ))
     }
 }
 
@@ -97,24 +144,113 @@ pub struct CacheRequest {
     pub input: Option<CacheKeyInput>,
 }
 
-impl CacheRequest {
-    pub(crate) fn from_logical(
-        identity: ProviderIdentity,
-        input: Option<CacheKeyInput>,
-        original: Option<&WireRequest>,
-        wire: &WireRequest,
-    ) -> Self {
-        let rewritten = original.is_some_and(|original| original != wire);
-        if rewritten {
-            tracing::debug!(
-                "request changed before the provider call, skipping the response cache"
-            );
-        }
-        Self {
-            identity,
-            input: input.filter(|_| !rewritten),
+pub(crate) struct RouteCache {
+    cache: ScopedCache,
+    policy: CachePolicy,
+    input: CacheKeyInput,
+}
+
+impl RouteCache {
+    pub(crate) fn attach(
+        cache: Option<&ScopedCache>,
+        policy: Option<CachePolicy>,
+        request: &impl CacheKeyProjection,
+        model_group: Option<&str>,
+    ) -> Result<Option<Self>, RouteError> {
+        let policy = policy.unwrap_or_default();
+        let Some(cache) = cache.filter(|_| policy.enabled()) else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            cache: cache.clone(),
+            policy,
+            input: request.cache_key_input(model_group)?,
+        }))
+    }
+
+    pub(crate) fn guard(self, outbound: &WireRequest) -> GuardedCache {
+        GuardedCache {
+            sent: SentRequest::of(outbound),
+            cache: self,
         }
     }
+
+    pub(crate) fn into_call(
+        cache: Option<Self>,
+        identity: ProviderIdentity,
+    ) -> (
+        CacheRequest,
+        Option<Arc<dyn ResponseCacheService>>,
+        Option<CacheOptions>,
+    ) {
+        match cache {
+            Some(Self {
+                cache,
+                policy,
+                input,
+            }) => (
+                CacheRequest {
+                    identity,
+                    input: Some(input),
+                },
+                Some(cache.service().clone()),
+                Some(cache.options(Some(policy))),
+            ),
+            None => (
+                CacheRequest {
+                    identity,
+                    input: None,
+                },
+                None,
+                None,
+            ),
+        }
+    }
+}
+
+pub(crate) struct GuardedCache {
+    cache: RouteCache,
+    sent: SentRequest,
+}
+
+impl GuardedCache {
+    pub(crate) fn confirm(self, wire: &WireRequest) -> Option<RouteCache> {
+        if self.sent.matches(wire) {
+            return Some(self.cache);
+        }
+        tracing::debug!("request changed before the provider call, skipping the response cache");
+        None
+    }
+}
+
+#[derive(PartialEq)]
+struct SentRequest {
+    url: String,
+    headers: BTreeMap<String, String>,
+    body: Value,
+}
+
+impl SentRequest {
+    fn of(wire: &WireRequest) -> Self {
+        Self {
+            url: wire.url.clone(),
+            headers: normalized_headers(&wire.headers),
+            body: wire.body.clone(),
+        }
+    }
+
+    fn matches(&self, wire: &WireRequest) -> bool {
+        self.url == wire.url
+            && self.body == wire.body
+            && self.headers == normalized_headers(&wire.headers)
+    }
+}
+
+fn normalized_headers(headers: &[(String, String)]) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+        .collect()
 }
 
 pub trait StreamCachable: Cachable {
@@ -141,11 +277,11 @@ impl CacheSession {
     async fn prepare<P: Cachable>(
         service: Option<Arc<dyn ResponseCacheService>>,
         options: Option<CacheOptions>,
-        request: &CacheRequest,
+        input: Option<CacheKeyInput>,
     ) -> Option<Self> {
         let options = options.filter(|options| options.policy.enabled())?;
         let service = service?;
-        let input = request.input.clone()?;
+        let input = input?;
         Self::resolve(service, options.request(P::SURFACE, input)).await
     }
 
@@ -234,9 +370,9 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<P::Response, RouteError>>,
 {
-    let identity = request.identity.clone();
+    let CacheRequest { identity, input } = request;
     crate::diagnostic::provider(&identity.model, &identity.provider);
-    let session = CacheSession::prepare::<P>(cache, options, &request).await;
+    let session = CacheSession::prepare::<P>(cache, options, input).await;
     let hit = match &session {
         Some(session) => session.lookup::<P>().await.and_then(|entry| match entry {
             CachedOutput::Response(response) => Some((response, session.key.as_str().to_owned())),
@@ -278,9 +414,9 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<OutputOf<P>, RouteError>>,
 {
-    let identity = request.identity.clone();
+    let CacheRequest { identity, input } = request;
     crate::diagnostic::provider(&identity.model, &identity.provider);
-    let session = CacheSession::prepare::<P>(cache, options, &request).await;
+    let session = CacheSession::prepare::<P>(cache, options, input).await;
     let cache = CallCache::<P> {
         session,
         protocol: PhantomData,
@@ -308,17 +444,17 @@ pub struct CallCache<P> {
 }
 
 impl<P: StreamCachable> CallCache<P> {
-    pub(crate) async fn prepare(
-        cache: Option<&ScopedCache>,
-        policy: CachePolicy,
-        input: Option<CacheKeyInput>,
-    ) -> Self {
-        let session = match (cache.filter(|_| policy.enabled()), input) {
-            (Some(cache), Some(input)) => {
+    pub(crate) async fn prepare(cache: Option<RouteCache>) -> Self {
+        let session = match cache {
+            Some(RouteCache {
+                cache,
+                policy,
+                input,
+            }) => {
                 let request = cache.options(Some(policy)).request(P::SURFACE, input);
-                CacheSession::resolve(cache.service.clone(), request).await
+                CacheSession::resolve(cache.service().clone(), request).await
             }
-            _ => None,
+            None => None,
         };
         Self {
             session,

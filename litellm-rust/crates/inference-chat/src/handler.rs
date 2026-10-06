@@ -17,16 +17,11 @@ use crate::{constants::CHAT_COMPLETIONS_TIMEOUT_SECS, types::ProviderChatComplet
 pub(super) async fn execute(
     http: &Client,
     auth: &AuthServices,
-    request: (
-        ProviderChatCompletionsRequest,
-        Option<litellm_cache_response::CacheKeyInput>,
-    ),
-    cache: Option<litellm_cache_response::ScopedCache>,
-    cache_options: Option<litellm_cache_response::CachePolicy>,
+    request: ProviderChatCompletionsRequest,
+    cache: Option<crate::caching::RouteCache>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<ChatCompletionsResponse, Error> {
-    let (request, cache_input) = request;
     let ProviderChatCompletionsRequest {
         model,
         custom_llm_provider,
@@ -51,22 +46,25 @@ pub(super) async fn execute(
         model: context.model.clone(),
         provider: context.custom_llm_provider.clone(),
     };
-    let cache = cache.filter(|_| authenticated.signer.is_none());
     let outbound = WireRequest {
         url,
         headers: authenticated.headers,
         body,
     };
-    let original = cache.as_ref().map(|_| outbound.clone());
+    let cache = cache
+        .filter(|_| authenticated.signer.is_none())
+        .map(|cache| cache.guard(&outbound));
     let wire = interceptors
         .before_provider_request(outbound, context)
         .await?;
-    let cache_request =
-        crate::caching::CacheRequest::from_logical(identity, cache_input, original.as_ref(), &wire);
+    let (cache_request, cache, cache_options) = crate::caching::RouteCache::into_call(
+        cache.and_then(|cache| cache.confirm(&wire)),
+        identity,
+    );
     crate::caching::execute_unary::<super::route::ChatCompletions, _, _>(
         cache_request,
-        cache.as_ref().map(|cache| cache.service.clone()),
-        cache.as_ref().map(|cache| cache.options(cache_options)),
+        cache,
+        cache_options,
         interceptors,
         observers,
         || async move {
@@ -251,8 +249,7 @@ mod tests {
         execute(
             &Client::plain_for_test(),
             &AuthServices::default(),
-            (prepared(&upstream.uri()), None),
-            None,
+            prepared(&upstream.uri()),
             None,
             &interceptors,
             None,
@@ -292,8 +289,7 @@ mod tests {
         let error = execute(
             &Client::plain_for_test(),
             &AuthServices::default(),
-            (prepared(&upstream.uri()), None),
-            None,
+            prepared(&upstream.uri()),
             None,
             &interceptors,
             None,

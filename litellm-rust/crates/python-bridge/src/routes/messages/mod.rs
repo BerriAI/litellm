@@ -39,17 +39,14 @@ fn run_messages(
                       services,
                       interceptors,
                       observers| async move {
-                    let (cache, options) = selection.map(|config| config.attach(services)).unzip();
-                    let route = match cache {
-                        Some(cache) => route.with_cache(cache),
-                        None => route,
-                    };
+                    let (cache, policy) = selection.map(|config| config.attach(services)).unzip();
                     route
+                        .with_cache(cache)
                         .execute(
                             call,
                             &interceptors,
                             litellm_core::CallOptions {
-                                cache: options.map(|options| options.policy),
+                                cache: policy,
                                 model_group: None,
                                 observers,
                             },

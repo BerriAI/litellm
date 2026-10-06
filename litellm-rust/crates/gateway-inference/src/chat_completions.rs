@@ -44,14 +44,13 @@ async fn handle(
     let model_group = request::model_name(&body)?.to_owned();
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
-    let route = gateway.chat_completions.clone();
-    let route = match &gateway.cache {
-        Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
-            cache.clone(),
-            cache_options.scope.clone(),
-        )),
-        None => route,
-    };
+    let route = gateway
+        .chat_completions
+        .clone()
+        .with_cache(crate::caching::scoped(
+            gateway.cache.as_ref(),
+            &cache_options,
+        )?);
 
     let messages = body.get("messages").cloned().unwrap_or_default();
     let headers = crate::caching::CacheHeaders::default();

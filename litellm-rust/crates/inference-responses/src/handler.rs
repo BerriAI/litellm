@@ -14,37 +14,35 @@ use super::{
 pub(super) async fn execute(
     http: &litellm_http::Client,
     auth: &litellm_auth::AuthServices,
-    request: (
-        ProviderResponsesRequest,
-        Option<litellm_cache_response::CacheKeyInput>,
-    ),
-    cache: Option<litellm_cache_response::ScopedCache>,
-    cache_options: Option<litellm_cache_response::CachePolicy>,
+    request: ProviderResponsesRequest,
+    cache: Option<crate::caching::RouteCache>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<ResponsesOutput, Error> {
-    let (request, cache_input) = request;
     let authenticated = resolve_auth(auth, request.environment, &|_| None).await?;
     let identity = litellm_host::interceptors::ProviderIdentity {
         model: request.context.model.clone(),
         provider: request.context.custom_llm_provider.clone(),
     };
-    let cache = cache.filter(|_| authenticated.signer.is_none());
     let outbound = WireRequest {
         url: request.url,
         headers: authenticated.headers,
         body: request.body,
     };
-    let original = cache.as_ref().map(|_| outbound.clone());
+    let cache = cache
+        .filter(|_| authenticated.signer.is_none())
+        .map(|cache| cache.guard(&outbound));
     let wire = interceptors
         .before_provider_request(outbound, request.context)
         .await?;
-    let cache_request =
-        crate::caching::CacheRequest::from_logical(identity, cache_input, original.as_ref(), &wire);
+    let (cache_request, cache, cache_options) = crate::caching::RouteCache::into_call(
+        cache.and_then(|cache| cache.confirm(&wire)),
+        identity,
+    );
     crate::caching::execute_streaming::<super::route::Responses, _, _>(
         cache_request,
-        cache.as_ref().map(|cache| cache.service.clone()),
-        cache.as_ref().map(|cache| cache.options(cache_options)),
+        cache,
+        cache_options,
         interceptors,
         observers,
         || async move {

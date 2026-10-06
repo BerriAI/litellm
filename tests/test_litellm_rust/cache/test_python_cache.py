@@ -325,6 +325,24 @@ async def test_v2_messages_replays_a_completed_stream(recording_server: Recordin
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("chat", "messages", "responses"))
+async def test_a_none_cache_key_falls_back_to_the_python_cache_key(
+    recording_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    route: Literal["chat", "messages", "responses"],
+) -> None:
+    from litellm.caching.caching import Cache
+
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    litellm.cache = Cache()
+    first: Final = await invoke(route, recording_server, {"cache_key": None})
+    second: Final = await invoke(route, recording_server, {"cache_key": None})
+    assert cache_key(first) is None
+    assert cache_key(second)
+    assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("backend", ("memory", "redis"))
 @pytest.mark.parametrize("route", ("chat", "messages", "responses"))
 async def test_rust_routes_use_a_legacy_cache_without_python_inference(

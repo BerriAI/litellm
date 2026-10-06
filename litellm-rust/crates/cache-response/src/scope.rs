@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_cache::ExactCacheContext;
+use litellm_cache::{Error, ExactCacheContext};
 
 use crate::{CacheAccess, CacheKeyInput, ResponseCacheRequest, ResponseCacheService};
 
@@ -63,13 +63,27 @@ impl CacheOptions {
 
 #[derive(Clone)]
 pub struct ScopedCache {
-    pub service: Arc<dyn ResponseCacheService>,
-    pub scope: CacheScope,
+    service: Arc<dyn ResponseCacheService>,
+    scope: CacheScope,
 }
 
 impl ScopedCache {
-    pub fn new(service: Arc<dyn ResponseCacheService>, scope: CacheScope) -> Self {
-        Self { service, scope }
+    pub fn new(service: Arc<dyn ResponseCacheService>, scope: CacheScope) -> Result<Self, Error> {
+        if matches!(scope, CacheScope::Isolated(_)) && !service.config().supports_isolated_scope {
+            return Err(Error::UnsupportedOperation);
+        }
+        Ok(Self { service, scope })
+    }
+
+    pub fn shared(service: Arc<dyn ResponseCacheService>) -> Self {
+        Self {
+            service,
+            scope: CacheScope::Shared,
+        }
+    }
+
+    pub fn service(&self) -> &Arc<dyn ResponseCacheService> {
+        &self.service
     }
 
     pub fn options(&self, policy: Option<CachePolicy>) -> CacheOptions {

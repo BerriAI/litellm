@@ -64,6 +64,7 @@ impl NativeCacheHandle {
             ResponseCacheConfig {
                 namespace: "sdk".into(),
                 max_entry_bytes,
+                ..ResponseCacheConfig::default()
             },
         ));
         Ok(Self {
@@ -104,6 +105,7 @@ impl NativeCacheHandle {
             ResponseCacheConfig {
                 namespace,
                 max_entry_bytes,
+                ..ResponseCacheConfig::default()
             },
         ));
         Ok(Self {

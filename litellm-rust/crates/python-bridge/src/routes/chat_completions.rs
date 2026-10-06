@@ -175,26 +175,14 @@ fn run_public(
                       services,
                       interceptors,
                       observers| async move {
-                    let (cache, options) = config.map(|config| config.attach(services)).unzip();
-                    let route = match cache {
-                        Some(cache) => route.with_cache(cache),
-                        None => route,
-                    };
+                    let (cache, policy) = config.map(|config| config.attach(services)).unzip();
                     route
+                        .with_cache(cache)
                         .execute(
-                            litellm_core::chat_completions::types::ChatCompletionsRequest {
-                                model: &call.model,
-                                messages: call.messages,
-                                optional_params: call.optional_params,
-                                api_key: call.api_key.as_deref(),
-                                api_base: call.api_base.as_deref(),
-                                custom_llm_provider: call.custom_llm_provider.as_deref(),
-                                extra_headers: call.extra_headers,
-                                timeout: call.timeout,
-                            },
+                            call,
                             &interceptors,
                             litellm_core::CallOptions {
-                                cache: options.map(|options| options.policy),
+                                cache: policy,
                                 model_group: None,
                                 observers,
                             },

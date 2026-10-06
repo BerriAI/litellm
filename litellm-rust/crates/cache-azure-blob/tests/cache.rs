@@ -28,7 +28,7 @@ fn response_cache(fixture: &Fixture) -> ResponseCache<AzureBlobCache<ResponseCac
 
 fn request(model: &str) -> ResponseCacheRequest {
     ResponseCacheRequest::new(CacheKeyInput::request(
-        CacheTarget::Model(model.into()),
+        CacheTarget::resolve(None, model, None, None),
         serde_json::json!({}),
     ))
 }

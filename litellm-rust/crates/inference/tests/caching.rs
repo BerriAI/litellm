@@ -74,7 +74,7 @@ fn cache_request(input: Value) -> CacheRequest {
             provider: "test-provider".into(),
         },
         input: Some(CacheKeyInput::request(
-            CacheTarget::Model("test-model".into()),
+            CacheTarget::resolve(None, "test-model", None, None),
             input,
         )),
     }
@@ -94,6 +94,7 @@ fn cache_with_limit(max_entry_bytes: usize) -> Arc<dyn ResponseCacheService> {
         .with_config(ResponseCacheConfig {
             namespace: "test".into(),
             max_entry_bytes,
+            ..ResponseCacheConfig::default()
         }),
     )
 }
@@ -568,6 +569,7 @@ async fn key_resolution_failure_skips_cache_and_runs_provider() {
         config: ResponseCacheConfig {
             namespace: "test".into(),
             max_entry_bytes: 4096,
+            ..ResponseCacheConfig::default()
         },
         lookups: AtomicUsize::new(0),
         stores: AtomicUsize::new(0),
@@ -687,7 +689,7 @@ async fn messages_cache_identity_includes_provider_native_parameters(
                         provider: "anthropic".into(),
                     },
                     input: Some(CacheKeyInput::request(
-                        CacheTarget::Model("test".into()),
+                        CacheTarget::resolve(None, "test", None, None),
                         json!({
                             "messages":[{"role":"user","content":"hello"}],
                             "max_tokens":32, (field):value
@@ -755,6 +757,7 @@ async fn backend_failures_do_not_fail_inference() {
         ResponseCache::new(Arc::new(UnavailableCache)).with_config(ResponseCacheConfig {
             namespace: "test".into(),
             max_entry_bytes: 4096,
+            ..ResponseCacheConfig::default()
         }),
     );
     let calls = AtomicUsize::new(0);
@@ -983,12 +986,14 @@ async fn namespaces_and_surfaces_isolate_entries_on_shared_storage() {
         ResponseCache::new(storage.clone()).with_config(ResponseCacheConfig {
             namespace: "first".into(),
             max_entry_bytes: 4096,
+            ..ResponseCacheConfig::default()
         }),
     );
     let second_cache: Arc<dyn ResponseCacheService> = Arc::new(
         ResponseCache::new(storage).with_config(ResponseCacheConfig {
             namespace: "second".into(),
             max_entry_bytes: 4096,
+            ..ResponseCacheConfig::default()
         }),
     );
     let calls = AtomicUsize::new(0);
@@ -1112,7 +1117,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
         .await;
     let route = support::chat_completions_route();
     let route = if caching {
-        route.with_cache(ScopedCache::new(cache, CacheScope::Shared))
+        route.with_cache(ScopedCache::new(cache, CacheScope::Shared).unwrap())
     } else {
         route
     };
@@ -1210,6 +1215,7 @@ impl litellm_secrets::source::SecretSource for ChangingSecrets {
 struct ChangingHooks {
     calls: AtomicUsize,
     rewrite: bool,
+    reshape_headers: bool,
     facts: std::sync::Mutex<Vec<ExecutionFacts>>,
 }
 
@@ -1222,6 +1228,14 @@ impl Interceptors<RouteError> for ChangingHooks {
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if self.rewrite {
             wire.body["temperature"] = json!(if call < 2 { 0.1 } else { 0.8 });
+        }
+        if self.reshape_headers {
+            wire.headers = wire
+                .headers
+                .into_iter()
+                .rev()
+                .map(|(name, value)| (name.to_ascii_uppercase(), value))
+                .collect();
         }
         Ok(wire)
     }
@@ -1240,12 +1254,15 @@ impl Interceptors<RouteError> for ChangingHooks {
 #[case::chat_credentials("chat", "credentials")]
 #[case::chat_endpoint("chat", "endpoint")]
 #[case::chat_callback("chat", "callback")]
+#[case::chat_headers("chat", "headers")]
 #[case::messages_credentials("messages", "credentials")]
 #[case::messages_endpoint("messages", "endpoint")]
 #[case::messages_callback("messages", "callback")]
+#[case::messages_headers("messages", "headers")]
 #[case::responses_credentials("responses", "credentials")]
 #[case::responses_endpoint("responses", "endpoint")]
 #[case::responses_callback("responses", "callback")]
+#[case::responses_headers("responses", "headers")]
 #[tokio::test]
 async fn cache_identity_ignores_deployment_settings_and_skips_rewritten_requests(
     cache: Arc<dyn ResponseCacheService>,
@@ -1294,13 +1311,14 @@ async fn cache_identity_ignores_deployment_settings_and_skips_rewritten_requests
     });
     let hooks = ChangingHooks {
         rewrite: change == "callback",
+        reshape_headers: change == "headers",
         ..Default::default()
     };
     for call in 0..4 {
         secrets
             .revision
             .store(usize::from(call >= 2), Ordering::SeqCst);
-        let cache = ScopedCache::new(cache.clone(), CacheScope::Shared);
+        let cache = ScopedCache::new(cache.clone(), CacheScope::Shared).unwrap();
         let model = "cache-test-model";
         match surface {
             "chat" => {
@@ -1422,8 +1440,8 @@ async fn the_model_group_decides_cache_reuse(
         .expect(if hit { 1 } else { 2 })
         .mount(&upstream)
         .await;
-    let route =
-        support::chat_completions_route().with_cache(ScopedCache::new(cache, CacheScope::Shared));
+    let route = support::chat_completions_route()
+        .with_cache(ScopedCache::new(cache, CacheScope::Shared).unwrap());
     let hooks = ChangingHooks::default();
     for (model, model_group) in [("anthropic/claude-a", "group-a"), (model, model_group)] {
         route
@@ -1474,8 +1492,8 @@ async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheSer
         .expect(2)
         .mount(&upstream)
         .await;
-    let route =
-        support::chat_completions_route().with_cache(ScopedCache::new(cache, CacheScope::Shared));
+    let route = support::chat_completions_route()
+        .with_cache(ScopedCache::new(cache, CacheScope::Shared).unwrap());
     let hooks = ChangingHooks::default();
     for _ in 0..2 {
         let response = route.execute(ChatCompletionsRequest {
@@ -1496,6 +1514,79 @@ async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheSer
             .unwrap()
             .iter()
             .all(|facts| facts.source == ResultSource::Provider)
+    );
+    upstream.verify().await;
+}
+
+#[rstest]
+#[case::same_request("none", true)]
+#[case::other_beta_header("provider_specific_header", false)]
+#[case::other_extra_header("extra_headers", false)]
+#[case::other_api_base_without_a_group("api_base", false)]
+#[tokio::test]
+async fn forwarded_headers_and_the_deployment_decide_messages_cache_reuse(
+    cache: Arc<dyn ResponseCacheService>,
+    #[case] change: &str,
+    #[case] hit: bool,
+) {
+    use litellm_cache_response::ScopedCache;
+    use litellm_core::messages::MessagesCall;
+    use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id":"message-test", "type":"message", "role":"assistant", "model":"test",
+            "content":[{"type":"text", "text":"answer"}], "stop_reason":"end_turn",
+            "stop_sequence":null, "usage":{"input_tokens":3,"output_tokens":2}
+        })))
+        .expect(if hit { 1 } else { 2 })
+        .mount(&upstream)
+        .await;
+    let route = support::messages_route(support::no_secrets())
+        .with_cache(ScopedCache::new(cache, CacheScope::Shared).unwrap());
+    let hooks = ChangingHooks::default();
+    let call = |change: &str| MessagesCall {
+        body: serde_json::from_value(json!({
+            "model":"claude-cache-test",
+            "messages":[{"role":"user","content":"hello"}],
+            "max_tokens":32
+        }))
+        .unwrap(),
+        api_key: Some("sk-test".into()),
+        api_base: Some(match change {
+            "api_base" => format!("{}/", upstream.uri()),
+            _ => upstream.uri(),
+        }),
+        custom_llm_provider: Some("anthropic".into()),
+        extra_headers: (change == "extra_headers").then(|| {
+            json!({"anthropic-version":"2023-06-01"})
+                .as_object()
+                .unwrap()
+                .clone()
+        }),
+        provider_specific_header: (change == "provider_specific_header").then(|| {
+            ProviderSpecificHeaders::One(ProviderSpecificHeader {
+                custom_llm_provider: "anthropic".into(),
+                extra_headers: json!({"anthropic-beta":"context-1m-2025-08-07"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            })
+        }),
+        timeout: None,
+        shaping: Default::default(),
+    };
+    for change in ["none", change] {
+        route.execute(call(change), &hooks, None).await.unwrap();
+    }
+    assert_eq!(
+        matches!(
+            hooks.facts.lock().unwrap()[1].source,
+            ResultSource::Cache { .. }
+        ),
+        hit
     );
     upstream.verify().await;
 }

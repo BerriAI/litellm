@@ -258,7 +258,7 @@ fn generated_keys_preserve_namespace_and_explicit_keys(#[case] namespace: &str) 
         },
     );
     let generated = ResponseCacheRequest::new(CacheKeyInput::request(
-        CacheTarget::Model("a".into()),
+        CacheTarget::resolve(None, "a", None, None),
         json!({}),
     ));
     let explicit = keyed(memory.key(&generated).as_str());

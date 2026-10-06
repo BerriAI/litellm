@@ -361,13 +361,16 @@ async fn route_uses_injected_dependencies_and_optional_cache(
         Arc::new(RecordingSecrets::new([("ANTHROPIC_API_KEY", "route-key")])),
     );
     let route = if caching {
-        route.with_cache(ScopedCache::new(
-            Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
-                Some(100),
-                Some(Duration::from_secs(60)),
-            )))),
-            CacheScope::Shared,
-        ))
+        route.with_cache(
+            ScopedCache::new(
+                Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
+                    Some(100),
+                    Some(Duration::from_secs(60)),
+                )))),
+                CacheScope::Shared,
+            )
+            .unwrap(),
+        )
     } else {
         route
     };
@@ -424,14 +427,11 @@ async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) 
         Some(100),
         Some(Duration::from_secs(60)),
     ))));
-    let first = messages_route(no_secrets()).with_cache(ScopedCache::new(
-        service.clone(),
-        CacheScope::Isolated("first".into()),
-    ));
-    let second = messages_route(no_secrets()).with_cache(ScopedCache::new(
-        service,
-        CacheScope::Isolated("second".into()),
-    ));
+    let first = messages_route(no_secrets()).with_cache(
+        ScopedCache::new(service.clone(), CacheScope::Isolated("first".into())).unwrap(),
+    );
+    let second = messages_route(no_secrets())
+        .with_cache(ScopedCache::new(service, CacheScope::Isolated("second".into())).unwrap());
     for (route, expected) in [
         (&first, &first_body),
         (&second, &second_body),

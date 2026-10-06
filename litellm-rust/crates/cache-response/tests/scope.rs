@@ -2,8 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheAccess, CacheEntry, CacheKey, CacheKeyInput, CacheTarget, ResponseCache,
-    ResponseCacheRequest,
+    CacheAccess, CacheEntry, CacheKey, CacheKeyInput, CacheScope, CacheTarget, ResponseCache,
+    ResponseCacheConfig, ResponseCacheRequest, ScopedCache,
 };
 use rstest::rstest;
 use serde_json::json;
@@ -25,6 +25,7 @@ async fn isolated_policy_controls_actual_entry_reuse(
     )));
     let request = |scope| {
         ScopedCache::new(service.clone(), scope)
+            .unwrap()
             .options(override_policy.then_some(CachePolicy {
                 ttl: Some(Duration::from_secs(30)),
                 ..CachePolicy::default()
@@ -112,4 +113,24 @@ fn input(parameters: serde_json::Value) -> CacheKeyInput {
 
 fn key(request: &ResponseCacheRequest) -> CacheKey {
     ResponseCache::new(Arc::new(InMemoryCache::<CacheEntry>::default())).key(request)
+}
+
+#[rstest]
+#[case::shared_on_shared_only_storage(false, CacheScope::Shared, true)]
+#[case::isolated_on_shared_only_storage(false, CacheScope::Isolated("tenant".into()), false)]
+#[case::isolated_on_isolating_storage(true, CacheScope::Isolated("tenant".into()), true)]
+fn a_scope_the_storage_cannot_isolate_is_rejected_at_construction(
+    #[case] supports_isolated_scope: bool,
+    #[case] scope: CacheScope,
+    #[case] accepted: bool,
+) {
+    let service = Arc::new(
+        ResponseCache::new(Arc::new(InMemoryCache::<CacheEntry>::default())).with_config(
+            ResponseCacheConfig {
+                supports_isolated_scope,
+                ..ResponseCacheConfig::default()
+            },
+        ),
+    );
+    assert_eq!(ScopedCache::new(service, scope).is_ok(), accepted);
 }

@@ -45,14 +45,10 @@ async fn handle(
     let model_group = request::model_name(&body)?.to_owned();
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
-    let route = gateway.messages.clone();
-    let route = match &gateway.cache {
-        Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
-            cache.clone(),
-            cache_options.scope.clone(),
-        )),
-        None => route,
-    };
+    let route = gateway.messages.clone().with_cache(crate::caching::scoped(
+        gateway.cache.as_ref(),
+        &cache_options,
+    )?);
 
     let call = project(deployment, body, headers)?;
     let machine = route.machine(

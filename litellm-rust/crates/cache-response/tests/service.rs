@@ -107,6 +107,7 @@ async fn entry_limit_applies_to_sync_async_and_batch_writes() {
     let cache = ResponseCache::new(storage.clone()).with_config(ResponseCacheConfig {
         namespace: "service-test".into(),
         max_entry_bytes: json!({"answer":7}).to_string().len(),
+        ..ResponseCacheConfig::default()
     });
     let small = json!({"answer":7});
     let large = json!({"answer":"too large"});

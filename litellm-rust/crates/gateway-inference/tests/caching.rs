@@ -56,6 +56,7 @@ async fn all_inference_endpoints_share_native_cache(
         .with_config(ResponseCacheConfig {
             namespace: "gateway-test".into(),
             max_entry_bytes: 4096,
+            ..ResponseCacheConfig::default()
         }),
     );
     let app = support::app_with_cache(model, &upstream.uri(), cache.clone());

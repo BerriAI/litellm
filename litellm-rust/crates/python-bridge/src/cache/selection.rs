@@ -1,7 +1,5 @@
 use super::python;
-use litellm_cache_response::{
-    CacheOptions, CachePolicy, CacheScope, ResponseCacheConfig, ScopedCache,
-};
+use litellm_cache_response::{CachePolicy, ResponseCacheConfig, ScopedCache};
 use litellm_core::caching::Cachable;
 use litellm_host::{
     machine::{HostServices, MachineFault},
@@ -21,7 +19,7 @@ impl<P: Protocol> Protocol for PythonCached<P> {
 }
 
 pub(crate) struct PythonCacheConfig {
-    options: CacheOptions,
+    policy: CachePolicy,
     surface: &'static str,
     config: ResponseCacheConfig,
 }
@@ -30,16 +28,13 @@ impl PythonCacheConfig {
     pub(crate) fn attach<P: Protocol<HostCall = python::CacheCall>>(
         self,
         services: HostServices<P>,
-    ) -> (ScopedCache, CacheOptions)
+    ) -> (ScopedCache, CachePolicy)
     where
         P::Error: From<MachineFault>,
     {
         (
-            ScopedCache::new(
-                python::service(services, self.surface, self.config),
-                CacheScope::Shared,
-            ),
-            self.options,
+            ScopedCache::shared(python::service(services, self.surface, self.config)),
+            self.policy,
         )
     }
 }
@@ -118,13 +113,10 @@ pub(crate) fn configure_python_cache<P: Cachable>(
             .transpose()
             .map(|value| value.unwrap_or(false))
     };
-    let options = CacheOptions {
-        policy: CachePolicy {
-            no_cache: boolean("no-cache")?,
-            no_store: boolean("no-store")?,
-            ..CachePolicy::default()
-        },
-        ..CacheOptions::new(CacheScope::Shared)
+    let policy = CachePolicy {
+        no_cache: boolean("no-cache")?,
+        no_store: boolean("no-store")?,
+        ..CachePolicy::default()
     };
     let namespace = cache
         .getattr_opt("namespace")?
@@ -134,10 +126,11 @@ pub(crate) fn configure_python_cache<P: Cachable>(
         .unwrap_or_default();
     host.bind(cache, arguments);
     Ok(Some(PythonCacheConfig {
-        options,
+        policy,
         surface: P::SURFACE,
         config: ResponseCacheConfig {
             namespace,
+            supports_isolated_scope: false,
             ..ResponseCacheConfig::default()
         },
     }))

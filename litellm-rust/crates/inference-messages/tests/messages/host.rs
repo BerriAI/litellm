@@ -135,13 +135,16 @@ async fn rejected_results_are_not_delivered_or_cached(
         message_response()
     };
     let upstream = upstream([response.clone(), response]).await;
-    let route = messages_route(no_secrets()).with_cache(ScopedCache::new(
-        Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
-            Some(100),
-            Some(Duration::from_secs(60)),
-        )))),
-        CacheScope::Shared,
-    ));
+    let route = messages_route(no_secrets()).with_cache(
+        ScopedCache::new(
+            Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
+                Some(100),
+                Some(Duration::from_secs(60)),
+            )))),
+            CacheScope::Shared,
+        )
+        .unwrap(),
+    );
     for (reject, expected_requests, cached) in [
         (true, 1, false),
         (false, 2, false),

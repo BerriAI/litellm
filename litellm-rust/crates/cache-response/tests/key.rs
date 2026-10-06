@@ -36,15 +36,15 @@ fn preset_keys_are_used_verbatim(#[case] namespace: &str) {
 }
 
 #[rstest]
-#[case::without_namespace("", "inference-v3:")]
-#[case::with_namespace("litellm", "litellm:inference-v3:")]
+#[case::without_namespace("", "inference-v4:")]
+#[case::with_namespace("litellm", "litellm:inference-v4:")]
 fn the_namespace_prefixes_generated_keys_exactly_once(
     #[case] namespace: &str,
     #[case] prefix: &str,
 ) {
     let key = key_in(
         namespace,
-        group("litellm", json!({"input": "litellm:inference-v3:x"})),
+        group("litellm", json!({"input": "litellm:inference-v4:x"})),
     );
     let hash = key.as_str().strip_prefix(prefix).unwrap();
     assert_eq!(hash.len(), 64);
@@ -56,11 +56,16 @@ fn deployments_in_one_model_group_share_a_key() {
     let request = json!({"input": "hello"});
     assert_eq!(
         key(CacheKeyInput::request(
-            CacheTarget::resolve("azure/gpt-5", Some("gpt-5")),
+            CacheTarget::resolve(
+                Some("gpt-5"),
+                "gpt-5",
+                Some("azure"),
+                Some("https://azure.example")
+            ),
             request.clone()
         )),
         key(CacheKeyInput::request(
-            CacheTarget::resolve("openai/gpt-5", Some("gpt-5")),
+            CacheTarget::resolve(Some("gpt-5"), "gpt-5", Some("openai"), None),
             request
         )),
     );
@@ -68,16 +73,24 @@ fn deployments_in_one_model_group_share_a_key() {
 
 #[rstest]
 #[case::different_groups(
-    CacheTarget::resolve("openai/gpt-5", Some("fast")),
-    CacheTarget::resolve("openai/gpt-5", Some("smart"))
+    CacheTarget::resolve(Some("fast"), "gpt-5", Some("openai"), None),
+    CacheTarget::resolve(Some("smart"), "gpt-5", Some("openai"), None)
 )]
 #[case::different_models_without_a_group(
-    CacheTarget::resolve("openai/gpt-5", None),
-    CacheTarget::resolve("openai/gpt-5-mini", None)
+    CacheTarget::resolve(None, "gpt-5", Some("openai"), None),
+    CacheTarget::resolve(None, "gpt-5-mini", Some("openai"), None)
+)]
+#[case::different_providers_without_a_group(
+    CacheTarget::resolve(None, "gpt-5", Some("openai"), None),
+    CacheTarget::resolve(None, "gpt-5", Some("azure"), None)
+)]
+#[case::different_api_bases_without_a_group(
+    CacheTarget::resolve(None, "gpt-5", Some("openai"), Some("https://a.example")),
+    CacheTarget::resolve(None, "gpt-5", Some("openai"), Some("https://b.example"))
 )]
 #[case::group_and_model_with_the_same_name(
-    CacheTarget::resolve("gpt-5", Some("gpt-5")),
-    CacheTarget::resolve("gpt-5", None)
+    CacheTarget::resolve(Some("gpt-5"), "gpt-5", None, None),
+    CacheTarget::resolve(None, "gpt-5", None, None)
 )]
 fn distinct_targets_never_share_a_key(#[case] first: CacheTarget, #[case] second: CacheTarget) {
     let request = json!({"input": "hello"});

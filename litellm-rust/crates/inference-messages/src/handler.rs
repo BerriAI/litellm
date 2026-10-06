@@ -19,29 +19,26 @@ use super::{
     Error, MessagesCallResponse, MessagesRoute, common_utils::truncate_error_body,
     prepare::ProviderMessagesRequest,
 };
-use crate::constants::MESSAGES_TIMEOUT_SECS;
-use litellm_inference::{context::CallContext, outbound::outbound_request};
+use crate::{
+    caching::RouteCache, constants::MESSAGES_TIMEOUT_SECS, context::CallContext,
+    outbound::outbound_request,
+};
 
 pub(super) struct ProviderCall {
     pub identity: ProviderIdentity,
     pub wire: WireRequest,
-    pub original: Option<WireRequest>,
+    pub cache: Option<RouteCache>,
     provider: super::common_utils::MessagesProvider,
     signer: Option<litellm_auth_aws::SigV4Signer>,
     timeout: Option<Duration>,
     stream: bool,
 }
 
-impl ProviderCall {
-    pub fn cacheable(&self) -> bool {
-        self.signer.is_none()
-    }
-}
-
 impl MessagesRoute {
     pub(super) async fn prepare_outbound(
         &self,
         request: ProviderMessagesRequest,
+        cache: Option<RouteCache>,
         context: &CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<ProviderCall, Error> {
         let ProviderMessagesRequest {
@@ -70,11 +67,9 @@ impl MessagesRoute {
             headers: authenticated.headers,
             body: serde_json::to_value(&body).map_err(serialize_failure)?,
         };
-        let original = self
-            .cache
-            .as_ref()
-            .filter(|_| authenticated.signer.is_none() && context.cache.enabled())
-            .map(|_| outbound.clone());
+        let cache = cache
+            .filter(|_| authenticated.signer.is_none())
+            .map(|cache| cache.guard(&outbound));
         let wire = context
             .interceptors
             .before_provider_request(outbound, request_context)
@@ -94,7 +89,7 @@ impl MessagesRoute {
         };
         Ok(ProviderCall {
             identity,
-            original,
+            cache: cache.and_then(|cache| cache.confirm(&wire)),
             wire,
             provider,
             signer: authenticated.signer,
@@ -110,7 +105,7 @@ impl MessagesRoute {
     ) -> Result<MessagesCallResponse, Error> {
         let ProviderCall {
             identity,
-            original: _,
+            cache: _,
             wire,
             provider,
             signer,

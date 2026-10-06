@@ -1,4 +1,4 @@
-use crate::caching::CacheKeyProjection;
+use crate::caching::RouteCache;
 pub use crate::error::RouteError as Error;
 use litellm_host::observation::ObservationSender;
 pub use litellm_inference::RouteError as Error;
@@ -39,9 +39,9 @@ impl ResponsesRoute {
         }
     }
 
-    pub fn with_cache(self, cache: litellm_cache_response::ScopedCache) -> Self {
+    pub fn with_cache(self, cache: impl Into<Option<litellm_cache_response::ScopedCache>>) -> Self {
         Self {
-            cache: Some(cache),
+            cache: cache.into(),
             ..self
         }
     }
@@ -101,11 +101,7 @@ impl ResponsesRoute {
         interceptors: &impl Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
-        let cache_input = self
-            .cache
-            .as_ref()
-            .map(|_| call.cache_key_input(model_group))
-            .transpose()?;
+        let cache = RouteCache::attach(self.cache.as_ref(), cache_options, &call, model_group)?;
         let request = prepare::prepare(call, self.secrets.as_ref()).await?;
         litellm_inference::diagnostic::provider(
             &request.context.model,
@@ -115,9 +111,8 @@ impl ResponsesRoute {
             Box::pin(handler::execute(
                 &self.http,
                 &self.auth,
-                (request, cache_input),
-                self.cache.clone(),
-                cache_options,
+                request,
+                cache,
                 interceptors,
                 observers,
             ));

@@ -1,6 +1,8 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope};
+use litellm_cache_response::{
+    CacheOptions, CachePolicy, CacheScope, ResponseCacheService, ScopedCache,
+};
 use litellm_gateway_auth::AuthenticatedRequest;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -20,6 +22,16 @@ struct Controls {
 }
 
 type Prepared = (Map<String, Value>, CacheOptions);
+
+pub(crate) fn scoped(
+    cache: Option<&Arc<dyn ResponseCacheService>>,
+    options: &CacheOptions,
+) -> Result<Option<ScopedCache>, Error> {
+    cache
+        .map(|cache| ScopedCache::new(cache.clone(), options.scope.clone()))
+        .transpose()
+        .map_err(|error| Error::Internal(error.to_string()))
+}
 
 pub(crate) fn prepare(
     identity: &AuthenticatedRequest,

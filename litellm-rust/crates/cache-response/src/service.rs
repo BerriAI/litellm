@@ -12,6 +12,7 @@ type CacheFuture<'a, T> = BoxFuture<'a, Result<T, Error>>;
 pub struct ResponseCacheConfig {
     pub namespace: String,
     pub max_entry_bytes: usize,
+    pub supports_isolated_scope: bool,
 }
 
 impl Default for ResponseCacheConfig {
@@ -19,6 +20,7 @@ impl Default for ResponseCacheConfig {
         Self {
             namespace: String::new(),
             max_entry_bytes: usize::MAX,
+            supports_isolated_scope: true,
         }
     }
 }

@@ -17,14 +17,10 @@ pub(crate) async fn create(
     let model_group = request::model_name(&body)?.to_owned();
     request::authorize_model(&identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(&identity, body)?;
-    let route = gateway.responses.clone();
-    let route = match &gateway.cache {
-        Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
-            cache.clone(),
-            cache_options.scope.clone(),
-        )),
-        None => route,
-    };
+    let route = gateway.responses.clone().with_cache(crate::caching::scoped(
+        gateway.cache.as_ref(),
+        &cache_options,
+    )?);
 
     let call = ResponsesCall {
         model: deployment.model.clone(),
