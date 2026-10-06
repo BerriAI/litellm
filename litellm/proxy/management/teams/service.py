@@ -1,17 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from litellm.proxy._types import TeamMemberBudgetSource, UserAPIKeyAuth
-from litellm.proxy.list_api.list_framework import FilterSpec, ListSpec, Scope, ScopeAll, handle_list
+from litellm.proxy.list_api.list_framework import FilterSpec, ListSpec, QueryPlan, Scope, ScopeAll
 from litellm.proxy.management.teams.repository import RawQuery, TeamMemberRow, TeamMemberRows
 from litellm.proxy.management.teams.schemas import TeamMemberListItem
-
-if TYPE_CHECKING:
-    from fastapi import Request
-
-    from litellm.types.proxy.management_endpoints.management_v1 import ListResponse
 
 
 def member_budget_source(budget_id: str | None, team_default_budget_id: str | None) -> TeamMemberBudgetSource:
@@ -60,12 +56,14 @@ TEAM_MEMBERS_LIST_SPEC: Final[ListSpec[TeamMemberRow, TeamMemberListItem]] = Lis
 )
 
 
-async def get_team_members_list(
-    team_id: str, request: Request, caller: UserAPIKeyAuth, roster_db: RawQuery
-) -> ListResponse[TeamMemberListItem]:
-    return await handle_list(
-        spec=TEAM_MEMBERS_LIST_SPEC,
-        executor=TeamMemberRows(db=roster_db, team_id=team_id),
-        request=request,
-        caller=caller,
-    )
+@dataclass(frozen=True, slots=True)
+class TeamMembersPage:
+    members: tuple[TeamMemberListItem, ...]
+    total_count: int
+
+
+async def get_team_members_list(team_id: str, plan: QueryPlan, roster_db: RawQuery) -> TeamMembersPage:
+    roster: Final = TeamMemberRows(db=roster_db, team_id=team_id)
+    total_count: Final = await roster.count(plan.where)
+    rows: Final = await roster.find_many(plan)
+    return TeamMembersPage(members=tuple(_team_member_item(row) for row in rows), total_count=total_count)

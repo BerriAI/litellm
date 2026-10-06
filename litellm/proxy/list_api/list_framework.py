@@ -602,13 +602,8 @@ def _duplicate_params(request: Request) -> tuple[str, ...]:
     return tuple(sorted(frozenset(name for name in names if names.count(name) > 1)))
 
 
-async def handle_list(
-    spec: ListSpec[TRow, TOut],
-    executor: ListExecutor[TRow],
-    request: Request,
-    caller: UserAPIKeyAuth,
-) -> ListResponse[TOut]:
-    """Plan, execute, count, serialize, envelope. Failures reach the client as RFC 9457 problems."""
+def plan_list_request(spec: ListSpec[TRow, TOut], request: Request, caller: UserAPIKeyAuth) -> QueryPlan:
+    """The request's query parameters as a plan. Parameters that cannot be planned raise their RFC 9457 problem."""
     plan: Final = build_query_plan(spec=spec, params=request.query_params, caller=caller)
     if isinstance(plan, ProblemDetail):
         raise ManagementProblem(plan)
@@ -627,13 +622,15 @@ async def handle_list(
                 f"use a comma-separated list for multiple sort keys or filter values.",
             )
         )
+    return plan
 
-    total_count: Final = await executor.count(plan.where)
-    rows: Final = await executor.find_many(plan)
+
+def list_response(request: Request, plan: QueryPlan, data: Sequence[TOut], total_count: int) -> ListResponse[TOut]:
+    """One planned page in the list envelope. The request is read only for the URL its links point back to."""
     total_pages: Final = ceil(total_count / plan.take)
     page: Final = plan.skip // plan.take + 1
     return ListResponse[TOut](
-        data=tuple(spec.serialize(row) for row in rows),
+        data=tuple(data),
         meta=ListMeta(
             total_count=total_count,
             page=page,
@@ -642,3 +639,16 @@ async def handle_list(
         ),
         links=build_list_links(request=request, page=page, total_pages=total_pages),
     )
+
+
+async def handle_list(
+    spec: ListSpec[TRow, TOut],
+    executor: ListExecutor[TRow],
+    request: Request,
+    caller: UserAPIKeyAuth,
+) -> ListResponse[TOut]:
+    """Plan, execute, count, serialize, envelope. Failures reach the client as RFC 9457 problems."""
+    plan: Final = plan_list_request(spec, request, caller)
+    total_count: Final = await executor.count(plan.where)
+    rows: Final = await executor.find_many(plan)
+    return list_response(request, plan, tuple(spec.serialize(row) for row in rows), total_count)

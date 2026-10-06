@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Annotated, Final, Protocol
 
-from fastapi import Depends
+from fastapi import Depends, Request
 
 from litellm.proxy._types import CommonProxyErrors, LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
+from litellm.proxy.list_api.list_framework import QueryPlan, plan_list_request
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management.teams.exceptions import members_not_readable, team_not_found
+from litellm.proxy.management.teams.service import TEAM_MEMBERS_LIST_SPEC
 from litellm.proxy.management.users.service import PrismaOrgRoles
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
@@ -63,3 +65,7 @@ async def get_readable_team(
     if not await team_access.reads_roster(caller, team):
         raise members_not_readable(team_id)
     return team
+
+
+def get_team_members_plan(request: Request, caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]) -> QueryPlan:
+    return plan_list_request(TEAM_MEMBERS_LIST_SPEC, request, caller)

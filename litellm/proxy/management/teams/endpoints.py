@@ -3,10 +3,11 @@ from typing import Annotated, Final
 from fastapi import APIRouter, Depends, Request
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTable
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
-from litellm.proxy.management.teams.dependencies import get_readable_team, get_roster_db
+from litellm.proxy.list_api.list_framework import QueryPlan, list_response
+from litellm.proxy.management.teams.dependencies import get_readable_team, get_roster_db, get_team_members_plan
 from litellm.proxy.management.teams.repository import RawQuery
 from litellm.proxy.management.teams.schemas import TeamMemberListItem
 from litellm.proxy.management.teams.service import get_team_members_list
@@ -24,8 +25,8 @@ router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 )
 async def list_team_members(
     request: Request,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     team: Annotated[LiteLLM_TeamTable, Depends(get_readable_team)],
+    plan: Annotated[QueryPlan, Depends(get_team_members_plan)],
     roster_db: Annotated[RawQuery, Depends(get_roster_db)],
 ) -> ListResponse[TeamMemberListItem]:
     """
@@ -52,9 +53,8 @@ async def list_team_members(
     ```
     """
     try:
-        return await get_team_members_list(team.team_id, request, user_api_key_dict, roster_db)
-    except ManagementProblem:
-        raise
+        page: Final = await get_team_members_list(team.team_id, plan, roster_db)
+        return list_response(request, plan, page.members, page.total_count)
     except Exception as e:  # noqa: BLE001  # a driver error answers as a problem document, not the OpenAI error shape
         verbose_proxy_logger.exception(
             "litellm.proxy.management.teams.endpoints.list_team_members(): Exception occured - %s", e

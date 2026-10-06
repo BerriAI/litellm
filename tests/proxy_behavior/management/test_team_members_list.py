@@ -277,3 +277,12 @@ async def test_members_list_rejects_unsupported_params(params, proxy_client, pri
     resp = await _list(proxy_client, world, roster.team_id, params)
     assert resp.status_code == 400, resp.text
     assert resp.headers["content-type"] == "application/problem+json"
+
+
+async def test_members_list_refuses_a_non_reader_before_judging_their_params(proxy_client, world):
+    resp = await proxy_client.get(
+        f"/management/v1/teams/{world.team_alpha_id}/members",
+        params={"sort": "budget_id"},
+        headers={"Authorization": f"Bearer {world.keys[Actor.CROSS_ORG_USER].cleartext}"},
+    )
+    assert resp.status_code == 403, resp.text
