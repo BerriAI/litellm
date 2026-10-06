@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -40,6 +40,7 @@ from litellm.proxy.management_helpers.bulk_user_deletion import (
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     BulkTeamMemberBudgetUpdateRequest,
     TeamMemberBudgetPatch,
@@ -86,7 +87,7 @@ async def _shared_budget_ids(tx: "Prisma", budget_ids: frozenset[str]) -> frozen
     return frozenset(budget_id for budget_id in budget_ids if sum(1 for row in rows if row.budget_id == budget_id) > 1)
 
 
-class _AuditedMemberBudget(BaseModel):
+class _AuditedMemberBudget(LiteLLMBaseModel):
     """One member's limits as the audit log's before/after values record them."""
 
     model_config = ConfigDict(frozen=True)
@@ -101,7 +102,7 @@ class _AuditedMemberBudget(BaseModel):
     allowed_models: tuple[str, ...] | None = None
 
 
-class _AuditedMemberBudgets(BaseModel):
+class _AuditedMemberBudgets(LiteLLMBaseModel):
     """The audit-log columns hold a JSON object, so the per-member list is nested under a key."""
 
     model_config = ConfigDict(frozen=True)
