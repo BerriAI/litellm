@@ -4,7 +4,11 @@ from typing import Final
 import pytest
 from integration._support.client import Gateway
 from integration.cost_calculation.case import CostTrackingTestCase
-from integration.cost_calculation.chat_completions.bases.anthropic import CLAUDE_SONNET_5_TEST_CASE
+from integration.cost_calculation.chat_completions.bases.anthropic import (
+    CLAUDE_SONNET_5_SYSTEM_CONTENT_BLOCK,
+    CLAUDE_SONNET_5_TEST_CASE,
+    CLAUDE_SONNET_5_USER_MESSAGE,
+)
 from integration.cost_calculation.cost_tracking_case import JsonResponse
 from integration.cost_calculation.runner import assert_cost_tracking
 
@@ -16,23 +20,9 @@ CLAUDE_SONNET_5_CACHE_READ_TEST_CASE: Final = replace(
         "messages": [
             {
                 "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
+                "content": [{**CLAUDE_SONNET_5_SYSTEM_CONTENT_BLOCK, "cache_control": {"type": "ephemeral"}}],
             },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "68925ddd50c0 summarize the attached material in one line and name the city weather",
-                    }
-                ],
-            },
+            CLAUDE_SONNET_5_USER_MESSAGE,
         ],
     },
     mock_provider_response=JsonResponse(
@@ -42,7 +32,7 @@ CLAUDE_SONNET_5_CACHE_READ_TEST_CASE: Final = replace(
             "type": "message",
             "role": "assistant",
             "model": "claude-sonnet-5",
-            "content": [{"type": "text", "text": "scripted answer 68925ddd50c0"}],
+            "content": [{"type": "text", "text": "scripted answer e672859760ae"}],
             "stop_reason": "end_turn",
             "usage": {"input_tokens": 640, "output_tokens": 380, "cache_read_input_tokens": 12288},
         },

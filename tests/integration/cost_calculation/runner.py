@@ -35,12 +35,6 @@ def assert_cost_tracking(case: CostTrackingTestCase, gateway: Gateway) -> None:
         )
         row: Final = JSON_OBJECT.validate_python(rows[0])
         assert row["status"] == "success"
-        spend: Final = row["spend"]
-        prompt_tokens: Final = row["prompt_tokens"]
-        completion_tokens: Final = row["completion_tokens"]
-        assert isinstance(spend, (int, float)) and not isinstance(spend, bool)
-        assert isinstance(prompt_tokens, int) and not isinstance(prompt_tokens, bool)
-        assert isinstance(completion_tokens, int) and not isinstance(completion_tokens, bool)
         metadata_value: Final = row["metadata"]
         metadata: Final = (
             JSON_OBJECT.validate_json(metadata_value)
@@ -49,32 +43,9 @@ def assert_cost_tracking(case: CostTrackingTestCase, gateway: Gateway) -> None:
         )
         breakdown: Final = object_value(metadata["cost_breakdown"])
         actual: Final = {
-            "spend": spend,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
+            "spend": row["spend"],
+            "prompt_tokens": row["prompt_tokens"],
+            "completion_tokens": row["completion_tokens"],
             **breakdown,
         }
-        expected: Final = dict(case.expected_spend_log)
-        assert actual.keys() == expected.keys()
-        actual_numeric: Final = {
-            field: value
-            for field, value in actual.items()
-            if isinstance(value, (int, float)) and not isinstance(value, bool)
-        }
-        expected_numeric: Final = {
-            field: value
-            for field, value in expected.items()
-            if isinstance(value, (int, float)) and not isinstance(value, bool)
-        }
-        assert actual_numeric == pytest.approx(expected_numeric, rel=1e-6)
-        actual_non_numeric: Final = {
-            field: value
-            for field, value in actual.items()
-            if not isinstance(value, (int, float)) or isinstance(value, bool)
-        }
-        expected_non_numeric: Final = {
-            field: value
-            for field, value in expected.items()
-            if not isinstance(value, (int, float)) or isinstance(value, bool)
-        }
-        assert actual_non_numeric == expected_non_numeric
+        assert actual == pytest.approx(dict(case.expected_spend_log), rel=1e-6)

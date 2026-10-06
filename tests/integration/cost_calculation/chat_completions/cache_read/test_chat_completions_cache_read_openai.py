@@ -11,29 +11,6 @@ from integration.cost_calculation.runner import assert_cost_tracking
 GPT_5_6_CACHE_READ_TEST_CASE: Final = replace(
     GPT_5_6_TEST_CASE,
     scenario="cache_read",
-    litellm_request={
-        **GPT_5_6_TEST_CASE.litellm_request,
-        "messages": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "2d376f5f39a0 summarize the attached material in one line and name the city weather",
-                    }
-                ],
-            },
-        ],
-    },
     mock_provider_response=JsonResponse(
         content_type="application/json",
         body={
@@ -44,7 +21,7 @@ GPT_5_6_CACHE_READ_TEST_CASE: Final = replace(
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": "scripted answer 2d376f5f39a0"},
+                    "message": {"role": "assistant", "content": "scripted answer ed318a18ec07"},
                     "finish_reason": "stop",
                 }
             ],

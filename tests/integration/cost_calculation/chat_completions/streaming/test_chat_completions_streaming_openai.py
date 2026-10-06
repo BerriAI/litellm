@@ -13,26 +13,6 @@ GPT_5_6_STREAM_TEST_CASE: Final = replace(
     scenario="stream",
     litellm_request={
         **GPT_5_6_TEST_CASE.litellm_request,
-        "messages": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "0d4dc45197bd summarize the attached material in one line and name the city weather",
-                    }
-                ],
-            },
-        ],
         "stream": True,
         "stream_options": {"include_usage": True},
     },
@@ -44,7 +24,7 @@ GPT_5_6_STREAM_TEST_CASE: Final = replace(
             '"usage": null}',
             'data: {"id": "chatcmpl-$REQUEST_ID", "object": "chat.completion.chunk", "created": 1789788262, '
             '"model": "gpt-5.6", "choices": [{"index": 0, "delta": {"role": "assistant", "content": '
-            '"scripted answer 0d4dc45197bd"}, "finish_reason": null}], "usage": null}',
+            '"scripted answer ed318a18ec07"}, "finish_reason": null}], "usage": null}',
             'data: {"id": "chatcmpl-$REQUEST_ID", "object": "chat.completion.chunk", "created": 1789788262, '
             '"model": "gpt-5.6", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": null}',
             'data: {"id": "chatcmpl-$REQUEST_ID", "object": "chat.completion.chunk", "created": 1789788262, '
@@ -61,26 +41,6 @@ GPT_5_6_STREAM_NO_USAGE_TEST_CASE: Final = replace(
     scenario="stream_no_usage",
     litellm_request={
         **GPT_5_6_TEST_CASE.litellm_request,
-        "messages": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "d2437c6d35d6 summarize the attached material in one line and name the city weather",
-                    }
-                ],
-            },
-        ],
         "stream": True,
         "stream_options": {"include_usage": True},
     },
@@ -92,7 +52,7 @@ GPT_5_6_STREAM_NO_USAGE_TEST_CASE: Final = replace(
             '"usage": null}',
             'data: {"id": "chatcmpl-$REQUEST_ID", "object": "chat.completion.chunk", "created": 1789788263, '
             '"model": "gpt-5.6", "choices": [{"index": 0, "delta": {"role": "assistant", "content": '
-            '"scripted answer d2437c6d35d6"}, "finish_reason": null}], "usage": null}',
+            '"scripted answer ed318a18ec07"}, "finish_reason": null}], "usage": null}',
             'data: {"id": "chatcmpl-$REQUEST_ID", "object": "chat.completion.chunk", "created": 1789788263, '
             '"model": "gpt-5.6", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": null}',
             "data: [DONE]",
@@ -101,13 +61,13 @@ GPT_5_6_STREAM_NO_USAGE_TEST_CASE: Final = replace(
     expected_response_cost_header=None,
     expected_spend_log={
         **GPT_5_6_TEST_CASE.expected_spend_log,
-        "spend": 0.00025375,
-        "prompt_tokens": 49,
-        "completion_tokens": 12,
-        "input_cost": 0.00008575,
-        "output_cost": 0.000168,
-        "total_cost": 0.00025375,
-        "original_cost": 0.00025375,
+        "spend": 0.0002065,  # recounted: 46 * 0.00000175 + 9 * 0.000014
+        "prompt_tokens": 46,
+        "completion_tokens": 9,
+        "input_cost": 0.0000805,
+        "output_cost": 0.000126,
+        "total_cost": 0.0002065,
+        "original_cost": 0.0002065,
     },
 )
 

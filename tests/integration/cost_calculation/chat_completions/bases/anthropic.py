@@ -3,30 +3,28 @@ from typing import Final
 from integration.cost_calculation.case import CostTrackingTestCase
 from integration.cost_calculation.cost_tracking_case import JsonResponse
 
+CLAUDE_SONNET_5_SYSTEM_CONTENT_BLOCK: Final = {
+    "type": "text",
+    "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+}
+CLAUDE_SONNET_5_USER_MESSAGE: Final = {
+    "role": "user",
+    "content": [
+        {
+            "type": "text",
+            "text": "e672859760ae summarize the attached material in one line and name the city weather",
+        }
+    ],
+}
+
 CLAUDE_SONNET_5_TEST_CASE: Final = CostTrackingTestCase(
     scenario="basic",
     deployment={"model": "anthropic/claude-sonnet-5", "api_key": "sk-scripted-provider"},
     litellm_endpoint="/v1/chat/completions",
     litellm_request={
         "messages": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "e672859760ae summarize the attached material in one line and name the city weather",
-                    }
-                ],
-            },
+            {"role": "system", "content": [CLAUDE_SONNET_5_SYSTEM_CONTENT_BLOCK]},
+            CLAUDE_SONNET_5_USER_MESSAGE,
         ],
         "stream": False,
         "allowed_openai_params": [],
