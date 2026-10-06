@@ -649,7 +649,6 @@ def test_cyberark_incremental_update_encrypts_reloads_on_restart_and_delete_clea
         "integration-cyberark-secret-one",
         "integration-cyberark-secret-two",
         "integration-cyberark-secret-three",
-        "integration-cyberark-secret-after-delete",
     )
     encoded_secret_names: Final = frozenset(quote(name, safe="") for name in secret_names)
 
@@ -674,13 +673,16 @@ def test_cyberark_incremental_update_encrypts_reloads_on_restart_and_delete_clea
         assert (request.method, request.target) == ("POST", "/v1/chat/completions"), (
             f"Unexpected provider request {request.method} {request.target}"
         )
-        assert request.headers["authorization"] == f"Bearer {provider_secret}", (
-            "Provider request did not use the CyberArk-resolved secret"
-        )
         body: Final = _JSON_OBJECT.validate_json(request.body)
         messages: Final = body["messages"]
         assert isinstance(messages, list)
-        return _completion(string_value(object_value(messages[0])["content"]))
+        marker: Final = string_value(object_value(messages[0])["content"])
+        if marker == "after-delete":
+            return _completion(marker)
+        assert request.headers["authorization"] == f"Bearer {provider_secret}", (
+            "Provider request did not use the CyberArk-resolved secret"
+        )
+        return _completion(marker)
 
     with (
         scratch_database() as database_url,
@@ -792,9 +794,28 @@ def test_cyberark_incremental_update_encrypts_reloads_on_restart_and_delete_clea
             )
             assert deleted_secret_reads == ()
             model_after_delete: Final = "integration-cyberark-" + uuid.uuid4().hex
-            assert _new_model(restarted, model_after_delete, provider_wire.url, secret_names[3])
+            _new_model(restarted, model_after_delete, provider_wire.url, "LITELLM_MASTER_KEY")
+            _chat(restarted, model_after_delete, "after-delete")
             requests_after_delete: Final = cyberark_wire.drain()
-            assert requests_after_delete == ()
+            assert requests_after_delete == (), requests_after_delete
+            empty_readback: Final = restarted.request("GET", "/config_overrides/cyberark")
+            assert empty_readback.status_code == 200, empty_readback.text
+            empty_values: Final = object_value(
+                object_value(_JSON_OBJECT.validate_json(empty_readback.content))["values"]
+            )
+            assert empty_values == {
+                field: None
+                for field in (
+                    "cyberark_api_base",
+                    "cyberark_account",
+                    "cyberark_username",
+                    "cyberark_api_key",
+                    "client_cert",
+                    "client_key",
+                    "ssl_verify",
+                    "refresh_interval",
+                )
+            }, empty_readback.text
 
 
 def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_reads(
