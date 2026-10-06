@@ -207,9 +207,6 @@ class ZscalerAIGuard(CustomGuardrail):
                 )
             verbose_proxy_logger.debug("inside apply_guardrail kwargs: %s", kwargs)
 
-            # Resolve user for payload (dashboard attribution on AI Guard)
-            # This is the top-level "user" field from the OpenAI chat completion request,
-            # independent of the user_api_key_* metadata sent via headers.
             user_for_payload = request_data.get("user") or None
 
             zscaler_ai_guard_result = None
