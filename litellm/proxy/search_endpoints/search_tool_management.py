@@ -68,7 +68,7 @@ async def _refresh_router_search_tools() -> None:
         verbose_proxy_logger.exception("Search tool router refresh failed after a management write: %s", e)
 
 
-def _with_loaded_tools_where_undecryptable(db_search_tools: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+def _with_loaded_tools_where_undecryptable(db_search_tools: Sequence[dict[str, object]]) -> list[dict[str, Any]]:
     from litellm.proxy.proxy_server import llm_router
 
     kept_search_tools: Final = keep_loaded_search_tools_that_do_not_decrypt(

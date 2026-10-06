@@ -62,7 +62,7 @@ def _index_of_output_item_type(items: Sequence[object], item_type: str) -> int |
     )
 
 
-def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str | None) -> tuple[Any, ...]:
+def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str | None) -> tuple[object, ...]:
     if item_id is None:
         return items
 

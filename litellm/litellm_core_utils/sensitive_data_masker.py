@@ -126,7 +126,7 @@ class SensitiveDataMasker:
         if depth >= max_depth:
             return data
 
-        masked_data: Final[dict[str, Any]] = {}
+        masked_data: Final[dict[str, object]] = {}
         for k, v in data.items():
             try:
                 key_is_sensitive = self.is_sensitive_key(k, excluded_keys)

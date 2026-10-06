@@ -159,7 +159,7 @@ class LangFlowConfig(BaseConfig):
 
         input_value: Final = self._get_last_user_message(messages)
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "input_value": input_value,
             "input_type": optional_params.get("input_type", "chat"),
             "output_type": optional_params.get("output_type", "chat"),

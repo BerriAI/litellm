@@ -562,7 +562,7 @@ def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
 
 
 def _strip_client_callback_credentials(
-    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
     """Drop callback credentials and destinations supplied by the caller.
 
@@ -626,7 +626,7 @@ def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
 
 
 def _strip_router_reserved_metadata(
-    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
     """Drop the router-owned fallback stamps from any client-supplied metadata bucket."""
     for metadata_key in ("metadata", "litellm_metadata"):

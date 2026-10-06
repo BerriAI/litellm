@@ -65,7 +65,7 @@ from ..common_utils import (
 # Typed as Any to avoid introducing a module-load-time cyclic import to
 # vertex_llm_base. The instance is lazily constructed by _get_vertex_base()
 # the first time GCS metadata needs to be fetched.
-_GCS_METADATA_VERTEX_BASE: Any | None = None
+_GCS_METADATA_VERTEX_BASE: object | None = None
 # Shared sync client for GCS JSON API metadata reads so proxy/SSL settings
 # from litellm's HTTP stack apply (see Greptile review on PR #27278).
 _GCS_METADATA_HTTP_HANDLER: HTTPHandler | None = None

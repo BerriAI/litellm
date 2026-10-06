@@ -361,7 +361,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,  # mutable-ok: out-param
         optional_params: dict,  # mutable-ok: out-param
-        messages: list[Any],  # mutable-ok: mirrors the validate_anthropic_messages_environment contract
+        messages: list[object],  # mutable-ok: mirrors the validate_anthropic_messages_environment contract
     ) -> dict:  # mutable-ok: out-param
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION

@@ -150,7 +150,7 @@ _trusted_overlay_callback_params: Final = frozenset(
 )
 
 
-def get_trusted_callback_params(kwargs: Mapping[str, Any] | None) -> tuple[tuple[str, str], ...]:
+def get_trusted_callback_params(kwargs: Mapping[str, object] | None) -> tuple[tuple[str, str], ...]:
     """
     Read callback params the proxy itself stamped from admin-configured team/key callback settings.
 

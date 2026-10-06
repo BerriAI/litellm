@@ -739,7 +739,7 @@ def redact_nested_match_and_regex_keys(
     if payload is None or isinstance(payload, str):
         return payload
     try:
-        redacted: Final[dict | list[Any] | str | None] = copy.deepcopy(payload)
+        redacted: Final[dict | list[object] | str | None] = copy.deepcopy(payload)
     except Exception:
         return payload
 

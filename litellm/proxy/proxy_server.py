@@ -14798,7 +14798,7 @@ async def _fetch_db_models_for_search(
     filter for `team_public_model_name` instead and keep the DB cost
     bounded by `search`.
     """
-    db_where_condition: Final[dict[str, Any]] = {
+    db_where_condition: Final[dict[str, object]] = {
         "model_name": {"contains": search_lower, "mode": "insensitive"} if model_name is None else model_name
     }
     if db_model_ids_in_router:

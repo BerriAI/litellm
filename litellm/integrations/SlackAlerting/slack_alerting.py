@@ -1807,7 +1807,7 @@ Model Info:
 
     async def _run_scheduled_daily_report(
         self,
-        llm_router: Any | None = None,
+        llm_router: object | None = None,
         pod_lock_manager: "PodLockManager | None" = None,
     ):
         """
