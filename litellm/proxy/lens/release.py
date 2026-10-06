@@ -3,14 +3,18 @@ from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from typing import Final
 
-from litellm._version import get_distribution
-
 PROTOCOL_VERSION: Final = 5
 
 
 def release_tag() -> str:
     if "LITELLM_RELEASE_TAG" in os.environ:
         return os.environ["LITELLM_RELEASE_TAG"]
+    try:
+        from litellm._version import get_distribution
+    except ModuleNotFoundError as error:
+        if error.name != "litellm":
+            raise
+        return ""
     try:
         installed: Final = get_distribution(distribution)
     except PackageNotFoundError:

@@ -1,5 +1,7 @@
+from collections.abc import Mapping, Sequence
 from importlib.metadata import Distribution, PackageNotFoundError, PathDistribution
 from pathlib import Path
+from types import ModuleType
 from typing import Final
 
 import pytest
@@ -79,3 +81,39 @@ def test_unknown_source_never_falls_back_to_a_package_version_or_image_override(
         monkeypatch.setenv("LITELLM_RELEASE_TAG", "")
     assert release.release_tag() == ""
     assert worker_image() == ""
+
+
+@pytest.mark.parametrize("tag,missing", (("sha-" + "a" * 40, "litellm"), ("", "litellm"), ("", "broken_sdk_dependency")))
+def test_standalone_worker_release_does_not_require_the_sdk(
+    monkeypatch: pytest.MonkeyPatch, tag: str, missing: str
+) -> None:
+    import builtins
+    import runpy
+
+    from litellm.proxy.lens import release
+
+    original_import: Final = builtins.__import__
+
+    def without_sdk(
+        name: str,
+        globals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object] | None = None,
+        fromlist: Sequence[str] = (),
+        level: int = 0,
+    ) -> ModuleType:
+        if name.startswith("litellm"):
+            raise ModuleNotFoundError(f"No module named {missing!r}", name=missing)
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", without_sdk)
+    if tag:
+        monkeypatch.setenv("LITELLM_RELEASE_TAG", tag)
+    else:
+        monkeypatch.delenv("LITELLM_RELEASE_TAG", raising=False)
+    namespace: Final = runpy.run_path(release.__file__)
+    if missing == "litellm":
+        assert namespace["release_tag"]() == tag
+    else:
+        with pytest.raises(ModuleNotFoundError) as caught:
+            namespace["release_tag"]()
+        assert caught.value.name == missing
