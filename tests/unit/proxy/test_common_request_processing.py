@@ -3832,12 +3832,16 @@ class TestStreamingOverheadHeader:
 class TestDDSpanTaggerTagRequest:
     """Tests for DDSpanTagger.tag_request - key/model DD span tagging."""
 
-    def _make_user_api_key_dict(self, key_alias=None, token=None):
-        from litellm.proxy._types import UserAPIKeyAuth
-
-        d = UserAPIKeyAuth()
+    def _make_user_api_key_dict(
+        self,
+        key_alias: str | None = None,
+        token: str | None = None,
+        user_email: str | None = None,
+    ) -> ProxyUserAPIKeyAuth:
+        d = ProxyUserAPIKeyAuth()
         d.key_alias = key_alias
         d.token = token
+        d.user_email = user_email
         return d
 
     def test_tags_key_alias_and_model(self):
@@ -3877,6 +3881,30 @@ class TestDDSpanTaggerTagRequest:
             )
 
         mock_set_tag.assert_called_once_with("litellm.requested_model", "claude-3-5-sonnet")
+
+    def test_user_email_is_not_tagged(self):  # test-quality-ok: mock sink boundary
+        """Personal email addresses are not added to trace tags."""
+        user_key = self._make_user_api_key_dict(user_email="user@example.com")
+
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
+            DDSpanTagger.tag_request(
+                user_api_key_dict=user_key,
+                requested_model=None,
+            )
+
+        assert all(call.args[0] != "litellm.user_email" for call in mock_set_tag.call_args_list)
+
+    def test_no_user_email_tag_when_absent(self):  # test-quality-ok: mock sink boundary
+        """No user email tag when the authenticated identity has no email."""
+        user_key = self._make_user_api_key_dict(key_alias="my-prod-key", user_email=None)
+
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
+            DDSpanTagger.tag_request(
+                user_api_key_dict=user_key,
+                requested_model="gpt-4o",
+            )
+
+        assert all(call.args[0] != "litellm.user_email" for call in mock_set_tag.call_args_list)
 
 
 class TestHasAttributeErrorInChain:

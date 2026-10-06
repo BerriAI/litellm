@@ -11279,6 +11279,15 @@ class Router:
         model_list: Final = self.get_model_list(model_name=model_group)
         if model_list is None:
             return None
+        model_group_description: str | None = None
+        for deployment in model_list:
+            deployment_model_info: object = deployment.get("model_info")
+            if not isinstance(deployment_model_info, dict):
+                continue
+            description: object = deployment_model_info.get("description")
+            if isinstance(description, str):
+                model_group_description = description
+                break
         for model in model_list:
             is_match = False
             if (
@@ -11383,6 +11392,7 @@ class Router:
                     **{
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
+                        "description": model_group_description,
                         **model_info,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
