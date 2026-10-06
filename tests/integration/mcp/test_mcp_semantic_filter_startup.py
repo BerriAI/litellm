@@ -34,8 +34,6 @@ Surface = Literal["chat", "responses"]
 
 
 class EmbeddingDouble:
-    """OpenAI /v1/embeddings double; descriptions containing 'invoice' embed along axis 0."""
-
     def __init__(self, mode: Literal["healthy", "held", "failing"], delay: float = 0.0) -> None:
         self.release = threading.Event()
         self.mode = mode
@@ -81,8 +79,8 @@ class EmbeddingDouble:
         )
 
 
-def _chat_double() -> tuple[Callable[[Request], Reply], list[dict]]:
-    bodies: list[dict] = []
+def _chat_double() -> tuple[Callable[[Request], Reply], list[dict[str, object]]]:
+    bodies: list[dict[str, object]] = []
 
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target.endswith("/models"):
@@ -136,7 +134,7 @@ def _chat_double() -> tuple[Callable[[Request], Reply], list[dict]]:
     return respond, bodies
 
 
-def _tool_names(body: dict) -> tuple[str, ...]:
+def _tool_names(body: dict[str, object]) -> tuple[str, ...]:
     tools: Final = body.get("tools")
     if not isinstance(tools, list):
         return ()
@@ -145,7 +143,7 @@ def _tool_names(body: dict) -> tuple[str, ...]:
     )
 
 
-def _peer_names(bodies: list[dict], alias: str) -> frozenset[str]:
+def _peer_names(bodies: list[dict[str, object]], alias: str) -> frozenset[str]:
     prefix: Final = f"{alias}-"
     return frozenset(name for body in bodies for name in _tool_names(body) if name.startswith(prefix))
 
@@ -178,7 +176,7 @@ def _config(
     peer_url: str,
     embeddings_url: str,
     chat_url: str,
-    semantic_filter: dict | None,
+    semantic_filter: dict[str, object] | None,
     reload_interval_seconds: int | None = None,
 ) -> Path:
     document: Final = {
@@ -240,7 +238,7 @@ def _send(proxy: Gateway, surface: Surface) -> httpx.Response:
     )
 
 
-def _request_is_filtered(proxy: Gateway, surface: Surface, bodies: list[dict], alias: str) -> bool:
+def _request_is_filtered(proxy: Gateway, surface: Surface, bodies: list[dict[str, object]], alias: str) -> bool:
     response: Final = _send(proxy, surface)
     return response.status_code == 200 and _peer_names(bodies[-1:], alias) == frozenset((f"{alias}-refund_invoice",))
 

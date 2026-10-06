@@ -164,19 +164,17 @@ class SemanticMCPToolFilter:
     def _tools_to_routes_and_map(self, tools: Sequence[object]) -> tuple[list["Route"], dict[str, object]]:
         from semantic_router.routers.base import Route
 
-        routes: list[Route] = []
-        tool_map: dict[str, object] = {}
-        for tool in tools:
-            name, description = self._extract_tool_info(tool)
-            tool_map[name] = tool
-            routes.append(
-                Route(
-                    name=name,
-                    description=description,
-                    utterances=[description],
-                    score_threshold=self.similarity_threshold,
-                )
+        extracted: Final = tuple((self._extract_tool_info(tool), tool) for tool in tools)
+        tool_map: Final = {name: tool for (name, _), tool in extracted}
+        routes: Final = [
+            Route(
+                name=name,
+                description=description,
+                utterances=[description],
+                score_threshold=self.similarity_threshold,
             )
+            for (name, description), _ in extracted
+        ]
         return routes, tool_map
 
     def _handle_build_error(self, error: Exception) -> bool:

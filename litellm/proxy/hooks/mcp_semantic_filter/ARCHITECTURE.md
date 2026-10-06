@@ -89,7 +89,7 @@ litellm_settings:
     defer_index_build: false
 ```
 
-When `defer_index_build` is true, the hook registers immediately at startup and the tool embedding index is built in a background task through the async encoder path, so proxy startup and the event loop are not blocked. Requests pass through unfiltered until the index is ready. When false (default), the index build is awaited inside the startup lifespan before the proxy serves traffic.
+With `defer_index_build`, `initialize_from_config` starts `build_router_from_mcp_registry(async_index=True)` as a background task stored on `hook.index_build_task`, and `filter_tools` returns every tool until `startup_index_ready` is set
 
 ## Error Handling
 
