@@ -29,17 +29,9 @@ litellm-host.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 litellm-cache.workspace = true
-litellm-cache-azure-blob.workspace = true
 litellm-cache-memory.workspace = true
 litellm-cache-redis.workspace = true
-litellm-cache-s3.workspace = true
-litellm-cache-gcs.workspace = true
-litellm-cache-disk.workspace = true
-litellm-cache-redis-semantic.workspace = true
 litellm-cache-response.workspace = true
-litellm-cache-qdrant-semantic.workspace = true
-qdrant-client.workspace = true
-litellm-cache-valkey-semantic = { path = "../cache-valkey-semantic" }
 serde.workspace = true
 litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
@@ -63,7 +55,6 @@ strum.workspace = true
 veil.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
-url.workspace = true
 
 [dev-dependencies]
 tracing.workspace = true
@@ -75,7 +66,6 @@ criterion.workspace = true
 futures-util.workspace = true
 rstest.workspace = true
 sqlx = { workspace = true, features = ["migrate"] }
-sha2.workspace = true
 tokio-tungstenite.workspace = true
 wiremock.workspace = true
 aws-sdk-secretsmanager = "1.117.0"
