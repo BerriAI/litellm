@@ -1,8 +1,10 @@
 import asyncio
-import aiohttp
 import json
 import math
 from typing import Any
+
+import aiohttp
+
 
 # Asynchronously fetch data from a given URL
 async def fetch_data(url):

@@ -1,0 +1,651 @@
+diff --git a/agentcc-gateway/internal/guardrails/plugin.go b/agentcc-gateway/internal/guardrails/plugin.go
+index 58e8242..2a37385 100644
+--- a/agentcc-gateway/internal/guardrails/plugin.go
++++ b/agentcc-gateway/internal/guardrails/plugin.go
+@@ -4,6 +4,7 @@ import (
+ 	"context"
+ 	"fmt"
+ 	"log/slog"
++	"sort"
+ 	"strings"
+ 	"sync"
+ 	"time"
+@@ -121,9 +122,23 @@ func (p *GuardrailPlugin) ProcessResponse(ctx context.Context, rc *models.Reques
+ 	return p.runOrgGuardrails(ctx, rc, StagePost)
+ }
+ 
++// orgCheck is one enabled org check resolved to its implementation.
++type orgCheck struct {
++	name  string
++	check *tenant.GuardrailCheck
++	g     Guardrail
++}
++
+ // runOrgGuardrails runs guardrails defined in the org's tenant config.
+ // This enables managed mode where guardrail rules come from the control plane
+ // rather than from config.yaml.
++//
++// The org's pipeline settings are honoured:
++//   - fail_open decides what happens when a check errors or times out
++//     (falls back to the gateway-wide guardrails.fail_open when unset).
++//   - pipeline_mode "sequential" runs checks one after another and stops at
++//     the first block; anything else (the dashboard default, "parallel")
++//     runs them concurrently and stops waiting as soon as one blocks.
+ func (p *GuardrailPlugin) runOrgGuardrails(ctx context.Context, rc *models.RequestContext, stage Stage) pipeline.PluginResult {
+ 	if p.tenantStore == nil {
+ 		return pipeline.ResultContinue()
+@@ -138,11 +153,83 @@ func (p *GuardrailPlugin) runOrgGuardrails(ctx context.Context, rc *models.Reque
+ 	if orgCfg == nil || orgCfg.Guardrails == nil || len(orgCfg.Guardrails.Checks) == 0 {
+ 		return pipeline.ResultContinue()
+ 	}
++	gcfg := orgCfg.Guardrails
++
++	checks := p.collectOrgChecks(orgID, gcfg, stage)
++	if len(checks) == 0 {
++		return pipeline.ResultContinue()
++	}
++
++	timeout := p.defaultTimeout
++	if gcfg.TimeoutMs > 0 {
++		timeout = time.Duration(gcfg.TimeoutMs) * time.Millisecond
++	}
++	failOpen := gcfg.ResolveFailOpen(p.failOpen)
++
++	input := &CheckInput{
++		Request:  rc.Request,
++		Metadata: rc.Metadata,
++	}
++	if stage == StagePost {
++		input.Response = rc.Response
++	}
++
++	var outcomes []*CheckResult
++	var blockIdx int
++	if gcfg.IsSequential() {
++		outcomes, blockIdx = p.runOrgChecksSequential(ctx, checks, input, timeout, failOpen)
++	} else {
++		outcomes, blockIdx = p.runOrgChecksParallel(ctx, checks, input, timeout, failOpen)
++	}
+ 
+ 	result := &PipelineResult{}
+ 
+-	for name, check := range orgCfg.Guardrails.Checks {
+-		if !check.Enabled {
++	// The blocking check goes first so block metadata and the error message
++	// name the check that actually blocked.
++	if blockIdx >= 0 {
++		p.recordOrgOutcome(result, orgID, checks[blockIdx], outcomes[blockIdx])
++	}
++	for i, c := range checks {
++		if i == blockIdx {
++			continue
++		}
++		p.recordOrgOutcome(result, orgID, c, outcomes[i])
++	}
++
++	if blockIdx >= 0 {
++		blocker := checks[blockIdx].name
++		result.Blocked = true
++		storeGuardrailResults(rc, result)
++		rc.Flags.GuardrailTriggered = true
++		rc.Metadata["guardrail_name"] = blocker
++		rc.Metadata["guardrail_action"] = "blocked"
++		return pipeline.ResultError(models.ErrGuardrailBlocked(
++			"content_blocked",
++			p.buildBlockMessage(result),
++		))
++	}
++
++	// Apply metadata for non-blocking triggers.
++	if len(result.Triggered) > 0 {
++		p.applyMetadata(rc, result)
++	}
++
++	return pipeline.ResultContinue()
++}
++
++// collectOrgChecks returns the org's enabled checks for this stage, sorted by
++// name so execution order (sequential) and result order are deterministic.
++func (p *GuardrailPlugin) collectOrgChecks(orgID string, gcfg *tenant.GuardrailConfig, stage Stage) []orgCheck {
++	names := make([]string, 0, len(gcfg.Checks))
++	for name := range gcfg.Checks {
++		names = append(names, name)
++	}
++	sort.Strings(names)
++
++	checks := make([]orgCheck, 0, len(names))
++	for _, name := range names {
++		check := gcfg.Checks[name]
++		if check == nil || !check.Enabled {
+ 			continue
+ 		}
+ 
+@@ -151,7 +238,6 @@ func (p *GuardrailPlugin) runOrgGuardrails(ctx context.Context, rc *models.Reque
+ 			continue
+ 		}
+ 
+-		// Get or create the guardrail implementation.
+ 		g := p.getGuardrail(orgID, name, check)
+ 		if g == nil {
+ 			slog.Debug("guardrail implementation not found",
+@@ -161,80 +247,105 @@ func (p *GuardrailPlugin) runOrgGuardrails(ctx context.Context, rc *models.Reque
+ 			continue
+ 		}
+ 
+-		// Check stage matches.
+ 		if g.Stage() != stage {
+ 			continue
+ 		}
+ 
+-		// Determine timeout.
+-		timeout := p.defaultTimeout
+-		if orgCfg.Guardrails.TimeoutMs > 0 {
+-			timeout = time.Duration(orgCfg.Guardrails.TimeoutMs) * time.Millisecond
+-		}
+-
+-		// Build input.
+-		input := &CheckInput{
+-			Request:  rc.Request,
+-			Metadata: rc.Metadata,
+-		}
+-		if stage == StagePost {
+-			input.Response = rc.Response
+-		}
++		checks = append(checks, orgCheck{name: name, check: check, g: g})
++	}
++	return checks
++}
+ 
+-		// Run with timeout and panic recovery.
+-		cr := p.runGuardrailSafe(ctx, g, input, timeout)
+-		if cr == nil {
+-			continue
+-		}
++// orgCheckBlocks reports whether a check outcome blocks the request.
++func orgCheckBlocks(c orgCheck, cr *CheckResult) bool {
++	return shouldTrigger(cr, c.check.ConfidenceThreshold) && parseAction(c.check.Action) == ActionBlock
++}
+ 
+-		// Apply threshold.
+-		threshold := check.ConfidenceThreshold
+-		triggered := shouldTrigger(cr, threshold)
+-		if !triggered {
+-			continue
++// runOrgChecksSequential runs checks one at a time, stopping at the first
++// block. It returns per-check outcomes (nil = not run or passed) and the
++// index of the blocking check, or -1.
++func (p *GuardrailPlugin) runOrgChecksSequential(ctx context.Context, checks []orgCheck, input *CheckInput, timeout time.Duration, failOpen bool) ([]*CheckResult, int) {
++	outcomes := make([]*CheckResult, len(checks))
++	for i, c := range checks {
++		outcomes[i] = p.runGuardrailSafe(ctx, c.g, input, timeout, failOpen)
++		if orgCheckBlocks(c, outcomes[i]) {
++			return outcomes, i
+ 		}
++	}
++	return outcomes, -1
++}
+ 
+-		action := parseAction(check.Action)
++// runOrgChecksParallel starts every check at once. As soon as one blocks,
++// the rest are cancelled and their outcomes discarded, so a request waits at
++// most one timeout rather than the sum of them.
++func (p *GuardrailPlugin) runOrgChecksParallel(ctx context.Context, checks []orgCheck, input *CheckInput, timeout time.Duration, failOpen bool) ([]*CheckResult, int) {
++	if len(checks) == 1 {
++		return p.runOrgChecksSequential(ctx, checks, input, timeout, failOpen)
++	}
+ 
+-		tg := TriggeredGuardrail{
+-			Name:      name,
+-			Score:     cr.Score,
+-			Threshold: threshold,
+-			Action:    action,
+-			Message:   cr.Message,
+-		}
+-		result.Triggered = append(result.Triggered, tg)
++	runCtx, cancel := context.WithCancel(ctx)
++	defer cancel()
+ 
+-		switch action {
+-		case ActionBlock:
+-			result.Blocked = true
+-			storeGuardrailResults(rc, result)
+-			rc.Flags.GuardrailTriggered = true
+-			rc.Metadata["guardrail_name"] = name
+-			rc.Metadata["guardrail_action"] = "blocked"
+-			return pipeline.ResultError(models.ErrGuardrailBlocked(
+-				"content_blocked",
+-				p.buildBlockMessage(result),
+-			))
+-		case ActionWarn:
+-			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %s", name, cr.Message))
+-		case ActionLog:
+-			slog.Info("guardrail triggered (log mode)",
+-				"guardrail", name,
+-				"org_id", orgID,
+-				"score", cr.Score,
+-				"threshold", threshold,
+-				"message", cr.Message,
+-			)
++	type outcome struct {
++		idx int
++		cr  *CheckResult
++	}
++	// Buffered so goroutines never block after we stop reading.
++	ch := make(chan outcome, len(checks))
++	for i, c := range checks {
++		go func(i int, c orgCheck) {
++			ch <- outcome{idx: i, cr: p.runGuardrailSafe(runCtx, c.g, input, timeout, failOpen)}
++		}(i, c)
++	}
++
++	outcomes := make([]*CheckResult, len(checks))
++	for range checks {
++		o := <-ch
++		outcomes[o.idx] = o.cr
++		if orgCheckBlocks(checks[o.idx], o.cr) {
++			// Remaining checks are cancelled; anything they report now would
++			// be an artefact of the cancellation, so drop it.
++			cancel()
++			for j := range outcomes {
++				if j != o.idx {
++					outcomes[j] = nil
++				}
++			}
++			return outcomes, o.idx
+ 		}
+ 	}
++	return outcomes, -1
++}
+ 
+-	// Apply metadata for non-blocking triggers.
+-	if len(result.Triggered) > 0 {
+-		p.applyMetadata(rc, result)
++// recordOrgOutcome applies a check's threshold and action to the aggregate
++// result. Block decisions are made by the caller.
++func (p *GuardrailPlugin) recordOrgOutcome(result *PipelineResult, orgID string, c orgCheck, cr *CheckResult) {
++	threshold := c.check.ConfidenceThreshold
++	if !shouldTrigger(cr, threshold) {
++		return
+ 	}
+ 
+-	return pipeline.ResultContinue()
++	action := parseAction(c.check.Action)
++	result.Triggered = append(result.Triggered, TriggeredGuardrail{
++		Name:      c.name,
++		Score:     cr.Score,
++		Threshold: threshold,
++		Action:    action,
++		Message:   cr.Message,
++	})
++
++	switch action {
++	case ActionWarn:
++		result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %s", c.name, cr.Message))
++	case ActionLog:
++		slog.Info("guardrail triggered (log mode)",
++			"guardrail", c.name,
++			"org_id", orgID,
++			"score", cr.Score,
++			"threshold", threshold,
++			"message", cr.Message,
++		)
++	}
+ }
+ 
+ // getGuardrail resolves a guardrail implementation by name.
+@@ -318,7 +429,8 @@ func (p *GuardrailPlugin) createDynamicGuardrail(orgID, name string, cfg map[str
+ }
+ 
+ // runGuardrailSafe runs a guardrail check with timeout and panic recovery.
+-func (p *GuardrailPlugin) runGuardrailSafe(ctx context.Context, g Guardrail, input *CheckInput, timeout time.Duration) *CheckResult {
++// failOpen decides whether an error or timeout passes (nil) or triggers.
++func (p *GuardrailPlugin) runGuardrailSafe(ctx context.Context, g Guardrail, input *CheckInput, timeout time.Duration, failOpen bool) *CheckResult {
+ 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+ 	defer cancel()
+ 
+@@ -348,9 +460,9 @@ func (p *GuardrailPlugin) runGuardrailSafe(ctx context.Context, g Guardrail, inp
+ 			slog.Error("dynamic guardrail error",
+ 				"guardrail", g.Name(),
+ 				"error", res.err,
+-				"fail_open", p.failOpen,
++				"fail_open", failOpen,
+ 			)
+-			if p.failOpen {
++			if failOpen {
+ 				return nil
+ 			}
+ 			return &CheckResult{
+@@ -364,9 +476,9 @@ func (p *GuardrailPlugin) runGuardrailSafe(ctx context.Context, g Guardrail, inp
+ 		slog.Warn("dynamic guardrail timed out",
+ 			"guardrail", g.Name(),
+ 			"timeout", timeout,
+-			"fail_open", p.failOpen,
++			"fail_open", failOpen,
+ 		)
+-		if p.failOpen {
++		if failOpen {
+ 			return nil
+ 		}
+ 		return &CheckResult{
+diff --git a/agentcc-gateway/internal/guardrails/plugin_org_settings_test.go b/agentcc-gateway/internal/guardrails/plugin_org_settings_test.go
+new file mode 100644
+index 0000000..1b9e380
+--- /dev/null
++++ b/agentcc-gateway/internal/guardrails/plugin_org_settings_test.go
+@@ -0,0 +1,187 @@
++package guardrails
++
++import (
++	"context"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/futureagi/agentcc-gateway/internal/models"
++	"github.com/futureagi/agentcc-gateway/internal/pipeline"
++	"github.com/futureagi/agentcc-gateway/internal/tenant"
++)
++
++func boolPtr(b bool) *bool { return &b }
++
++const orgSettingsTestOrg = "org-pipeline-settings"
++
++// newOrgSettingsPlugin builds a plugin with a gateway-wide failOpen and one
++// org whose guardrail config is gcfg.
++func newOrgSettingsPlugin(gatewayFailOpen bool, registry map[string]Guardrail, gcfg *tenant.GuardrailConfig) *GuardrailPlugin {
++	store := tenant.NewStore()
++	store.Set(orgSettingsTestOrg, &tenant.OrgConfig{Guardrails: gcfg})
++	p := NewPlugin(nil, registry, nil, nil, store)
++	p.failOpen = gatewayFailOpen
++	return p
++}
++
++func newOrgSettingsRC() *models.RequestContext {
++	rc := models.AcquireRequestContext()
++	rc.Request = &models.ChatCompletionRequest{Model: "gpt-4o"}
++	rc.Metadata["org_id"] = orgSettingsTestOrg
++	return rc
++}
++
++func blockCheck() *tenant.GuardrailCheck {
++	return &tenant.GuardrailCheck{Enabled: true, Action: "block", ConfidenceThreshold: 0.5}
++}
++
++func slowPass(name string) *mockGuardrail {
++	return &mockGuardrail{name: name, stage: StagePre, result: &CheckResult{Pass: true}, delay: time.Second}
++}
++
++func TestOrgFailOpen_OrgFalseOverridesGatewayTrue(t *testing.T) {
++	p := newOrgSettingsPlugin(true,
++		map[string]Guardrail{"slow": slowPass("slow")},
++		&tenant.GuardrailConfig{
++			FailOpen:  boolPtr(false),
++			TimeoutMs: 20,
++			Checks:    map[string]*tenant.GuardrailCheck{"slow": blockCheck()},
++		})
++	rc := newOrgSettingsRC()
++	defer rc.Release()
++
++	if res := p.ProcessRequest(context.Background(), rc); res.Action != pipeline.ShortCircuit {
++		t.Fatal("org fail_open=false: timed-out check should block")
++	}
++}
++
++func TestOrgFailOpen_OrgTrueOverridesGatewayFalse(t *testing.T) {
++	p := newOrgSettingsPlugin(false,
++		map[string]Guardrail{"slow": slowPass("slow")},
++		&tenant.GuardrailConfig{
++			FailOpen:  boolPtr(true),
++			TimeoutMs: 20,
++			Checks:    map[string]*tenant.GuardrailCheck{"slow": blockCheck()},
++		})
++	rc := newOrgSettingsRC()
++	defer rc.Release()
++
++	if res := p.ProcessRequest(context.Background(), rc); res.Action != pipeline.Continue {
++		t.Fatal("org fail_open=true: timed-out check should be let through")
++	}
++}
++
++func TestOrgFailOpen_UnsetFallsBackToGateway(t *testing.T) {
++	for _, gatewayFailOpen := range []bool{true, false} {
++		p := newOrgSettingsPlugin(gatewayFailOpen,
++			map[string]Guardrail{"slow": slowPass("slow")},
++			&tenant.GuardrailConfig{
++				TimeoutMs: 20,
++				Checks:    map[string]*tenant.GuardrailCheck{"slow": blockCheck()},
++			})
++		rc := newOrgSettingsRC()
++		res := p.ProcessRequest(context.Background(), rc)
++		rc.Release()
++
++		blocked := res.Action == pipeline.ShortCircuit
++		if blocked == gatewayFailOpen {
++			t.Errorf("gateway fail_open=%v, org unset: blocked=%v", gatewayFailOpen, blocked)
++		}
++	}
++}
++
++// Three checks each taking ~100ms: parallel should finish in roughly one
++// check's time, sequential in roughly three.
++func TestOrgPipelineMode_ParallelVsSequentialLatency(t *testing.T) {
++	const delay = 100 * time.Millisecond
++	registry := map[string]Guardrail{}
++	checks := map[string]*tenant.GuardrailCheck{}
++	for _, n := range []string{"a", "b", "c"} {
++		registry[n] = &mockGuardrail{name: n, stage: StagePre, result: &CheckResult{Pass: true}, delay: delay}
++		checks[n] = blockCheck()
++	}
++
++	run := func(mode string) time.Duration {
++		p := newOrgSettingsPlugin(true, registry, &tenant.GuardrailConfig{PipelineMode: mode, Checks: checks})
++		rc := newOrgSettingsRC()
++		defer rc.Release()
++		start := time.Now()
++		if res := p.ProcessRequest(context.Background(), rc); res.Action != pipeline.Continue {
++			t.Fatalf("mode %q: passing checks should continue", mode)
++		}
++		return time.Since(start)
++	}
++
++	if d := run("parallel"); d >= 2*delay {
++		t.Errorf("parallel took %v, want < %v", d, 2*delay)
++	}
++	if d := run(""); d >= 2*delay {
++		t.Errorf("default (unset) mode took %v, want parallel (< %v)", d, 2*delay)
++	}
++	if d := run("sequential"); d < 3*delay {
++		t.Errorf("sequential took %v, want >= %v", d, 3*delay)
++	}
++}
++
++// In parallel mode a fast block must not wait for slow checks, and the block
++// is attributed to the check that blocked.
++func TestOrgPipelineMode_ParallelBlockShortCircuits(t *testing.T) {
++	registry := map[string]Guardrail{
++		"a-slow":  &mockGuardrail{name: "a-slow", stage: StagePre, result: &CheckResult{Pass: true}, delay: 2 * time.Second},
++		"b-block": &mockGuardrail{name: "b-block", stage: StagePre, result: &CheckResult{Pass: false, Score: 0.9, Message: "bad"}},
++	}
++	p := newOrgSettingsPlugin(false, registry, &tenant.GuardrailConfig{
++		PipelineMode: "parallel",
++		Checks: map[string]*tenant.GuardrailCheck{
++			"a-slow":  blockCheck(),
++			"b-block": blockCheck(),
++		},
++	})
++	rc := newOrgSettingsRC()
++	defer rc.Release()
++
++	start := time.Now()
++	res := p.ProcessRequest(context.Background(), rc)
++	if res.Action != pipeline.ShortCircuit {
++		t.Fatal("expected block")
++	}
++	if d := time.Since(start); d > 500*time.Millisecond {
++		t.Errorf("parallel block waited %v for slow check", d)
++	}
++	if rc.Metadata["guardrail_name"] != "b-block" {
++		t.Errorf("guardrail_name = %q, want b-block", rc.Metadata["guardrail_name"])
++	}
++	// The cancelled slow check must not be reported (it would look like a
++	// fail-closed timeout).
++	for _, r := range rc.GuardrailResults {
++		if r.Name == "a-slow" {
++			t.Errorf("cancelled check a-slow should not be in results: %+v", r)
++		}
++	}
++}
++
++// A warn that triggers before a block must not be named in the block error.
++func TestOrgPipelineMode_SequentialBlockMessageNamesBlocker(t *testing.T) {
++	registry := map[string]Guardrail{
++		"a-warn":  &mockGuardrail{name: "a-warn", stage: StagePre, result: &CheckResult{Pass: false, Score: 0.9, Message: "meh"}},
++		"b-block": &mockGuardrail{name: "b-block", stage: StagePre, result: &CheckResult{Pass: false, Score: 0.9, Message: "bad"}},
++	}
++	p := newOrgSettingsPlugin(true, registry, &tenant.GuardrailConfig{
++		PipelineMode: "sequential",
++		Checks: map[string]*tenant.GuardrailCheck{
++			"a-warn":  {Enabled: true, Action: "warn", ConfidenceThreshold: 0.5},
++			"b-block": blockCheck(),
++		},
++	})
++	rc := newOrgSettingsRC()
++	defer rc.Release()
++
++	res := p.ProcessRequest(context.Background(), rc)
++	if res.Action != pipeline.ShortCircuit || res.Error == nil {
++		t.Fatal("expected block")
++	}
++	if !strings.Contains(res.Error.Message, "b-block") {
++		t.Errorf("block message %q should name b-block", res.Error.Message)
++	}
++}
+diff --git a/agentcc-gateway/internal/tenant/config.go b/agentcc-gateway/internal/tenant/config.go
+index 27231ce..13a4931 100644
+--- a/agentcc-gateway/internal/tenant/config.go
++++ b/agentcc-gateway/internal/tenant/config.go
+@@ -5,6 +5,8 @@
+ // the org that owns the API key.
+ package tenant
+ 
++import "strings"
++
+ // OrgConfig holds the merged configuration for a single organization.
+ type OrgConfig struct {
+ 	Providers    map[string]*ProviderConfig `json:"providers,omitempty"`
+@@ -53,10 +55,35 @@ func (p *ProviderConfig) HasCredentials() bool {
+ 
+ // GuardrailConfig holds per-org guardrail pipeline settings.
+ type GuardrailConfig struct {
+-	PipelineMode string                     `json:"pipeline_mode,omitempty"` // "parallel" or "sequential"
+-	FailOpen     bool                       `json:"fail_open,omitempty"`
+-	TimeoutMs    int                        `json:"timeout_ms,omitempty"`
+-	Checks       map[string]*GuardrailCheck `json:"checks,omitempty"`
++	PipelineMode string `json:"pipeline_mode,omitempty"` // "parallel" (default) or "sequential"
++	// FailOpen decides whether a check that errors or times out lets the
++	// request through (true) or blocks it (false). nil means the org has not
++	// chosen, so the gateway-wide guardrails.fail_open applies.
++	FailOpen  *bool                      `json:"fail_open,omitempty"`
++	TimeoutMs int                        `json:"timeout_ms,omitempty"`
++	Checks    map[string]*GuardrailCheck `json:"checks,omitempty"`
++}
++
++// Guardrail pipeline modes accepted in GuardrailConfig.PipelineMode.
++const (
++	GuardrailPipelineParallel   = "parallel"
++	GuardrailPipelineSequential = "sequential"
++)
++
++// ResolveFailOpen returns the org's fail-open choice, or def when the org
++// has not set one.
++func (g *GuardrailConfig) ResolveFailOpen(def bool) bool {
++	if g == nil || g.FailOpen == nil {
++		return def
++	}
++	return *g.FailOpen
++}
++
++// IsSequential reports whether the org's checks should run one after
++// another. Anything other than "sequential" (including empty) runs in
++// parallel, matching the dashboard default.
++func (g *GuardrailConfig) IsSequential() bool {
++	return g != nil && strings.EqualFold(strings.TrimSpace(g.PipelineMode), GuardrailPipelineSequential)
+ }
+ 
+ // GuardrailCheck configures a single guardrail check for an org.
+diff --git a/futureagi/agentcc/services/config_push.py b/futureagi/agentcc/services/config_push.py
+index 642c00e..0f72237 100644
+--- a/futureagi/agentcc/services/config_push.py
++++ b/futureagi/agentcc/services/config_push.py
+@@ -178,6 +178,29 @@ def _inject_guardrail_credentials(checks):
+                     del cfg[key]
+ 
+ 
++# Defaults must match what the dashboard shows when the org has never saved
++# Pipeline Settings (GuardrailConfigTab.jsx): Fail Open on, Mode parallel.
++_DEFAULT_FAIL_OPEN = True
++_DEFAULT_PIPELINE_MODE = "parallel"
++_PIPELINE_SETTING_ALIASES = ("fail_open", "failOpen", "pipeline_mode", "pipelineMode")
++
++
++def _pipeline_settings(guardrails_data):
++    """Return the org's guardrail pipeline settings in gateway (snake_case) form."""
++    fail_open = guardrails_data.get("fail_open")
++    if fail_open is None:
++        fail_open = guardrails_data.get("failOpen")
++    if fail_open is None:
++        fail_open = _DEFAULT_FAIL_OPEN
++
++    mode = guardrails_data.get("pipeline_mode") or guardrails_data.get("pipelineMode")
++    mode = str(mode).strip().lower() if mode else _DEFAULT_PIPELINE_MODE
++    if mode not in ("parallel", "sequential"):
++        mode = _DEFAULT_PIPELINE_MODE
++
++    return {"fail_open": bool(fail_open), "pipeline_mode": mode}
++
++
+ def _transform_guardrails(guardrails_data, org_id=None):
+     """
+     Transform Django org-config guardrails (rules array) into gateway tenant
+@@ -221,10 +244,7 @@ def _transform_guardrails(guardrails_data, org_id=None):
+             _inject_fi_credentials(checks, org_id)
+         result = {
+             "checks": checks,
+-            "fail_open": guardrails_data.get(
+-                "failOpen", guardrails_data.get("fail_open", False)
+-            ),
+-            "pipeline_mode": guardrails_data.get("pipeline_mode", "parallel"),
++            **_pipeline_settings(guardrails_data),
+         }
+         if guardrails_data.get("timeout_ms"):
+             result["timeout_ms"] = guardrails_data["timeout_ms"]
+@@ -249,7 +269,16 @@ def _transform_guardrails(guardrails_data, org_id=None):
+             mapped[registry_name] = clean_cfg
+         if org_id:
+             _inject_fi_credentials(mapped, org_id)
+-        return {**guardrails_data, "checks": mapped}
++        passthrough = {
++            k: v
++            for k, v in guardrails_data.items()
++            if k not in _PIPELINE_SETTING_ALIASES
++        }
++        return {
++            **passthrough,
++            "checks": mapped,
++            **_pipeline_settings(guardrails_data),
++        }
+ 
+     # Convert rules array → checks map
+     if not isinstance(rules, list) or not rules:
+@@ -279,10 +308,7 @@ def _transform_guardrails(guardrails_data, org_id=None):
+ 
+     result = {
+         "checks": checks,
+-        "fail_open": guardrails_data.get(
+-            "failOpen", guardrails_data.get("fail_open", False)
+-        ),
+-        "pipeline_mode": guardrails_data.get("pipeline_mode", "parallel"),
++        **_pipeline_settings(guardrails_data),
+     }
+     if guardrails_data.get("timeout_ms"):
+         result["timeout_ms"] = guardrails_data["timeout_ms"]

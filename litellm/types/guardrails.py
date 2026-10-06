@@ -144,6 +144,7 @@ class SupportedGuardrailIntegrations(Enum):
     COMPRESR = "compresr"
     TYPESAFE = "typesafe"
     STRAIKER = "straiker"
+    TEALTIGER = "tealtiger"
     ALICE = "alice"
     AGENT_365 = "agent_365"
     LLM_SHIELD_PROXY = "llm_shield_proxy"

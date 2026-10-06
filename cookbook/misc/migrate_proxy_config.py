@@ -12,8 +12,8 @@ Step 2: reads `model_list` and loops through all models
 Step 3: calls `<proxy-base-url>/model/new` for each model
 """
 
-import yaml
 import requests
+import yaml
 
 _in_memory_os_variables = {}
 

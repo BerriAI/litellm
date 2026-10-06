@@ -110,6 +110,7 @@ import os
 import re
 import sys
 import tokenize
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from multiprocessing import Pool
 from pathlib import Path
