@@ -1,4 +1,4 @@
-SELECT o.TraceId AS trace_id, o.SpanId AS span_id, o.ParentSpanId AS parent_span_id, o.SpanName AS name,
+SELECT o.TraceId AS trace_id, o.SpanAttributes['lens.original_trace_id'] AS original_trace_id, o.SpanId AS span_id, o.ParentSpanId AS parent_span_id, o.SpanName AS name,
        o.ObservationType AS type, toUInt8(o.WrapperCandidate) AS wrapper_candidate, o.AgentName AS agent,
        o.SpanAttributes['agent_id'] AS native_agent_id,
        o.SpanAttributes['parent_agent_id'] AS native_parent_agent_id,

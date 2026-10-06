@@ -23,6 +23,7 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
         has_output: false,
         capture_warning: false,
         trace_id: String::new(),
+        original_trace_id: String::new(),
         span_id: span_id.into(),
         parent_span_id: parent.into(),
         name: name.into(),

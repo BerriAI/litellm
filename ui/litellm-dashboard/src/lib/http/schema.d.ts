@@ -9136,6 +9136,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/worker/{lens_id}/{job_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Cached Reviews */
+        get: operations["cached_reviews_lens_worker__lens_id___job_id__reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/worker/{lens_id}/{job_id}/sample": {
         parameters: {
             query?: never;
@@ -25823,6 +25840,8 @@ export interface components {
             parent_actor_id?: string | null;
             /** Parent Agent */
             parent_agent: string | null;
+            /** Priced Calls */
+            priced_calls: number;
             /** Spend */
             spend: number | null;
             /** Tool Calls */
@@ -27614,6 +27633,19 @@ export interface components {
             /** Budgets */
             budgets: string[];
         };
+        /** BudgetReservation */
+        BudgetReservation: {
+            /** Amount */
+            amount: number;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Id */
+            id: string;
+            /** Job Id */
+            job_id: string;
+            /** Month */
+            month: string;
+        };
         /**
          * BulkDeleteUserRequest
          * @description Body of `POST /management/v1/users/bulk_delete`.
@@ -28982,6 +29014,8 @@ export interface components {
             job: components["schemas"]["Job"];
             /** Lens Id */
             lens_id: string;
+            /** Reviews */
+            reviews?: components["schemas"]["Review"][] | null;
         };
         /**
          * ClassificationRubric
@@ -29997,6 +30031,12 @@ export interface components {
             reject_clientside_metadata_tags?: boolean | null;
             /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
+            /**
+             * Search Tool Deny By Default
+             * @description When True, a search tool must be explicitly listed in object_permission.search_tools: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing, and the unregistered search fallback is denied. The master key and dashboard sessions are exempt
+             * @default false
+             */
+            search_tool_deny_by_default: boolean;
             /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
             spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
             /**
@@ -30072,6 +30112,12 @@ export interface components {
              * @description Master switch for the SSRF guard applied to user-supplied URLs (image_url, file_url, MCP/OpenAPI spec URLs, etc). Defaults to True. Set to False to disable DNS/IP validation entirely (not recommended).
              */
             user_url_validation?: boolean | null;
+            /**
+             * Vector Store Deny By Default
+             * @description When True, a vector store must be explicitly listed in object_permission.vector_stores: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing. Dashboard session keys are not yet covered
+             * @default false
+             */
+            vector_store_deny_by_default: boolean;
         };
         /** ConfigList */
         ConfigList: {
@@ -30844,6 +30890,16 @@ export interface components {
              * @default 0
              */
             partial: number;
+            /**
+             * Reusable
+             * @default 0
+             */
+            reusable: number;
+            /**
+             * Reused
+             * @default 0
+             */
+            reused: number;
             /**
              * Screened
              * @default 0
@@ -31915,6 +31971,24 @@ export interface components {
          * @enum {string}
          */
         ExportType: "daily" | "daily_with_keys" | "daily_with_models" | "daily_with_users";
+        /** Extraction */
+        Extraction: {
+            /**
+             * Cannot Assess
+             * @default false
+             */
+            cannot_assess: boolean;
+            /**
+             * Observations
+             * @default []
+             */
+            observations: components["schemas"]["Observation"][];
+            /**
+             * Reasoning
+             * @default
+             */
+            reasoning: string;
+        };
         /**
          * FacetListResponse
          * @description The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows.
@@ -32100,6 +32174,11 @@ export interface components {
             brief?: components["schemas"]["IssueBrief"] | null;
             /** Check Id */
             check_id: string;
+            /**
+             * Check Ids
+             * @default []
+             */
+            check_ids: string[];
             /** Description */
             description: string;
             /** Evidence */
@@ -32113,6 +32192,11 @@ export interface components {
             first_seen: string;
             /** Id */
             id: string;
+            /**
+             * Investigation Runs
+             * @default []
+             */
+            investigation_runs: string[];
             /**
              * Kind
              * @default issue
@@ -32129,6 +32213,11 @@ export interface components {
              * @default
              */
             limitation: string;
+            /**
+             * Merged Finding Ids
+             * @default []
+             */
+            merged_finding_ids: string[];
             /**
              * Occurrences
              * @default []
@@ -32166,6 +32255,11 @@ export interface components {
             brief?: components["schemas"]["IssueBrief"] | null;
             /** Check Id */
             check_id: string;
+            /**
+             * Check Ids
+             * @default []
+             */
+            check_ids: string[];
             /** Description */
             description: string;
             /** Evidence */
@@ -32183,6 +32277,11 @@ export interface components {
              * @default
              */
             limitation: string;
+            /**
+             * Merged Finding Ids
+             * @default []
+             */
+            merged_finding_ids: string[];
             /**
              * Priority
              * @default medium
@@ -33444,6 +33543,8 @@ export interface components {
              *       "inconclusive": 0,
              *       "investigated": 0,
              *       "partial": 0,
+             *       "reusable": 0,
+             *       "reused": 0,
              *       "screened": 0,
              *       "selected": 0,
              *       "unassessable": 0
@@ -33478,6 +33579,11 @@ export interface components {
              * @default []
              */
             reading: components["schemas"]["InFlight"][];
+            /**
+             * Review Versions
+             * @default []
+             */
+            review_versions: components["schemas"]["ReviewVersion"][];
             /**
              * Reviewed
              * @default 0
@@ -33818,6 +33924,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Criteria Updated At */
+            criteria_updated_at?: string | null;
             /**
              * Findings
              * @default []
@@ -33837,6 +33945,11 @@ export interface components {
              * Format: date-time
              */
             next_run_at: string;
+            /**
+             * Reservations
+             * @default []
+             */
+            reservations: components["schemas"]["BudgetReservation"][];
             /**
              * Revision
              * @default 1
@@ -39443,6 +39556,24 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** Observation */
+        Observation: {
+            /** Check Id */
+            check_id: string;
+            /**
+             * Evidence
+             * @default []
+             */
+            evidence: components["schemas"]["Evidence"][];
+            /**
+             * Kind
+             * @default issue
+             * @enum {string}
+             */
+            kind: "issue" | "pattern";
+            /** Summary */
+            summary: string;
+        };
         /**
          * OpenIdConnectSecurityScheme
          * @description Defines a security scheme using OpenID Connect.
@@ -43791,6 +43922,11 @@ export interface components {
              * @default []
              */
             findings: components["schemas"]["FindingDraft"][];
+            /**
+             * Review Versions
+             * @default []
+             */
+            review_versions: components["schemas"]["ReviewVersion"][];
         };
         /** Result */
         "Result-Output": {
@@ -43873,19 +44009,40 @@ export interface components {
              * @default false
              */
             cannot_assess: boolean;
+            /**
+             * Consolidated
+             * @default false
+             */
+            consolidated: boolean;
+            /**
+             * Content Version
+             * @default
+             */
+            content_version: string;
             /** Duration Ms */
             duration_ms: number;
             /** Execution Id */
             execution_id: string;
+            extraction?: components["schemas"]["Extraction"] | null;
             /** Model */
             model: string;
             /** Name */
             name: string;
             /**
+             * Partial
+             * @default false
+             */
+            partial: boolean;
+            /**
              * Reasoning
              * @default
              */
             reasoning: string;
+            /**
+             * Reused
+             * @default false
+             */
+            reused: boolean;
             /**
              * Spans
              * @default []
@@ -43938,6 +44095,13 @@ export interface components {
             kind: "issue" | "pattern";
             /** Summary */
             summary: string;
+        };
+        /** ReviewVersion */
+        ReviewVersion: {
+            /** Content Version */
+            content_version: string;
+            /** Execution Id */
+            execution_id: string;
         };
         /**
          * RoleMappings
@@ -45130,6 +45294,10 @@ export interface components {
             span_id: string;
             /** Spend */
             spend: number | null;
+            /** Spend Log Request Id */
+            spend_log_request_id: string | null;
+            /** Spend Match */
+            spend_match: ("matched" | "no_call_id" | "no_spend_log" | "ambiguous" | "incomplete_evidence") | null;
             /** Start Offset Ms */
             start_offset_ms: number;
             /**
@@ -47291,6 +47459,8 @@ export interface components {
             name: string;
             /** Output Tokens */
             output_tokens: number;
+            /** Priced Calls */
+            priced_calls: number;
             /** Resolution Limited */
             resolution_limited?: boolean;
             /** Service */
@@ -62632,6 +62802,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Lens"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cached_reviews_lens_worker__lens_id___job_id__reviews_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Review"][];
                 };
             };
             /** @description Validation Error */
