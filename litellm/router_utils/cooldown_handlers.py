@@ -64,6 +64,15 @@ def is_advisor_orchestration_failure(exception: BaseException | None) -> bool:
     return bool(getattr(exception, _ADVISOR_ORCHESTRATION_FAILURE_ATTR, False))
 
 
+def is_client_completion_policy_rejection(exception: BaseException | None) -> bool:
+    """Whether the caller's own completion policy rejected the response, not the deployment.
+
+    ``strict_stream_completion`` is opt-in per request, so without this a client could
+    drive a healthy deployment into a shared cooldown by repeatedly asking for a stream
+    the backend ends without a terminal marker."""
+    return isinstance(exception, litellm.exceptions.IncompleteStreamError)
+
+
 def is_background_response_cost_poll_not_found(exception: Exception, litellm_params: Mapping[str, object]) -> bool:
     """Whether a background response cost poll failed with a provider 404."""
     return getattr(exception, "status_code", None) == 404 and any(

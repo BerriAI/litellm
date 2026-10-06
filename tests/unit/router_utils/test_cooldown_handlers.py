@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -501,3 +503,65 @@ class TestTeamModelCooldownAlternatives:
             )
             is False
         )
+
+
+class TestClientCompletionPolicyRejection:
+    def _router(self):
+        from litellm import Router
+
+        return Router(
+            model_list=[
+                {
+                    "model_name": "grp",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                    "model_info": {"id": "strict-deploy-1"},
+                },
+                {
+                    "model_name": "grp",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                    "model_info": {"id": "strict-deploy-2"},
+                },
+            ]
+        )
+
+    def _kwargs(self, exception):
+        return {
+            "exception": exception,
+            "litellm_params": {
+                "metadata": {"deployment": "openai/gpt-4o", "model_group": "grp"},
+                "model_info": {"id": "strict-deploy-1"},
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_strict_stream_rejection_does_not_cool_down_the_deployment(self):
+        router = self._router()
+        error = litellm.exceptions.IncompleteStreamError(
+            message="incomplete", model="gpt-4o", llm_provider="openai"
+        )
+
+        results = [
+            router.deployment_callback_on_failure(
+                kwargs=self._kwargs(error), completion_response=None, start_time=None, end_time=None
+            )
+            for _ in range(6)
+        ]
+
+        assert results == [False] * 6
+
+    @pytest.mark.asyncio
+    async def test_a_provider_failure_still_cools_the_deployment_down(self):
+        # Cooldown schedules router_cooldown_event_callback, so this needs a loop
+        router = self._router()
+        error = litellm.InternalServerError(
+            message="boom", model="gpt-4o", llm_provider="openai"
+        )
+
+        results = [
+            router.deployment_callback_on_failure(
+                kwargs=self._kwargs(error), completion_response=None, start_time=None, end_time=None
+            )
+            for _ in range(6)
+        ]
+
+        assert results[-1] is True

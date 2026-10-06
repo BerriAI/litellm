@@ -199,6 +199,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_advisor_orchestration_failure,
     is_background_response_cost_poll_not_found,
     is_caller_timeout_408,
+    is_client_completion_policy_rejection,
 )
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
@@ -8245,6 +8246,13 @@ class Router:
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
                     "Failure originated from advisor orchestration, not the selected deployment."
+                )
+                return False
+
+            if is_client_completion_policy_rejection(exception):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "The caller's own completion policy rejected the response, not the deployment."
                 )
                 return False
 
