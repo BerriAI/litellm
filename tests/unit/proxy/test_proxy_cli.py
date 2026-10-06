@@ -566,7 +566,7 @@ class TestProxyInitializationHelpers:
         "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
     )
     def test_skip_server_startup(
-        self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run
+        self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run, tmp_path: Path
     ):
         from click.testing import CliRunner
 
@@ -587,6 +587,9 @@ class TestProxyInitializationHelpers:
             for k, v in os.environ.items()
             if k not in ("DATABASE_URL", "DIRECT_URL")
         }
+        clean_env["PROMETHEUS_MULTIPROC_DIR"] = str(tmp_path)
+        live_proxy_samples = tmp_path / "counter_123.db"
+        live_proxy_samples.write_bytes(b"samples of a proxy that is still running")
         with (
             patch.dict(
                 os.environ,
@@ -630,6 +633,7 @@ class TestProxyInitializationHelpers:
             ), f"exit_code={result.exit_code}, output={result.output}"
             assert "Skipping server startup" in result.output
             assert "telemetry" not in runner.invoke(run_server, ["--help"]).output
+            assert live_proxy_samples.exists()
 
             # --- normal startup ---
             mock_uvicorn_run.reset_mock()
@@ -640,6 +644,7 @@ class TestProxyInitializationHelpers:
                 result.exit_code == 0
             ), f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
+            assert not live_proxy_samples.exists()
 
     @patch("uvicorn.run")
     @patch("atexit.register")

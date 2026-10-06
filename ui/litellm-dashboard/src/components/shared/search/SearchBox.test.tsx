@@ -1,9 +1,18 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { NOTE_INDEX, type NoteField, NOTE_QUERY, notes } from "./__fixtures__/notes";
+import {
+  EXACT_NOTE_QUERY,
+  NEGATION_NOTE_QUERY,
+  NOTE_INDEX,
+  type NoteField,
+  NOTE_QUERY,
+  notes,
+  WILDCARD_NOTE_QUERY,
+} from "./__fixtures__/notes";
+import type { QueryLanguage } from "./language";
 import { SearchBox } from "./SearchBox";
 import type { SearchQuery } from "./searchQuery";
 import { itemValues, type ValueSource } from "./valueSource";
@@ -35,13 +44,15 @@ function NoteSearch({
   value,
   onChange,
   values = itemValues(NOTE_INDEX, notes),
+  language = NOTE_QUERY,
 }: {
   value: string;
   onChange: (value: string) => void;
   values?: ValueSource<NoteField>;
+  language?: QueryLanguage<NoteField>;
 }) {
   return (
-    <SearchBox.Root language={NOTE_QUERY} values={values} value={value} onValueChange={onChange} label="Search notes">
+    <SearchBox.Root language={language} values={values} value={value} onValueChange={onChange} label="Search notes">
       <SearchBox.Input placeholder="Search notes" />
       <SearchBox.Suggestions />
     </SearchBox.Root>
@@ -84,8 +95,46 @@ function LaggingHarness() {
 const box = () => screen.getByRole("combobox", { name: "Search notes" });
 const undelivered = () => screen.getByRole("status", { name: "undelivered" });
 const listbox = () => screen.getByRole("listbox", { name: "Search suggestions" });
+const operatorLabels = () =>
+  within(listbox())
+    .queryAllByText(/^(equals|not equals|wildcard match|does not contain)$/)
+    .map((label) => label.textContent);
+
+/**
+ * Timers only move when the test says so, so a slow machine cannot fire the debounce mid-typing.
+ * Testing Library flushes its own zero-delay timer through the `jest` global, which Vitest lacks.
+ */
+const pausedClockUser = () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.stubGlobal("jest", { advanceTimersByTime: vi.advanceTimersByTime });
+  return userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+};
+const pauseTyping = () => act(() => vi.advanceTimersByTime(150));
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe("SearchBox", () => {
+  it("swaps the search icon for a loading status while results for the query load", () => {
+    const search = (busy: boolean) => (
+      <SearchBox.Root
+        language={NOTE_QUERY}
+        values={itemValues(NOTE_INDEX, notes)}
+        value=""
+        onValueChange={vi.fn()}
+        label="Search notes"
+      >
+        <SearchBox.Input placeholder="Search notes" busy={busy} />
+      </SearchBox.Root>
+    );
+    const { rerender } = render(search(true));
+    expect(screen.getByRole("status", { name: "Loading results" })).toBeVisible();
+    rerender(search(false));
+    expect(screen.queryByRole("status", { name: "Loading results" })).not.toBeInTheDocument();
+  });
+
   it("builds a filter from the keyboard: field, then value", async () => {
     const user = userEvent.setup();
     render(<Harness />);
@@ -114,6 +163,33 @@ describe("SearchBox", () => {
     });
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(box()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it.each([
+    ["negation and wildcards", NOTE_QUERY, ["equals", "not equals", "wildcard match", "does not contain"]],
+    ["negation only", NEGATION_NOTE_QUERY, ["equals", "not equals"]],
+    ["wildcards only", WILDCARD_NOTE_QUERY, ["equals", "wildcard match"]],
+  ])("explains exactly the operators a language with %s honors", async (_, language, expected) => {
+    const user = userEvent.setup();
+    render(<NoteSearch value="" onChange={vi.fn()} language={language} />);
+    await user.click(box());
+    await user.keyboard("tag:");
+    expect(within(listbox()).getByText("Comparison operators")).toBeVisible();
+    expect(operatorLabels()).toEqual(expected);
+  });
+
+  it("offers values without operator help or negated keys for an equality-only language", async () => {
+    const user = userEvent.setup();
+    render(<NoteSearch value="" onChange={vi.fn()} language={EXACT_NOTE_QUERY} />);
+    await user.click(box());
+    await user.keyboard("tag:");
+    expect(within(listbox()).getByRole("option", { name: "cron" })).toBeVisible();
+    expect(within(listbox()).queryByText("Comparison operators")).not.toBeInTheDocument();
+    expect(operatorLabels()).toEqual([]);
+    await user.keyboard("{Escape}{ArrowDown}");
+    expect(listbox()).toBeVisible();
+    await user.keyboard(" -ta");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
   it("wraps arrow navigation and picks with Tab", async () => {
@@ -157,35 +233,77 @@ describe("SearchBox", () => {
   });
 
   it("emits the query once typing pauses, not per keystroke", async () => {
-    const user = userEvent.setup();
+    const user = pausedClockUser();
+    const onChange = vi.fn();
+    render(<NoteSearch value="" onChange={onChange} />);
+    await user.click(box());
+    await user.keyboard("ref");
+    act(() => vi.advanceTimersByTime(149));
+    await user.keyboard("und");
+    act(() => vi.advanceTimersByTime(149));
+    expect(onChange).not.toHaveBeenCalled();
+    pauseTyping();
+    expect(onChange).toHaveBeenCalledExactlyOnceWith("refund");
+  });
+
+  it("keeps typing intact while the value it emitted arrives late", async () => {
+    const user = pausedClockUser();
+    render(<LaggingHarness />);
+    const deliver = () => user.click(screen.getByRole("button", { name: "Deliver next" }));
+    await user.click(box());
+    await user.keyboard("ab");
+    pauseTyping();
+    expect(undelivered()).toHaveTextContent(/^ab$/, { normalizeWhitespace: false });
+    await user.keyboard("c");
+    await deliver();
+    await user.click(box());
+    await user.keyboard("d");
+    pauseTyping();
+    expect(box()).toHaveTextContent(/^abcd$/, { normalizeWhitespace: false });
+    expect(undelivered()).toHaveTextContent(/^abc\|abcd$/, { normalizeWhitespace: false });
+    await deliver();
+    expect(box()).toHaveTextContent(/^abcd$/, { normalizeWhitespace: false });
+    await deliver();
+    expect(box()).toHaveTextContent(/^abcd$/, { normalizeWhitespace: false });
+    expect(undelivered()).toBeEmptyDOMElement();
+  });
+
+  it("hands over what was typed as soon as focus leaves, without waiting for the pause", async () => {
+    const user = pausedClockUser();
+    render(<LaggingHarness />);
+    await user.click(box());
+    await user.keyboard("tag:cron");
+    expect(undelivered()).toBeEmptyDOMElement();
+    await user.click(document.body);
+    expect(undelivered()).toHaveTextContent(/^tag:cron$/, { normalizeWhitespace: false });
+    pauseTyping();
+    expect(undelivered()).toHaveTextContent(/^tag:cron$/, { normalizeWhitespace: false });
+  });
+
+  it("delivers nothing more on blur once the query was already delivered", async () => {
+    const user = pausedClockUser();
     const onChange = vi.fn();
     render(<NoteSearch value="" onChange={onChange} />);
     await user.click(box());
     await user.keyboard("refund");
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith("refund"));
+    pauseTyping();
+    expect(onChange).toHaveBeenCalledExactlyOnceWith("refund");
+    await user.click(document.body);
+    await user.click(box());
+    await user.click(document.body);
+    pauseTyping();
     expect(onChange).toHaveBeenCalledOnce();
   });
 
-  it("keeps typing intact while the value it emitted arrives late", async () => {
-    const user = userEvent.setup();
-    render(<LaggingHarness />);
+  it("lets a query set from outside replace text that blur just handed over", async () => {
+    const user = pausedClockUser();
+    render(<Harness />);
     await user.click(box());
-    await user.keyboard("ab");
-    await waitFor(() =>
-      expect(undelivered()).toHaveTextContent(/^ab$/, {
-        normalizeWhitespace: false,
-      }),
-    );
-    await user.keyboard("c");
-    await user.click(screen.getByRole("button", { name: "Deliver next" }));
-    await user.click(box());
-    await user.keyboard("d");
-    expect(box()).toHaveTextContent(/^abcd$/, { normalizeWhitespace: false });
-    await waitFor(() =>
-      expect(undelivered()).toHaveTextContent(/^abcd$/, {
-        normalizeWhitespace: false,
-      }),
-    );
+    await user.keyboard("refund");
+    await user.click(screen.getByRole("button", { name: "Load saved query" }));
+    expect(box()).toHaveTextContent(/^tag:cron$/, { normalizeWhitespace: false });
+    pauseTyping();
+    expect(box()).toHaveTextContent(/^tag:cron$/, { normalizeWhitespace: false });
   });
 
   it("shows a query set from outside, such as the URL", async () => {

@@ -84,7 +84,10 @@ from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
     should_throttle_budget_exceeded,
 )
-from litellm.proxy.auth.model_access_denied import model_access_denied_client_message
+from litellm.proxy.auth.model_access_denied import (
+    customer_model_access_denied_client_message,
+    model_access_denied_client_message,
+)
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
@@ -145,13 +148,14 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+from litellm.types.router import DeploymentTypedDict
 from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import (
     add_team_org_context_to_request_body,
     organization_role_based_access_check,
 )
-from .auth_utils import get_model_from_request, get_request_route_template
+from .auth_utils import get_model_from_request, get_request_route_template, request_fallback_model_names
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -524,7 +528,8 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
             # not from defaulted sparse auto-registration entries.
             # See: https://github.com/BerriAI/litellm/issues/24770
             safe_name = str(model_name).replace("\n", "").replace("\r", "")
-            if not _is_cost_explicitly_configured(model_name, llm_router):
+            served_deployments = _deployments_served_for(model_name, llm_router)
+            if not _is_cost_explicitly_configured(served_deployments):
                 verbose_proxy_logger.debug(
                     "Model %s has zero cost but no explicit cost "
                     "configuration in model_cost entry — treating as unknown "
@@ -535,7 +540,16 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                     zero_cost_cache[model_name] = False
                 return False
 
-            if _has_ptu_flat_cost(model_name, llm_router):
+            if _has_explicit_positive_cost(served_deployments):
+                verbose_proxy_logger.debug(
+                    "Model %s routes to a deployment with an explicit positive per-token price (enforce budget)",
+                    safe_name,
+                )
+                if zero_cost_cache is not None:
+                    zero_cost_cache[model_name] = False
+                return False
+
+            if _has_ptu_flat_cost(served_deployments):
                 verbose_proxy_logger.debug(
                     "Model %s prices reserved PTU capacity as a flat cost, so its zero per-token "
                     "rate is not a free model (enforce budget)",
@@ -567,45 +581,81 @@ _NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
 _TEAM_GRANT_RELATIONS: Final[Mapping[str, object]] = MappingProxyType({"litellm_model_table": True})
 
 
-def _has_ptu_flat_cost(model: str, llm_router: "Router") -> bool:
-    """Whether any deployment in the model group bills reserved PTU capacity as a flat cost.
+def _deployments_served_for(model: str, llm_router: "Router") -> Sequence[DeploymentTypedDict]:
+    """
+    The deployments a request to ``model`` routes to, for the gates that waive budget checks.
+
+    The router resolves a ``model_group_alias`` name to its target exactly once and serves that
+    group, never a real deployment that shares the alias's name. ``Router.get_model_list()`` on the
+    routed group reads those deployments unless the group is itself an alias key, where it would
+    follow the alias a second hop the router never takes; then the deployments named after the
+    group count, or the wildcard route serving the group when none carries its name, the same
+    fallback ``get_model_list()`` takes.
+    """
+    routed_group: Final = llm_router.routable_model_group(model)
+    if llm_router.routable_model_group(routed_group) == routed_group:
+        return llm_router.get_model_list(model_name=routed_group) or ()
+    named: Final = llm_router.get_model_list_from_model_alias(model_name=model)
+    if named:
+        return named
+    return tuple(
+        DeploymentTypedDict(**deployment)
+        for deployment in llm_router.pattern_router.get_deployments_by_pattern(model=routed_group)
+    )
+
+
+def _has_ptu_flat_cost(deployments: Sequence[DeploymentTypedDict]) -> bool:
+    """Whether any of the deployments bills reserved PTU capacity as a flat cost.
 
     Such a deployment carries an explicit zero per-token price so the flat cost is not charged
     twice, which otherwise reads here as a free model and waives every budget check for it.
-
-    Resolved through ``Router.get_model_list()``, which includes ``model_group_alias``, because
-    this runs after the explicit-cost gate: resolving that gate alone would let an aliased PTU
-    group through as free.
     """
-    for deployment in llm_router.get_model_list(model_name=model) or ():
+    for deployment in deployments:
         model_info = deployment.get("model_info") or _NO_MODEL_INFO
         if model_info.get("ptu_count") is not None and model_info.get("cost_per_ptu_per_hour") is not None:
             return True
     return False
 
 
-def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
+def _is_cost_explicitly_configured(deployments: Sequence[DeploymentTypedDict]) -> bool:
     """
-    Check if any deployment in the model group has cost fields explicitly
-    set in its litellm.model_cost entry.
+    Check if any of the deployments has cost fields explicitly set in its
+    litellm.model_cost entry.
 
     When Router._create_deployment() registers a model not in the global
     cost map, it creates a sparse entry like {"id": "<hash>"} with no cost
     fields. _get_model_info_helper() then defaults missing costs to 0.
     This function detects that scenario by checking the raw model_cost entry.
 
-    The group is resolved through ``Router.get_model_list()``, the same resolution
-    ``get_model_group_info()`` applies when the caller reads the cost a few lines earlier, so the
-    two lookups cannot disagree, including for names defined in ``Router.model_group_alias``.
     It also reaches a deployment that prices itself through its ``model_info`` block, whose entry
     lands in the cost map under the deployment id.
     """
-    for deployment in llm_router.get_model_list(model_name=model) or ():
+    for deployment in deployments:
         model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
         if model_id is None:
             continue
         raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
         if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
+            return True
+    return False
+
+
+def _has_explicit_positive_cost(deployments: Sequence[DeploymentTypedDict]) -> bool:
+    """Whether any of the deployments carries an explicit positive per-token price.
+
+    The group's price is read from the deployments named after the routed group and from
+    that group's own alias target, while an alias chain is served from the deployments named
+    after its routed group or from a wildcard route; a priced route among those serves the
+    request at its own rate whatever the group's price reads.
+    """
+    for deployment in deployments:
+        model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
+        if model_id is None:
+            continue
+        raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
+        if _is_positive_cost(raw_entry.get("input_cost_per_token")) or _is_positive_cost(
+            raw_entry.get("output_cost_per_token")
+        ):
             return True
     return False
 
@@ -669,7 +719,7 @@ def model_has_no_cost_mapping(model: str | None, llm_router: Router | None) -> b
     if _model_group_has_pricing(model=model, llm_router=llm_router):
         return False
 
-    return not _is_cost_explicitly_configured(model=model, llm_router=llm_router)
+    return not _is_cost_explicitly_configured(llm_router.get_model_list(model_name=model) or ())
 
 
 def _unpriced_models_in_request(model: str | list[str] | None, llm_router: Router | None) -> tuple[str, ...]:
@@ -1068,7 +1118,9 @@ async def common_checks(
         if not isinstance(managed_models, (list, tuple)) or not managed_models:
             raise HTTPException(403, "This agent has no model grants")
         _can_object_call_model(
-            model=_resolve_team_alias(_model, valid_token.team_model_aliases, valid_token.team_id, llm_router),
+            model=_resolve_team_alias(
+                _model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router
+            ),
             llm_router=llm_router,
             models=list(managed_models),
             team_id=valid_token.team_id,
@@ -1095,6 +1147,23 @@ async def common_checks(
                 user_object=user_object,
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
+
+    if end_user_object is not None and end_user_object.models:
+        with tracer.trace("litellm.proxy.auth.common_checks.can_customer_call_model"):
+            if _model:
+                can_customer_access_model(
+                    model=_model,
+                    end_user_object=end_user_object,
+                    llm_router=llm_router,
+                    valid_token=valid_token,
+                )
+            for fallback_model in request_fallback_model_names(_typed_request_body(request_body)):
+                can_customer_access_model(
+                    model=fallback_model,
+                    end_user_object=end_user_object,
+                    llm_router=llm_router,
+                    valid_token=valid_token,
+                )
 
     # 1.1 - 2.2 - 3.0.2 - 3.0.3: Project checks (blocked, model access, budget)
     with tracer.trace("litellm.proxy.auth.common_checks.run_project_checks"):
@@ -1436,6 +1505,7 @@ def get_actual_routes(allowed_routes: list) -> list:
 
 
 KEY_END_USER_BUDGET_ID_METADATA_FIELD: Final = "end_user_budget_id"
+_KEY_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
 def get_key_end_user_budget_id(key_metadata: Mapping[str, object] | None) -> str | None:
@@ -1698,9 +1768,15 @@ def _column_is_set(column: str) -> Mapping[str, object]:
     return {column: {"not": None}}
 
 
+def _array_is_not_empty(column: str) -> Mapping[str, object]:
+    """``column`` holds at least one element, as a plain dict for prisma's builder."""
+    return {column: {"is_empty": False}}
+
+
 def _restricted_end_user_where() -> Mapping[str, object]:
     """Prisma filter selecting every end-user row that carries a restriction auth enforces."""
-    return {"OR": [{"blocked": True}, *map(_column_is_set, _RESTRICTED_COLUMNS)]}
+    restrictions: Final = (*map(_column_is_set, _RESTRICTED_COLUMNS), _array_is_not_empty("models"))
+    return {"OR": [{"blocked": True}, *restrictions]}
 
 
 class _RegistryNotCached:
@@ -1857,8 +1933,8 @@ async def _end_user_is_known_unrestricted(
     True when the cached registry proves the id restricts nothing, so its row need not be read.
 
     Every field ``get_end_user_object`` callers consume (budget, spend under that budget, region,
-    default model, object permission, blocked) is part of the registry predicate, so an id outside
-    it is indistinguishable from one with no row at all. The skip is off whenever mere existence of
+    default model, models, object permission, blocked) is part of the registry predicate, so an id
+    outside it is indistinguishable from one with no row at all. The skip is off whenever mere existence of
     the row is meaningful: ``max_end_user_budget_id`` or the key's ``end_user_budget_id`` grafts a
     default budget onto any row that exists, ``validate_end_user_id_in_db`` rejects ids that resolve
     to no row, and a token-supplied ``end_user_max_budget`` (a ``user_custom_auth`` callable can set
@@ -4463,7 +4539,7 @@ def _can_object_call_model(
     team_model_aliases: dict[str, str] | None = None,
     team_id: str | None = None,
     key_model_aliases: Mapping[str, str] | None = None,
-    object_type: Literal["user", "team", "key", "org", "project", "agent"] = "user",
+    object_type: Literal["user", "customer", "team", "key", "org", "project", "agent"] = "user",
     fallback_depth: int = 0,
 ) -> Literal[True]:
     """
@@ -4544,7 +4620,11 @@ def _can_object_call_model(
         f"Tried to access {model}"
     )
     raise ModelAccessDeniedProxyException(
-        message=model_access_denied_client_message(model=model),
+        message=(
+            customer_model_access_denied_client_message(model=model)
+            if object_type == "customer"
+            else model_access_denied_client_message(model=model)
+        ),
         internal_message=internal_message,
         type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
         param="model",
@@ -4554,7 +4634,7 @@ def _can_object_call_model(
 
 def _resolve_team_alias(
     model: str | list[str],
-    team_model_aliases: dict[str, str] | None,
+    team_model_aliases: Mapping[str, str] | None,
     team_id: str | None,
     llm_router: Router | None,
 ) -> str | list[str]:
@@ -4566,7 +4646,7 @@ def _resolve_team_alias(
 
 
 def _live_team_alias_target(
-    model: str, team_model_aliases: dict[str, str], team_id: str | None, llm_router: Router | None
+    model: str, team_model_aliases: Mapping[str, str], team_id: str | None, llm_router: Router | None
 ) -> str:
     target: Final = team_model_aliases.get(model)
     if target is None:
@@ -4600,7 +4680,9 @@ async def _check_agent_access_group_model_access(
         if unmanaged is not None
         else ()
     )
-    dispatched: Final = _resolve_team_alias(model, valid_token.team_model_aliases, valid_token.team_id, llm_router)
+    dispatched: Final = _resolve_team_alias(
+        model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router
+    )
     for ceiling in ceilings:
         if not ceiling.models:
             raise ModelAccessDeniedProxyException(
@@ -4696,6 +4778,10 @@ def _model_in_team_aliases(model: str, team_model_aliases: dict[str, str] | None
 
 def key_model_aliases_for_auth_check(valid_token: UserAPIKeyAuth | None) -> Mapping[str, str] | None:
     return alias_map(valid_token.aliases) if valid_token is not None and valid_token.aliases else None
+
+
+def team_model_aliases_for_auth_check(valid_token: UserAPIKeyAuth) -> Mapping[str, str] | None:
+    return alias_map(valid_token.team_model_aliases) if valid_token.team_model_aliases else None
 
 
 def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> list[str]:
@@ -5135,6 +5221,24 @@ async def can_key_call_resolved_model(
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
 
+    if valid_token.end_user_id is not None and prisma_client is not None:
+        key_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(valid_token.metadata)
+        end_user_object: Final = await get_end_user_object(
+            end_user_id=valid_token.end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            token_end_user_max_budget=valid_token.end_user_max_budget,
+            key_end_user_budget_id=get_key_end_user_budget_id(key_metadata),
+        )
+        if end_user_object is not None and end_user_object.models:
+            can_customer_access_model(
+                model=model,
+                end_user_object=end_user_object,
+                llm_router=llm_router,
+                valid_token=valid_token,
+            )
+
 
 def can_org_access_model(
     model: str,
@@ -5300,6 +5404,35 @@ def can_project_access_model(
         key_model_aliases=key_model_aliases,
         object_type="project",
     )
+
+
+def can_customer_access_model(
+    model: str | list[str],
+    end_user_object: LiteLLM_EndUserTable,
+    llm_router: Router | None,
+    valid_token: UserAPIKeyAuth | None,
+) -> Literal[True]:
+    team_model_aliases: Final = team_model_aliases_for_auth_check(valid_token) if valid_token is not None else None
+    team_id: Final = valid_token.team_id if valid_token is not None else None
+    key_model_aliases: Final = key_model_aliases_for_auth_check(valid_token)
+
+    def check(name: str) -> None:
+        team_target: Final = (
+            _live_team_alias_target(name, team_model_aliases, team_id, llm_router) if team_model_aliases else name
+        )
+        if team_target != name and name in (end_user_object.models or ()):
+            return
+        _can_object_call_model(
+            model=team_target,
+            llm_router=llm_router,
+            models=end_user_object.models,
+            key_model_aliases=key_model_aliases,
+            object_type="customer",
+        )
+
+    for name in (model,) if isinstance(model, str) else model:
+        check(name)
+    return True
 
 
 async def can_user_call_model(

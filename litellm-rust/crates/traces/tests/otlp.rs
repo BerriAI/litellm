@@ -1428,3 +1428,424 @@ fn environment_decode_limits_child() {
         )),
     }
 }
+
+fn log_request(
+    source: &str,
+) -> opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest {
+    use opentelemetry_proto::tonic::{
+        collector::logs::v1::ExportLogsServiceRequest,
+        common::v1::{AnyValue, InstrumentationScope, KeyValue, any_value::Value},
+        logs::v1::{LogRecord, ResourceLogs, ScopeLogs},
+    };
+    let attributes = [
+        ("event.name", "assistant_response"),
+        ("query_source", source),
+        ("response", "Visible reply"),
+        ("message.uuid", "message-one"),
+        ("model", "test-model"),
+        ("session.id", "session-one"),
+    ]
+    .into_iter()
+    .map(|(key, value)| KeyValue {
+        key: key.to_owned(),
+        value: Some(AnyValue {
+            value: Some(Value::StringValue(value.to_owned())),
+        }),
+        ..Default::default()
+    })
+    .collect();
+    ExportLogsServiceRequest {
+        resource_logs: vec![ResourceLogs {
+            scope_logs: vec![ScopeLogs {
+                scope: Some(InstrumentationScope {
+                    name: "com.anthropic.claude_code.events".to_owned(),
+                    ..Default::default()
+                }),
+                log_records: vec![LogRecord {
+                    trace_id: vec![1; 16],
+                    span_id: vec![2; 8],
+                    time_unix_nano: 100,
+                    attributes,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+    }
+}
+
+#[rstest]
+#[case::main("repl_main_thread", 1)]
+#[case::subagent("agent:builtin:general-purpose", 1)]
+#[case::title("generate_session_title", 0)]
+#[case::suggestion("prompt_suggestion", 0)]
+fn native_assistant_logs_preserve_visible_messages_without_counting_model_calls(
+    #[case] source: &str,
+    #[case] count: usize,
+) {
+    use prost::Message;
+    let request = log_request(source);
+    let json = litellm_traces::decode_otlp_logs(
+        &serde_json::to_vec(&request).unwrap(),
+        Some("application/json"),
+    )
+    .unwrap();
+    let binary = litellm_traces::decode_otlp_logs(&request.encode_to_vec(), None).unwrap();
+    assert_eq!(
+        serde_json::to_value(&json).unwrap(),
+        serde_json::to_value(&binary).unwrap()
+    );
+    assert_eq!(json.len(), count);
+    if let Some(span) = json.first() {
+        assert_eq!(span.trace_id, "01".repeat(16));
+        assert_eq!(span.parent_span_id, "02".repeat(8));
+        assert_ne!(span.span_id, span.parent_span_id);
+        assert_eq!(span.normalized.observation_type, ObservationType::Chain);
+        assert_eq!(span.normalized.framework, Some(Integration::ClaudeCode));
+        assert_eq!(span.normalized.model.as_deref(), Some("test-model"));
+        assert_eq!(span.normalized.output_tokens, 0);
+        assert_eq!(span.normalized.input_tokens, 0);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&span.normalized.output).unwrap()["content"],
+            "Visible reply"
+        );
+    }
+}
+
+#[rstest]
+#[case::json(true)]
+#[case::protobuf(false)]
+fn simultaneous_native_tool_logs_keep_distinct_sequence_ids(#[case] json: bool) {
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value::Value};
+    use prost::Message;
+    let mut request = log_request("repl_main_thread");
+    let template = request.resource_logs[0].scope_logs[0].log_records[0].clone();
+    request.resource_logs[0].scope_logs[0].log_records = [1, 2]
+        .into_iter()
+        .map(|sequence| {
+            let mut record = template.clone();
+            record.attributes = [
+                ("event.name", Value::StringValue("tool_result".into())),
+                ("event.sequence", Value::IntValue(sequence)),
+                (
+                    "tool_use_id",
+                    Value::StringValue(format!("call-{sequence}")),
+                ),
+            ]
+            .into_iter()
+            .map(|(key, value)| KeyValue {
+                key: key.into(),
+                value: Some(AnyValue { value: Some(value) }),
+                ..Default::default()
+            })
+            .collect();
+            record
+        })
+        .collect();
+    let bytes = if json {
+        serde_json::to_vec(&request).unwrap()
+    } else {
+        request.encode_to_vec()
+    };
+    let content_type = json.then_some("application/json");
+    let spans = litellm_traces::decode_otlp_logs(&bytes, content_type).unwrap();
+    assert_eq!(spans.len(), 2);
+    assert_ne!(spans[0].span_id, spans[1].span_id);
+    let replayed = litellm_traces::decode_otlp_logs(&bytes, content_type).unwrap();
+    assert_eq!(spans[0].span_id, replayed[0].span_id);
+    assert_eq!(spans[1].span_id, replayed[1].span_id);
+}
+
+#[rstest]
+#[case::boolean_failure(false, true)]
+#[case::boolean_success(true, true)]
+#[case::string_failure(false, false)]
+#[case::string_success(true, false)]
+fn native_tool_log_status_accepts_boolean_and_string_values(
+    #[case] success: bool,
+    #[case] typed: bool,
+) {
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value::Value};
+    use prost::Message;
+    let mut request = log_request("repl_main_thread");
+    request.resource_logs[0].scope_logs[0].log_records[0].attributes = [
+        ("event.name", Value::StringValue("tool_result".into())),
+        ("error", Value::StringValue("Command failed".into())),
+        (
+            "success",
+            if typed {
+                Value::BoolValue(success)
+            } else {
+                Value::StringValue(success.to_string())
+            },
+        ),
+    ]
+    .into_iter()
+    .map(|(key, value)| KeyValue {
+        key: key.into(),
+        value: Some(AnyValue { value: Some(value) }),
+        ..Default::default()
+    })
+    .collect();
+    let binary = litellm_traces::decode_otlp_logs(&request.encode_to_vec(), None).unwrap();
+    let json = litellm_traces::decode_otlp_logs(
+        &serde_json::to_vec(&request).unwrap(),
+        Some("application/json"),
+    )
+    .unwrap();
+    assert_eq!(binary[0].status_code == "STATUS_CODE_ERROR", !success);
+    assert_eq!(json[0].status_code, binary[0].status_code);
+    if !success {
+        assert_eq!(binary[0].status_message, "Command failed");
+    }
+}
+
+#[rstest]
+fn session_capture_joins_native_logs_and_traces_across_turns_without_changing_span_parents() {
+    use opentelemetry_proto::tonic::{
+        common::v1::{AnyValue, KeyValue, any_value::Value},
+        resource::v1::Resource,
+    };
+    use prost::Message;
+    let mut logs = log_request("repl_main_thread");
+    let resource = Resource {
+        attributes: [
+            ("lens.session.capture", "true"),
+            ("gen_ai.agent.name", "custom-claude"),
+        ]
+        .into_iter()
+        .map(|(key, value)| KeyValue {
+            key: key.to_owned(),
+            value: Some(AnyValue {
+                value: Some(Value::StringValue(value.to_owned())),
+            }),
+            ..Default::default()
+        })
+        .collect(),
+        ..Default::default()
+    };
+    logs.resource_logs[0].resource = Some(resource.clone());
+    let mut request = request_with(Span {
+        trace_id: vec![3; 16],
+        span_id: vec![4; 8],
+        name: "claude_code.interaction".to_owned(),
+        attributes: logs.resource_logs[0].scope_logs[0].log_records[0]
+            .attributes
+            .iter()
+            .filter(|attr| attr.key == "session.id")
+            .cloned()
+            .collect(),
+        start_time_unix_nano: 100,
+        end_time_unix_nano: 200,
+        ..Default::default()
+    });
+    request.resource_spans[0].resource = Some(resource);
+    request.resource_spans[0].scope_spans[0].scope = Some(
+        opentelemetry_proto::tonic::common::v1::InstrumentationScope {
+            name: "com.anthropic.claude_code.tracing".to_owned(),
+            ..Default::default()
+        },
+    );
+    let first = litellm_traces::decode_otlp_logs(&logs.encode_to_vec(), None).unwrap();
+    let second = decode_otlp(&request.encode_to_vec(), None).unwrap();
+    assert_eq!(first[0].trace_id, second[0].trace_id);
+    assert_eq!(
+        first[0].attributes["lens.original_trace_id"],
+        "01".repeat(16)
+    );
+    assert_eq!(
+        second[0].attributes["lens.original_trace_id"],
+        "03".repeat(16)
+    );
+    assert_eq!(first[0].parent_span_id, "02".repeat(8));
+    assert_eq!(second[0].attributes["gen_ai.agent.id"], "session-one");
+    assert_eq!(
+        first[0].normalized.agent_name.as_deref(),
+        Some("custom-claude")
+    );
+    request.resource_spans[0].resource = None;
+    assert_eq!(
+        decode_otlp(&request.encode_to_vec(), None).unwrap()[0].trace_id,
+        "03".repeat(16)
+    );
+}
+
+#[rstest]
+#[case::short_trace(vec![1;15], vec![2;8], 1)]
+#[case::zero_parent(vec![1;16], vec![0;8], 1)]
+#[case::timestamp(vec![1;16], vec![2;8], i64::MAX as u64 + 1)]
+fn native_logs_reject_invalid_context(
+    #[case] trace: Vec<u8>,
+    #[case] parent: Vec<u8>,
+    #[case] time: u64,
+) {
+    use prost::Message;
+    let mut request = log_request("repl_main_thread");
+    let record = &mut request.resource_logs[0].scope_logs[0].log_records[0];
+    record.trace_id = trace;
+    record.span_id = parent;
+    record.time_unix_nano = time;
+    assert!(matches!(
+        litellm_traces::decode_otlp_logs(&request.encode_to_vec(), None),
+        Err(litellm_traces::Error::InvalidPayload)
+    ));
+}
+
+#[rstest]
+#[case::nodes(litellm_traces::DecodeLimits { nodes: 4, ..Default::default() })]
+#[case::depth(litellm_traces::DecodeLimits { depth: 2, ..Default::default() })]
+#[case::bytes(litellm_traces::DecodeLimits { decoded_span_bytes: 20, ..Default::default() })]
+#[case::attributes(litellm_traces::DecodeLimits { attributes: 2, ..Default::default() })]
+fn native_logs_enforce_budgets_for_both_encodings(#[case] limits: litellm_traces::DecodeLimits) {
+    use prost::Message;
+    let request = log_request("repl_main_thread");
+    assert!(matches!(
+        litellm_traces::decode_otlp_logs_with_limits(&request.encode_to_vec(), None, limits),
+        Err(litellm_traces::Error::TooLarge)
+    ));
+    assert!(matches!(
+        litellm_traces::decode_otlp_logs_with_limits(
+            &serde_json::to_vec(&request).unwrap(),
+            Some("application/json"),
+            limits
+        ),
+        Err(litellm_traces::Error::TooLarge)
+    ));
+}
+
+#[rstest]
+fn interactive_claude_exports_join_replies_with_native_child_execution_context() {
+    let traces = decode_otlp(
+        include_bytes!("fixtures/claude_code_native_traces.json"),
+        Some("application/json"),
+    )
+    .unwrap();
+    let logs = litellm_traces::decode_otlp_logs(
+        include_bytes!("fixtures/claude_code_native_logs.json"),
+        Some("application/json"),
+    )
+    .unwrap();
+    assert!(
+        logs.iter()
+            .any(|span| span.normalized.output.contains("MINIMAL-COMMENTARY"))
+    );
+    assert!(
+        logs.iter()
+            .any(|span| span.normalized.output.contains("MINIMAL-FINAL"))
+    );
+    assert!(
+        logs.iter()
+            .any(|span| span.normalized.output.contains("NATIVE-AGENTS-FINAL"))
+    );
+    assert!(logs.iter().all(|span| span.trace_id == traces[0].trace_id));
+    assert!(logs.iter().all(|span| {
+        traces
+            .iter()
+            .any(|parent| parent.span_id == span.parent_span_id)
+    }));
+    let child = logs
+        .iter()
+        .find(|span| {
+            span.normalized.output.contains("NATIVE-READER")
+                && span
+                    .attributes
+                    .get("query_source")
+                    .is_some_and(|source| source.starts_with("agent:"))
+        })
+        .unwrap();
+    let execution = traces
+        .iter()
+        .find(|span| span.span_id == child.parent_span_id)
+        .unwrap();
+    assert_eq!(execution.name, "claude_code.tool.execution");
+    assert!(
+        traces
+            .iter()
+            .any(|span| span.span_id == execution.parent_span_id && span.name == "Agent")
+    );
+    assert!(
+        logs.iter().all(|span| span
+            .attributes
+            .get("query_source")
+            .is_none_or(|source| !matches!(
+                source.as_str(),
+                "prompt_suggestion" | "generate_session_title"
+            )))
+    );
+}
+
+#[rstest]
+#[case::tool_result("tool_result", "", false)]
+#[case::complete_body("api_request_body", r#"{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","is_error":true,"content":[{"type":"text","text":"exit 3 output"},{"type":"image","source":{"data":"PRIVATE_IMAGE"}}]}]}],"system":"PRIVATE_SYSTEM"}"#, false)]
+#[case::truncated_body("api_request_body", "{truncated", true)]
+fn native_tool_logs_supply_arguments_and_results_without_fake_calls(
+    #[case] event: &str,
+    #[case] body: &str,
+    #[case] warning: bool,
+) {
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value::Value};
+    use prost::Message;
+    let mut request = log_request("repl_main_thread");
+    request.resource_logs[0].scope_logs[0].log_records[0].attributes = [
+        ("event.name", event),
+        ("query_source", "repl_main_thread"),
+        ("body", body),
+        ("tool_use_id", "call-1"),
+        ("success", "false"),
+        ("error", "exit 3"),
+        (
+            "tool_input",
+            r#"{"command":"exit 3","description":"Expected failure"}"#,
+        ),
+    ]
+    .into_iter()
+    .map(|(key, text)| KeyValue {
+        key: key.into(),
+        value: Some(AnyValue {
+            value: Some(Value::StringValue(text.into())),
+        }),
+        ..Default::default()
+    })
+    .collect();
+    let spans = litellm_traces::decode_otlp_logs(&request.encode_to_vec(), None).unwrap();
+    let span = &spans[0];
+    assert_eq!(span.normalized.observation_type, ObservationType::Framework);
+    assert_eq!(span.normalized.input_tokens, 0);
+    if event == "tool_result" {
+        assert_eq!(span.normalized.tool_call_id.as_deref(), Some("call-1"));
+        assert!(span.normalized.input.contains("Expected failure"));
+        assert_eq!(span.status_code, "STATUS_CODE_ERROR");
+    } else {
+        let output: serde_json::Value = serde_json::from_str(&span.normalized.output).unwrap();
+        assert_eq!(output.get("warning").is_some(), warning);
+        assert!(span.consumed_attributes.contains(&"body"));
+        if !warning {
+            assert_eq!(output["tool_results"][0]["id"], "call-1");
+            assert!(
+                output["tool_results"][0]["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("exit 3 output")
+            );
+            assert!(!span.normalized.output.contains("PRIVATE"));
+        }
+    }
+}
+
+#[rstest]
+fn interactive_claude_body_export_retains_failed_command_stdout() {
+    let spans = litellm_traces::decode_otlp_logs(
+        include_bytes!("fixtures/claude_code_native_tool_result.json"),
+        Some("application/json"),
+    )
+    .unwrap();
+    let output: serde_json::Value = serde_json::from_str(&spans[0].normalized.output).unwrap();
+    let failed = output["tool_results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|result| result["is_error"] == true)
+        .unwrap();
+    assert_eq!(failed["content"], "Exit code 3\nRAW-EXPECTED");
+}
