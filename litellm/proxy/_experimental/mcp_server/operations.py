@@ -1439,6 +1439,8 @@ async def _list_mcp_tools(
     except (HTTPException, MCPError):
         raise
     except Exception as e:
+        if params is not None and params.cursor is not None:
+            raise
         verbose_logger.exception("Error getting tools from managed MCP servers: %s", e)
         # Continue with an empty listing instead of failing completely
         return AggregateToolListing(tools=[], outcomes={})

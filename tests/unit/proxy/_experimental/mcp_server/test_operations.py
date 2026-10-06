@@ -1018,3 +1018,40 @@ async def test_optional_catalog_preserves_revoked_user_error(monkeypatch, reques
     request = getattr(types, request_name)(params=types.PaginatedRequestParams(cursor=cursor))
     with pytest.raises(MCPError, match="Invalid or expired credential"):
         await GatewayOperations().execute(request, prepare_context(caller))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", ["continuation-state", ""])
+async def test_tool_continuation_failure_requires_a_fresh_listing(monkeypatch: pytest.MonkeyPatch, cursor: str) -> None:
+    from mcp import MCPError
+    from mcp.types import INVALID_PARAMS, ListToolsRequest, PaginatedRequestParams
+
+    failure: Final = RuntimeError("catalog temporarily unavailable")
+    fetch: Final = AsyncMock(side_effect=failure)
+    monkeypatch.setattr(operations, "_get_tools_from_mcp_servers", fetch)
+    with pytest.raises(MCPError, match="start a fresh listing") as raised:
+        await GatewayOperations().execute(
+            ListToolsRequest(params=PaginatedRequestParams(cursor=cursor)), prepare_context()
+        )
+    assert raised.value.error.code == INVALID_PARAMS
+    assert raised.value.__cause__ is failure
+    assert fetch.await_count == 1
+    assert fetch.await_args.kwargs["params"].cursor == cursor
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gateway", [False, True])
+async def test_initial_tool_listing_preserves_legacy_error_fallback(monkeypatch: pytest.MonkeyPatch, gateway: bool) -> None:
+    from mcp.types import ListToolsRequest
+
+    fetch: Final = AsyncMock(side_effect=RuntimeError("catalog temporarily unavailable"))
+    monkeypatch.setattr(operations, "_get_tools_from_mcp_servers", fetch)
+    if gateway:
+        result: Final = await GatewayOperations().execute(ListToolsRequest(), prepare_context())
+        assert result.tools == []
+        assert result.next_cursor is None
+    else:
+        listing: Final = await operations._list_mcp_tools()
+        assert listing.tools == []
+        assert listing.next_cursor is None
+    fetch.assert_awaited_once()
