@@ -1,3 +1,6 @@
+use litellm_host::interceptors::Interceptors;
+use litellm_inference::RouteError;
+use litellm_router::RouterHooks;
 use std::sync::Arc;
 
 use axum::{Json, body::Bytes, extract::State, response::Response};
@@ -8,12 +11,15 @@ use serde_json::json;
 
 use crate::{Error, Gateway, JsonObject, request};
 
-pub(crate) async fn create(
-    State(gateway): State<Arc<Gateway>>,
+pub(crate) async fn create<
+    R: RouterHooks + 'static,
+    I: Interceptors<RouteError> + Clone + 'static,
+>(
+    State(gateway): State<Arc<Gateway<R, I>>>,
     identity: AuthenticatedRequest,
     JsonObject(body): JsonObject,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(&gateway, &body)?;
+    let deployment = request::resolve_deployment(&gateway, &body).await?;
     request::authorize_model(&identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(&identity, body)?;
     let route = gateway.responses.clone();
@@ -46,7 +52,7 @@ pub(crate) async fn create(
             json!({"type": "error", "code": error.status().as_u16().to_string(), "message": error.to_string(), "param": null})
         ))
     });
-    let headers = crate::caching::CacheHeaders::default();
+    let headers = crate::caching::CacheHeaders::new(gateway.interceptors.clone());
     let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
     Ok(headers.apply(response))
 }

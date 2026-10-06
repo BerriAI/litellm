@@ -110,8 +110,8 @@ pub(crate) async fn authorize_model(
     Ok(())
 }
 
-pub(crate) fn resolve_deployment<'a>(
-    gateway: &'a Gateway,
+pub(crate) async fn resolve_deployment<'a, R: crate::RouterHooks, I>(
+    gateway: &'a Gateway<R, I>,
     body: &Map<String, Value>,
 ) -> Result<&'a Deployment, Error> {
     let model = body
@@ -120,7 +120,8 @@ pub(crate) fn resolve_deployment<'a>(
         .ok_or_else(|| Error::InvalidBody("model is required".into()))?;
     gateway
         .models
-        .get(model)
+        .select(model)
+        .await
         .ok_or_else(|| Error::UnknownModel(model.to_owned()))
 }
 

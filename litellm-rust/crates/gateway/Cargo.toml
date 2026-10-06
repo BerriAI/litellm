@@ -10,6 +10,7 @@ axum.workspace = true
 envy = "0.4.2"
 http-body-util = "0.1"
 litellm-inference.workspace = true
+litellm-host.workspace = true
 litellm-gateway-inference.workspace = true
 litellm-gateway-mcp.workspace = true
 tokio-util = "0.7"
@@ -31,6 +32,7 @@ uuid.workspace = true
 tower-sessions-moka-store = "0.15.0"
 
 [dev-dependencies]
+wiremock.workspace = true
 base64.workspace = true
 rstest.workspace = true
 tempfile.workspace = true

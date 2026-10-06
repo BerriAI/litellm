@@ -11,4 +11,5 @@ litellm-inference.workspace = true
 litellm-inference-messages.workspace = true
 
 [dev-dependencies]
+tokio.workspace = true
 rstest.workspace = true

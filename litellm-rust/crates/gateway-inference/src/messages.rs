@@ -1,6 +1,9 @@
 //! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
 
 use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_host::interceptors::Interceptors;
+use litellm_inference::RouteError;
+use litellm_router::RouterHooks;
 use std::sync::Arc;
 
 use axum::{
@@ -21,8 +24,8 @@ use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
 const ANTHROPIC_API_HEADERS: [&str; 2] = ["anthropic-version", "anthropic-beta"];
 const ANTHROPIC_API_HEADER_PROVIDERS: &str = "anthropic,bedrock,bedrock_mantle,vertex_ai";
 
-pub async fn create(
-    State(gateway): State<Arc<Gateway>>,
+pub async fn create<R: RouterHooks + 'static, I: Interceptors<RouteError> + Clone + 'static>(
+    State(gateway): State<Arc<Gateway<R, I>>>,
     identity: AuthenticatedRequest,
     RequestId(request_id): RequestId,
     headers: HeaderMap,
@@ -35,13 +38,13 @@ pub async fn create(
     result.map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
 }
 
-async fn handle(
-    gateway: &Gateway,
+async fn handle<R: RouterHooks + 'static, I: Interceptors<RouteError> + Clone + 'static>(
+    gateway: &Gateway<R, I>,
     identity: &AuthenticatedRequest,
     headers: &HeaderMap,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(gateway, &body)?;
+    let deployment = request::resolve_deployment(gateway, &body).await?;
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.messages.clone();
@@ -57,7 +60,7 @@ async fn handle(
     let machine = route.machine(call, cache_options.policy);
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
-    let headers = crate::caching::CacheHeaders::default();
+    let headers = crate::caching::CacheHeaders::new(gateway.interceptors.clone());
     let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
     Ok(headers.apply(response))
 }

@@ -1,4 +1,7 @@
 use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_host::interceptors::Interceptors;
+use litellm_inference::RouteError;
+use litellm_router::RouterHooks;
 use std::sync::Arc;
 
 use axum::{
@@ -11,16 +14,22 @@ use serde_json::{Map, Value};
 
 use crate::{Error, Gateway, JsonObject, request};
 
-pub(crate) async fn create(
-    State(gateway): State<Arc<Gateway>>,
+pub(crate) async fn create<
+    R: RouterHooks + 'static,
+    I: Interceptors<RouteError> + Clone + 'static,
+>(
+    State(gateway): State<Arc<Gateway<R, I>>>,
     identity: AuthenticatedRequest,
     JsonObject(body): JsonObject,
 ) -> Result<impl IntoResponse, Error> {
     handle(&gateway, &identity, body).await
 }
 
-pub(crate) async fn create_from_model_path(
-    State(gateway): State<Arc<Gateway>>,
+pub(crate) async fn create_from_model_path<
+    R: RouterHooks + 'static,
+    I: Interceptors<RouteError> + Clone + 'static,
+>(
+    State(gateway): State<Arc<Gateway<R, I>>>,
     identity: AuthenticatedRequest,
     Path(model): Path<String>,
     JsonObject(body): JsonObject,
@@ -35,12 +44,12 @@ pub(crate) async fn create_from_model_path(
     handle(&gateway, &identity, body).await
 }
 
-async fn handle(
-    gateway: &Gateway,
+async fn handle<R: RouterHooks + 'static, I: Interceptors<RouteError> + Clone + 'static>(
+    gateway: &Gateway<R, I>,
     identity: &AuthenticatedRequest,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(gateway, &body)?;
+    let deployment = request::resolve_deployment(gateway, &body).await?;
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.chat_completions.clone();
@@ -53,7 +62,7 @@ async fn handle(
     };
 
     let messages = body.get("messages").cloned().unwrap_or_default();
-    let headers = crate::caching::CacheHeaders::default();
+    let headers = crate::caching::CacheHeaders::new(gateway.interceptors.clone());
     let response = litellm_host_http::serve_unary(
         route.machine(
             ChatCompletionsCall {

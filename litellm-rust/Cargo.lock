@@ -3781,6 +3781,7 @@ dependencies = [
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
  "litellm-gateway-ui",
+ "litellm-host",
  "litellm-http",
  "litellm-inference",
  "litellm-llms",
@@ -3797,6 +3798,7 @@ dependencies = [
  "tower-sessions-moka-store",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -4312,6 +4314,7 @@ dependencies = [
  "litellm-inference",
  "litellm-inference-messages",
  "rstest",
+ "tokio",
 ]
 
 [[package]]

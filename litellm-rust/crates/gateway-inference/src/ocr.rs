@@ -1,4 +1,7 @@
 use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_host::interceptors::Interceptors;
+use litellm_inference::RouteError;
+use litellm_router::RouterHooks;
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
@@ -13,8 +16,11 @@ use crate::{
     request::{self, InferenceBody},
 };
 
-pub(crate) async fn create(
-    State(gateway): State<Arc<Gateway>>,
+pub(crate) async fn create<
+    R: RouterHooks + 'static,
+    I: Interceptors<RouteError> + Clone + 'static,
+>(
+    State(gateway): State<Arc<Gateway<R, I>>>,
     identity: AuthenticatedRequest,
     headers: HeaderMap,
     body: InferenceBody,
@@ -22,8 +28,8 @@ pub(crate) async fn create(
     handle(&gateway, &identity, &headers, body).await.map(Json)
 }
 
-async fn handle(
-    gateway: &Gateway,
+async fn handle<R: RouterHooks + 'static, I: Interceptors<RouteError> + Clone + 'static>(
+    gateway: &Gateway<R, I>,
     identity: &AuthenticatedRequest,
     headers: &HeaderMap,
     InferenceBody {
@@ -35,7 +41,7 @@ async fn handle(
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let deployment = request::resolve_deployment(gateway, &body)?;
+    let deployment = request::resolve_deployment(gateway, &body).await?;
     request::authorize_model(identity, deployment, &body).await?;
     let document = match upload {
         Some(upload) => OcrDocumentInput::Bytes {

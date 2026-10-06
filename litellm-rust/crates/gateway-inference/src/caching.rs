@@ -69,39 +69,52 @@ fn duration(seconds: f64) -> Result<Duration, Error> {
         .ok_or_else(|| Error::InvalidBody("cache durations must be finite and positive".into()))
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct CacheHeaders(std::sync::Arc<std::sync::OnceLock<String>>);
+#[derive(Clone)]
+pub(crate) struct CacheHeaders<H> {
+    key: std::sync::Arc<std::sync::OnceLock<String>>,
+    hooks: H,
+}
 
-impl litellm_host::interceptors::Interceptors<litellm_inference::RouteError> for CacheHeaders {
+impl<H: litellm_host::interceptors::Interceptors<litellm_inference::RouteError>>
+    litellm_host::interceptors::Interceptors<litellm_inference::RouteError> for CacheHeaders<H>
+{
     async fn before_provider_request(
         &self,
         wire: litellm_host::interceptors::WireRequest,
-        _: litellm_host::interceptors::RequestContext,
+        context: litellm_host::interceptors::RequestContext,
     ) -> Result<litellm_host::interceptors::WireRequest, litellm_inference::RouteError> {
-        Ok(wire)
+        self.hooks.before_provider_request(wire, context).await
     }
 
     async fn after_provider_response(
         &self,
-        _: litellm_host::interceptors::RawResponse,
+        raw: litellm_host::interceptors::RawResponse,
     ) -> Result<(), litellm_inference::RouteError> {
-        Ok(())
+        self.hooks.after_provider_response(raw).await
     }
 
     async fn result_ready(
         &self,
         facts: litellm_host::interceptors::ExecutionFacts,
     ) -> Result<(), litellm_inference::RouteError> {
+        self.hooks.result_ready(facts.clone()).await?;
         if let litellm_host::interceptors::ResultSource::Cache { key } = facts.source {
-            let _ = self.0.set(key);
+            let _ = self.key.set(key);
         }
         Ok(())
     }
 }
 
-impl CacheHeaders {
+impl<H> CacheHeaders<H> {
+    pub(crate) fn new(hooks: H) -> Self {
+        Self {
+            key: Default::default(),
+            hooks,
+        }
+    }
+
     pub(crate) fn apply(&self, mut response: axum::response::Response) -> axum::response::Response {
-        if let Some(key) = self.0.get()
+        if let Some(key) = self.key.get()
             && let Ok(value) = axum::http::HeaderValue::from_str(key)
         {
             response.headers_mut().insert("x-litellm-cache-key", value);

@@ -1,4 +1,6 @@
 mod deployment;
+mod hooks;
+pub use hooks::RouterHooks;
 
 use std::collections::HashMap;
 
@@ -7,7 +9,10 @@ use litellm_config::Model;
 pub use deployment::Deployment;
 
 #[derive(Clone, Debug, Default)]
-pub struct Router(HashMap<String, Deployment>);
+pub struct Router<H = ()> {
+    deployments: HashMap<String, Deployment>,
+    hooks: H,
+}
 
 impl Router {
     pub fn from_model_list(model_list: &[Model]) -> Self {
@@ -33,12 +38,35 @@ impl Router {
     }
 
     pub fn get(&self, model_name: &str) -> Option<&Deployment> {
-        self.0.get(model_name)
+        self.deployments.get(model_name)
+    }
+}
+
+impl<H> Router<H> {
+    pub fn with_hooks<T>(self, hooks: T) -> Router<T> {
+        Router {
+            deployments: self.deployments,
+            hooks,
+        }
+    }
+}
+
+impl<H: RouterHooks> Router<H> {
+    pub async fn select(&self, model_name: &str) -> Option<&Deployment> {
+        let candidates = self.deployments.get(model_name).into_iter().collect();
+        self.hooks
+            .filter_deployments(model_name, candidates)
+            .await
+            .into_iter()
+            .next()
     }
 }
 
 impl FromIterator<(String, Deployment)> for Router {
     fn from_iter<I: IntoIterator<Item = (String, Deployment)>>(entries: I) -> Self {
-        Self(entries.into_iter().collect())
+        Self {
+            deployments: entries.into_iter().collect(),
+            hooks: (),
+        }
     }
 }

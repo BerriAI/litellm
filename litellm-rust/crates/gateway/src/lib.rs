@@ -1,5 +1,6 @@
 mod auth;
 mod error;
+pub mod hooks;
 mod secrets;
 pub use error::Error;
 
@@ -113,14 +114,40 @@ pub async fn build_mcp(
     ))
 }
 
-pub fn router(
-    inference: Arc<Gateway>,
+pub fn router<R, I>(
+    inference: Arc<Gateway<R, I>>,
     config: &Config,
     ui: Option<Router>,
     mcp: Option<Router>,
-) -> Router {
+) -> Router
+where
+    R: litellm_gateway_inference::RouterHooks + 'static,
+    I: litellm_host::interceptors::Interceptors<litellm_inference::RouteError> + Clone + 'static,
+{
+    router_with_hooks(inference, config, ui, mcp, ())
+}
+
+pub fn router_with_hooks<R, I, H>(
+    inference: Arc<Gateway<R, I>>,
+    config: &Config,
+    ui: Option<Router>,
+    mcp: Option<Router>,
+    hooks: H,
+) -> Router
+where
+    R: litellm_gateway_inference::RouterHooks + 'static,
+    I: litellm_host::interceptors::Interceptors<litellm_inference::RouteError> + Clone + 'static,
+    H: hooks::GatewayHooks + 'static,
+{
+    let hooks = Arc::new(hooks);
     let auth = Auth::from_config(config, inference.secrets.clone());
     let inference = litellm_gateway_inference::router(inference)
+        .route_layer(axum::middleware::from_fn(
+            move |request: Request, next: Next| {
+                let hooks = hooks.clone();
+                async move { hooks::run(hooks.as_ref(), request, next).await }
+            },
+        ))
         .merge(mcp.unwrap_or_default())
         .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
         .route_layer(axum::middleware::from_fn_with_state(
