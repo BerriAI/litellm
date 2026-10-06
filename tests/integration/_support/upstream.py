@@ -29,7 +29,6 @@ from integration.cost_calculation.cost_tracking_case import (
     StoredResponse,
     TextResponse,
 )
-from litellm.constants import AIOHTTP_KEEPALIVE_TIMEOUT
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from starlette.applications import Starlette
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -599,7 +598,7 @@ def main() -> None:
         host="127.0.0.1",
         port=cast(int, arguments.port),
         access_log=False,
-        timeout_keep_alive=AIOHTTP_KEEPALIVE_TIMEOUT + 5,
+        timeout_keep_alive=125,
     )
 
 
