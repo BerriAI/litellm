@@ -2,12 +2,12 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { isMaskedSecret } from "@/utils/maskedSecretUtils";
-import { requiredRule } from "../common_components/formRules";
 import { MountedFormField, type MountedFieldControlProps } from "../common_components/MountedFormField";
 import {
   FEDERATION_CORE_FIELDS,
-  IDENTITY_SOURCES,
   identitySourceById,
+  identitySourceOptions,
+  requiredFederationValue,
   validateIdentityTokenReference,
   validateIssuerTtlSeconds,
   validateMaskedValueUntouched,
@@ -23,11 +23,9 @@ interface AnthropicFederationFieldsProps {
 
 const IDENTITY_SOURCE_SELECT_ID = "anthropic_federation_identity_source";
 
-const identitySourceItems = IDENTITY_SOURCES.map((source) => ({ value: source.id, label: source.label }));
-
 const fieldRules = (field: FederationField, storedValue: unknown) => ({
   validate: {
-    ...(field.required ? { required: requiredRule("Required") } : {}),
+    ...(field.required ? { required: requiredFederationValue } : {}),
     ...(field.key === "anthropic_identity_token" ? { reference: validateIdentityTokenReference } : {}),
     ...(field.control === "integer" ? { ttl: validateIssuerTtlSeconds } : {}),
     masked: validateMaskedValueUntouched(storedValue),
@@ -81,6 +79,7 @@ export default function AnthropicFederationFields({
   storedValues,
 }: AnthropicFederationFieldsProps) {
   const sourceFields = identitySourceById(identitySource).fields;
+  const identitySourceItems = identitySourceOptions(storedValues);
 
   const renderField = (field: FederationField) => (
     <MountedFormField
@@ -121,6 +120,12 @@ export default function AnthropicFederationFields({
             ))}
           </SelectContent>
         </Select>
+        {identitySource === "unrecognized" && (
+          <p className="text-sm text-muted-foreground">
+            This form does not offer the stored identity source. Saving keeps it and its settings as stored. Pick
+            another source to replace it.
+          </p>
+        )}
         {identitySource === "environment" && (
           <p className="text-sm text-muted-foreground">
             The proxy reads ANTHROPIC_IDENTITY_TOKEN_FILE or ANTHROPIC_IDENTITY_TOKEN from its own environment.

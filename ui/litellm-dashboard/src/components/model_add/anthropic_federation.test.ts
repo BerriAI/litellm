@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildCreateCredentialValues,
   buildCredentialPatch,
+  buildProviderChangePatch,
   inferAuthMethod,
+  identitySourceOptions,
   inferIdentitySource,
   isAnthropicProvider,
   isFederatedCredential,
@@ -73,9 +75,22 @@ describe("reading a stored credential", () => {
     expect(inferIdentitySource({ anthropic_identity_token: "oidc****" })).toBe("secret_reference");
   });
 
-  it("falls back to the proxy environment when no identity value is stored or the source is unknown", () => {
+  it("falls back to the proxy environment when no identity value is stored", () => {
     expect(inferIdentitySource({ anthropic_federation_rule_id: "fdrl_1" })).toBe("environment");
-    expect(inferIdentitySource({ anthropic_identity_source: "spiffe" })).toBe("environment");
+  });
+
+  it("keeps a stored identity source it does not offer as its own option, never as another source", () => {
+    expect(inferIdentitySource({ anthropic_identity_source: "spiffe" })).toBe("unrecognized");
+    expect(identitySourceOptions({ anthropic_identity_source: "spiffe" })[0]).toEqual({
+      value: "unrecognized",
+      label: "Stored: spiffe",
+    });
+    expect(identitySourceOptions(storedKeycloak).map((option) => option.value)).not.toContain("unrecognized");
+  });
+
+  it("opens a credential that stores an api key next to federation values as an api key credential", () => {
+    expect(inferAuthMethod({ api_key: "sk-1****", anthropic_federation_rule_id: "fdrl_1" })).toBe("api_key");
+    expect(inferAuthMethod({ api_key: "", anthropic_federation_rule_id: "fdrl_1" })).toBe("federation");
   });
 });
 
@@ -185,15 +200,27 @@ describe("buildCredentialPatch", () => {
     expect(patch.credential_values).toEqual({ anthropic_identity_token_file: "/run/secrets/new-token" });
   });
 
-  it("deletes an optional federation value the admin cleared and keeps a cleared base URL stored", () => {
+  it("deletes every stored value the admin cleared, a base URL included", () => {
     expect(
       buildCredentialPatch(
-        storedTokenFile,
-        { ...storedTokenFile, api_base: "", anthropic_federation_workspace_id: "" },
+        { ...storedTokenFile, api_base: "https://gateway.example.com" },
+        { ...storedTokenFile, api_base: "", anthropic_federation_workspace_id: " " },
         tokenFileSelection,
         tokenFileSelection,
       ),
-    ).toEqual({ credential_values: {}, credential_values_to_delete: ["anthropic_federation_workspace_id"] });
+    ).toEqual({
+      credential_values: {},
+      credential_values_to_delete: ["api_base", "anthropic_federation_workspace_id"],
+    });
+  });
+
+  it("deletes every stored value the admin did not re-enter when the provider changed", () => {
+    const stored = { api_base: "https://corp.openai.azure.com", api_version: "2024-10-21", api_key: "sk-1****" };
+    const typed = { anthropic_federation_rule_id: "fdrl_1", anthropic_identity_token_file: "/run/secrets/token" };
+    expect(buildProviderChangePatch(stored, typed, tokenFileSelection)).toEqual({
+      credential_values: typed,
+      credential_values_to_delete: ["api_base", "api_version", "api_key"],
+    });
   });
 
   it("does not treat an unchanged stored lifetime as an edit", () => {

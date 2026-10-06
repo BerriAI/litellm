@@ -23,9 +23,11 @@ import AnthropicFederationFields from "./AnthropicFederationFields";
 import {
   buildCreateCredentialValues,
   buildCredentialPatch,
+  buildProviderChangePatch,
   inferAuthMethod,
   inferIdentitySource,
   isAnthropicProvider,
+  isFederatedCredential,
   type AnthropicAuthMethod,
   type IdentitySourceId,
 } from "./anthropic_federation";
@@ -56,6 +58,9 @@ interface CredentialModalProps {
   initialAuthMethod?: AnthropicAuthMethod;
 }
 
+const sameProvider = (left: string | null | undefined, right: string | null | undefined): boolean =>
+  (left ?? "").toLowerCase() === (right ?? "").toLowerCase();
+
 const initialFormValues = (
   existingCredential: CredentialItem | null | undefined,
   initialProvider: string | null | undefined,
@@ -85,6 +90,7 @@ export default function CredentialModal({
   const [selectedProvider, setSelectedProvider] = useState<string | null>(
     (existingCredential?.credential_info.custom_llm_provider as Providers) ?? initialProvider ?? Providers.OpenAI,
   );
+  const storedProvider = existingCredential?.credential_info.custom_llm_provider ?? null;
   const storedValues: Record<string, unknown> = existingCredential?.credential_values ?? {};
   const storedSelection = {
     authMethod: inferAuthMethod(storedValues),
@@ -94,7 +100,7 @@ export default function CredentialModal({
     existingCredential ? storedSelection.authMethod : initialAuthMethod ?? "api_key",
   );
   const [identitySource, setIdentitySource] = useState<IdentitySourceId>(
-    existingCredential && storedSelection.authMethod === "federation" ? storedSelection.identitySource : "token_file",
+    isFederatedCredential(storedValues) ? storedSelection.identitySource : "token_file",
   );
   const isAnthropic = isAnthropicProvider(selectedProvider);
   const selection = { authMethod: isAnthropic ? authMethod : ("api_key" as const), identitySource };
@@ -104,11 +110,11 @@ export default function CredentialModal({
   const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: initialValues });
   const registry = useMountRegistry();
 
-  const formAdapter = {
+  const formAdapterFor = (provider: string | null) => ({
     getFieldValue: (field: string) => form.getValues(field),
-    resetFields: () => form.reset(),
+    resetFields: () => form.reset(isEdit && !sameProvider(provider, storedProvider) ? {} : initialValues),
     setFieldValue: (field: string, value: unknown) => form.setValue(field, value),
-  };
+  });
 
   const handleSubmit = async () => {
     const isValid = await form.trigger(registry.mountedNames() as string[]);
@@ -122,17 +128,12 @@ export default function CredentialModal({
     };
     if (!isEdit) {
       onSubmit({ ...meta, ...buildCreateCredentialValues(withoutRestrictedFields(values), selection) }, []);
-      form.reset();
       return;
     }
-    const patch = buildCredentialPatch(
-      storedValues,
-      withoutRestrictedFields(values),
-      isAnthropic ? storedSelection : selection,
-      selection,
-    );
+    const patch = sameProvider(selectedProvider, storedProvider)
+      ? buildCredentialPatch(storedValues, withoutRestrictedFields(values), storedSelection, selection)
+      : buildProviderChangePatch(storedValues, withoutRestrictedFields(values), selection);
     onSubmit({ ...meta, ...patch.credential_values }, patch.credential_values_to_delete);
-    form.reset();
   };
 
   const closeAndReset = () => {
@@ -188,7 +189,7 @@ export default function CredentialModal({
                     value={typeof control.value === "string" ? control.value : null}
                     onValueChange={(value) => {
                       control.onChange(value);
-                      resetCredentialFormOnProviderChange(formAdapter, value, setSelectedProvider);
+                      resetCredentialFormOnProviderChange(formAdapterFor(value), value, setSelectedProvider);
                     }}
                   />
                 )}

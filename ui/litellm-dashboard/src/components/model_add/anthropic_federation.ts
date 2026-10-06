@@ -2,7 +2,13 @@ import { isMaskedSecret } from "@/utils/maskedSecretUtils";
 
 export type AnthropicAuthMethod = "api_key" | "federation";
 
-export type IdentitySourceId = "token_file" | "secret_reference" | "internal_issuer" | "keycloak" | "environment";
+export type IdentitySourceId =
+  | "token_file"
+  | "secret_reference"
+  | "internal_issuer"
+  | "keycloak"
+  | "environment"
+  | "unrecognized";
 
 export interface FederationField {
   readonly key: string;
@@ -37,16 +43,18 @@ export const FEDERATION_CORE_FIELDS: readonly FederationField[] = [
   {
     key: "anthropic_federation_rule_id",
     label: "Federation Rule ID",
-    tooltip: "The fdrl_ id of the federation rule, from Settings > Workload identity in the Claude Console.",
+    tooltip:
+      "The fdrl_ id of the federation rule, from Settings > Workload identity in the Claude Console. Leave empty when the proxy sets ANTHROPIC_FEDERATION_RULE_ID in its environment.",
     placeholder: "fdrl_...",
-    required: true,
+    required: false,
     control: "text",
   },
   {
     key: "anthropic_organization_id",
     label: "Organization ID",
-    tooltip: "The Anthropic organization the federation rule belongs to, shown on the rule's detail page.",
-    required: true,
+    tooltip:
+      "The Anthropic organization the federation rule belongs to, shown on the rule's detail page. Leave empty when the proxy sets ANTHROPIC_ORGANIZATION_ID in its environment.",
+    required: false,
     control: "text",
   },
   {
@@ -210,6 +218,8 @@ export const FEDERATION_VALUE_KEYS: readonly string[] = [
   ...IDENTITY_SOURCE_VALUE_KEYS,
 ];
 
+const UNRECOGNIZED_IDENTITY_SOURCE: IdentitySource = { id: "unrecognized", label: "", fixedValues: {}, fields: [] };
+
 const isBlank = (value: unknown): boolean => {
   if (typeof value === "string") {
     return value.trim() === "";
@@ -218,7 +228,7 @@ const isBlank = (value: unknown): boolean => {
 };
 
 export const identitySourceById = (id: IdentitySourceId): IdentitySource =>
-  IDENTITY_SOURCES.find((source) => source.id === id) ?? IDENTITY_SOURCES[0];
+  IDENTITY_SOURCES.find((source) => source.id === id) ?? UNRECOGNIZED_IDENTITY_SOURCE;
 
 export const isAnthropicProvider = (provider: string | null | undefined): boolean =>
   provider !== null && provider !== undefined && provider.toLowerCase() === "anthropic";
@@ -227,16 +237,15 @@ export const isFederatedCredential = (credentialValues: Record<string, unknown> 
   FEDERATION_VALUE_KEYS.some((key) => !isBlank(credentialValues?.[key]));
 
 export const inferAuthMethod = (credentialValues: Record<string, unknown> | null | undefined): AnthropicAuthMethod =>
-  isFederatedCredential(credentialValues) ? "federation" : "api_key";
+  isBlank(credentialValues?.[API_KEY]) && isFederatedCredential(credentialValues) ? "federation" : "api_key";
 
 export const inferIdentitySource = (credentialValues: Record<string, unknown> | null | undefined): IdentitySourceId => {
   const values = credentialValues ?? {};
-  const declared = IDENTITY_SOURCES.find(
-    (source) =>
-      !isBlank(values[IDENTITY_SOURCE_KEY]) && source.fixedValues[IDENTITY_SOURCE_KEY] === values[IDENTITY_SOURCE_KEY],
-  );
-  if (declared) {
-    return declared.id;
+  const declared = values[IDENTITY_SOURCE_KEY];
+  if (!isBlank(declared)) {
+    return (
+      IDENTITY_SOURCES.find((source) => source.fixedValues[IDENTITY_SOURCE_KEY] === declared)?.id ?? "unrecognized"
+    );
   }
   if (!isBlank(values.anthropic_identity_token_file)) {
     return "token_file";
@@ -246,6 +255,17 @@ export const inferIdentitySource = (credentialValues: Record<string, unknown> | 
   }
   return "environment";
 };
+
+export const identitySourceOptions = (
+  storedValues: Record<string, unknown>,
+): readonly { value: IdentitySourceId; label: string }[] => [
+  ...(inferIdentitySource(storedValues) === "unrecognized"
+    ? [{ value: "unrecognized" as const, label: `Stored: ${String(storedValues[IDENTITY_SOURCE_KEY])}` }]
+    : []),
+  ...IDENTITY_SOURCES.map((source) => ({ value: source.id, label: source.label })),
+];
+
+export const requiredFederationValue = (value: unknown): string | true => (isBlank(value) ? "Required" : true);
 
 export const validateIdentityTokenReference = (value: unknown): string | true => {
   if (typeof value !== "string" || isBlank(value) || isMaskedSecret(value)) {
@@ -272,9 +292,6 @@ export const validateMaskedValueUntouched =
     isMaskedSecret(value) && value !== storedValue
       ? "This stored value is hidden. Replace the whole value to change it"
       : true;
-
-const selectedFields = (authMethod: AnthropicAuthMethod, sourceId: IdentitySourceId): readonly FederationField[] =>
-  authMethod === "federation" ? [...FEDERATION_CORE_FIELDS, ...identitySourceById(sourceId).fields] : [];
 
 const toStoredType = (field: FederationField | undefined, value: unknown): unknown => {
   if (field === undefined || isBlank(value)) {
@@ -313,11 +330,7 @@ export const buildCreateCredentialValues = (
   selection: CredentialSelection,
 ): Record<string, unknown> => ({ ...typedFormValues(formValues), ...fixedValuesFor(selection) });
 
-const keysLeftBehind = (
-  stored: Record<string, unknown>,
-  initial: CredentialSelection,
-  selection: CredentialSelection,
-): readonly string[] => {
+const keysLeftBehind = (initial: CredentialSelection, selection: CredentialSelection): readonly string[] => {
   if (selection.authMethod !== initial.authMethod) {
     return selection.authMethod === "federation" ? [API_KEY] : FEDERATION_VALUE_KEYS;
   }
@@ -329,20 +342,30 @@ const keysLeftBehind = (
   return IDENTITY_SOURCE_VALUE_KEYS.filter((key) => !kept.has(key));
 };
 
+const changedValues = (stored: Record<string, unknown>, desired: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(desired).filter(([key, value]) => !isMaskedSecret(value) && value !== stored[key]));
+
+export const buildProviderChangePatch = (
+  stored: Record<string, unknown>,
+  formValues: Record<string, unknown>,
+  selection: CredentialSelection,
+): CredentialValuesPatch => {
+  const desired = { ...typedFormValues(formValues), ...fixedValuesFor(selection) };
+  return {
+    credential_values: changedValues(stored, desired),
+    credential_values_to_delete: Object.keys(stored).filter((key) => !(key in desired)),
+  };
+};
+
 export const buildCredentialPatch = (
   stored: Record<string, unknown>,
   formValues: Record<string, unknown>,
   initial: CredentialSelection,
   selection: CredentialSelection,
 ): CredentialValuesPatch => {
-  const desired = { ...typedFormValues(formValues), ...fixedValuesFor(selection) };
-  const changed = Object.fromEntries(
-    Object.entries(desired).filter(([key, value]) => !isMaskedSecret(value) && value !== stored[key]),
-  );
-  const clearedOptional = selectedFields(selection.authMethod, selection.identitySource)
-    .filter((field) => !field.required && isBlank(formValues[field.key]))
-    .map((field) => field.key);
-  const toDelete = [...keysLeftBehind(stored, initial, selection), ...clearedOptional].filter(
+  const changed = changedValues(stored, { ...typedFormValues(formValues), ...fixedValuesFor(selection) });
+  const cleared = Object.keys(formValues).filter((key) => isBlank(formValues[key]) && !isBlank(stored[key]));
+  const toDelete = [...keysLeftBehind(initial, selection), ...cleared].filter(
     (key) => key in stored && !(key in changed),
   );
   return { credential_values: changed, credential_values_to_delete: Array.from(new Set(toDelete)) };

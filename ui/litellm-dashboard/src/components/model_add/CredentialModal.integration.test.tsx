@@ -30,6 +30,16 @@ vi.mock("../networking", async () => {
           { key: "api_key", label: "API Key", field_type: "password" },
         ],
       },
+      {
+        provider: "Azure",
+        provider_display_name: Providers.Azure,
+        litellm_provider: "azure",
+        credential_fields: [
+          { key: "api_base", label: "Azure API Base", field_type: "text" },
+          { key: "api_version", label: "API Version", field_type: "text" },
+          { key: "api_key", label: "Azure API Key", field_type: "password" },
+        ],
+      },
     ]),
   };
 });
@@ -43,6 +53,33 @@ const federatedCredential: CredentialItem = {
     anthropic_keycloak_token_url: "http****",
     anthropic_keycloak_client_id: "lite****",
     anthropic_keycloak_client_secret_ref: "os.e****",
+  },
+  credential_info: { custom_llm_provider: "anthropic" },
+};
+
+const azureCredential: CredentialItem = {
+  credential_name: "azure-prod",
+  credential_values: { api_base: "https://corp.openai.azure.com", api_version: "2024-10-21", api_key: "sk-1****" },
+  credential_info: { custom_llm_provider: "Azure" },
+};
+
+const keyAndFederationCredential: CredentialItem = {
+  credential_name: "anthropic-key-and-federation",
+  credential_values: {
+    api_key: "sk-a****",
+    anthropic_federation_rule_id: "fdrl_stored",
+    anthropic_organization_id: "org-stored",
+    anthropic_identity_token_file: "/var/run/secrets/anthropic/token",
+  },
+  credential_info: { custom_llm_provider: "anthropic" },
+};
+
+const unknownSourceCredential: CredentialItem = {
+  credential_name: "anthropic-unknown-source",
+  credential_values: {
+    anthropic_federation_rule_id: "fdrl_stored",
+    anthropic_organization_id: "org-stored",
+    anthropic_identity_source: "spiffe",
   },
   credential_info: { custom_llm_provider: "anthropic" },
 };
@@ -62,6 +99,14 @@ const fill = (label: string | RegExp, value: string) =>
 
 const chooseOption = (user: ReturnType<typeof userEvent.setup>, select: RegExp, option: string | RegExp) =>
   chooseSelectOption(user, screen.getByRole("combobox", { name: select }), option);
+
+const chooseProvider = async (user: ReturnType<typeof userEvent.setup>, provider: string) => {
+  const providerSelect = screen.getByRole("combobox", { name: /Provider/ });
+  await user.clear(providerSelect);
+  await user.type(providerSelect, provider);
+  const options = await screen.findAllByRole("option");
+  await user.click(options.find((option) => option.textContent === provider) ?? options[0]);
+};
 
 describe("CredentialModal with Anthropic workload identity federation", () => {
   it("does not carry the previous provider's base URL into the Anthropic form or its payload", async () => {
@@ -130,7 +175,7 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
     );
   });
 
-  it("refuses to save a federated credential that is missing its required ids", async () => {
+  it("refuses to save a federated credential that is missing its identity token file", async () => {
     const user = userEvent.setup();
     const onSubmit = renderModal({ initialProvider: "Anthropic", initialAuthMethod: "federation" });
     await screen.findByLabelText("Upstream API Base");
@@ -198,5 +243,181 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
       api_key: "sk-ant-replacement",
     });
     expect([...valuesToDelete].sort()).toEqual(Object.keys(federatedCredential.credential_values).sort());
+  });
+
+  it("drops another provider's stored values when the admin turns the credential into a federated Anthropic one", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ mode: "edit", existingCredential: azureCredential });
+    expect(await screen.findByLabelText("Azure API Base")).toHaveValue("https://corp.openai.azure.com");
+
+    await chooseProvider(user, "Anthropic");
+    expect(await screen.findByLabelText("Upstream API Base")).toHaveValue("");
+    await chooseOption(user, /^Authentication:/, "Workload identity federation");
+    fill(/Federation Rule ID/, "fdrl_new");
+    fill(/Organization ID/, "org-new");
+    fill(/Identity Token File/, "/var/run/secrets/anthropic/token");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    const [values, valuesToDelete] = onSubmit.mock.calls[0];
+    const expectedValues = {
+      credential_name: "azure-prod",
+      custom_llm_provider: "Anthropic",
+      anthropic_federation_rule_id: "fdrl_new",
+      anthropic_organization_id: "org-new",
+      anthropic_identity_token_file: "/var/run/secrets/anthropic/token",
+    };
+    expect(values).toEqual(expectedValues);
+    expect([...valuesToDelete].sort()).toEqual(["api_base", "api_key", "api_version"]);
+  });
+
+  it("shows the stored values again when the admin returns to the credential's own provider", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ mode: "edit", existingCredential: azureCredential });
+    await screen.findByLabelText("Azure API Base");
+
+    await chooseProvider(user, "Anthropic");
+    await screen.findByLabelText("Upstream API Base");
+    await chooseProvider(user, "Azure");
+
+    expect(await screen.findByLabelText("Azure API Base")).toHaveValue("https://corp.openai.azure.com");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+    expect(onSubmit).toHaveBeenCalledWith({ credential_name: "azure-prod", custom_llm_provider: "Azure" }, []);
+  });
+
+  it("deletes the stored base URL when the admin clears it on a federated credential", async () => {
+    const user = userEvent.setup();
+    const stored = {
+      ...federatedCredential,
+      credential_values: { ...federatedCredential.credential_values, api_base: "https://gateway.example.com" },
+    };
+    const onSubmit = renderModal({ mode: "edit", existingCredential: stored });
+    expect(await screen.findByLabelText("Upstream API Base")).toHaveValue("https://gateway.example.com");
+
+    fill("Upstream API Base", "");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      { credential_name: "anthropic-federated", custom_llm_provider: "anthropic" },
+      ["api_base"],
+    );
+  });
+
+  it("deletes the stored federation values when the admin moves a federated credential to another provider", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ mode: "edit", existingCredential: federatedCredential });
+    await screen.findByLabelText(/Federation Rule ID/);
+
+    await chooseProvider(user, "OpenAI");
+    await screen.findByLabelText("OpenAI API Key");
+    fill("OpenAI API Key", "sk-openai-new");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    const [values, valuesToDelete] = onSubmit.mock.calls[0];
+    expect(values).toMatchObject({ custom_llm_provider: "OpenAI", api_key: "sk-openai-new" });
+    expect([...valuesToDelete].sort()).toEqual(Object.keys(federatedCredential.credential_values).sort());
+  });
+
+  it("opens a credential that stores an API key next to federation values as the API key credential the proxy uses", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ mode: "edit", existingCredential: keyAndFederationCredential });
+    expect(await screen.findByRole("combobox", { name: /^Authentication:/ })).toHaveTextContent("API key");
+    expect(await screen.findByLabelText("API Key")).toHaveValue("sk-a****");
+
+    await chooseOption(user, /^Authentication:/, "Workload identity federation");
+    expect(screen.getByLabelText(/Federation Rule ID/)).toHaveValue("fdrl_stored");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      { credential_name: "anthropic-key-and-federation", custom_llm_provider: "anthropic" },
+      ["api_key"],
+    );
+  });
+
+  it("keeps what the admin typed in the form after submitting, so a failed save loses nothing", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: "Anthropic", initialAuthMethod: "federation" });
+    await screen.findByLabelText("Upstream API Base");
+    fill("Credential Name:", "anthropic-federated");
+    fill(/Federation Rule ID/, "fdrl_new");
+    fill(/Organization ID/, "org-new");
+    fill(/Identity Token File/, "/var/run/secrets/anthropic/token");
+
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Credential Name:")).toHaveValue("anthropic-federated");
+    expect(screen.getByLabelText(/Federation Rule ID/)).toHaveValue("fdrl_new");
+    expect(screen.getByLabelText(/Identity Token File/)).toHaveValue("/var/run/secrets/anthropic/token");
+  });
+
+  it("refuses a required federation field that holds only whitespace", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: "Anthropic", initialAuthMethod: "federation" });
+    await screen.findByLabelText("Upstream API Base");
+    await chooseOption(user, /Identity Source/, "Token signed by LiteLLM (internal issuer)");
+    fill("Credential Name:", "anthropic-issuer");
+    fill(/Federation Rule ID/, "fdrl_new");
+    fill(/Organization ID/, "org-new");
+    fill(/Issuer URL/, "https://litellm.example.com");
+    fill(/^Subject/, " ");
+    fill(/Signing Key Reference/, "os.environ/ANTHROPIC_ISSUER_SIGNING_KEY");
+
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    expect(await screen.findByText("Required")).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("shows an identity source it does not recognize as stored and leaves it alone on save", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ mode: "edit", existingCredential: unknownSourceCredential });
+
+    const sourceSelect = await screen.findByRole("combobox", { name: /Identity Source/ });
+    expect(sourceSelect).toHaveTextContent("spiffe");
+    expect(sourceSelect).not.toHaveTextContent("Proxy environment variables");
+    fill(/Organization ID/, "org-edited");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      {
+        credential_name: "anthropic-unknown-source",
+        custom_llm_provider: "anthropic",
+        anthropic_organization_id: "org-edited",
+      },
+      [],
+    );
+  });
+
+  it("replaces an identity source it does not recognize when the admin picks one it offers", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ mode: "edit", existingCredential: unknownSourceCredential });
+    await screen.findByRole("combobox", { name: /Identity Source/ });
+
+    await chooseOption(user, /Identity Source/, "Proxy environment variables");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      { credential_name: "anthropic-unknown-source", custom_llm_provider: "anthropic" },
+      ["anthropic_identity_source"],
+    );
+  });
+
+  it("saves a federated credential that leaves the rule id and organization id to the proxy environment", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: "Anthropic", initialAuthMethod: "federation" });
+    await screen.findByLabelText("Upstream API Base");
+    fill("Credential Name:", "anthropic-env-ids");
+    fill(/Identity Token File/, "/var/run/secrets/anthropic/token");
+
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      {
+        credential_name: "anthropic-env-ids",
+        custom_llm_provider: "Anthropic",
+        anthropic_identity_token_file: "/var/run/secrets/anthropic/token",
+      },
+      [],
+    );
   });
 });
