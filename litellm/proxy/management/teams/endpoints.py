@@ -2,17 +2,15 @@ from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Request
 
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_TeamTable
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
 from litellm.proxy.list_api.list_framework import QueryPlan, list_response
 from litellm.proxy.management.teams.dependencies import get_readable_team, get_roster_db, get_team_members_plan
 from litellm.proxy.management.teams.repository import RawQuery
 from litellm.proxy.management.teams.schemas import TeamMemberListItem
 from litellm.proxy.management.teams.service import get_team_members_list
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
-from litellm.types.proxy.management_endpoints.management_v1 import ListResponse, ProblemDetail
+from litellm.types.proxy.management_endpoints.management_v1 import ListResponse
 
 router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 
@@ -44,18 +42,5 @@ async def list_team_members(
     curl --globoff 'http://0.0.0.0:4000/management/v1/teams/team-1/members?q=acme&filter[role]=admin' -H 'Authorization: Bearer sk-1234'
     ```
     """
-    try:
-        page: Final = await get_team_members_list(team.team_id, plan, roster_db)
-        return list_response(request, plan, page.members, page.total_count)
-    except Exception as e:  # noqa: BLE001  # a driver error answers as a problem document, not the OpenAI error shape
-        verbose_proxy_logger.exception(
-            "litellm.proxy.management.teams.endpoints.list_team_members(): Exception occured - %s", e
-        )
-        raise ManagementProblem(
-            ProblemDetail(
-                type=f"{PROBLEM_TYPE_BASE}internal-server-error",
-                title="Internal server error",
-                status=500,
-                detail="Failed to list team members.",
-            )
-        )
+    page: Final = await get_team_members_list(team.team_id, plan, roster_db)
+    return list_response(request, plan, page.members, page.total_count)
