@@ -77,7 +77,9 @@ def _store_response_cost_before_usage_flattening(completion_response: object, kw
     if litellm_logging_obj is None:
         return
     try:
-        cost = litellm_logging_obj._response_cost_calculator(result=cast(ModelResponse, completion_response))
+        cost = litellm_logging_obj._response_cost_calculator(  # pyright: ignore[reportPrivateUsage]
+            result=cast(ModelResponse, completion_response)
+        )
     except Exception:
         verbose_logger.exception("Anthropic Adapter - failed to pre-compute response cost")
         return
