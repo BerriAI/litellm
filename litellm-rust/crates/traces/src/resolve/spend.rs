@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use indexmap::IndexMap;
 
 use crate::{
-    CallEvidence, CallKey,
+    CallEvidence, CallKey, SpendMatch,
     query::named::{SpendByResponseIdsRow as SpendRow, TraceSpansRow},
 };
 
@@ -100,6 +100,30 @@ pub(super) fn requests<'a>(
         .map(|id| unique_match(id, spend_rows))
         .collect::<Option<Vec<_>>>()
         .map(unique)
+}
+
+pub(super) fn spend_match(
+    ids: &BTreeSet<CallKey>,
+    spend_rows: &[SpendRow],
+    requests: Option<&Requests<'_>>,
+) -> SpendMatch {
+    if ids.is_empty() {
+        return SpendMatch::NoCallId;
+    }
+    if requests
+        .and_then(|requests| request_cost(requests))
+        .is_some()
+    {
+        return SpendMatch::Matched;
+    }
+    let logged = spend_rows
+        .iter()
+        .any(|spend| ids.iter().any(|key| names(key, spend)));
+    if logged {
+        SpendMatch::Ambiguous
+    } else {
+        SpendMatch::NoSpendLog
+    }
 }
 
 pub(super) fn request_cost(requests: &[&SpendRow]) -> Option<f64> {

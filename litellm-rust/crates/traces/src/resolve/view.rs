@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use crate::{
     normalize::ObservationType,
     query::named::{ListTracesRow, SpendByResponseIdsRow as SpendRow, TraceSpansRow},
-    view::{AgentNode, Span, SpanStatus, Trace, TraceSummary},
+    view::{AgentNode, Span, SpanStatus, SpendMatch, Trace, TraceSummary},
 };
 
 use super::{
@@ -23,7 +23,19 @@ fn optional(value: &str) -> Option<String> {
 fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span {
     let row = resolution.row(index);
     let status = resolution.status_source(index);
-    let requests = resolution.requests(index);
+    let (requests, spend_match) = if resolution.model_calls.contains(&index) {
+        let (requests, matched) = resolution.call_match(index);
+        (requests, Some(matched))
+    } else {
+        (resolution.requests(index), None)
+    };
+    let spend = requests
+        .as_ref()
+        .and_then(|requests| request_cost(requests));
+    let spend_log_request_id = match (spend_match, requests.as_deref()) {
+        (Some(SpendMatch::Matched), Some([request])) => Some(request.request_id.clone()),
+        _ => None,
+    };
     Span {
         span_id: row.span_id.clone(),
         parent_span_id: optional(&row.parent_span_id),
@@ -42,9 +54,9 @@ fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span 
         input_tokens: row.input_tokens,
         output_tokens: row.output_tokens,
         litellm_request_id: optional(&row.litellm_request_id),
-        spend: requests
-            .as_ref()
-            .and_then(|requests| request_cost(requests)),
+        spend,
+        spend_log_request_id,
+        spend_match,
     }
 }
 

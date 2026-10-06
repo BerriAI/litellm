@@ -3,6 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use indexmap::IndexMap;
 
 use crate::{
+    SpendMatch,
     normalize::{CallKey, ObservationType},
     query::named::{SpendByResponseIdsRow as SpendRow, TraceSpansRow},
 };
@@ -112,9 +113,20 @@ impl<'a> Resolution<'a> {
         spend::requests(&spend::call_ids(self.row(index)), self.spend)
     }
 
+    pub(super) fn call_requests(&self, call: usize) -> Option<Requests<'a>> {
+        spend::requests(&self.call_ids(call), self.spend)
+    }
+
+    pub(super) fn call_match(&self, call: usize) -> (Option<Requests<'a>>, SpendMatch) {
+        let ids = self.call_ids(call);
+        let requests = spend::requests(&ids, self.spend);
+        let matched = spend::spend_match(&ids, self.spend, requests.as_ref());
+        (requests, matched)
+    }
+
     /// A model call is priced by every id LiteLLM assigned that is recorded on it, on the LLM
     /// wrappers around only it, and on the spans beneath it.
-    pub(super) fn call_requests(&self, call: usize) -> Option<Requests<'a>> {
+    fn call_ids(&self, call: usize) -> BTreeSet<CallKey> {
         let wrappers = self.graph.ancestors(call).into_iter().filter(|ancestor| {
             self.kind(*ancestor) == ObservationType::Llm
                 && self
@@ -126,12 +138,11 @@ impl<'a> Resolution<'a> {
                             || self.kind(descendant) != ObservationType::Llm
                     })
         });
-        let ids: BTreeSet<CallKey> = std::iter::once(call)
+        std::iter::once(call)
             .chain(wrappers)
             .chain(self.graph.descendants(call))
             .flat_map(|source| spend::call_ids(self.row(source)))
-            .collect();
-        spend::requests(&ids, self.spend)
+            .collect()
     }
 
     pub(super) fn unique_tools(&self) -> Vec<usize> {
