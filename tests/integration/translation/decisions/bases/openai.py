@@ -2,10 +2,6 @@ from typing import Final
 
 from integration.translation.case import TranslationTestCase
 
-"""OpenAI Decisions: LiteLLM forwards the request as is.
-
-Spec: https://developers.openai.com/api/docs/guides/decisions. Mock reply captured live on 2026-10-06.
-"""
 GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/decisions",

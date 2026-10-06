@@ -3,6 +3,7 @@ from typing import Final
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import PAYLOAD_ADAPTER, BaseDecisionsConfig
 from litellm.types.decisions import DecisionsRequest, DecisionsResponse
@@ -11,14 +12,15 @@ _RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(Decisions
 
 
 class OpenAIDecisionsConfig(BaseDecisionsConfig):
-    """OpenAI's own Decisions API: the LiteLLM shape is its shape, so nothing is translated."""
-
     path = "/v1/decisions"
     api_key_env = ("OPENAI_API_KEY",)
     api_base_env = ("OPENAI_BASE_URL", "OPENAI_API_BASE")
 
     def get_default_api_base(self) -> str | None:
         return "https://api.openai.com"
+
+    def resolve_api_key(self, api_key: str | None) -> str | None:
+        return api_key or litellm.api_key or litellm.openai_key or self._first_secret(self.api_key_env)
 
     def transform_decisions_request(
         self,

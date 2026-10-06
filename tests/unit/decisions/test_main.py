@@ -230,6 +230,20 @@ async def test_openai_decisions_are_forwarded_without_translation(respx_mock: re
 
 
 @pytest.mark.asyncio
+async def test_openai_decisions_fall_back_to_the_global_openai_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", "global-openai-key")
+
+    await litellm.adecisions(model="openai/gpt-6-luna", input=_INPUT, questions=_predicate())
+
+    assert respx_mock.calls[0].request.headers["authorization"] == "Bearer global-openai-key"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("label", "input_value", "questions"),
     (
