@@ -160,14 +160,32 @@ class TestTokenLabCostMap:
     def test_chat_cost_is_wired(self):
         prompt_cost, completion_cost = litellm.cost_per_token(
             model="tokenlab/gpt-5.5",
-            prompt_tokens=1_000_000,
-            completion_tokens=1_000_000,
+            prompt_tokens=100_000,
+            completion_tokens=100_000,
         )
-        assert prompt_cost == pytest.approx(litellm.model_cost["tokenlab/gpt-5.5"]["input_cost_per_token"] * 1_000_000)
+        assert prompt_cost == pytest.approx(litellm.model_cost["tokenlab/gpt-5.5"]["input_cost_per_token"] * 100_000)
         assert completion_cost == pytest.approx(
-            litellm.model_cost["tokenlab/gpt-5.5"]["output_cost_per_token"] * 1_000_000
+            litellm.model_cost["tokenlab/gpt-5.5"]["output_cost_per_token"] * 100_000
         )
         assert prompt_cost > 0 and completion_cost > 0
+
+    def test_chat_cost_uses_the_long_context_tier(self):
+        assert (
+            litellm.model_cost["tokenlab/gpt-5.5"]["input_cost_per_token_above_272k_tokens"]
+            > litellm.model_cost["tokenlab/gpt-5.5"]["input_cost_per_token"]
+        )
+
+        prompt_cost, completion_cost = litellm.cost_per_token(
+            model="tokenlab/gpt-5.5",
+            prompt_tokens=300_000,
+            completion_tokens=100_000,
+        )
+        assert prompt_cost == pytest.approx(
+            litellm.model_cost["tokenlab/gpt-5.5"]["input_cost_per_token_above_272k_tokens"] * 300_000
+        )
+        assert completion_cost == pytest.approx(
+            litellm.model_cost["tokenlab/gpt-5.5"]["output_cost_per_token_above_272k_tokens"] * 100_000
+        )
 
     def test_embedding_cost_is_wired(self):
         prompt_cost, completion_cost = litellm.cost_per_token(
