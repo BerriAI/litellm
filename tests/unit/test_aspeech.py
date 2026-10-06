@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import httpx
 import pytest
@@ -51,6 +52,12 @@ async def test_aspeech_sync_provider_called_once_with_marker(monkeypatch):
 
     assert len(calls) == 1, "sync provider must be called exactly once"
     assert response.content == marker, "returned audio must come from that single call"
+    # success_handler is submitted to litellm's bounded logging thread-pool
+    # executor; poll briefly instead of assuming it flushed before the await
+    # returned (this is what makes the assertion stable on slow CI runners).
+    deadline = time.monotonic() + 5
+    while not cost_records and time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
     assert len(cost_records) == 1, "exactly one usage/cost record per call"
 
 
