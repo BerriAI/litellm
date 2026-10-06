@@ -139,6 +139,8 @@ class HealthCheckCacheParams(BaseModel):
 
 EMBEDDING_CACHE_FORMAT_VERSION: Final = 2
 
+CACHED_STREAM_EVENTS_KEY: Final = "litellm_cached_anthropic_sse_events"
+
 
 class CachedEmbedding(TypedDict):
     """Type definition for cached embedding objects"""
