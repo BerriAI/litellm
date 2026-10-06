@@ -141,6 +141,18 @@ def test_unsupported_audio_formats_are_rejected_without_starting_the_stream(audi
     assert _start_request(config.transform_realtime_request(_append(), MODEL))["sample_rate"] == 24_000
 
 
+@pytest.mark.parametrize(
+    ("audio_input", "sample_rate"),
+    [({"format": {"type": "audio/pcm"}}, 24_000), ({"input_audio_format": "pcm16"}, 24_000)],
+)
+def test_pcm16_without_a_rate_streams_at_the_openai_default_rate(audio_input: dict[str, object], sample_rate: int):
+    config = SonioxRealtimeConfig()
+
+    frames = config.transform_realtime_request(_session_update(audio_input), MODEL)
+
+    assert _start_request(frames)["sample_rate"] == sample_rate
+
+
 def test_validate_environment_sends_the_key_as_a_bearer_header(monkeypatch):
     monkeypatch.setenv("SONIOX_API_KEY", "env-key")
     config = SonioxRealtimeConfig()
@@ -343,6 +355,7 @@ class _RecordingBackend:
         self.upstream: Final[asyncio.Queue[str]] = asyncio.Queue()
         self.entered = False
         self.exited = False
+        self.closed = False
 
     async def __aenter__(self) -> "_RecordingBackend":
         self.entered = True
@@ -358,7 +371,12 @@ class _RecordingBackend:
         return await self.upstream.get()
 
     async def close(self) -> None:
-        return None
+        self.closed = True
+
+
+class _BrokenBackend(_RecordingBackend):
+    async def send(self, message: str | bytes) -> None:
+        raise ConnectionError("upstream gone")
 
 
 @pytest.mark.asyncio
@@ -406,3 +424,45 @@ async def test_backend_announces_the_session_once_the_start_request_is_sent_whil
         await backend.send('{"model":"ignored-second-config"}')
         await inner.upstream.put('{"tokens":[]}')
         assert await backend.recv() == '{"tokens":[]}'
+
+
+@pytest.mark.asyncio
+async def test_backend_relays_upstream_frames_that_arrive_before_the_session_starts():
+    inner = _RecordingBackend()
+
+    async with SonioxRealtimeBackend(inner) as backend:
+        await inner.upstream.put('{"error_code":401,"error_message":"Invalid API key."}')
+
+        assert await backend.recv() == '{"error_code":401,"error_message":"Invalid API key."}'
+
+
+@pytest.mark.asyncio
+async def test_closing_the_backend_cancels_pending_reads_and_closes_upstream():
+    inner = _RecordingBackend()
+    backend = SonioxRealtimeBackend(inner)
+    await backend.__aenter__()
+    pending = asyncio.create_task(backend.recv())
+    await backend.send('{"model":"stt-rt-v5"}')
+    assert await pending == SESSION_STARTED_FRAME
+
+    await backend.close()
+    await inner.upstream.put('{"tokens":[]}')
+    await asyncio.sleep(0)
+
+    assert inner.closed
+    assert inner.upstream.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_keepalive_stops_after_the_upstream_rejects_a_send():
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        await asyncio.sleep(0)
+
+    async with SonioxRealtimeBackend(_BrokenBackend(), keepalive_interval=0.0, sleep=sleep):
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    assert sleeps == [0.0]

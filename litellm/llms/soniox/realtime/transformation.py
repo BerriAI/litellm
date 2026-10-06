@@ -1,7 +1,7 @@
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from types import TracebackType
+from types import MappingProxyType, TracebackType
 from typing import Final
 from urllib.parse import urlparse
 
@@ -12,6 +12,7 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transcription_protocol import (
+    SESSION_UPDATE_EVENT_TYPES,
     RealtimeTranscriptionProtocolError,
     TranscriptionSessionUpdate,
     completed_event,
@@ -41,6 +42,9 @@ _FINALIZE: Final = '{"type":"finalize"}'
 _KEEPALIVE: Final = '{"type":"keepalive"}'
 _END_STREAM: Final = ""
 _CONTROL_FRAMES: Final = frozenset((_FINALIZE, _KEEPALIVE, _END_STREAM))
+_CLIENT_CONTROL_FRAMES: Final = MappingProxyType(
+    {"input_audio_buffer.commit": _FINALIZE, "input_audio_buffer.end": _END_STREAM}
+)
 SESSION_STARTED_FRAME: Final = '{"type":"litellm.soniox.session_started"}'
 _ENDPOINT_TOKEN: Final = "<end>"
 _FINALIZED_TOKEN: Final = "<fin>"
@@ -217,7 +221,7 @@ class SonioxRealtimeBackend:
         self._interval: Final = keepalive_interval
         self._clock: Final = clock
         self._sleep: Final = sleep
-        self._local_frames: Final[asyncio.Queue[str]] = asyncio.Queue()
+        self._local_frames: Final[asyncio.Queue[str]] = asyncio.Queue(maxsize=1)
         self._last_sent: float = clock()
         self._started: bool = False
         self._ended: bool = False
@@ -247,8 +251,6 @@ class SonioxRealtimeBackend:
             self._local_frames.put_nowait(SESSION_STARTED_FRAME)
 
     async def recv(self, decode: bool | None = None) -> str | bytes:
-        if not self._local_frames.empty():
-            return self._local_frames.get_nowait()
         upstream: Final = self._upstream_recv or asyncio.create_task(self._inner.recv(decode))
         local: Final = asyncio.create_task(self._local_frames.get())
         done, _ = await asyncio.wait((upstream, local), return_when=asyncio.FIRST_COMPLETED)
@@ -326,19 +328,17 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         session_configuration_request: str | None = None,
     ) -> tuple[str | bytes, ...]:
         request: Final = json_object(message, SonioxProtocolError)
-        match request.get("type"):
-            case "session.update" | "transcription_session.update":
-                return self._start(model, parse_transcription_session_update(message, SonioxProtocolError))
-            case "input_audio_buffer.append":
-                audio: Final = decode_pcm16_append(request.get("audio"), error=SonioxProtocolError)
-                return (*self._start(model, None), audio)
-            case "input_audio_buffer.commit":
-                return (*self._start(model, None), _FINALIZE)
-            case "input_audio_buffer.end":
-                return (*self._start(model, None), _END_STREAM)
-            case event_type:
-                verbose_logger.debug("Soniox realtime: dropping unsupported client event %s", event_type)
-                return ()
+        event_type: Final = request.get("type")
+        if event_type in SESSION_UPDATE_EVENT_TYPES:
+            return self._start(model, parse_transcription_session_update(message, SonioxProtocolError))
+        if event_type == "input_audio_buffer.append":
+            audio: Final = decode_pcm16_append(request.get("audio"), error=SonioxProtocolError)
+            return (*self._start(model, None), audio)
+        control_frame: Final = _CLIENT_CONTROL_FRAMES.get(event_type) if isinstance(event_type, str) else None
+        if control_frame is None:
+            verbose_logger.debug("Soniox realtime: dropping unsupported client event %s", event_type)
+            return ()
+        return (*self._start(model, None), control_frame)
 
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         return self._transformer.take_unbilled_usage()
