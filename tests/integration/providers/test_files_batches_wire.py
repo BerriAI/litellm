@@ -8,7 +8,7 @@ from email.message import Message
 from email.parser import BytesParser
 from email.policy import HTTP
 from functools import partial
-from typing import Final
+from typing import Final, Literal, assert_never
 from urllib.parse import urlsplit
 
 import httpx
@@ -28,6 +28,10 @@ JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 MANAGED_FILE_ROW: Final = (
     'SELECT model_mappings, flat_model_file_ids FROM "LiteLLM_ManagedFileTable" WHERE unified_file_id = %s'
 )
+_BatchUploadSpelling = Literal["sdk_list", "repeated_bracket", "indexed", "comma_joined"]
+_ModelRoutedSpelling = Literal["sdk_extra_body", "multipart_field", "query_param", "model_header"]
+_ContentRoute = Literal["v1_encoded", "files_encoded", "files_raw_query", "v1_raw_header"]
+_BatchCreateSpelling = Literal["encoded_input", "body_model", "query_model", "header_model", "sanitized_metadata"]
 
 
 def _jsonl(model: str) -> bytes:
@@ -213,39 +217,33 @@ def _multiplexed_openai_backends(
     return respond
 
 
-def _managed_upload(gateway: Gateway, spelling: str, fields: Mapping[str, object]) -> str:
+def _managed_upload(gateway: Gateway, spelling: _BatchUploadSpelling, fields: Mapping[str, object]) -> str:
     key: Final = gateway.key
-    if spelling == "sdk_list":
-        with OpenAI(base_url=_sdk_base_url(gateway), api_key=key, max_retries=0) as client:
-            created: Final = client.files.create(
-                file=(INPUT_FILENAME, _jsonl("uploaded-model")), purpose="batch", extra_body=fields
+    match spelling:
+        case "sdk_list":
+            with OpenAI(base_url=_sdk_base_url(gateway), api_key=key, max_retries=0) as client:
+                return client.files.create(
+                    file=(INPUT_FILENAME, _jsonl("uploaded-model")), purpose="batch", extra_body=fields
+                ).id
+        case "repeated_bracket" | "indexed":
+            posted: Final = gateway.client.post(
+                "/v1/files",
+                data={"purpose": "batch", **fields},
+                files={"file": (INPUT_FILENAME, _jsonl("uploaded-model"), "application/jsonl")},
+                headers={"Authorization": f"Bearer {key}"},
             )
-        return created.id
-    if spelling == "repeated_bracket":
-        response: Final = gateway.client.post(
-            "/v1/files",
-            data={"purpose": "batch", **fields},
-            files={"file": (INPUT_FILENAME, _jsonl("uploaded-model"), "application/jsonl")},
-            headers={"Authorization": f"Bearer {key}"},
-        )
-        assert response.status_code == 200, response.text
-        return string_value(_json(response)["id"])
-    if spelling == "indexed":
-        response = gateway.client.post(
-            "/v1/files",
-            data={"purpose": "batch", **fields},
-            files={"file": (INPUT_FILENAME, _jsonl("uploaded-model"), "application/jsonl")},
-            headers={"Authorization": f"Bearer {key}"},
-        )
-        assert response.status_code == 200, response.text
-        return string_value(_json(response)["id"])
-    response = gateway.request_multipart(
-        "/v1/files",
-        {"purpose": "batch", **fields},
-        {"file": (INPUT_FILENAME, _jsonl("uploaded-model"), "application/jsonl")},
-    )
-    assert response.status_code == 200, response.text
-    return string_value(_json(response)["id"])
+            assert posted.status_code == 200, posted.text
+            return string_value(_json(posted)["id"])
+        case "comma_joined":
+            created: Final = gateway.request_multipart(
+                "/v1/files",
+                {"purpose": "batch", **fields},
+                {"file": (INPUT_FILENAME, _jsonl("uploaded-model"), "application/jsonl")},
+            )
+            assert created.status_code == 200, created.text
+            return string_value(_json(created)["id"])
+        case _:
+            assert_never(spelling)
 
 
 @pytest.mark.parametrize(
@@ -253,7 +251,9 @@ def _managed_upload(gateway: Gateway, spelling: str, fields: Mapping[str, object
     ["sdk_list", "repeated_bracket", "indexed", "comma_joined"],
     ids=["sdk-list-extra-body", "multipart-repeated-bracket", "multipart-indexed", "multipart-comma-joined"],
 )
-def test_batch_upload_to_two_target_models_reaches_each_deployment(gateway: Gateway, spelling: str) -> None:
+def test_batch_upload_to_two_target_models_reaches_each_deployment(
+    gateway: Gateway, spelling: _BatchUploadSpelling
+) -> None:
     key_a: Final = "provider-key-a-" + uuid.uuid4().hex[:8]
     key_b: Final = "provider-key-b-" + uuid.uuid4().hex[:8]
     with wire_server(_multiplexed_openai_backends()) as wire, gateway.scenario() as scenario:
@@ -299,52 +299,58 @@ def test_batch_upload_to_two_target_models_reaches_each_deployment(gateway: Gate
         assert _drained_other_than_model_list_probes(wire) == ()
 
 
-@pytest.mark.parametrize(
-    "spelling",
-    ["sdk_extra_body", "multipart_field", "query_param", "model_header"],
-    ids=["sdk-extra-body-model", "multipart-model-field", "query-model", "x-litellm-model-header"],
-)
-def test_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_back(
-    gateway: Gateway, spelling: str
-) -> None:
-    key: Final = "provider-key-" + uuid.uuid4().hex[:8]
-    uploaded: Final = _jsonl("uploaded-model")
-    with wire_server(_multiplexed_openai_backends()) as wire, gateway.scenario() as scenario:
-        alias: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key)
-        _wait_until_every_worker_serves(gateway, alias)
-        if spelling == "sdk_extra_body":
+def _model_routed_upload(gateway: Gateway, spelling: _ModelRoutedSpelling, alias: str, uploaded: bytes) -> str:
+    match spelling:
+        case "sdk_extra_body":
             with OpenAI(base_url=_sdk_base_url(gateway), api_key=gateway.key, max_retries=0) as client:
-                created: Final = client.files.create(
+                return client.files.create(
                     file=(INPUT_FILENAME, uploaded), purpose="batch", extra_body={"model": alias}
-                )
-            encoded: Final = created.id
-        elif spelling == "multipart_field":
-            uploaded_response: Final = gateway.request_multipart(
+                ).id
+        case "multipart_field":
+            created: Final = gateway.request_multipart(
                 "/v1/files",
                 {"purpose": "batch", "model": alias},
                 {"file": (INPUT_FILENAME, uploaded, "application/jsonl")},
             )
-            assert uploaded_response.status_code == 200, uploaded_response.text
-            encoded = string_value(_json(uploaded_response)["id"])
-        elif spelling == "query_param":
-            response: Final = gateway.client.post(
+            assert created.status_code == 200, created.text
+            return string_value(_json(created)["id"])
+        case "query_param":
+            queried: Final = gateway.client.post(
                 "/v1/files",
                 params={"model": alias},
                 data={"purpose": "batch"},
                 files={"file": (INPUT_FILENAME, uploaded, "application/jsonl")},
                 headers={"Authorization": f"Bearer {gateway.key}"},
             )
-            assert response.status_code == 200, response.text
-            encoded = string_value(_json(response)["id"])
-        else:
-            response = gateway.client.post(
+            assert queried.status_code == 200, queried.text
+            return string_value(_json(queried)["id"])
+        case "model_header":
+            headed: Final = gateway.client.post(
                 "/v1/files",
                 data={"purpose": "batch"},
                 files={"file": (INPUT_FILENAME, uploaded, "application/jsonl")},
                 headers={"Authorization": f"Bearer {gateway.key}", "x-litellm-model": alias},
             )
-            assert response.status_code == 200, response.text
-            encoded = string_value(_json(response)["id"])
+            assert headed.status_code == 200, headed.text
+            return string_value(_json(headed)["id"])
+        case _:
+            assert_never(spelling)
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["sdk_extra_body", "multipart_field", "query_param", "model_header"],
+    ids=["sdk-extra-body-model", "multipart-model-field", "query-model", "x-litellm-model-header"],
+)
+def test_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_back(
+    gateway: Gateway, spelling: _ModelRoutedSpelling
+) -> None:
+    key: Final = "provider-key-" + uuid.uuid4().hex[:8]
+    uploaded: Final = _jsonl("uploaded-model")
+    with wire_server(_multiplexed_openai_backends()) as wire, gateway.scenario() as scenario:
+        alias: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key)
+        _wait_until_every_worker_serves(gateway, alias)
+        encoded: Final = _model_routed_upload(gateway, spelling, alias, uploaded)
 
         expected_encoded: Final = encode_file_id_with_model(file_id=f"file-{key}", model=alias)
         assert encoded == expected_encoded, encoded
@@ -390,6 +396,22 @@ def _encoded_output_file_id(gateway: Gateway, alias: str, bearer_key: str) -> tu
     return batch.output_file_id, f"file-out-{bearer_key}"
 
 
+def _download_file_content(
+    gateway: Gateway, route: _ContentRoute, encoded_output: str, raw_output: str, alias: str
+) -> httpx.Response:
+    match route:
+        case "v1_encoded":
+            return gateway.request("GET", f"/v1/files/{encoded_output}/content")
+        case "files_encoded":
+            return gateway.request("GET", f"/files/{encoded_output}/content")
+        case "files_raw_query":
+            return gateway.request("GET", f"/files/{raw_output}/content", params={"model": alias})
+        case "v1_raw_header":
+            return gateway.request("GET", f"/v1/files/{raw_output}/content", headers={"x-litellm-model": alias})
+        case _:
+            assert_never(route)
+
+
 @pytest.mark.parametrize("provider", ["openai", "azure"], ids=["openai-streaming", "azure-non-streaming"])
 @pytest.mark.parametrize(
     "route",
@@ -397,7 +419,7 @@ def _encoded_output_file_id(gateway: Gateway, alias: str, bearer_key: str) -> tu
     ids=["v1-files-encoded", "files-encoded", "files-raw-model-query", "v1-files-raw-model-header"],
 )
 def test_batch_output_file_content_downloads_through_the_model_encoded_id(
-    gateway: Gateway, provider: str, route: str
+    gateway: Gateway, provider: str, route: _ContentRoute
 ) -> None:
     key: Final = f"provider-key-{provider}-" + uuid.uuid4().hex[:8]
     with wire_server(_multiplexed_openai_backends()) as wire, gateway.scenario() as scenario:
@@ -432,14 +454,7 @@ def test_batch_output_file_content_downloads_through_the_model_encoded_id(
             ("GET", expected_content_target),
         ], [(r.method, r.target) for r in settled]
 
-        if route == "v1_encoded":
-            response: Final = gateway.request("GET", f"/v1/files/{encoded_output}/content")
-        elif route == "files_encoded":
-            response = gateway.request("GET", f"/files/{encoded_output}/content")
-        elif route == "files_raw_query":
-            response = gateway.request("GET", f"/files/{raw_output}/content", params={"model": alias})
-        else:
-            response = gateway.request("GET", f"/v1/files/{raw_output}/content", headers={"x-litellm-model": alias})
+        response: Final = _download_file_content(gateway, route, encoded_output, raw_output, alias)
         assert response.status_code == 200, response.text
         assert response.content == OUTPUT_BYTES, response.text
         (content_request,) = _drained_other_than_model_list_probes(wire)
@@ -453,12 +468,66 @@ def test_batch_output_file_content_downloads_through_the_model_encoded_id(
             assert content_request.headers["api-key"] == key, content_request.headers
 
 
+def _encoded_batch_input(
+    gateway: Gateway, spelling: _BatchCreateSpelling, alias: str, wire: Wire, raw_input: str
+) -> str:
+    if spelling == "encoded_input":
+        uploaded: Final = gateway.request_multipart(
+            "/v1/files",
+            {"purpose": "batch", "model": alias},
+            {"file": (INPUT_FILENAME, _jsonl("uploaded-model"), "application/jsonl")},
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        wire.drain()
+        return string_value(_json(uploaded)["id"])
+    return encode_file_id_with_model(file_id=raw_input, model=alias)
+
+
+def _created_batch(
+    gateway: Gateway, spelling: _BatchCreateSpelling, encoded_input: str, raw_input: str, alias: str
+) -> _Batch:
+    if spelling == "sanitized_metadata":
+        created: Final = gateway.request(
+            "POST",
+            "/v1/batches",
+            {
+                "input_file_id": raw_input,
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "metadata": {"job": "x", "attempt": 2},
+                "model": alias,
+            },
+        )
+        assert created.status_code == 200, created.text
+        return _Batch.model_validate_json(created.content)
+    with OpenAI(base_url=_sdk_base_url(gateway), api_key=gateway.key, max_retries=0) as client:
+        extra: Final = (
+            {}
+            if spelling == "encoded_input"
+            else {"extra_body": {"model": alias}}
+            if spelling == "body_model"
+            else {"extra_query": {"model": alias}}
+            if spelling == "query_model"
+            else {"extra_headers": {"x-litellm-model": alias}}
+        )
+        sdk_batch: Final = client.batches.create(
+            input_file_id=encoded_input if spelling == "encoded_input" else raw_input,
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+            metadata={"job": "x"},
+            **extra,
+        )
+    return _Batch.model_validate(sdk_batch.model_dump())
+
+
 @pytest.mark.parametrize(
     "spelling",
     ["encoded_input", "body_model", "query_model", "header_model", "sanitized_metadata"],
     ids=["encoded-input-id", "body-model", "query-model", "x-litellm-model-header", "non-string-metadata-dropped"],
 )
-def test_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(gateway: Gateway, spelling: str) -> None:
+def test_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(
+    gateway: Gateway, spelling: _BatchCreateSpelling
+) -> None:
     key: Final = "provider-key-" + uuid.uuid4().hex[:8]
     raw_input: Final = f"file-in-{key}"
     raw_batch: Final = f"batch-{key}"
@@ -468,52 +537,8 @@ def test_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(gatew
     with wire_server(_multiplexed_openai_backends(created_batch)) as wire, gateway.scenario() as scenario:
         alias: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key)
         _wait_until_every_worker_serves(gateway, alias)
-        if spelling == "encoded_input":
-            uploaded: Final = gateway.request_multipart(
-                "/v1/files",
-                {"purpose": "batch", "model": alias},
-                {"file": (INPUT_FILENAME, _jsonl("uploaded-model"), "application/jsonl")},
-            )
-            assert uploaded.status_code == 200, uploaded.text
-            wire.drain()
-            encoded_input: Final = string_value(_json(uploaded)["id"])
-        else:
-            encoded_input = encode_file_id_with_model(file_id=raw_input, model=alias)
-
-        if spelling == "sanitized_metadata":
-            created: Final = gateway.request(
-                "POST",
-                "/v1/batches",
-                {
-                    "input_file_id": raw_input,
-                    "endpoint": "/v1/chat/completions",
-                    "completion_window": "24h",
-                    "metadata": {"job": "x", "attempt": 2},
-                    "model": alias,
-                },
-            )
-            assert created.status_code == 200, created.text
-            created_batch_payload: Final = _Batch.model_validate_json(created.content)
-        else:
-            with OpenAI(base_url=_sdk_base_url(gateway), api_key=gateway.key, max_retries=0) as client:
-                extra: Final = (
-                    {}
-                    if spelling == "encoded_input"
-                    else {"extra_body": {"model": alias}}
-                    if spelling == "body_model"
-                    else {"extra_query": {"model": alias}}
-                    if spelling == "query_model"
-                    else {"extra_headers": {"x-litellm-model": alias}}
-                )
-                sent_input: Final = encoded_input if spelling == "encoded_input" else raw_input
-                sdk_batch: Final = client.batches.create(
-                    input_file_id=sent_input,
-                    endpoint="/v1/chat/completions",
-                    completion_window="24h",
-                    metadata={"job": "x"},
-                    **extra,
-                )
-            created_batch_payload = _Batch.model_validate(sdk_batch.model_dump())
+        encoded_input: Final = _encoded_batch_input(gateway, spelling, alias, wire, raw_input)
+        created_batch_payload: Final = _created_batch(gateway, spelling, encoded_input, raw_input, alias)
 
         expected_raw_input: Final = f"file-{key}" if spelling == "encoded_input" else raw_input
         expected_input: Final = (

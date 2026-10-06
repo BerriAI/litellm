@@ -5,7 +5,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
-from typing import Final
+from typing import Final, Literal, assert_never
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -22,6 +22,16 @@ MANAGED_FILE_ROW: Final = 'SELECT model_mappings, flat_model_file_ids, created_b
 INPUT_FILENAME: Final = "in.jsonl"
 MANAGED_PREFIX: Final = "litellm_proxy:"
 BUCKET: Final = "integration-delete-bucket"
+_ForbiddenSurface = Literal[
+    "upload_form",
+    "upload_query",
+    "upload_header",
+    "batch_encoded_input",
+    "batch_body_model",
+    "file_get_encoded",
+    "file_content_encoded",
+    "batch_get_encoded",
+]
 
 
 def _jsonl(model: str) -> bytes:
@@ -247,6 +257,70 @@ def test_stranger_cannot_retrieve_or_cancel_another_teams_managed_batch(gateway:
         assert cancel_request.headers["authorization"] == f"Bearer {key}", cancel_request.headers
 
 
+def _forbidden_surface_request(
+    gateway: Gateway,
+    surface: _ForbiddenSurface,
+    forbidden: str,
+    caller_key: str,
+    encoded_file: str,
+    encoded_batch: str,
+) -> httpx.Response:
+    match surface:
+        case "upload_form":
+            return gateway.request_multipart(
+                "/v1/files",
+                {"purpose": "batch", "model": forbidden},
+                {"file": (INPUT_FILENAME, _jsonl(forbidden), "application/jsonl")},
+                key=caller_key,
+            )
+        case "upload_query":
+            return gateway.client.post(
+                "/v1/files",
+                params={"model": forbidden},
+                data={"purpose": "batch"},
+                files={"file": (INPUT_FILENAME, _jsonl(forbidden), "application/jsonl")},
+                headers={"Authorization": f"Bearer {caller_key}"},
+            )
+        case "upload_header":
+            return gateway.client.post(
+                "/v1/files",
+                data={"purpose": "batch"},
+                files={"file": (INPUT_FILENAME, _jsonl(forbidden), "application/jsonl")},
+                headers={"Authorization": f"Bearer {caller_key}", "x-litellm-model": forbidden},
+            )
+        case "batch_encoded_input":
+            return gateway.request(
+                "POST",
+                "/v1/batches",
+                {
+                    "input_file_id": encoded_file,
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                },
+                key=caller_key,
+            )
+        case "batch_body_model":
+            return gateway.request(
+                "POST",
+                "/v1/batches",
+                {
+                    "input_file_id": "file-raw-x",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                    "model": forbidden,
+                },
+                key=caller_key,
+            )
+        case "file_get_encoded":
+            return gateway.request("GET", f"/v1/files/{encoded_file}", key=caller_key)
+        case "file_content_encoded":
+            return gateway.request("GET", f"/v1/files/{encoded_file}/content", key=caller_key)
+        case "batch_get_encoded":
+            return gateway.request("GET", f"/v1/batches/{encoded_batch}", key=caller_key)
+        case _:
+            assert_never(surface)
+
+
 @pytest.mark.parametrize(
     "surface",
     [
@@ -271,7 +345,7 @@ def test_stranger_cannot_retrieve_or_cancel_another_teams_managed_batch(gateway:
     ],
 )
 def test_a_key_granted_one_model_cannot_spend_another_deployments_files_or_batches(
-    gateway: Gateway, surface: str
+    gateway: Gateway, surface: _ForbiddenSurface
 ) -> None:
     key_allowed: Final = "provider-key-allowed-" + uuid.uuid4().hex[:8]
     key_forbidden: Final = "provider-key-forbidden-" + uuid.uuid4().hex[:8]
@@ -286,57 +360,9 @@ def test_a_key_granted_one_model_cannot_spend_another_deployments_files_or_batch
         encoded_forbidden_batch: Final = encode_file_id_with_model(
             file_id="batch_raw_x", model=forbidden, id_type="batch"
         )
-        if surface == "upload_form":
-            response: Final = gateway.request_multipart(
-                "/v1/files",
-                {"purpose": "batch", "model": forbidden},
-                {"file": (INPUT_FILENAME, _jsonl(forbidden), "application/jsonl")},
-                key=caller.key,
-            )
-        elif surface == "upload_query":
-            response = gateway.client.post(
-                "/v1/files",
-                params={"model": forbidden},
-                data={"purpose": "batch"},
-                files={"file": (INPUT_FILENAME, _jsonl(forbidden), "application/jsonl")},
-                headers={"Authorization": f"Bearer {caller.key}"},
-            )
-        elif surface == "upload_header":
-            response = gateway.client.post(
-                "/v1/files",
-                data={"purpose": "batch"},
-                files={"file": (INPUT_FILENAME, _jsonl(forbidden), "application/jsonl")},
-                headers={"Authorization": f"Bearer {caller.key}", "x-litellm-model": forbidden},
-            )
-        elif surface == "batch_encoded_input":
-            response = gateway.request(
-                "POST",
-                "/v1/batches",
-                {
-                    "input_file_id": encoded_forbidden_file,
-                    "endpoint": "/v1/chat/completions",
-                    "completion_window": "24h",
-                },
-                key=caller.key,
-            )
-        elif surface == "batch_body_model":
-            response = gateway.request(
-                "POST",
-                "/v1/batches",
-                {
-                    "input_file_id": "file-raw-x",
-                    "endpoint": "/v1/chat/completions",
-                    "completion_window": "24h",
-                    "model": forbidden,
-                },
-                key=caller.key,
-            )
-        elif surface == "file_get_encoded":
-            response = gateway.request("GET", f"/v1/files/{encoded_forbidden_file}", key=caller.key)
-        elif surface == "file_content_encoded":
-            response = gateway.request("GET", f"/v1/files/{encoded_forbidden_file}/content", key=caller.key)
-        else:
-            response = gateway.request("GET", f"/v1/batches/{encoded_forbidden_batch}", key=caller.key)
+        response: Final = _forbidden_surface_request(
+            gateway, surface, forbidden, caller.key, encoded_forbidden_file, encoded_forbidden_batch
+        )
         assert response.status_code == 403, response.text
         assert _error_message(response, 403) == (
             f"The requested model '{forbidden}' is not available for this API key, or the model name is invalid. "
