@@ -78,7 +78,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_or_create_hidden_params
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_param
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
     is_unbilled_non_inference_call,
@@ -3251,14 +3251,12 @@ class Logging(LiteLLMLoggingBaseClass):
             batch_successful_requests: Final = kwargs.get("batch_successful_requests", None)
             batch_failed_requests: Final = kwargs.get("batch_failed_requests", None)
             has_explicit_batch_data: Final = all(x is not None for x in (batch_cost, batch_usage, batch_models))
-            result_hidden_params: Final = get_or_create_hidden_params(result)
-
             should_compute_batch_data: Final = not has_explicit_batch_data and batch_cost_is_final(result)
             if has_explicit_batch_data:
-                result_hidden_params["response_cost"] = batch_cost
-                result_hidden_params["batch_models"] = batch_models
-                result_hidden_params["batch_successful_requests"] = batch_successful_requests
-                result_hidden_params["batch_failed_requests"] = batch_failed_requests
+                set_hidden_param(result, "response_cost", batch_cost)
+                set_hidden_param(result, "batch_models", batch_models)
+                set_hidden_param(result, "batch_successful_requests", batch_successful_requests)
+                set_hidden_param(result, "batch_failed_requests", batch_failed_requests)
                 result.usage = batch_usage
                 batch_prompt_cost: Final = kwargs.get("batch_prompt_cost", None)
                 batch_completion_cost: Final = kwargs.get("batch_completion_cost", None)
@@ -3283,10 +3281,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     model_info=self.get_router_deployment_model_info(),
                 )
 
-                result_hidden_params["response_cost"] = batch_result.cost
-                result_hidden_params["batch_models"] = batch_result.models
-                result_hidden_params["batch_successful_requests"] = batch_result.successful_requests
-                result_hidden_params["batch_failed_requests"] = batch_result.failed_requests
+                set_hidden_param(result, "response_cost", batch_result.cost)
+                set_hidden_param(result, "batch_models", batch_result.models)
+                set_hidden_param(result, "batch_successful_requests", batch_result.successful_requests)
+                set_hidden_param(result, "batch_failed_requests", batch_result.failed_requests)
                 result.usage = batch_result.usage
                 self.set_cost_breakdown(
                     input_cost=batch_result.prompt_cost,

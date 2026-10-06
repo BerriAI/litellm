@@ -15,7 +15,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_param
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import (
@@ -244,7 +244,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         try:
             if isinstance(response, ModelResponse):
-                response_hidden_params: Final = get_or_create_hidden_params(response)
+                response_hidden_params: Final = getattr(response, HIDDEN_PARAMS_ATTR)
                 model_info: Final = self.llm_router.get_model_info(id=response_hidden_params["model_id"])
                 assert model_info is not None, "Model info for model with id={} is None".format(
                     response_hidden_params["model_id"]
@@ -257,14 +257,18 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                     model_rpm,
                     active_projects,
                 ) = await self.check_available_usage(model=model_info["model_name"], priority=key_priority)
-                response_hidden_params["additional_headers"] = {  # Add additional response headers - easier debugging
-                    "x-litellm-model_group": model_info["model_name"],
-                    "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
-                    "x-ratelimit-remaining-litellm-project-requests": available_rpm,
-                    "x-ratelimit-remaining-model-tokens": model_tpm,
-                    "x-ratelimit-remaining-model-requests": model_rpm,
-                    "x-ratelimit-current-active-projects": active_projects,
-                }
+                set_hidden_param(
+                    response,
+                    "additional_headers",
+                    {
+                        "x-litellm-model_group": model_info["model_name"],
+                        "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
+                        "x-ratelimit-remaining-litellm-project-requests": available_rpm,
+                        "x-ratelimit-remaining-model-tokens": model_tpm,
+                        "x-ratelimit-remaining-model-requests": model_rpm,
+                        "x-ratelimit-current-active-projects": active_projects,
+                    },
+                )
 
                 return response
             return await super().async_post_call_success_hook(

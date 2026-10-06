@@ -5,7 +5,7 @@ import httpx
 
 import litellm
 from litellm import stream_chunk_builder
-from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
@@ -115,8 +115,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 )
 
                 # Set the calculated cost in _hidden_params to prevent recalculation
-                litellm_model_response_hidden_params: Final = get_or_create_hidden_params(litellm_model_response)
-                litellm_model_response_hidden_params["response_cost"] = response_cost
+                set_hidden_param(litellm_model_response, "response_cost", response_cost)
 
                 kwargs["response_cost"] = response_cost
                 kwargs["model"] = model

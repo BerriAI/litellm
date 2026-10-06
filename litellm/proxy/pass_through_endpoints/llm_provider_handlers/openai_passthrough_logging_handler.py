@@ -13,7 +13,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
@@ -415,9 +415,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     model=model,
                     custom_llm_provider=custom_llm_provider,
                 )
-                embedding_hidden_params: Final = get_hidden_params(litellm_model_response)
-                if embedding_hidden_params is not None:
-                    embedding_hidden_params["response_cost"] = response_cost
+                set_hidden_param(litellm_model_response, "response_cost", response_cost)
             elif is_image_generation:
                 # Handle image generation cost calculation
                 response_cost = OpenAIPassthroughLoggingHandler._calculate_image_generation_cost(
@@ -436,8 +434,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     model=model,
                 )
                 # Set the calculated cost in _hidden_params to prevent recalculation
-                image_generation_hidden_params: Final = get_or_create_hidden_params(litellm_model_response)
-                image_generation_hidden_params["response_cost"] = response_cost
+                set_hidden_param(litellm_model_response, "response_cost", response_cost)
             elif is_image_editing:
                 # Handle image editing cost calculation
                 response_cost = OpenAIPassthroughLoggingHandler._calculate_image_editing_cost(
@@ -456,8 +453,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     model=model,
                 )
                 # Set the calculated cost in _hidden_params to prevent recalculation
-                image_editing_hidden_params: Final = get_or_create_hidden_params(litellm_model_response)
-                image_editing_hidden_params["response_cost"] = response_cost
+                set_hidden_param(litellm_model_response, "response_cost", response_cost)
             elif is_responses:
                 # Responses-API cost tracking — see
                 # `_build_responses_api_response_and_cost` for why this needs

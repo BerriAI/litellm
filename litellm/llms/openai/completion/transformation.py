@@ -4,7 +4,7 @@ Support for gpt model family
 
 from typing import Final
 
-from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionResponse
@@ -112,8 +112,10 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
             if "model" in response_object:
                 model_response_object.model = response_object["model"]
 
-            get_or_create_hidden_params(model_response_object)["original_response"] = (
-                response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
+            set_hidden_param(
+                model_response_object,
+                "original_response",
+                response_object,
             )
             return model_response_object
         except Exception as e:
