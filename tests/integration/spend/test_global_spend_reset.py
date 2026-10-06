@@ -6,15 +6,38 @@ import httpx
 import pytest
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
+from pydantic import JsonValue
 
 
-def _chat(gateway: Gateway, model: str, key: str) -> httpx.Response:
+def _chat(gateway: Gateway, model: str, key: str, content: str | None = None) -> httpx.Response:
     return gateway.request(
         "POST",
         "/v1/chat/completions",
-        {"model": model, "max_tokens": 20, "messages": [{"role": "user", "content": f"reset {uuid.uuid4().hex}"}]},
+        {
+            "model": model,
+            "max_tokens": 20,
+            "messages": [{"role": "user", "content": content or f"reset {uuid.uuid4().hex}"}],
+        },
         key=key,
     )
+
+
+def _observed(upstream: httpx.Client) -> list[JsonValue]:
+    response: Final = upstream.get("/__observations")
+    response.raise_for_status()
+    requests: Final = object_value(response.json())["requests"]
+    assert isinstance(requests, list), response.text
+    return requests
+
+
+def _upstream_chat(content: str) -> dict[str, JsonValue]:
+    return {
+        "path": "/v1/chat/completions",
+        "authorization": "Bearer integration-provider-key",
+        "body": {"model": "gpt-4o-mini", "max_tokens": 20, "messages": [{"role": "user", "content": content}]},
+        "method": "POST",
+        "api_key": "",
+    }
 
 
 def _token_spend(key: str) -> list[dict[str, object]]:
@@ -53,7 +76,10 @@ def _seed_spend(gateway: Gateway, model: str, team_id: str, key_a: str, key_b: s
 
 
 def test_global_spend_reset_zeroes_token_and_team_spend_but_keeps_logs(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
         team_id: Final = scenario.team()
         key_a: Final = scenario.key(team_id=team_id, models=[model], max_budget=0.06)
@@ -66,13 +92,23 @@ def test_global_spend_reset_zeroes_token_and_team_spend_but_keeps_logs(gateway: 
 
         refused: Final = gateway.request("POST", "/global/spend/reset", key=internal_key)
         assert refused.status_code == 401, refused.text
+        assert refused.json() == {
+            "error": {
+                "message": "Authentication Error, Tried to access route=/global/spend/reset, which is only for MASTER KEY",
+                "type": "auth_error",
+                "param": "None",
+                "code": "401",
+            }
+        }, refused.text
         assert float(str(_token_spend(key_a)[0]["spend"])) == pytest.approx(0.06), _token_spend(key_a)
         assert float(str(_token_spend(key_b)[0]["spend"])) == pytest.approx(0.06), _token_spend(key_b)
         assert float(str(_team_spend(team_id)[0]["spend"])) == pytest.approx(0.12), _team_spend(team_id)
 
+        _observed(upstream)
         denied: Final = _chat(gateway, model, key_a)
         assert denied.status_code == 422, denied.text
-        assert object_value(denied.json()["error"])["type"] == "budget_exceeded"
+        assert object_value(denied.json()["error"])["type"] == "budget_exceeded", denied.text
+        assert _observed(upstream) == [], denied.text
 
         reset: Final = gateway.request("POST", "/global/spend/reset")
         assert reset.status_code == 200, reset.text
@@ -108,6 +144,8 @@ def test_reset_exhausted_key_is_served_again(gateway: Gateway) -> None:
         assert denied.status_code == 422, denied.text
         reset: Final = gateway.request("POST", "/global/spend/reset")
         assert reset.status_code == 200, reset.text
-        upstream.get("/__observations").raise_for_status()
-        eventually(lambda: _chat(gateway, model, key), lambda response: response.status_code == 200, seconds=30)
-        assert len(upstream.get("/__observations").json()["requests"]) == 1
+        content: Final = f"restored {uuid.uuid4().hex}"
+        _observed(upstream)
+        restored: Final = _chat(gateway, model, key, content)
+        assert restored.status_code == 200, restored.text
+        assert _observed(upstream) == [_upstream_chat(content)], restored.text

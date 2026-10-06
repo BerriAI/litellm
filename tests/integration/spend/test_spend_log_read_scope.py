@@ -3,6 +3,7 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -271,6 +272,9 @@ def test_legacy_spend_logs_clamp_internal_user_filters_to_their_own_user(gateway
 
         by_key: Final = _legacy_spend_rows(gateway, key_a, {"api_key": key_b})
         assert by_key == [], by_key
+        hashed_key_b: Final = sha256(key_b.encode()).hexdigest()
+        by_hashed_key: Final = _legacy_spend_rows(gateway, key_a, {"api_key": hashed_key_b})
+        assert by_hashed_key == [], by_hashed_key
 
         by_request: Final = _legacy_spend_rows(gateway, key_a, {"request_id": request_b})
         assert by_request == [], by_request
@@ -291,3 +295,22 @@ def test_legacy_spend_logs_clamp_internal_user_filters_to_their_own_user(gateway
 
         master: Final = _legacy_spend_rows(gateway, gateway.key, {"user_id": user_b, "request_id": request_b})
         assert [string_value(object_value(row)["request_id"]) for row in master] == [request_b], master
+        for api_key in (key_b, hashed_key_b):
+            admin_by_key = _legacy_spend_rows(gateway, gateway.key, {"api_key": api_key})
+            assert [
+                (string_value(object_value(row)["request_id"]), object_value(row)["user"]) for row in admin_by_key
+            ] == [(request_b, user_b)], admin_by_key
+        summarized_by_key: Final = _legacy_spend_rows(gateway, key_a, {**window, "summarize": "true", "api_key": key_b})
+        assert sum(float(str(object_value(row)["spend"])) for row in summarized_by_key) == 0, summarized_by_key
+        admin_summarized: Final = _legacy_spend_rows(
+            gateway, gateway.key, {**window, "summarize": "true", "api_key": key_b}
+        )
+        assert sum(float(str(object_value(row)["spend"])) for row in admin_summarized) == pytest.approx(0.06), (
+            admin_summarized
+        )
+        admin_users: Final = {
+            name: float(str(spend))
+            for row in admin_summarized
+            for name, spend in object_value(object_value(row)["users"]).items()
+        }
+        assert admin_users == pytest.approx({user_b: 0.06}), admin_summarized

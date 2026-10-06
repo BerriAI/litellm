@@ -361,13 +361,31 @@ def test_loaded_router_preserves_cached_defaults_during_real_requests(gateway: G
             router.reset()
 
 
-def _bounded_chat(gateway: Gateway, model: str, key: str) -> httpx.Response:
+def _bounded_chat(gateway: Gateway, model: str, key: str, content: str) -> httpx.Response:
     return gateway.request(
         "POST",
         "/v1/chat/completions",
-        {"model": model, "max_tokens": 20, "messages": [{"role": "user", "content": f"unpriced {uuid.uuid4().hex}"}]},
+        {"model": model, "max_tokens": 20, "messages": [{"role": "user", "content": content}]},
         key=key,
     )
+
+
+def _observed(upstream: httpx.Client) -> list[JsonValue]:
+    response: Final = upstream.get("/__observations")
+    response.raise_for_status()
+    requests: Final = object_value(response.json())["requests"]
+    assert isinstance(requests, list), response.text
+    return requests
+
+
+def _upstream_chat(upstream_model: str, content: str) -> dict[str, JsonValue]:
+    return {
+        "path": "/v1/chat/completions",
+        "authorization": "Bearer integration-provider-key",
+        "body": {"model": upstream_model, "max_tokens": 20, "messages": [{"role": "user", "content": content}]},
+        "method": "POST",
+        "api_key": "",
+    }
 
 
 def _block_unpriced(gateway: Gateway, enabled: bool) -> httpx.Response:
@@ -384,13 +402,15 @@ def test_block_requests_for_models_without_pricing_refuses_unpriced_deployments(
         enabled: Final = _block_unpriced(gateway, True)
         assert enabled.status_code == 200, enabled.text
         assert enabled.json() == {"enabled": True}, enabled.text
+        assert gateway.get("/config/block_requests_for_models_without_pricing") == {"enabled": True}
         settings_rows: Final = read_rows(
             'SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s', ("litellm_settings",)
         )
         settings: Final = object_value(settings_rows[0]["param_value"])
         assert settings["block_requests_for_models_without_pricing"] is True, settings
 
-        unpriced: Final = scenario.model(model=f"openai/integration-unpriced-{uuid.uuid4().hex}")
+        unpriced_upstream_model: Final = f"integration-unpriced-{uuid.uuid4().hex}"
+        unpriced: Final = scenario.model(model=f"openai/{unpriced_upstream_model}")
         priced: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
         key: Final = scenario.key(models=[unpriced, priced])
         entries: Final = gateway.get("/model/info")["data"]
@@ -402,17 +422,26 @@ def test_block_requests_for_models_without_pricing_refuses_unpriced_deployments(
         assert unpriced_model_info["input_cost_per_token"] is None, unpriced_model_info
         assert unpriced_model_info["output_cost_per_token"] is None, unpriced_model_info
 
-        upstream.get("/__observations").raise_for_status()
-        blocked: Final = _bounded_chat(gateway, unpriced, key)
+        _observed(upstream)
+        blocked: Final = _bounded_chat(gateway, unpriced, key, f"unpriced {uuid.uuid4().hex}")
         assert blocked.status_code == 403, blocked.text
-        error: Final = object_value(blocked.json()["error"])
-        assert error["type"] == "model_cost_map_missing", blocked.text
-        assert "no pricing in the cost map" in str(error["message"]), blocked.text
-        assert upstream.get("/__observations").json()["requests"] == []
+        assert blocked.json() == {
+            "error": {
+                "message": f"Model '{unpriced}' has no pricing in the cost map, so litellm cannot price the request. "
+                "Requests for unpriced models are blocked because 'block_requests_for_models_without_pricing' is "
+                "enabled. Add pricing (input_cost_per_token/output_cost_per_token) to allow the request.",
+                "type": "model_cost_map_missing",
+                "param": "model",
+                "code": "403",
+            }
+        }, blocked.text
+        assert _observed(upstream) == [], blocked.text
 
-        served: Final = _bounded_chat(gateway, priced, key)
+        priced_content: Final = f"priced {uuid.uuid4().hex}"
+        served: Final = _bounded_chat(gateway, priced, key, priced_content)
         assert served.status_code == 200, served.text
-        assert len(upstream.get("/__observations").json()["requests"]) == 1
+        assert float(served.headers["x-litellm-response-cost"]) == pytest.approx(0.06), served.text
+        assert _observed(upstream) == [_upstream_chat("gpt-4o-mini", priced_content)], served.text
 
         disabled: Final = _block_unpriced(gateway, False)
         assert disabled.status_code == 200, disabled.text
@@ -423,7 +452,8 @@ def test_block_requests_for_models_without_pricing_refuses_unpriced_deployments(
         )
         disabled_settings: Final = object_value(settings_rows[0]["param_value"])
         assert disabled_settings["block_requests_for_models_without_pricing"] is False, disabled_settings
-        upstream.get("/__observations").raise_for_status()
-        now_served: Final = _bounded_chat(gateway, unpriced, key)
+        _observed(upstream)
+        unpriced_content: Final = f"unpriced {uuid.uuid4().hex}"
+        now_served: Final = _bounded_chat(gateway, unpriced, key, unpriced_content)
         assert now_served.status_code == 200, now_served.text
-        assert len(upstream.get("/__observations").json()["requests"]) == 1
+        assert _observed(upstream) == [_upstream_chat(unpriced_upstream_model, unpriced_content)], now_served.text
