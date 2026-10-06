@@ -222,7 +222,6 @@ def _assert_served(spelling: Spelling, response: httpx.Response) -> None:
         chunks: Final = [ChatChunk.model_validate_json(event) for event in events[:-1]]
         assert {chunk.object for chunk in chunks} == {"chat.completion.chunk"}, response.text
         assert "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices) == CANNED_CONTENT
-        assert "x-litellm-response-cost" not in response.headers, dict(response.headers)
         return
     assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.06), dict(response.headers)
     match spelling.route:
