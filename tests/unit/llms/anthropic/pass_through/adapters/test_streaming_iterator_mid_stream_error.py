@@ -140,3 +140,95 @@ def test_error_event_preserves_midstream_fallback_error():
     assert name == "error"
     assert payload["error"]["type"] == "api_error"
     assert "internalServerException" in payload["error"]["message"]
+
+
+class _RecordingLoggingObj:
+    """Stands in for the logging object at the mid-stream failure boundary.
+
+    ``dispatch_failure_handlers`` is the seam the adapter calls, so recording
+    through it is what proves the adapter routed the failure rather than
+    swallowing it.
+    """
+
+    def __init__(self, proxy_managed: bool):
+        self.recorded_message_ids: list[str] = []
+        self.failure_calls: list[BaseException] = []
+        self.sync_failure_callback_ran = False
+        if proxy_managed:
+            self._on_detached_stream_failure = self._detached_failure_hook
+
+    async def _detached_failure_hook(self, exc: BaseException) -> None:
+        return None
+
+    def record_streamed_anthropic_message_id(self, message_id: str) -> None:
+        self.recorded_message_ids.append(message_id)
+
+    async def dispatch_failure_handlers(
+        self,
+        exception: BaseException,
+        traceback_exception: str,
+        prefer_async_handlers: bool = False,
+    ) -> None:
+        self.failure_calls.append(exception)
+        self.sync_failure_callback_ran = True
+
+
+def _failing_wrapper(logging_obj) -> AnthropicStreamWrapper:
+    return AnthropicStreamWrapper(
+        completion_stream=_AsyncStreamThenRaise(
+            [_make_chunk(Delta(content="partial"))],
+            BedrockError(status_code=500, message="ConverseStream ended without messageStop"),
+        ),
+        model="bedrock-converse-sonnet-4-6",
+        litellm_logging_obj=logging_obj,
+    )
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_error_reraises_for_proxy_managed_stream():
+    """The proxy arms ``_on_detached_stream_failure`` on the logging object, which
+    makes its streaming boundary the owner of failure bookkeeping. Re-raising lets
+    that boundary write the failure spend row and serialize the error frame, so the
+    adapter must neither swallow the error nor report it a second time."""
+    logging_obj = _RecordingLoggingObj(proxy_managed=True)
+    wrapper = _failing_wrapper(logging_obj)
+
+    with pytest.raises(BedrockError):
+        await _drain_sse(wrapper)
+
+    assert logging_obj.failure_calls == [], "adapter duplicated bookkeeping the proxy boundary owns"
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_error_dispatches_failure_handlers_for_standalone_stream():
+    """Standalone SDK consumption has no proxy boundary downstream, so a mid-stream
+    provider failure reaches no failure bookkeeping on its own and the spend row is
+    never written. The adapter must route it through ``dispatch_failure_handlers``,
+    which covers both the sync ``litellm.failure_callback`` list and the async one."""
+    logging_obj = _RecordingLoggingObj(proxy_managed=False)
+    wrapper = _failing_wrapper(logging_obj)
+
+    events = await _drain_sse(wrapper)
+
+    assert len(logging_obj.failure_calls) == 1, "mid-stream failure was swallowed without bookkeeping"
+    assert "messageStop" in str(logging_obj.failure_calls[0])
+    assert logging_obj.sync_failure_callback_ran
+    assert _parse_sse(events[-1])[0] == "error"
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_error_emits_error_event_without_logging_obj():
+    """No logging object at all is a legitimate standalone shape (the adapter is
+    constructed without one for direct SDK use), and it must still produce the
+    client-facing error frame."""
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=_AsyncStreamThenRaise(
+            [_make_chunk(Delta(content="partial"))],
+            BedrockError(status_code=500, message="boom"),
+        ),
+        model="claude-x",
+    )
+
+    events = await _drain_sse(wrapper)
+
+    assert _parse_sse(events[-1])[0] == "error"
