@@ -168,7 +168,9 @@ class OpenAIContainerConfig(BaseContainerConfig):
 
         container_hidden_params: Final = get_or_create_hidden_params(container_obj)
         container_hidden_params.setdefault("additional_headers", {})
-        container_additional_headers: Final = cast("dict[str, object]", container_hidden_params["additional_headers"])
+        container_additional_headers: Final = cast(  # cast-ok: preserve mapping operations on response metadata
+            "dict[str, object]", container_hidden_params["additional_headers"]
+        )
         container_additional_headers["llm_provider-x-litellm-response-cost"] = container_cost
 
         return container_obj

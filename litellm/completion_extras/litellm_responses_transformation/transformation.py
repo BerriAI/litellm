@@ -1002,8 +1002,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 if key == "additional_headers" and key in model_response_hidden_params:
                     existing_additional_headers = model_response_hidden_params.get("additional_headers", {})
                     merged_headers = {
-                        **cast("dict[str, object]", value),
-                        **cast("dict[str, object]", existing_additional_headers),
+                        **cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                            "dict[str, object]", value
+                        ),
+                        **cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                            "dict[str, object]", existing_additional_headers
+                        ),
                     }
                     model_response_hidden_params[key] = merged_headers
                 else:

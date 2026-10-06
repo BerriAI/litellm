@@ -153,6 +153,32 @@ def test_add_fallback_headers_to_streaming_wrapper():
     }
 
 
+def test_add_fallback_headers_updates_plain_duck_backing_storage() -> None:
+    class PlainDuckResponse:
+        def __init__(self) -> None:
+            self._hidden_params: dict[str, object] = {
+                "model_id": "deployment-1",
+                "custom_metadata": {"keep": True},
+                "additional_headers": {"x-existing": "keep"},
+            }
+
+    response: Final = PlainDuckResponse()
+    original_hidden_params: Final = response._hidden_params
+
+    result: Final = add_fallback_headers_to_response(response=response, attempted_fallbacks=2)
+
+    assert result is response
+    assert response._hidden_params is original_hidden_params
+    assert response._hidden_params == {
+        "model_id": "deployment-1",
+        "custom_metadata": {"keep": True},
+        "additional_headers": {
+            "x-existing": "keep",
+            "x-litellm-attempted-fallbacks": 2,
+        },
+    }
+
+
 def test_add_fallback_headers_serializes_fallback_errors():
     response = StreamingWrapper()
     fallback_errors = [
@@ -248,6 +274,29 @@ def test_ensure_response_additional_headers_updates_frozen_decisions_response() 
 
     assert additional_headers == {}
     assert response.hidden_params["additional_headers"] is additional_headers
+
+
+def test_ensure_response_additional_headers_preserves_plain_duck_storage() -> None:
+    class PlainDuckResponse:
+        def __init__(self) -> None:
+            self._hidden_params: dict[str, object] = {
+                "model_id": "deployment-1",
+                "custom_metadata": {"keep": True},
+                "additional_headers": {"x-existing": "keep"},
+            }
+
+    response: Final = PlainDuckResponse()
+    original_hidden_params: Final = response._hidden_params
+    additional_headers: Final = ensure_response_additional_headers(response)
+    additional_headers["x-added"] = "value"
+
+    assert response._hidden_params is original_hidden_params
+    assert additional_headers is original_hidden_params["additional_headers"]
+    assert response._hidden_params == {
+        "model_id": "deployment-1",
+        "custom_metadata": {"keep": True},
+        "additional_headers": {"x-existing": "keep", "x-added": "value"},
+    }
 
 
 def test_add_fallback_headers_returns_none_when_response_is_none():

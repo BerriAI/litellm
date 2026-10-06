@@ -29,7 +29,7 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache, response_cache_phase
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS
-from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
@@ -710,6 +710,7 @@ class LLMCachingHandler:
             if cached.usage is not None and embedding_response.usage is not None
             else cached.usage
         )
+        cached_hidden_params: Final = getattr(cached, HIDDEN_PARAMS_ATTR)
         merged: Final = EmbeddingResponse(
             model=cached.model,
             data=[
@@ -720,7 +721,7 @@ class LLMCachingHandler:
             ],
             usage=merged_usage,
             hidden_params={
-                **cached.hidden_params,
+                **cached_hidden_params,
                 "cache_hit": True,
             },
             _response_headers=cached._response_headers,

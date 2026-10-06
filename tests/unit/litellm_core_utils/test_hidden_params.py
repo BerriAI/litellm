@@ -6,6 +6,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.types.decisions import DecisionsResponse
+from litellm.types.llms.base import HiddenParams
 from litellm.types.utils import ModelResponse
 
 
@@ -40,6 +41,16 @@ def test_get_hidden_params_preserves_model_response_identity() -> None:
     response: Final = ModelResponse()
 
     assert get_hidden_params(response) is response.hidden_params
+
+
+def test_get_hidden_params_returns_none_for_non_dict_storage() -> None:
+    class PlainResponse:
+        def __init__(self) -> None:
+            self._hidden_params = HiddenParams(response_cost=0.25)
+
+    response: Final = PlainResponse()
+
+    assert get_hidden_params(response) is None
 
 
 def test_set_hidden_params_replaces_frozen_decisions_response_private_attr() -> None:

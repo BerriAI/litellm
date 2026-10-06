@@ -20,6 +20,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -1830,14 +1831,22 @@ class CustomStreamWrapper:
                     if getattr(response, "usage", None) is not None:
                         usage_to_preserve = response.usage
                         if usage_to_preserve:
-                            response.hidden_params["usage"] = usage_to_preserve
+                            response_hidden_params_for_usage = cast(  # cast-ok: preserve dynamic mapping behavior
+                                dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
+                            )
+                            response_hidden_params_for_usage["usage"] = usage_to_preserve
 
                         obj_dict = response.model_dump()
 
                         if "usage" in obj_dict:
                             del obj_dict["usage"]
 
-                        response = self.model_response_creator(chunk=obj_dict, hidden_params=response.hidden_params)
+                        response_hidden_params_for_model = cast(  # cast-ok: preserve dynamic mapping behavior
+                            Mapping[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
+                        )
+                        response = self.model_response_creator(
+                            chunk=obj_dict, hidden_params=response_hidden_params_for_model
+                        )
                         ## check if empty
                         is_empty = is_model_response_stream_empty(model_response=cast(ModelResponseStream, response))
 
@@ -1846,8 +1855,11 @@ class CustomStreamWrapper:
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
-                        response.hidden_params["usage"] = usage
-                        self._last_returned_hidden_params = response.hidden_params
+                        response_hidden_params_for_final_chunk = cast(  # cast-ok: preserve dynamic mapping behavior
+                            dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
+                        )
+                        response_hidden_params_for_final_chunk["usage"] = usage
+                        self._last_returned_hidden_params = response_hidden_params_for_final_chunk
                         # Add MCP metadata to final chunk if present
                         response = self._add_mcp_metadata_to_final_chunk(response)
                     # RETURN RESULT
@@ -2042,7 +2054,10 @@ class CustomStreamWrapper:
                         if "usage" in obj_dict:
                             del obj_dict["usage"]
                         processed_chunk = self.model_response_creator(
-                            chunk=obj_dict, hidden_params=processed_chunk.hidden_params
+                            chunk=obj_dict,
+                            hidden_params=cast(  # cast-ok: preserve mapping operations on dynamic storage
+                                Mapping[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
+                            ),
                         )
                         is_empty = is_model_response_stream_empty(
                             model_response=cast(ModelResponseStream, processed_chunk)
@@ -2056,8 +2071,11 @@ class CustomStreamWrapper:
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
-                        processed_chunk.hidden_params["usage"] = usage
-                        self._last_returned_hidden_params = processed_chunk.hidden_params
+                        processed_chunk_hidden_params = cast(  # cast-ok: preserve dynamic mapping behavior
+                            dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
+                        )
+                        processed_chunk_hidden_params["usage"] = usage
+                        self._last_returned_hidden_params = processed_chunk_hidden_params
 
                     # Call post-call streaming deployment hook for final chunk
                     if self.sent_last_chunk is True:
@@ -2212,7 +2230,10 @@ class CustomStreamWrapper:
                 self.chunks.append(processed_chunk)
             if self.stream_options is None:
                 usage: Final = calculate_total_usage(chunks=self.chunks)
-                processed_chunk._hidden_params["usage"] = usage  # pyright: ignore[reportPrivateUsage]  # sync parity
+                processed_chunk_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+                    dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
+                )
+                processed_chunk_hidden_params["usage"] = usage
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log

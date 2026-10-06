@@ -17,6 +17,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
+from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
@@ -211,7 +212,7 @@ async def _create_provider_batch_for_managed_file(
     }
     response: Final = await llm_router.acreate_batch(**request)
     response.input_file_id = input_file_id
-    response.hidden_params["unified_file_id"] = unified_file_id
+    get_or_create_hidden_params(response)["unified_file_id"] = unified_file_id
     return response
 
 
@@ -484,7 +485,7 @@ async def create_batch(
                     **_create_batch_data,
                 )
 
-        response.hidden_params[BATCH_CREATE_HIDDEN_PARAM] = True
+        get_or_create_hidden_params(response)[BATCH_CREATE_HIDDEN_PARAM] = True
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
@@ -736,11 +737,12 @@ async def retrieve_batch(
                 )
 
             response = await llm_router.aretrieve_batch(**data)
-            response.hidden_params["unified_batch_id"] = unified_batch_id
+            response_hidden_params: Final = get_or_create_hidden_params(response)
+            response_hidden_params["unified_batch_id"] = unified_batch_id
             if unified_batch_id:
                 model_id_from_batch: Final = get_model_id_from_unified_batch_id(unified_batch_id)
                 if model_id_from_batch:
-                    response.hidden_params["model_id"] = model_id_from_batch
+                    response_hidden_params["model_id"] = model_id_from_batch
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
@@ -1168,10 +1170,11 @@ async def cancel_batch(
             data["model"] = model_id_from_batch
             data["batch_id"] = get_batch_id_from_unified_batch_id(unified_batch_id)
             response = await llm_router.acancel_batch(**data)
-            response.hidden_params["unified_batch_id"] = unified_batch_id
+            response_hidden_params: Final = get_or_create_hidden_params(response)
+            response_hidden_params["unified_batch_id"] = unified_batch_id
 
-            if not response.hidden_params.get("model_id") and data.get("model"):
-                response.hidden_params["model_id"] = data["model"]
+            if not response_hidden_params.get("model_id") and data.get("model"):
+                response_hidden_params["model_id"] = data["model"]
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:

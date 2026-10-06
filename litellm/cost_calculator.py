@@ -2025,7 +2025,7 @@ def response_cost_calculator(
         else:
             if isinstance(response_object, BaseModel):
                 if hasattr(response_object, HIDDEN_PARAMS_ATTR):
-                    hidden_params: Final = cast(
+                    hidden_params: Final = cast(  # cast-ok: cost metadata supports dict and Pydantic storage
                         dict[str, object] | BaseModel,
                         getattr(response_object, HIDDEN_PARAMS_ATTR),
                     )

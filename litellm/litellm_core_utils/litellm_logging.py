@@ -78,6 +78,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_or_create_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
     is_unbilled_non_inference_call,
@@ -1851,7 +1852,7 @@ class Logging(LiteLLMLoggingBaseClass):
             else result
         )
 
-        result_hidden_params: Final = getattr(priced_result, "_hidden_params", None) or MappingProxyType({})
+        result_hidden_params: Final = getattr(priced_result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
         if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
             priced_result, "_hidden_params"
         ):
@@ -2041,7 +2042,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _custom_pricing_for(self, result: object) -> bool:
         litellm_params: Final = getattr(self, "litellm_params", None)
-        result_hidden_params: Final = getattr(result, "_hidden_params", None) or MappingProxyType({})
+        result_hidden_params: Final = getattr(result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
         additional_headers: Final = (
             result_hidden_params.get("additional_headers")
             if isinstance(result_hidden_params, dict)
@@ -2377,7 +2378,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         if logging_result is None:
             return
-        hidden_params: Final = getattr(logging_result, "_hidden_params", None)
+        hidden_params: Final = getattr(logging_result, HIDDEN_PARAMS_ATTR, None)
         if not hidden_params:
             return
         if self.model_call_details.get("litellm_params") is None:
@@ -2401,7 +2402,7 @@ class Logging(LiteLLMLoggingBaseClass):
     ):
         """Resolve hidden params, compute response cost, and emit the standard logging payload."""
         self._surface_response_headers_from_result(logging_result)
-        hidden_params: Final = getattr(logging_result, "_hidden_params", {})
+        hidden_params: Final = getattr(logging_result, HIDDEN_PARAMS_ATTR, {})
         if hidden_params:
             if self.model_call_details.get("litellm_params") is not None:
                 self.model_call_details["litellm_params"].setdefault("metadata", {})
@@ -2676,7 +2677,7 @@ class Logging(LiteLLMLoggingBaseClass):
         Left in place they overwrite the create's real deployment with the
         poll's empty one in the payload every logging integration reads.
         """
-        settled_hidden_params: Final = getattr(result, "_hidden_params", None)
+        settled_hidden_params: Final = getattr(result, HIDDEN_PARAMS_ATTR, None)
         if isinstance(settled_hidden_params, dict):
             for poll_scoped_key in ("response_cost", "model_id", "litellm_model_name"):
                 settled_hidden_params.pop(poll_scoped_key, None)
@@ -3250,13 +3251,14 @@ class Logging(LiteLLMLoggingBaseClass):
             batch_successful_requests: Final = kwargs.get("batch_successful_requests", None)
             batch_failed_requests: Final = kwargs.get("batch_failed_requests", None)
             has_explicit_batch_data: Final = all(x is not None for x in (batch_cost, batch_usage, batch_models))
+            result_hidden_params: Final = get_or_create_hidden_params(result)
 
             should_compute_batch_data: Final = not has_explicit_batch_data and batch_cost_is_final(result)
             if has_explicit_batch_data:
-                result.hidden_params["response_cost"] = batch_cost
-                result.hidden_params["batch_models"] = batch_models
-                result._hidden_params["batch_successful_requests"] = batch_successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same result._hidden_params pattern as response_cost/batch_models above
-                result._hidden_params["batch_failed_requests"] = batch_failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
+                result_hidden_params["response_cost"] = batch_cost
+                result_hidden_params["batch_models"] = batch_models
+                result_hidden_params["batch_successful_requests"] = batch_successful_requests
+                result_hidden_params["batch_failed_requests"] = batch_failed_requests
                 result.usage = batch_usage
                 batch_prompt_cost: Final = kwargs.get("batch_prompt_cost", None)
                 batch_completion_cost: Final = kwargs.get("batch_completion_cost", None)
@@ -3281,10 +3283,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     model_info=self.get_router_deployment_model_info(),
                 )
 
-                result.hidden_params["response_cost"] = batch_result.cost
-                result.hidden_params["batch_models"] = batch_result.models
-                result._hidden_params["batch_successful_requests"] = batch_result.successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
-                result._hidden_params["batch_failed_requests"] = batch_result.failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
+                result_hidden_params["response_cost"] = batch_result.cost
+                result_hidden_params["batch_models"] = batch_result.models
+                result_hidden_params["batch_successful_requests"] = batch_result.successful_requests
+                result_hidden_params["batch_failed_requests"] = batch_result.failed_requests
                 result.usage = batch_result.usage
                 self.set_cost_breakdown(
                     input_cost=batch_result.prompt_cost,
@@ -6430,7 +6432,7 @@ def _extract_response_obj_and_hidden_params(
 ) -> tuple[dict, dict | None]:
     """Extract response_obj and hidden_params from init_response_obj."""
     hidden_params: dict | None = (
-        getattr(init_response_obj, "_hidden_params", None)
+        getattr(init_response_obj, HIDDEN_PARAMS_ATTR, None)
         if isinstance(init_response_obj, BaseModel | HttpxBinaryResponseContent)
         else None
     )

@@ -9,6 +9,7 @@ from typing import Final, Literal, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _extract_reasoning_content,
 )
@@ -512,7 +513,8 @@ class LiteLLMResponseObjectHandler:
 
         text_completion_response["choices"] = choices_list
         text_completion_response["usage"] = response.get("usage", None)
-        text_completion_response.hidden_params = HiddenParams(**response.hidden_params)
+        response_hidden_params: Final = getattr(response, HIDDEN_PARAMS_ATTR)
+        setattr(text_completion_response, HIDDEN_PARAMS_ATTR, HiddenParams(**response_hidden_params))
         return text_completion_response
 
     @staticmethod
