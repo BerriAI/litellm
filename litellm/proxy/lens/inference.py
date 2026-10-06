@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
@@ -23,6 +23,10 @@ from litellm.types.integrations.anthropic_cache_control_hook import CacheControl
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CostPerToken, ModelResponse
+
+BUDGET_LEASE: Final = timedelta(minutes=5)
+BUDGET_RENEW_INTERVAL: Final = 30.0
+BUDGET_WAIT_TIMEOUT: Final = 60.0
 
 
 class DeploymentParams(LiteLLMBaseModel):
@@ -277,6 +281,24 @@ def settle_amount(lens: Lens, reservation_id: str, cost: float, step: Step | Non
     return replace_job(settled, add_step(charged, step) if step is not None else charged)
 
 
+def renew_reservation(lens: Lens, reservation_id: str, now: datetime) -> Lens:
+    reservation: Final = next((item for item in lens.reservations if item.id == reservation_id), None)
+    if reservation is None or (reservation.expires_at is not None and reservation.expires_at <= now):
+        raise HTTPException(503, "Analysis budget reservation expired; retry the investigation")
+    return lens.model_copy(
+        update=MappingProxyType(
+            {
+                "reservations": tuple(
+                    item.model_copy(update=MappingProxyType({"expires_at": now + BUDGET_LEASE}))
+                    if item.id == reservation_id
+                    else item
+                    for item in lens.reservations
+                )
+            }
+        )
+    )
+
+
 async def wait_for_reservation(
     repo: LensRepository, lens_id: str, reservation_id: str, reserve: Callable[[Lens], Lens]
 ) -> None:
@@ -285,6 +307,61 @@ async def wait_for_reservation(
             return
         await asyncio.sleep(0.25)
     raise HTTPException(409, "Could not reserve analysis budget")
+
+
+async def renew_budget_reservation(
+    repo: LensRepository, lens_id: str, reservation_id: str, admitted: asyncio.Event
+) -> None:
+    await admitted.wait()
+    while True:
+        await asyncio.sleep(BUDGET_RENEW_INTERVAL)
+        try:
+            async with asyncio.timeout(BUDGET_RENEW_INTERVAL):
+                if (
+                    await repo.update(
+                        lens_id, lambda e: renew_reservation(e, reservation_id, datetime.now(timezone.utc))
+                    )
+                    is None
+                ):
+                    raise HTTPException(503, "Could not renew analysis budget reservation")
+        except TimeoutError as error:
+            raise HTTPException(503, "Analysis budget reservation renewal timed out") from error
+
+
+async def model_with_renewal(
+    model: Coroutine[None, None, tuple[ModelResponse, float | None]], renew: Coroutine[None, None, None]
+) -> tuple[ModelResponse, float | None]:
+    call: Final = asyncio.create_task(model)
+    renewal: Final = asyncio.create_task(renew)
+    try:
+        await asyncio.wait((call, renewal), return_when=asyncio.FIRST_COMPLETED)
+        if not call.done():
+            await renewal
+        return await call
+    finally:
+        renewal.cancel()
+        call.cancel()
+        await asyncio.gather(call, renewal, return_exceptions=True)
+
+
+@asynccontextmanager
+async def reserved_budget(
+    repo: LensRepository, lens_id: str, reservation_id: str, reserve: Callable[[Lens], Lens], admitted: asyncio.Event
+) -> AsyncGenerator[None]:
+    try:
+        async with asyncio.timeout(float(litellm.request_timeout)):
+            try:
+                async with asyncio.timeout(BUDGET_WAIT_TIMEOUT):
+                    await wait_for_reservation(repo, lens_id, reservation_id, reserve)
+            except TimeoutError as error:
+                raise HTTPException(504, "Analysis request timed out waiting for budget") from error
+            admitted.set()
+            yield
+    except BaseException as error:
+        await repo.update(lens_id, lambda e: settle_amount(e, reservation_id, 0, None))
+        if isinstance(error, TimeoutError):
+            raise HTTPException(504, "Analysis request timed out waiting for budget or model output") from error
+        raise
 
 
 async def analyze(
@@ -308,7 +385,7 @@ async def analyze(
         return ModelResult(content="", cost=0, context_exceeded=True)
     estimate: Final = quote(deployments, body)
     reservation_id: Final = str(uuid4())
-    request_timeout: Final = float(litellm.request_timeout)
+    admitted: Final = asyncio.Event()
 
     def reserve(e: Lens) -> Lens:
         now: Final = datetime.now(timezone.utc)
@@ -329,25 +406,10 @@ async def analyze(
                 job_id=job.id,
                 amount=estimate,
                 month=now.strftime("%Y-%m"),
-                expires_at=now + timedelta(seconds=request_timeout + 60),
+                expires_at=now + BUDGET_LEASE,
             ),
             now,
         )
-
-    def settle(e: Lens, cost: float, step: Step | None) -> Lens:
-        return settle_amount(e, reservation_id, cost, step)
-
-    @asynccontextmanager
-    async def reserve_budget() -> AsyncGenerator[None]:
-        try:
-            async with asyncio.timeout(request_timeout):
-                await wait_for_reservation(repo, lens.id, reservation_id, reserve)
-                yield
-        except BaseException as error:
-            await repo.update(lens.id, lambda e: settle(e, 0, None))
-            if isinstance(error, TimeoutError):
-                raise HTTPException(504, "Analysis request timed out waiting for budget or model output") from error
-            raise
 
     data: Final[dict[str, object]] = {  # mutable-ok: proxy processing enriches request data
         "model": job.settings.model,
@@ -369,7 +431,15 @@ async def analyze(
 
     try:
         with lens_analysis(), inherit_message_logging_privacy(True):
-            response, billed_cost = await complete(worker.analysis_key_id, data, reserve_budget, request)
+            response, billed_cost = await model_with_renewal(
+                complete(
+                    worker.analysis_key_id,
+                    data,
+                    lambda: reserved_budget(repo, lens.id, reservation_id, reserve, admitted),
+                    request,
+                ),
+                renew_budget_reservation(repo, lens.id, reservation_id, admitted),
+            )
     except (ProxyException, ContextWindowExceededError) as error:
         if context_failure(error):
             return ModelResult(content="", cost=0, context_exceeded=True)
@@ -377,7 +447,7 @@ async def analyze(
     cost: Final = billed_cost if billed_cost is not None else completion_charge(deployments, response, estimate)
 
     step: Final = model_step(response, body, job.settings.model, cost)
-    await repo.update(lens.id, lambda e: settle(e, cost, step))
+    await repo.update(lens.id, lambda e: settle_amount(e, reservation_id, cost, step))
     parsed: Final = Completion.model_validate_json(response.model_dump_json())
     choice: Final = parsed.choices[0]
     return ModelResult(

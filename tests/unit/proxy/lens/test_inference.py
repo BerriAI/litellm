@@ -415,10 +415,11 @@ def test_cache_hook_marks_prior_write_boundary_when_the_conversation_grows(monke
 
 
 def test_parallel_reservations_wait_without_charging_or_falsely_exhausting_budget() -> None:
+    from functools import reduce
+
     from litellm.proxy.lens.inference import reserve_amount, settle_amount
     from litellm.proxy.lens.models import BudgetReservation
     from tests.unit.proxy.lens.test_state import lens
-    from functools import reduce
 
     initial: Final = lens().model_copy(update={"spent": 45})
     reservations: Final = tuple(
@@ -439,6 +440,7 @@ def test_parallel_reservations_wait_without_charging_or_falsely_exhausting_budge
 
 def test_expired_reservations_do_not_hold_budget_and_late_settlement_still_charges() -> None:
     from datetime import timedelta
+
     from litellm.proxy.lens.inference import reserve_amount, settle_amount
     from litellm.proxy.lens.models import BudgetReservation
     from tests.unit.proxy.lens.test_state import NOW, lens
@@ -458,6 +460,7 @@ def test_expired_reservations_do_not_hold_budget_and_late_settlement_still_charg
 
 def test_abandoned_reservations_are_pruned_after_late_settlement_retention() -> None:
     from datetime import timedelta
+
     from litellm.proxy.lens.inference import reserve_amount
     from litellm.proxy.lens.models import BudgetReservation
     from tests.unit.proxy.lens.test_state import NOW, lens
@@ -470,3 +473,93 @@ def test_abandoned_reservations_are_pruned_after_late_settlement_retention() -> 
     admitted: Final = reserve_amount(lens().model_copy(update={"reservations": (stale, recent)}), incoming, NOW)
     assert admitted.reservations == (recent, incoming)
     assert admitted.spent == 0
+
+
+def test_renewed_model_call_keeps_budget_reserved_until_it_finishes_or_its_lease_expires() -> None:
+    from datetime import timedelta
+
+    from litellm.proxy.lens.inference import BUDGET_LEASE, renew_reservation, reserve_amount, settle_amount
+    from litellm.proxy.lens.models import BudgetReservation
+    from tests.unit.proxy.lens.test_state import NOW, lens
+
+    active: Final = BudgetReservation(
+        id="active", job_id="run", amount=90, month=lens().budget_month, expires_at=NOW + BUDGET_LEASE
+    )
+    other: Final = active.model_copy(update={"id": "other", "amount": 1})
+    renewed: Final = renew_reservation(
+        lens().model_copy(update={"reservations": (active, other)}), active.id, NOW + BUDGET_LEASE / 2
+    )
+    incoming: Final = active.model_copy(update={"id": "incoming", "amount": 20})
+    assert renewed.reservations[1] == other
+    assert renewed.spent == 0
+    assert reserve_amount(renewed, incoming, NOW + BUDGET_LEASE + timedelta(seconds=1)) is renewed
+    assert incoming in reserve_amount(renewed, incoming, NOW + BUDGET_LEASE * 2).reservations
+    settled: Final = settle_amount(renewed, active.id, 0.25, None)
+    assert settled.reservations == (other,)
+    assert settled.spent == 0.25
+
+
+@pytest.mark.parametrize("missing", (False, True))
+def test_renewal_does_not_resurrect_expired_or_released_budget(missing: bool) -> None:
+    from litellm.proxy.lens.inference import renew_reservation
+    from litellm.proxy.lens.models import BudgetReservation
+    from tests.unit.proxy.lens.test_state import NOW, lens
+
+    expired: Final = BudgetReservation(id="expired", job_id="run", amount=90, month=lens().budget_month, expires_at=NOW)
+    initial: Final = lens().model_copy(update={"reservations": () if missing else (expired,)})
+    with pytest.raises(HTTPException) as error:
+        renew_reservation(initial, expired.id, NOW)
+    assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ("completed", "model_failed", "lease_lost", "cancelled"))
+async def test_model_call_and_budget_renewal_finish_together(outcome: str) -> None:
+    import asyncio
+
+    from litellm.proxy.lens.inference import model_with_renewal
+
+    model_started: Final = asyncio.Event()
+    renewal_started: Final = asyncio.Event()
+    model_finished: Final = asyncio.Event()
+    renewal_finished: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    response: Final = (ModelResponse(model="analysis"), 0.25)
+
+    async def model() -> tuple[ModelResponse, float | None]:
+        try:
+            model_started.set()
+            await renewal_started.wait()
+            if outcome == "model_failed":
+                raise HTTPException(503, "Model failed")
+            if outcome != "completed":
+                await release.wait()
+            return response
+        finally:
+            model_finished.set()
+
+    async def renewal() -> None:
+        try:
+            renewal_started.set()
+            await model_started.wait()
+            if outcome == "lease_lost":
+                raise HTTPException(503, "Reservation lost")
+            await release.wait()
+        finally:
+            renewal_finished.set()
+
+    request: Final = asyncio.create_task(model_with_renewal(model(), renewal()))
+    if outcome == "cancelled":
+        await model_started.wait()
+        await renewal_started.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+    elif outcome == "completed":
+        assert await request is response
+    else:
+        with pytest.raises(HTTPException) as error:
+            await request
+        assert error.value.detail == ("Model failed" if outcome == "model_failed" else "Reservation lost")
+    assert model_finished.is_set()
+    assert renewal_finished.is_set()
