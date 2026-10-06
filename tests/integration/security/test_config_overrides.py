@@ -11,9 +11,10 @@ from urllib.parse import quote
 
 import httpx
 import pytest
-from integration._support.client import Gateway, object_value, string_value
+from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
+from integration._support.tls import write_self_signed_cert
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -213,6 +214,57 @@ def test_saved_vault_config_reads_back_masked_and_refuses_non_admins(
                 )
                 _assert_non_admin_refusal(denied_post, "/config_overrides/hashicorp_vault", non_admin_user_id)
 
+                stored_before_scoped: Final = _stored_override(database_url, "hashicorp_vault")
+                scoped_route_key: Final = scenario.key(
+                    user_id=scenario.user(user_role="internal_user"),
+                    allowed_routes=["/config_overrides/hashicorp_vault"],
+                )
+                scoped_get: Final = candidate.request(
+                    "GET", "/config_overrides/hashicorp_vault", key=scoped_route_key
+                )
+                assert scoped_get.status_code == 403, scoped_get.text
+                assert scoped_get.json() == {"detail": "Only admin users can view config overrides"}, (
+                    scoped_get.text
+                )
+                scoped_post: Final = candidate.request(
+                    "POST", "/config_overrides/hashicorp_vault", config, key=scoped_route_key
+                )
+                assert scoped_post.status_code == 403, scoped_post.text
+                assert scoped_post.json() == {"detail": "Only admin users can update config overrides"}, (
+                    scoped_post.text
+                )
+                assert _stored_override(database_url, "hashicorp_vault") == stored_before_scoped
+
+                viewer_key: Final = scenario.key(
+                    user_id=scenario.user(user_role="proxy_admin_viewer")
+                )
+                viewer_get: Final = candidate.request(
+                    "GET", "/config_overrides/hashicorp_vault", key=viewer_key
+                )
+                assert viewer_get.status_code == 200, viewer_get.text
+                viewer_values: Final = object_value(
+                    object_value(_JSON_OBJECT.validate_json(viewer_get.content))["values"]
+                )
+                assert viewer_values == expected_values, viewer_get.text
+                assert all(
+                    string_value(config[field]).encode() not in viewer_get.content
+                    for field in ("vault_token", "approle_secret_id", "client_key")
+                )
+                viewer_post: Final = candidate.request(
+                    "POST", "/config_overrides/hashicorp_vault", config, key=viewer_key
+                )
+                assert viewer_post.status_code == 403, viewer_post.text
+                assert viewer_post.json() == {
+                    "error": {
+                        "message": "user not allowed to access this route, role= proxy_admin_viewer. "
+                        "Trying to access: /config_overrides/hashicorp_vault",
+                        "type": "auth_error",
+                        "param": "None",
+                        "code": "403",
+                    }
+                }, viewer_post.text
+                assert _stored_override(database_url, "hashicorp_vault") == stored_before_scoped
+
         env_values: Final = {
             "HCP_VAULT_ADDR": vault.url,
             "HCP_VAULT_TOKEN": "env-vault-token-" + uuid.uuid4().hex,
@@ -315,6 +367,57 @@ def test_saved_cyberark_config_reads_back_masked_and_refuses_non_admins(
                     "POST", "/config_overrides/cyberark", config, key=non_admin
                 )
                 _assert_non_admin_refusal(denied_post, "/config_overrides/cyberark", non_admin_user_id)
+
+                stored_before_scoped: Final = _stored_override(_database_url, "cyberark")
+                scoped_route_key: Final = scenario.key(
+                    user_id=scenario.user(user_role="internal_user"),
+                    allowed_routes=["/config_overrides/cyberark"],
+                )
+                scoped_get: Final = candidate.request(
+                    "GET", "/config_overrides/cyberark", key=scoped_route_key
+                )
+                assert scoped_get.status_code == 403, scoped_get.text
+                assert scoped_get.json() == {"detail": "Only admin users can view config overrides"}, (
+                    scoped_get.text
+                )
+                scoped_post: Final = candidate.request(
+                    "POST", "/config_overrides/cyberark", config, key=scoped_route_key
+                )
+                assert scoped_post.status_code == 403, scoped_post.text
+                assert scoped_post.json() == {"detail": "Only admin users can update config overrides"}, (
+                    scoped_post.text
+                )
+                assert _stored_override(_database_url, "cyberark") == stored_before_scoped
+
+                viewer_key: Final = scenario.key(
+                    user_id=scenario.user(user_role="proxy_admin_viewer")
+                )
+                viewer_get: Final = candidate.request(
+                    "GET", "/config_overrides/cyberark", key=viewer_key
+                )
+                assert viewer_get.status_code == 200, viewer_get.text
+                viewer_values: Final = object_value(
+                    object_value(_JSON_OBJECT.validate_json(viewer_get.content))["values"]
+                )
+                assert viewer_values == values, viewer_get.text
+                assert all(
+                    string_value(config[field]).encode() not in viewer_get.content
+                    for field in ("cyberark_api_key", "client_key")
+                )
+                viewer_post: Final = candidate.request(
+                    "POST", "/config_overrides/cyberark", config, key=viewer_key
+                )
+                assert viewer_post.status_code == 403, viewer_post.text
+                assert viewer_post.json() == {
+                    "error": {
+                        "message": "user not allowed to access this route, role= proxy_admin_viewer. "
+                        "Trying to access: /config_overrides/cyberark",
+                        "type": "auth_error",
+                        "param": "None",
+                        "code": "403",
+                    }
+                }, viewer_post.text
+                assert _stored_override(_database_url, "cyberark") == stored_before_scoped
 
 
 def test_vault_partial_update_keeps_omitted_fields_encrypts_and_drives_secret_reads(
@@ -502,13 +605,16 @@ def test_vault_partial_update_keeps_omitted_fields_encrypts_and_drives_secret_re
                     api_base=provider_wire.url + "/v1",
                 )
                 assert model_after_delete
-                after_delete_secret_reads: Final = tuple(
+                test_secret_names: Final = frozenset(
+                    {"secret-one", "secret-two", "secret-after-delete"}
+                )
+                after_delete_vault_requests: Final = tuple(
                     (request.method, request.target)
                     for request in vault_wire.drain()
-                    if request.target in {path_one, path_two}
+                    if request.target.rsplit("/", 1)[-1] in test_secret_names
                 )
-                assert after_delete_secret_reads == ()
-                assert first_secret_reads + second_secret_reads + after_delete_secret_reads == (
+                assert after_delete_vault_requests == ()
+                assert first_secret_reads + second_secret_reads + after_delete_vault_requests == (
                     ("GET", path_one),
                     ("GET", path_two),
                 )
@@ -676,3 +782,238 @@ def test_cyberark_incremental_update_encrypts_reloads_on_restart_and_delete_clea
             assert _new_model(restarted, model_after_delete, provider_wire.url, secret_names[3])
             requests_after_delete: Final = cyberark_wire.drain()
             assert requests_after_delete == ()
+
+
+def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_reads(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider_secret: Final = "vault-auth-provider-secret-" + uuid.uuid4().hex
+    approle_token: Final = "approle-token-" + uuid.uuid4().hex
+    cert_token: Final = "cert-token-" + uuid.uuid4().hex
+    role_id: Final = "approle-role-" + uuid.uuid4().hex
+    secret_id: Final = "approle-secret-" + uuid.uuid4().hex
+    mount_path: Final = "approle-" + uuid.uuid4().hex
+    cert_role: Final = "cert-role-" + uuid.uuid4().hex
+    base_namespace: Final = "ns/base-" + uuid.uuid4().hex[:8]
+    login_namespace: Final = "ns/login-" + uuid.uuid4().hex[:8]
+    secret_namespace: Final = "ns/secrets-" + uuid.uuid4().hex[:8]
+    mount_name: Final = "kv-" + uuid.uuid4().hex[:8]
+    secret_a: Final = "secret-a-" + uuid.uuid4().hex
+    secret_b: Final = "secret-b-" + uuid.uuid4().hex
+    marker_a: Final = "vault-approle-runtime-" + uuid.uuid4().hex
+    marker_b: Final = "vault-cert-runtime-" + uuid.uuid4().hex
+    login_approle_path: Final = f"/v1/auth/{mount_path}/login"
+    login_cert_path: Final = "/v1/auth/cert/login"
+    secret_a_path: Final = f"/v1/{secret_namespace}/{mount_name}/data/{secret_a}"
+    secret_b_path: Final = f"/v1/{secret_namespace}/{mount_name}/data/{secret_b}"
+
+    def vault(request: Request) -> Reply:
+        if request.method == "POST" and request.target == login_approle_path:
+            assert _JSON_OBJECT.validate_json(request.body) == {
+                "role_id": role_id,
+                "secret_id": secret_id,
+            }, request.body
+            return Reply(
+                body=json.dumps(
+                    {"auth": {"client_token": approle_token, "lease_duration": 3600}}
+                ).encode()
+            )
+        if request.method == "POST" and request.target == login_cert_path:
+            assert _JSON_OBJECT.validate_json(request.body) == {"name": cert_role}, request.body
+            return Reply(
+                body=json.dumps(
+                    {"auth": {"client_token": cert_token, "lease_duration": 3600}}
+                ).encode()
+            )
+        if request.method == "GET" and request.target in {secret_a_path, secret_b_path}:
+            return Reply(
+                body=json.dumps({"data": {"data": {"key": provider_secret}}}).encode()
+            )
+        return Reply(status=404, body=b'{"errors":["secret not found"]}')
+
+    def provider(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/chat/completions"
+        assert request.headers["authorization"] == f"Bearer {provider_secret}", (
+            "Provider request did not use the Vault-resolved secret"
+        )
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        messages: Final = body["messages"]
+        assert isinstance(messages, list)
+        marker: Final = string_value(object_value(messages[0])["content"])
+        assert marker in {marker_a, marker_b}, request.body
+        return _completion(marker)
+
+    cert_dir: Final = tmp_path / "vault-client-cert"
+    cert_dir.mkdir()
+    cert_file, key_file = write_self_signed_cert(cert_dir)
+    with wire_server(vault) as vault_wire, wire_server(provider) as provider_wire:
+        with _config_proxy(gateway, tmp_path, monkeypatch) as (candidate, database_url):
+            full_config: Final = {
+                "vault_addr": vault_wire.url,
+                "approle_role_id": role_id,
+                "approle_secret_id": secret_id,
+                "approle_mount_path": mount_path,
+                "vault_namespace": base_namespace,
+                "vault_login_namespace": login_namespace,
+                "vault_secret_namespace": secret_namespace,
+                "vault_mount_name": mount_name,
+            }
+            saved: Final = candidate.request(
+                "POST", "/config_overrides/hashicorp_vault", full_config
+            )
+            assert saved.status_code == 200, saved.text
+            assert saved.json() == {
+                "message": "Hashicorp Vault configuration updated successfully",
+                "status": "success",
+            }, saved.text
+            stored_full: Final = _stored_override(database_url, "hashicorp_vault")
+            assert set(stored_full) == set(full_config), stored_full
+            serialized_full: Final = json.dumps(stored_full)
+            assert all(
+                value not in serialized_full for value in full_config.values()
+            ), serialized_full
+
+            with candidate.scenario() as scenario:
+                model_a: Final = scenario.model(
+                    api_key=f"os.environ/{secret_a}",
+                    api_base=provider_wire.url + "/v1",
+                )
+                response_a: Final = candidate.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {"model": model_a, "messages": [{"role": "user", "content": marker_a}]},
+                )
+                assert response_a.status_code == 200, response_a.text
+                assert response_a.json()["choices"][0]["message"]["content"] == marker_a, (
+                    response_a.text
+                )
+                approle_targets: Final = frozenset(
+                    {login_approle_path, login_cert_path, secret_a_path, secret_b_path}
+                )
+                approle_phase: Final = tuple(
+                    request
+                    for request in vault_wire.drain()
+                    if request.target in approle_targets
+                )
+                assert tuple((request.method, request.target) for request in approle_phase) == (
+                    ("POST", login_approle_path),
+                    ("GET", secret_a_path),
+                ), approle_phase
+                assert approle_phase[0].headers["x-vault-namespace"] == login_namespace
+                assert _JSON_OBJECT.validate_json(approle_phase[0].body) == {
+                    "role_id": role_id,
+                    "secret_id": secret_id,
+                }
+                assert approle_phase[1].headers["x-vault-token"] == approle_token
+
+                partial_config: Final = {
+                    "vault_addr": vault_wire.url,
+                    "approle_role_id": "",
+                    "approle_secret_id": "",
+                    "client_cert": str(cert_file),
+                    "client_key": str(key_file),
+                    "vault_cert_role": cert_role,
+                }
+                partial: Final = candidate.request(
+                    "POST", "/config_overrides/hashicorp_vault", partial_config
+                )
+                assert partial.status_code == 200, partial.text
+                assert partial.json() == {
+                    "message": "Hashicorp Vault configuration updated successfully",
+                    "status": "success",
+                }, partial.text
+                readback: Final = _override_values(
+                    candidate, "/config_overrides/hashicorp_vault", "hashicorp_vault"
+                )
+                assert readback == {
+                    "vault_addr": vault_wire.url,
+                    "approle_mount_path": mount_path,
+                    "client_cert": str(cert_file),
+                    "client_key": _masked(str(key_file)),
+                    "vault_cert_role": cert_role,
+                    "vault_namespace": base_namespace,
+                    "vault_login_namespace": login_namespace,
+                    "vault_secret_namespace": secret_namespace,
+                    "vault_mount_name": mount_name,
+                }, readback
+
+                model_b: Final = scenario.model(
+                    api_key=f"os.environ/{secret_b}",
+                    api_base=provider_wire.url + "/v1",
+                )
+                response_b: Final = candidate.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {"model": model_b, "messages": [{"role": "user", "content": marker_b}]},
+                )
+                assert response_b.status_code == 200, response_b.text
+                assert response_b.json()["choices"][0]["message"]["content"] == marker_b, (
+                    response_b.text
+                )
+                cert_phase: Final = tuple(
+                    request
+                    for request in vault_wire.drain()
+                    if request.target in approle_targets
+                )
+                assert all(
+                    request.target != login_approle_path for request in cert_phase
+                ), cert_phase
+                assert cert_phase[0].target == login_cert_path, cert_phase
+                cert_logins: Final = tuple(
+                    request for request in cert_phase if request.target == login_cert_path
+                )
+                assert all(
+                    request.method == "POST"
+                    and request.headers["x-vault-namespace"] == login_namespace
+                    and _JSON_OBJECT.validate_json(request.body) == {"name": cert_role}
+                    for request in cert_logins
+                ), cert_logins
+                cert_secret_reads: Final = tuple(
+                    request
+                    for request in cert_phase
+                    if request.target in {secret_a_path, secret_b_path}
+                )
+                assert secret_b_path in tuple(
+                    request.target for request in cert_secret_reads
+                ), cert_secret_reads
+                assert all(
+                    request.headers["x-vault-token"] == cert_token
+                    for request in cert_secret_reads
+                ), cert_secret_reads
+
+                deleted: Final = candidate.request("DELETE", "/config_overrides/hashicorp_vault")
+                assert deleted.status_code == 200, deleted.text
+                assert deleted.json() == {
+                    "message": "Hashicorp Vault configuration deleted successfully",
+                    "status": "success",
+                }, deleted.text
+                assert (
+                    read_rows(
+                        'SELECT config_type FROM "LiteLLM_ConfigOverrides" WHERE config_type = %s',
+                        ("hashicorp_vault",),
+                        database_url=database_url,
+                    )
+                    == []
+                )
+                eventually(
+                    lambda: vault_wire.drain(),
+                    lambda requests: all(
+                        request.target not in approle_targets for request in requests
+                    ),
+                    seconds=10,
+                )
+                model_after_delete: Final = scenario.model(
+                    api_key="os.environ/secret-never-read",
+                    api_base=provider_wire.url + "/v1",
+                )
+                assert model_after_delete
+                assert tuple(
+                    request for request in vault_wire.drain() if request.target in approle_targets
+                ) == ()
+
+            provider_requests: Final = provider_wire.drain()
+            assert tuple((request.method, request.target) for request in provider_requests) == (
+                ("POST", "/v1/chat/completions"),
+                ("POST", "/v1/chat/completions"),
+            ), provider_requests

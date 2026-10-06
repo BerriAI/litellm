@@ -1,5 +1,6 @@
 from datetime import datetime
 import json
+import os
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -290,6 +291,9 @@ def test_multi_section_config_update_merges_sent_keys_normalizes_callbacks_and_a
 def test_deleted_callback_case_variant_stops_delivery_on_both_workers(
     gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    assert os.environ.get("LITELLM_LICENSE"), (
+        "LITELLM_LICENSE must be set: audit logs are an enterprise feature"
+    )
     marker: Final = "callback-delete-" + uuid.uuid4().hex
     provider_secret: Final = "provider-secret-" + marker
 
@@ -494,6 +498,9 @@ def test_deleted_callback_case_variant_stops_delivery_on_both_workers(
 def test_dashboard_field_updates_preserve_plugin_key_and_apply_at_runtime(
     gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    assert os.environ.get("LITELLM_LICENSE"), (
+        "LITELLM_LICENSE must be set: max_request_size_mb enforcement is an enterprise feature"
+    )
     plugin_key: Final = "plugin-key-" + uuid.uuid4().hex
     plugin_body: Final = {"message": "plugin-" + uuid.uuid4().hex}
     passthrough_body: Final = {"message": "passthrough-" + uuid.uuid4().hex}
@@ -519,7 +526,14 @@ def test_dashboard_field_updates_preserve_plugin_key_and_apply_at_runtime(
         wire_server(passthrough) as passthrough_wire,
     ):
         monkeypatch.setenv("DATABASE_URL", database_url)
-        with owned_proxy(gateway, tmp_path, {"DATABASE_URL": database_url}) as candidate:
+        environment: Final = {
+            "DATABASE_URL": database_url,
+            "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "600",
+        }
+        with (
+            owned_proxy(gateway, tmp_path, environment) as candidate,
+            owned_proxy(gateway, tmp_path, environment) as peer,
+        ):
             plugin_value: Final = [
                 {
                     "name": "integration-plugin",
@@ -574,6 +588,13 @@ def test_dashboard_field_updates_preserve_plugin_key_and_apply_at_runtime(
             )
             assert plugin_response.status_code == 200, plugin_response.text
             assert plugin_response.json() == {"received": plugin_body}, plugin_response.text
+            peer_plugin_response: Final = eventually(
+                lambda: peer.request("POST", "/plugin-proxy/integration-plugin/rpc", plugin_body),
+                lambda response: response.status_code == 200
+                and response.json() == {"received": plugin_body},
+                seconds=20,
+            )
+            assert peer_plugin_response.json() == {"received": plugin_body}, peer_plugin_response.text
 
             passthrough_value: Final = [
                 {
@@ -596,6 +617,15 @@ def test_dashboard_field_updates_preserve_plugin_key_and_apply_at_runtime(
             passthrough_response: Final = candidate.request("POST", passthrough_path, passthrough_body)
             assert passthrough_response.status_code == 200, passthrough_response.text
             assert passthrough_response.json() == {"received": passthrough_body}, passthrough_response.text
+            peer_passthrough_response: Final = eventually(
+                lambda: peer.request("POST", passthrough_path, passthrough_body),
+                lambda response: response.status_code == 200
+                and response.json() == {"received": passthrough_body},
+                seconds=20,
+            )
+            assert peer_passthrough_response.json() == {"received": passthrough_body}, (
+                peer_passthrough_response.text
+            )
 
             alerting_args: Final = {
                 "daily_report_frequency": 43200,
@@ -687,6 +717,33 @@ def test_dashboard_field_updates_preserve_plugin_key_and_apply_at_runtime(
             )
             assert oversized.status_code == 413, oversized.text
             assert oversized.text == '{"error":"Request size is too large. Max size is 1 MB"}'
+            peer_oversized: Final = eventually(
+                lambda: peer.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {
+                        "model": "openai/gpt-4o-mini",
+                        "messages": [{"role": "user", "content": "x" * (1024 * 1024 + 1)}],
+                    },
+                ),
+                lambda response: response.status_code == 413
+                and response.text == '{"error":"Request size is too large. Max size is 1 MB"}',
+                seconds=20,
+            )
+            assert peer_oversized.text == '{"error":"Request size is too large. Max size is 1 MB"}', (
+                peer_oversized.text
+            )
+
+            plugin_requests: Final = plugin_wire.drain()
+            assert tuple((request.method, request.target) for request in plugin_requests) == (
+                ("POST", "/rpc"),
+                ("POST", "/rpc"),
+            ), plugin_requests
+            passthrough_requests: Final = passthrough_wire.drain()
+            assert tuple((request.method, request.target) for request in passthrough_requests) == (
+                ("POST", "/echo"),
+                ("POST", "/echo"),
+            ), passthrough_requests
 
 
 @pytest.mark.covers("mgmt.model.block.changes_serving_and_preserves_control")
