@@ -162,16 +162,16 @@ const stepOfField = {
   "selection.team_id": "activity",
   "selection.lookback_hours": "activity",
   "selection.sample_percent": "activity",
+  "selection.sample_size": "activity",
+  "selection.execution_ids": "activity",
+  manualSelection: "activity",
   context: "criteria",
   questions: "criteria",
   watching: "criteria",
-  "selection.execution_ids": "run",
-  "selection.sample_size": "run",
   selectedModel: "run",
   budget: "run",
   interval: "run",
   repeat: "run",
-  manualSelection: "run",
 } as const satisfies Record<InvestigationField, SetupStep>;
 
 const fields = Object.keys(stepOfField) as readonly InvestigationField[];

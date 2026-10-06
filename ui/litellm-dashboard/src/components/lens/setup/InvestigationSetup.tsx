@@ -1,11 +1,11 @@
 "use client";
 
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
-import { useEffect, useState } from "react";
-import { ChevronLeft } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { ArrowLeft } from "lucide-react";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { FieldError } from "@/components/ui/field";
 import {
   investigationSchema,
   investigationDefaults,
@@ -13,8 +13,9 @@ import {
   investigationStepFields,
   type InvestigationInput,
   type InvestigationOutput,
-  type SetupStep as SetupStepId,
 } from "./investigationSchema";
+import { DRAFT_FIELDS, draftFromParams, useSetupDraftRoute, useSetupStepRoute } from "./setupRoute";
+import { useDebouncedValue } from "./useDebouncedValue";
 import { nextSetupStep, SetupStep, SetupSteps } from "./SetupSteps";
 import { ScopeFields } from "./fields/ScopeFields";
 import { SampleFields } from "./fields/SampleFields";
@@ -28,10 +29,12 @@ import { Inspector } from "@/components/shared/Inspector";
 import { TraceEvidence } from "../investigations/Evidence";
 import { FINDING_PANEL_WIDTH_KEY } from "../storage";
 import type { Execution } from "./useMatchingActivity";
-import { durationLabel } from "../model/format";
+import { durationLabel, scopeLabel } from "../model/format";
 import { type Settings } from "../model/types";
 
 type SetupMode = "new" | "edit" | "duplicate";
+
+const DRAFT_URL_DEBOUNCE_MS = 400;
 
 const TITLES: Record<SetupMode, string> = {
   new: "New investigation",
@@ -44,10 +47,25 @@ function saveLabelFor(mode: SetupMode, repeat: boolean): string {
   return repeat ? "Run and monitor" : "Run investigation";
 }
 
-function activitySummary(selection: InvestigationInput["selection"]): string {
-  const who = selection.agent_name || selection.service || "All activity";
-  const conditions = selection.filters.length ? ` · ${selection.filters.length} conditions` : "";
-  return `${who} · Last ${durationLabel(selection.lookback_hours ?? 24, "hours")}${conditions}`;
+function ActivitySummary() {
+  const [selection, manual] = useWatch<InvestigationInput, ["selection", "manualSelection"]>({
+    name: ["selection", "manualSelection"],
+  });
+  return activitySummary(selection, manual);
+}
+
+function CriteriaSummary() {
+  const [context, watching, questions] = useWatch<InvestigationInput, ["context", "watching", "questions"]>({
+    name: ["context", "watching", "questions"],
+  });
+  return criteriaSummary({ context, watching, questions });
+}
+
+function activitySummary(selection: InvestigationInput["selection"], manual: boolean): string {
+  const span = `Last ${durationLabel(selection.lookback_hours ?? 24, "hours")}`;
+  const picked = selection.execution_ids.length;
+  if (manual) return `${picked} picked ${picked === 1 ? "run" : "runs"} · ${span}`;
+  return `${scopeLabel(selection)} · ${span}`;
 }
 
 function criteriaSummary(values: Pick<InvestigationInput, "context" | "watching" | "questions">): string {
@@ -69,15 +87,33 @@ interface SetupProps {
 /** Replaces the Investigations tab body: a three-step setup on the left, the activity it matches on the right. */
 export function InvestigationSetup(props: SetupProps) {
   const { initial, mode, defaultSource = "traces" } = props;
+  const draft = useSetupDraftRoute(defaultSource);
+  const fromUrl = mode === "new" && !initial;
   const form = useZodForm(investigationSchema, {
-    defaultValues: investigationDefaults(initial, mode, defaultSource),
+    defaultValues: fromUrl
+      ? draftFromParams(draft.params, defaultSource)
+      : investigationDefaults(initial, mode, defaultSource),
     mode: "onChange",
   });
   return (
     <FormProvider {...form}>
+      {fromUrl && <DraftUrlSync defaultSource={defaultSource} />}
       <SetupEditor {...props} form={form} />
     </FormProvider>
   );
+}
+
+/** Writes the draft to the URL once typing pauses; only this empty component re-renders per keystroke. */
+function DraftUrlSync({ defaultSource }: { defaultSource: Settings["source"] }) {
+  const [name, selection, context, watching, questions, repeat, interval] = useWatch<
+    InvestigationInput,
+    typeof DRAFT_FIELDS
+  >({ name: DRAFT_FIELDS });
+  const draft = { name, selection, context, watching, questions, repeat, interval };
+  const { value } = useDebouncedValue(draft, DRAFT_URL_DEBOUNCE_MS);
+  const { saveDraft } = useSetupDraftRoute(defaultSource);
+  useEffect(() => saveDraft(value), [value, saveDraft]);
+  return null;
 }
 
 function SetupEditor({
@@ -89,35 +125,15 @@ function SetupEditor({
   form,
 }: SetupProps & { form: UseFormReturn<InvestigationInput, unknown, InvestigationOutput> }) {
   const analysis = useAnalysisModels();
-  const [step, setStep] = useState<SetupStepId>("activity");
+  const [step, setStep] = useSetupStepRoute();
   const [error, setError] = useState("");
   const [trace, setTrace] = useState<Execution | null>(null);
-  const { control, register, setValue, subscribe, trigger, formState } = form;
-  const [selectedModel, repeat, selection, context, watching, questions] = useWatch({
-    control,
-    name: ["selectedModel", "repeat", "selection", "context", "watching", "questions"],
-  });
+  const { control, register, trigger, formState } = form;
+  const [selectedModel, repeat] = useWatch({ control, name: ["selectedModel", "repeat"] });
   const activity = useMatchingActivity();
-  const traceRuns = activity.preview.page.executions.filter((run) => run.source === "traces");
+  const { executions } = activity.preview.page;
+  const traceRuns = useMemo(() => executions.filter((run) => run.source === "traces"), [executions]);
   const model = selectedModel ?? analysis.defaultModel ?? "";
-  useEffect(
-    () =>
-      subscribe({
-        name: [
-          "selection.source",
-          "selection.service",
-          "selection.agent_name",
-          "selection.filters",
-          "selection.lookback_hours",
-          "selection.team_id",
-        ],
-        formState: { values: true },
-        callback: ({ values }) => {
-          if (values.selection.execution_ids.length) setValue("selection.execution_ids", []);
-        },
-      }),
-    [setValue, subscribe],
-  );
   const next = async () => {
     const following = nextSetupStep(step);
     if (following && (await trigger(investigationStepFields[step]))) setStep(following);
@@ -137,76 +153,76 @@ function SetupEditor({
   const saveLabel = saveLabelFor(mode, repeat);
   const offline = !ready && mode !== "edit";
   return (
-    <section aria-label={TITLES[mode]} className="flex min-w-0 flex-1 flex-col gap-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-start gap-1">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="-ml-2 shrink-0 text-muted-foreground"
-            aria-label="Back to investigations"
-            disabled={formState.isSubmitting}
-            onClick={onClose}
-          >
-            <ChevronLeft className="size-5" />
-          </Button>
-          <div>
-            <h2 className="text-lg font-semibold tracking-tight">{TITLES[mode]}</h2>
-            <p className="text-xs text-muted-foreground">
-              Matching activity on the right updates as you change the setup.
-            </p>
-          </div>
-        </div>
-        <Button variant="outline" disabled={formState.isSubmitting} onClick={onClose}>
+    <section aria-label={TITLES[mode]} className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <header className="flex items-center gap-1 border-b pb-3">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="shrink-0 text-muted-foreground"
+          aria-label="Back to investigations"
+          disabled={formState.isSubmitting}
+          onClick={onClose}
+        >
+          <ArrowLeft className="size-4" />
+        </Button>
+        <input
+          {...register("name")}
+          aria-label="Investigation name"
+          placeholder={TITLES[mode]}
+          autoComplete="off"
+          data-1p-ignore
+          className="h-8 min-w-0 flex-1 appearance-none rounded-md border-0 bg-transparent px-2 py-0 text-lg font-semibold tracking-tight shadow-none ring-0 outline-none placeholder:text-muted-foreground/60 hover:bg-muted/50 focus:bg-muted/50 focus:ring-0 focus:outline-none"
+        />
+        <Button variant="ghost" size="sm" disabled={formState.isSubmitting} onClick={onClose}>
           Cancel
         </Button>
       </header>
       {offline && (
-        <p role="status" className="text-sm text-warning">
+        <p
+          role="status"
+          className="mt-4 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning"
+        >
           The worker or trace storage is unavailable. Your draft is safe; you can start when it reconnects.
         </p>
       )}
-      <div className="grid min-w-0 gap-8 lg:grid-cols-2">
-        <SetupSteps aria-label="Investigation setup" current={step} onOpen={setStep}>
+      <div className="grid min-h-0 min-w-0 flex-1 items-start gap-8 pt-6 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] xl:gap-10">
+        <SetupSteps
+          aria-label="Investigation setup"
+          current={step}
+          onOpen={setStep}
+          className="lg:-mx-2 lg:-my-1 lg:max-h-full lg:overflow-y-auto lg:px-2 lg:py-1"
+        >
           <SetupStep
             id="activity"
             heading="Activity"
             description="Which traces or requests to review"
-            summary={activitySummary(selection)}
+            summary={<ActivitySummary />}
           >
-            <label className="grid gap-2 text-sm font-medium">
-              Investigation name
-              <Input {...register("name")} placeholder="e.g. Support quality" />
-            </label>
             <ScopeFields {...activity.scope} />
-            <SampleFields />
-            <div className="flex justify-end pt-1">
+            <SampleFields eligible={activity.preview.page.eligible} />
+            <StepFooter>
               <Button onClick={() => void next()}>Continue</Button>
-            </div>
+            </StepFooter>
           </SetupStep>
           <SetupStep
             id="criteria"
             heading="Criteria"
             description="What the agent should do and what to watch for"
-            summary={criteriaSummary({ context, watching, questions })}
+            summary={<CriteriaSummary />}
           >
             <ExpectationsFields />
-            <div className="flex justify-end pt-1">
+            <StepFooter>
               <Button onClick={() => void next()}>Continue</Button>
-            </div>
+            </StepFooter>
           </SetupStep>
-          <SetupStep id="run" heading="Run" description="Schedule, analysis model, and budget" summary="">
+          <SetupStep id="run" heading="Schedule" description="How often to run, the model, and a budget" summary="">
             <RunFields models={analysis} gate={gate} />
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
-            <div className="flex justify-end pt-1">
+            <FieldError>{formState.errors.selection?.execution_ids?.message || error}</FieldError>
+            <StepFooter>
               <Button disabled={!canSave} onClick={() => void save()}>
                 {formState.isSubmitting ? "Saving…" : saveLabel}
               </Button>
-            </div>
+            </StepFooter>
           </SetupStep>
         </SetupSteps>
         <Inspector.Root
@@ -217,7 +233,7 @@ function SetupEditor({
           noun="run"
           storageKey={FINDING_PANEL_WIDTH_KEY}
         >
-          <MatchingActivityPreview {...activity.preview} className="min-w-0 lg:sticky lg:top-0" onOpen={setTrace} />
+          <MatchingActivityPreview {...activity.preview} className="min-w-0 lg:max-h-full" onOpen={setTrace} />
           <Inspector.Panel label="Run details" testId="run-panel">
             {(run: Execution) => (
               <TraceEvidence
@@ -232,4 +248,8 @@ function SetupEditor({
       </div>
     </section>
   );
+}
+
+function StepFooter({ children }: { children: ReactNode }) {
+  return <div className="flex justify-end border-t pt-4">{children}</div>;
 }

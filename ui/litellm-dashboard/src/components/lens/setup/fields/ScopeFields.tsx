@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import type { InvestigationInput } from "../investigationSchema";
-import type { ScopeOptions } from "../useMatchingActivity";
+import { useDropPicks, type ScopeOptions } from "../useMatchingActivity";
 
 import { MetadataFilters } from "./MetadataFilters";
 
@@ -20,6 +20,7 @@ const selectClass = "h-9 w-full rounded-md border border-input bg-background px-
 
 export function ScopeFields({ names, agentsLoading, agentsError, retryAgents, attributes, keys }: ScopeOptions) {
   const { control, register, setValue } = useFormContext<InvestigationInput>();
+  const dropPicks = useDropPicks();
   const selection = useWatch({ control, name: "selection" });
   const filters = selection.filters ?? [];
   const hasOptionalScope = !!selection.team_id || !!selection.service;
@@ -30,24 +31,27 @@ export function ScopeFields({ names, agentsLoading, agentsError, retryAgents, at
   const nameLabel = selection.source === "requests" ? "Model group (optional)" : "Agent (optional)";
   return (
     <>
-      <label className="grid gap-2 text-sm font-medium">
-        {nameLabel}
-        <Controller
-          control={control}
-          name={nameFieldName}
-          render={({ field }) => (
+      <Controller
+        control={control}
+        name={nameFieldName}
+        render={({ field }) => {
+          const change = (name: string) => {
+            if (name !== field.value) dropPicks();
+            field.onChange(name);
+          };
+          return (
             <Combobox
               items={names}
               value={field.value || null}
               inputValue={field.value ?? ""}
-              onInputValueChange={field.onChange}
-              onValueChange={(name) => field.onChange(name ?? "")}
+              onInputValueChange={change}
+              onValueChange={(name) => change(name ?? "")}
             >
               <ComboboxInput
                 aria-label={nameLabel}
                 placeholder={selection.source === "requests" ? "All model groups" : "All agents and activity"}
                 showClear={!!selectedName}
-                className="w-full h-9"
+                className="h-10 w-full"
               />
               <ComboboxContent>
                 <ComboboxEmpty>
@@ -62,9 +66,9 @@ export function ScopeFields({ names, agentsLoading, agentsError, retryAgents, at
                 </ComboboxList>
               </ComboboxContent>
             </Combobox>
-          )}
-        />
-      </label>
+          );
+        }}
+      />
       {selection.source !== "requests" && agentsError && (
         <p role="alert" className="text-sm text-destructive">
           Could not load agents.{" "}
@@ -81,7 +85,7 @@ export function ScopeFields({ names, agentsLoading, agentsError, retryAgents, at
           {selection.source !== "requests" && (
             <label className="grid gap-2 text-sm">
               Application (optional)
-              <Input {...register("selection.service")} placeholder="All applications" />
+              <Input {...register("selection.service", { onChange: dropPicks })} placeholder="All applications" />
             </label>
           )}
           <label className="grid gap-2 text-sm">
@@ -89,6 +93,7 @@ export function ScopeFields({ names, agentsLoading, agentsError, retryAgents, at
             <select
               {...register("selection.source", {
                 onChange: () => {
+                  dropPicks();
                   setValue("selection.service", "");
                   setValue("selection.agent_name", "");
                   setValue("selection.filters", []);
@@ -107,7 +112,7 @@ export function ScopeFields({ names, agentsLoading, agentsError, retryAgents, at
           <MetadataFilters attributes={attributes} keys={keys} />
           <label className="grid gap-2 text-sm">
             Team ID (optional)
-            <Input {...register("selection.team_id")} placeholder="All accessible teams" />
+            <Input {...register("selection.team_id", { onChange: dropPicks })} placeholder="All accessible teams" />
           </label>
         </div>
       </details>

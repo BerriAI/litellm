@@ -19,7 +19,15 @@ import { LensModeSwitch } from "./LensModeSwitch";
 import { FindingsView } from "./investigations/FindingsView";
 import { investigationActivity, listPollInterval } from "./model/status";
 import { cn } from "@/lib/cva.config";
-import { useDialogRoute, useIssueRoute, useLensRoute, type LensDialog, type LensTab } from "./route";
+import {
+  useDemoRoute,
+  useDialogRoute,
+  useInvestigateRoute,
+  useIssueRoute,
+  useLensRoute,
+  type LensDialog,
+  type LensTab,
+} from "./route";
 import { LensGettingStarted } from "./onboarding/LensGettingStarted";
 import { useLensReadiness, type LensReadiness } from "./hooks/useLensReadiness";
 import { OnboardingProvider, type Onboarding } from "./onboarding/OnboardingContext";
@@ -79,14 +87,21 @@ function useLensOverview(enabled: boolean, settingsOpen: boolean) {
 const PANEL =
   "flex min-h-0 flex-1 flex-col overflow-y-auto animate-in fade-in-0 duration-300 motion-reduce:animate-none";
 
+function useInvestigateAction(isAdmin: boolean, readOnly: boolean) {
+  const investigate = useInvestigateRoute();
+  return isAdmin && !readOnly ? investigate : undefined;
+}
+
 function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">) {
   const accessToken = useLensAccessToken();
-  const { tab, lensId, demo, settingUp, setTab, setDemo, setSetup } = useLensRoute();
+  const { tab, lensId, demo, settingUp, setTab, setSetup } = useLensRoute();
+  const setDemo = useDemoRoute();
   const { dialog, openDialog } = useDialogRoute();
   const { issueKey } = useIssueRoute();
   const { trace, openTrace } = useOpenTraceRouting();
   const canViewInvestigations = isProxyAdminTierRole(userRole);
   const isAdmin = isProxyAdminRole(userRole);
+  const onInvestigate = useInvestigateAction(isAdmin, readOnly);
   const canConfigure = canViewInvestigations && !readOnly;
   const defaultTab = lensId ? "investigations" : "traces";
   const activeTab = tab === "settings" && !canConfigure ? defaultTab : tab ?? defaultTab;
@@ -196,6 +211,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                     readOnly={readOnly}
                     canMintTracingKey={isAdmin}
                     canViewFindings={canViewInvestigations}
+                    onInvestigate={onInvestigate}
                   />
                 </TabsContent>
                 <TabsContent value="findings" className={PANEL}>

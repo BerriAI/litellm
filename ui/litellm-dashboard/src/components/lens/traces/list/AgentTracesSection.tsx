@@ -1,7 +1,7 @@
 "use client";
 
 import moment from "moment";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, ScanSearch } from "lucide-react";
 import { traceAgentNames } from "../utils";
 import { useMemo, useState } from "react";
 
@@ -23,6 +23,7 @@ import { TracesTimeline } from "./TracesTimeline";
 import { TracingSetupCard } from "../../onboarding/tracing/TracingSetupCard";
 import { useTracesLive } from "../api";
 import { type AgentTracesResult, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
+import type { InvestigateScope } from "../../route";
 
 const DRAWER_WIDTH_KEY = "litellm.agentTraces.drawerWidth";
 
@@ -41,6 +42,34 @@ interface AgentTracesSectionProps {
   readOnly?: boolean;
   canMintTracingKey?: boolean;
   canViewFindings?: boolean;
+  /** Starts an investigation over the runs the agent filter shows; offered only when that filter alone narrows them. */
+  onInvestigate?: (scope: InvestigateScope) => void;
+}
+
+const HOUR_MS = 3_600_000;
+
+interface InvestigateActionProps {
+  onInvestigate?: (scope: InvestigateScope) => void;
+  agent: string;
+  query: string;
+  status: string;
+  range: TimeWindow;
+  zoom: TimeWindow | null;
+}
+
+/** Hidden while a search or status filter narrows the runs, since an investigation cannot express either. */
+function InvestigateAction({ onInvestigate, agent, query, status, range, zoom }: InvestigateActionProps) {
+  const narrowed = query.trim() !== "" || status !== "all";
+  if (!onInvestigate || !agent || narrowed) return null;
+  const startMs = (zoom ?? range).startMs;
+  const investigate = () =>
+    onInvestigate({ agent, lookbackHours: Math.max(1, Math.ceil((Date.now() - startMs) / HOUR_MS)) });
+  return (
+    <Button variant="outline" size="sm" onClick={investigate}>
+      <ScanSearch className="size-3.5" />
+      Investigate these runs
+    </Button>
+  );
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -79,6 +108,7 @@ export function AgentTracesSection({
   readOnly = false,
   canMintTracingKey = false,
   canViewFindings,
+  onInvestigate,
 }: AgentTracesSectionProps) {
   const live = useTracesLive();
   const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
@@ -183,6 +213,14 @@ export function AgentTracesSection({
           range={zoom ?? window}
           busy={traces.isPlaceholder}
         >
+          <InvestigateAction
+            onInvestigate={onInvestigate}
+            agent={agent}
+            query={query}
+            status={status}
+            range={window}
+            zoom={zoom}
+          />
           <TracingSetupAction available={traces.traces.length > 0} live={live} onSetup={() => setShowSetup(true)} />
           <Button
             variant="outline"

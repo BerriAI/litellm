@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useFormContext, useWatch } from "react-hook-form";
 import { lensKeys, lensQueries } from "../data/queries";
 import { useLensApi } from "../data/LensServices";
-import { durationLabel } from "../model/format";
 import type { Sample } from "../model/types";
 import { useDebouncedValue } from "./useDebouncedValue";
 import type { InvestigationInput } from "./investigationSchema";
@@ -14,10 +13,17 @@ const PREVIEW_DEBOUNCE_MS = 350;
 const EMPTY_PREVIEW_POLL_MS = 15000;
 
 type Selection = InvestigationInput["selection"];
-type PreviewPageData = Pick<Sample, "eligible" | "selected">;
 
 export type Execution = Sample["executions"][number];
 export type Attribute = NonNullable<Execution["metadata"]>[number];
+
+/** Hand-picked runs belong to the scope and window they were picked from, so changing either drops them. */
+export function useDropPicks(): () => void {
+  const { getValues, setValue } = useFormContext<InvestigationInput>();
+  return useCallback(() => {
+    if (getValues("selection.execution_ids").length) setValue("selection.execution_ids", []);
+  }, [getValues, setValue]);
+}
 
 export interface ScopeOptions {
   readonly names: readonly string[];
@@ -29,9 +35,13 @@ export interface ScopeOptions {
 }
 
 export interface PreviewStatus {
-  readonly title: string;
-  readonly windowLabel: string;
+  /** Why no preview can run yet, or null once the setup is complete enough to preview. */
+  readonly notice: string | null;
   readonly ready: boolean;
+  /** No results yet for any selection: the list shows skeleton rows. */
+  readonly loading: boolean;
+  /** The rows belong to the previous selection while this one loads. */
+  readonly stale: boolean;
   readonly error: Error | null;
   readonly refresh: () => void;
 }
@@ -79,37 +89,15 @@ function validScope(scope: Selection): boolean {
   return validWindow(scope) && validSampling && validFilters;
 }
 
-function previewTitle(
-  state: { pending: boolean; validWindow: boolean; valid: boolean },
-  source: Selection["source"],
-  data: PreviewPageData | undefined,
-): string {
-  if (!state.validWindow) return "Choose a history window between 1 hour and 365 days";
-  if (!state.valid) return "Complete your condition to preview matches";
-  if (state.pending) return "Finding matching activity…";
-  if (!data) return "Preview unavailable";
-  const noun = source === "requests" ? "request" : "run";
-  return `${data.eligible} matching ${noun}${data.eligible === 1 ? "" : "s"}`;
+function previewNotice(windowValid: boolean, valid: boolean): string | null {
+  if (!windowValid) return "Choose a history window between 1 hour and 365 days";
+  if (!valid) return "Complete your condition to preview matches";
+  return null;
 }
 
 function manualSelectedCount(selection: Selection): number {
   const sampled = Math.ceil((selection.execution_ids.length * (selection.sample_percent ?? 100)) / 100);
   return Math.min(sampled, selection.sample_size ?? Infinity);
-}
-
-function manualPicks(selection: Selection, setExecutionIds: (ids: readonly string[]) => void): PreviewSelection {
-  const ids = selection.execution_ids;
-  return {
-    ids,
-    count: manualSelectedCount(selection),
-    toggle: (id, checked) => setExecutionIds(checked ? [...ids, id] : ids.filter((other) => other !== id)),
-    clear: () => setExecutionIds([]),
-  };
-}
-
-function windowLabel(selection: Selection): string {
-  if (!validWindow(selection)) return "Choose a valid history window";
-  return `Last ${durationLabel(selection.lookback_hours ?? 24, "hours")}`;
 }
 
 function useScopeFieldOptions(api: ReturnType<typeof useLensApi>, selection: Selection): ScopeOptions {
@@ -129,6 +117,15 @@ function useScopeFieldOptions(api: ReturnType<typeof useLensApi>, selection: Sel
 }
 
 /** Live preview of the activity a draft selection matches, debounced so typing a filter does not spam the API. */
+/** Skeletons only before the first page; afterwards the previous rows stay up while a new selection loads. */
+function previewPhase(valid: boolean, pending: boolean, hasRows: boolean) {
+  return {
+    ready: valid && !pending,
+    loading: valid && pending && !hasRows,
+    stale: valid && pending && hasRows,
+  };
+}
+
 export function useMatchingActivity(): MatchingActivity {
   const { control, setValue } = useFormContext<InvestigationInput>();
   const [selection, manualSelection] = useWatch({ control, name: ["selection", "manualSelection"] });
@@ -146,7 +143,7 @@ export function useMatchingActivity(): MatchingActivity {
   const scopeFields = useScopeFieldOptions(api, selection);
   const preview = useInfiniteQuery(lensQueries.preview(api, { scope, asOf, enabled: valid }));
   const firstPage = preview.data?.pages[0];
-  const executions = preview.data?.pages.flatMap((page) => page.executions) ?? [];
+  const executions = useMemo(() => preview.data?.pages.flatMap((page) => page.executions) ?? [], [preview.data]);
   const empty = firstPage?.eligible === 0;
   const refresh = useCallback(() => {
     setRefreshedAt(new Date().toISOString());
@@ -158,20 +155,40 @@ export function useMatchingActivity(): MatchingActivity {
     const timer = window.setTimeout(refresh, EMPTY_PREVIEW_POLL_MS);
     return () => window.clearTimeout(timer);
   }, [empty, valid, asOf, refresh]);
-  const pending = settling || preview.isLoading || preview.isPlaceholderData;
-  const ready = !pending && valid;
-  const setExecutionIds = (next: readonly string[]) =>
-    setValue("selection.execution_ids", [...next], { shouldValidate: true });
-  const picked = manualSelection ? manualPicks(selection, setExecutionIds) : null;
+  const { ready, loading, stale } = previewPhase(
+    valid,
+    settling || preview.isLoading || preview.isPlaceholderData,
+    !!firstPage,
+  );
+  const ids = selection.execution_ids;
+  const setExecutionIds = useCallback(
+    (next: readonly string[]) => setValue("selection.execution_ids", [...next], { shouldValidate: true }),
+    [setValue],
+  );
+  const toggle = useCallback(
+    (id: string, checked: boolean) => setExecutionIds(checked ? [...ids, id] : ids.filter((other) => other !== id)),
+    [ids, setExecutionIds],
+  );
+  const clear = useCallback(() => setExecutionIds([]), [setExecutionIds]);
+  const { hasNextPage, isFetching, fetchNextPage } = preview;
+  const loadMore = useCallback(() => {
+    if (hasNextPage && !isFetching) void fetchNextPage({ cancelRefetch: false });
+  }, [hasNextPage, isFetching, fetchNextPage]);
+  const count = manualSelectedCount(selection);
+  const picked = useMemo(
+    () => (manualSelection ? { ids, count, toggle, clear } : null),
+    [manualSelection, ids, count, toggle, clear],
+  );
   const hasMatches = !preview.error && (firstPage?.selected ?? 0) > 0;
   const hasSelection = !picked || picked.ids.length > 0;
   return {
     scope: scopeFields,
     preview: {
       status: {
-        title: previewTitle({ pending, validWindow: windowValid, valid }, selection.source, firstPage),
-        windowLabel: windowLabel(selection),
+        notice: previewNotice(windowValid, valid),
         ready,
+        loading,
+        stale,
         error: preview.error,
         refresh,
       },
@@ -181,9 +198,7 @@ export function useMatchingActivity(): MatchingActivity {
         executions,
         hasMore: preview.hasNextPage,
         loadingMore: preview.isFetchingNextPage,
-        loadMore: () => {
-          if (preview.hasNextPage && !preview.isFetching) void preview.fetchNextPage({ cancelRefetch: false });
-        },
+        loadMore,
       },
       selection: picked,
     },

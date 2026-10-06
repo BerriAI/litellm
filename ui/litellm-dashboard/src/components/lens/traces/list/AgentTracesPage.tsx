@@ -4,6 +4,7 @@ import { useRelativeRange } from "@/components/shared/timeRange/useRelativeRange
 
 import { AgentTracesSection } from "./AgentTracesSection";
 import { useTracesLive } from "../api";
+import type { InvestigateScope } from "../../route";
 
 export default function AgentTracesPage({
   accessToken,
@@ -11,12 +12,14 @@ export default function AgentTracesPage({
   readOnly = false,
   canMintTracingKey = false,
   canViewFindings = true,
+  onInvestigate,
 }: {
   accessToken: string;
   isActive?: boolean;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
   canViewFindings?: boolean;
+  onInvestigate?: (scope: InvestigateScope) => void;
 }) {
   const time = useRelativeRange(useTracesLive());
   return (
@@ -28,6 +31,7 @@ export default function AgentTracesPage({
         readOnly={readOnly}
         canMintTracingKey={canMintTracingKey}
         canViewFindings={canViewFindings}
+        onInvestigate={onInvestigate}
         timeControls={time}
       />
     </div>
