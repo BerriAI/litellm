@@ -17,6 +17,28 @@ export function conversationSteps(spans: readonly Span[]): Span[] {
     .sort((a, b) => a.start_offset_ms - b.start_offset_ms);
 }
 
+export function pendingConversationBranches(
+  spans: readonly Span[],
+  details: ReadonlyMap<string, SpanDetail>,
+  hasMoreSpans: boolean,
+): ReadonlySet<string> {
+  const byId = new Map(spans.map((span) => [span.span_id, span]));
+  const steps = new Set(conversationSteps(spans).map((span) => span.span_id));
+  const pageBoundary = spans.reduce((latest, span) => Math.max(latest, span.start_offset_ms), -Infinity);
+  const pending = new Set<string>();
+  for (const span of spans) {
+    const missingDetail = steps.has(span.span_id) && !details.has(span.span_id);
+    const mayHaveLaterChildren = hasMoreSpans && span.start_offset_ms + span.duration_ms >= pageBoundary;
+    if (!missingDetail && !mayHaveLaterChildren) continue;
+    let ancestor: Span | undefined = span;
+    while (ancestor && !pending.has(ancestor.span_id)) {
+      pending.add(ancestor.span_id);
+      ancestor = ancestor.parent_span_id ? byId.get(ancestor.parent_span_id) : undefined;
+    }
+  }
+  return pending;
+}
+
 function contentText(value: string, content?: UIContent): string {
   if (content?.kind === "text") return content.text;
   if (content?.kind === "fields")
@@ -147,7 +169,7 @@ function conversationEvents(
   steps: readonly Span[],
   byId: ReadonlyMap<string, Span>,
   details: ReadonlyMap<string, SpanDetail>,
-  complete: boolean,
+  { complete, pendingBranches }: { complete: boolean; pendingBranches?: ReadonlySet<string> },
 ): ConversationEvent[] {
   const missingIndex = steps.findIndex((span) => !details.has(span.span_id));
   const loaded = missingIndex < 0 ? steps : steps.slice(0, missingIndex);
@@ -170,7 +192,8 @@ function conversationEvents(
       const start = { span, time: messageTime(span, loaded, details), output: false };
       if (span.type === "tool" || (span.type !== "agent" && span.parent_span_id !== null)) return [start];
       const end = ends.get(span.span_id)!;
-      return (complete && missingIndex < 0) || end < boundary ? [start, { span, time: end, output: true }] : [start];
+      const branchComplete = (complete && missingIndex < 0) || pendingBranches?.has(span.span_id) === false;
+      return branchComplete || end < boundary ? [start, { span, time: end, output: true }] : [start];
     })
     .sort(
       (a, b) =>
@@ -252,6 +275,7 @@ export function buildConversation(
   spans: readonly Span[],
   recordedDetails: ReadonlyMap<string, SpanDetail>,
   complete: boolean,
+  pendingBranches?: ReadonlySet<string>,
 ): ConversationItem[] {
   const details = claudeToolDetails(spans, recordedDetails);
   const byId = new Map(spans.map((span) => [span.span_id, span]));
@@ -259,7 +283,7 @@ export function buildConversation(
   const completedOutputs = new Map<string, TraceMessage[]>();
   const pendingCalls = new Map<string, TraceToolCall[]>();
   const items: ConversationItem[] = [];
-  const events = conversationEvents(conversationSteps(spans), byId, details, complete);
+  const events = conversationEvents(conversationSteps(spans), byId, details, { complete, pendingBranches });
   const branch = (span: Span): string => conversationBranch(span, byId);
   for (const event of events) {
     const { span } = event;

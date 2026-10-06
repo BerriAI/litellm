@@ -11,6 +11,7 @@ import {
   buildConversation,
   conversationWarnings,
   conversationBranchGroups,
+  pendingConversationBranches,
   groupConversation,
   CONVERSATION_PAGE_SIZE,
   type ConversationItem,
@@ -29,6 +30,10 @@ export interface ConversationTracePaging {
   loadMore: () => void;
 }
 
+function hasRemainingSource(branchId: string | null, sourceRemaining: boolean, pendingBranches: ReadonlySet<string>) {
+  return sourceRemaining && (branchId === null || pendingBranches.has(branchId));
+}
+
 export function TraceConversation({
   trace,
   accessToken,
@@ -44,12 +49,16 @@ export function TraceConversation({
   const [requestedBranch, setRequestedBranch] = useState<string | null>();
   const { details, entries, complete, loading, failed, hasMore, loadMore } = useConversationDetails(trace, accessToken);
   const traceComplete = complete && !trace.next_cursor;
-  const items = buildConversation(trace.spans, details, complete);
+  const pendingBranches = pendingConversationBranches(trace.spans, details, Boolean(trace.next_cursor));
+  const items = buildConversation(trace.spans, details, complete, pendingBranches);
   const groups = groupConversation(items, trace.spans);
-  const requestedGroups = conversationBranchGroups(groups, requestedBranch ?? null);
-  const requestedLimit = pages.get(requestedBranch ?? null) ?? CONVERSATION_PAGE_SIZE;
-  const needsMore = requestedBranch !== undefined && requestedGroups.length < requestedLimit;
+  const requestedId = requestedBranch ?? null;
+  const requestedGroups = conversationBranchGroups(groups, requestedId);
+  const requestedLimit = pages.get(requestedId) ?? CONVERSATION_PAGE_SIZE;
   const sourceRemaining = hasMore || Boolean(trace.next_cursor && paging);
+  const requestedSourceRemaining = hasRemainingSource(requestedId, sourceRemaining, pendingBranches);
+  const needsMore =
+    requestedBranch !== undefined && requestedGroups.length < requestedLimit && requestedSourceRemaining;
   const busy = loading || Boolean(paging?.loading);
   const blocked = failed || Boolean(paging?.failed);
   const loadTracePage = paging?.loadMore;
@@ -96,6 +105,7 @@ export function TraceConversation({
           onOpenStep={onOpenStep}
           pages={pages}
           sourceRemaining={sourceRemaining}
+          pendingBranches={pendingBranches}
           disabled={busy || blocked || fillingPage}
           onLoadEntries={loadEntries}
           complete={traceComplete}
@@ -161,6 +171,7 @@ function ConversationGroups({
   name,
   pages,
   sourceRemaining,
+  pendingBranches,
   disabled,
   onLoadEntries,
   complete,
@@ -172,14 +183,16 @@ function ConversationGroups({
   name?: string;
   pages: ReadonlyMap<string | null, number>;
   sourceRemaining: boolean;
+  pendingBranches: ReadonlySet<string>;
   disabled: boolean;
   onLoadEntries: (branchId: string | null, shown: number) => void;
   complete: boolean;
 }) {
   const limit = pages.get(branchId) ?? CONVERSATION_PAGE_SIZE;
   const visible = groups.slice(0, limit);
-  const hasMore = visible.length < groups.length || sourceRemaining;
-  const nextCount = sourceRemaining
+  const branchRemaining = hasRemainingSource(branchId, sourceRemaining, pendingBranches);
+  const hasMore = visible.length < groups.length || branchRemaining;
+  const nextCount = branchRemaining
     ? CONVERSATION_PAGE_SIZE
     : Math.min(CONVERSATION_PAGE_SIZE, groups.length - visible.length);
   return (
@@ -209,6 +222,7 @@ function ConversationGroups({
                 name={group.name}
                 pages={pages}
                 sourceRemaining={sourceRemaining}
+                pendingBranches={pendingBranches}
                 disabled={disabled}
                 onLoadEntries={onLoadEntries}
                 complete={complete}

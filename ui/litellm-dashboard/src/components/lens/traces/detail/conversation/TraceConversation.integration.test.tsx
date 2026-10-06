@@ -209,6 +209,112 @@ describe("TraceConversation", () => {
     expect(screen.queryByText("End of conversation")).not.toBeInTheDocument();
   });
 
+  it.each([
+    { duration: 10, nextCursor: null },
+    { duration: 1000, nextCursor: null },
+    { duration: 10, nextCursor: "unrelated-page" },
+  ])("hides an exhausted subagent control with unrelated work remaining (%j)", async ({ duration, nextCursor }) => {
+    const user = userEvent.setup();
+    const child = {
+      ...root,
+      span_id: "child",
+      parent_span_id: "root",
+      name: "Reviewer",
+      start_offset_ms: 1,
+      duration_ms: duration,
+    };
+    const spans = [
+      root,
+      child,
+      { ...tool, span_id: "child-tool", parent_span_id: "child", start_offset_ms: 2, duration_ms: 1 },
+      ...Array.from({ length: 40 }, (_, index) => ({
+        ...tool,
+        span_id: `parent-${index}`,
+        start_offset_ms: 100 + index,
+        duration_ms: 1,
+      })),
+    ] as Trace["spans"];
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) => {
+      if (id === "child") return { ...rootDetail, span_id: id, input: "Review task", output: "Review finished" };
+      return id === "root" ? rootDetail : { ...toolDetail, span_id: id };
+    });
+    const loadMore = vi.fn();
+    renderWithProviders(
+      <TraceConversation
+        trace={{ ...trace, spans, next_cursor: nextCursor }}
+        accessToken="test"
+        onOpenStep={vi.fn()}
+        paging={{ loading: false, failed: false, loadMore }}
+      />,
+    );
+    const more = await screen.findByRole("button", { name: "Load next 20 entries", exact: true });
+    await waitFor(() => expect(more).toBeEnabled());
+    await user.click(screen.getByText("Subagent: Reviewer", { exact: true }));
+    expect(screen.getByText("Review finished")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /entries in Reviewer/ })).not.toBeInTheDocument();
+    expect(agentTraceSpanCall).toHaveBeenCalledTimes(20);
+    expect(loadMore).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("stops loading at the selected subagent's end (server paging: %s)", async (paged) => {
+    const user = userEvent.setup();
+    const child = {
+      ...root,
+      span_id: "child",
+      parent_span_id: "root",
+      name: "Reviewer",
+      start_offset_ms: 1,
+      duration_ms: 60,
+    };
+    const spans = [
+      root,
+      child,
+      ...Array.from({ length: 25 }, (_, index) => ({
+        ...tool,
+        span_id: `child-${index}`,
+        parent_span_id: "child",
+        name: `child tool ${index}`,
+        start_offset_ms: 2 + index,
+        duration_ms: 1,
+      })),
+      ...Array.from({ length: 40 }, (_, index) => ({
+        ...tool,
+        span_id: `parent-${index}`,
+        name: `parent tool ${index}`,
+        start_offset_ms: 100 + index,
+        duration_ms: 1,
+      })),
+    ] as Trace["spans"];
+    const first: Trace = {
+      ...trace,
+      spans: paged ? spans.slice(0, 20) : spans,
+      next_cursor: paged ? "child-page" : null,
+    };
+    const next: Trace = { ...trace, spans: spans.slice(20, 40), next_cursor: "unrelated-page" };
+    vi.mocked(agentTraceCall).mockImplementation(async (_token, _trace, _ref, cursor) => (cursor ? next : first));
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) => {
+      if (id === "child") return { ...rootDetail, span_id: id, input: "Review task", output: "Review finished" };
+      return id === "root" ? rootDetail : { ...toolDetail, span_id: id };
+    });
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Conversation" }));
+    await user.click(await screen.findByText("Subagent: Reviewer", { exact: true }));
+    const more = await screen.findByRole("button", { name: "Load next 20 entries in Reviewer" });
+    await waitFor(() => expect(more).toBeEnabled());
+    await user.click(more);
+    expect(await screen.findByRole("button", { name: "Expand child tool 24 tool call" })).toBeVisible();
+    await waitFor(() => expect(screen.queryByRole("button", { name: /entries in Reviewer/ })).not.toBeInTheDocument());
+    expect(screen.getByText("Review finished")).toBeVisible();
+    expect(screen.getAllByRole("region", { name: /Conversation step child tool/ })).toHaveLength(25);
+    expect(screen.getByRole("button", { name: "Load next 20 entries", exact: true })).toBeEnabled();
+    expect(screen.queryByText("Loading conversation…")).not.toBeInTheDocument();
+    expect(agentTraceSpanCall).toHaveBeenCalledTimes(40);
+    expect(agentTraceCall).toHaveBeenCalledTimes(paged ? 2 : 1);
+    expect(agentTraceCall).not.toHaveBeenCalledWith("test", trace.summary.trace_id, undefined, "unrelated-page");
+  });
+
   it("stops at a failed server page and resumes the requested entries after retry", async () => {
     const user = userEvent.setup();
     const first: Trace = { ...trace, next_cursor: "next-page" };

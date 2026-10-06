@@ -5,6 +5,7 @@ import {
   newConversationMessages,
   groupConversation,
   conversationWarnings,
+  pendingConversationBranches,
 } from "./conversation";
 import type { Span, SpanDetail, TraceMessage } from "../../types";
 import research from "../../__fixtures__/research_trace.json";
@@ -26,6 +27,46 @@ const detail = (span_id: string, input: unknown, output: unknown): SpanDetail =>
 });
 
 describe("trace conversation", () => {
+  it("keeps missing nested details pending through framework and native agent ancestors", () => {
+    const agent = {
+      ...root,
+      span_id: "agent",
+      parent_span_id: "root",
+      type: "tool",
+      name: "Agent",
+      framework: "claude-code",
+    };
+    const framework = { ...root, span_id: "framework", parent_span_id: "agent", type: "framework" };
+    const child = { ...root, span_id: "child", parent_span_id: "framework" };
+    const other = { ...root, span_id: "other", parent_span_id: "root" };
+    const spans = [root, agent, framework, child, other] as Span[];
+    const details = new Map(
+      spans.filter((span) => span !== child).map((span) => [span.span_id, detail(span.span_id, [], [])]),
+    );
+    expect([...pendingConversationBranches(spans, details, false)].sort()).toEqual([
+      "agent",
+      "child",
+      "framework",
+      "root",
+    ]);
+    details.set(child.span_id, detail(child.span_id, [], []));
+    expect(pendingConversationBranches(spans, details, false).size).toBe(0);
+  });
+
+  it.each([
+    { boundary: 10, morePages: true, pending: true },
+    { boundary: 20, morePages: true, pending: true },
+    { boundary: 21, morePages: true, pending: false },
+    { boundary: 10, morePages: false, pending: false },
+  ])("only waits for pages that could contain later branch children (%j)", ({ boundary, morePages, pending }) => {
+    const agent = { ...root, span_id: "agent", parent_span_id: "root", start_offset_ms: 1, duration_ms: 5 };
+    const child = { ...agent, span_id: "child", parent_span_id: "agent", start_offset_ms: 2, duration_ms: 18 };
+    const other = { ...root, span_id: "other", parent_span_id: "root", start_offset_ms: boundary };
+    const spans = [root, agent, child, other];
+    const details = new Map(spans.map((span) => [span.span_id, detail(span.span_id, [], [])]));
+    expect(pendingConversationBranches(spans, details, morePages).has("agent")).toBe(pending);
+  });
+
   it.each(["reviewer", "__proto__", "constructor"])("keeps repeated agent name %s stable as steps load", (name) => {
     const first = { ...root, span_id: "first", name, start_offset_ms: 1 };
     const second = { ...first, span_id: "second", start_offset_ms: 2 };
