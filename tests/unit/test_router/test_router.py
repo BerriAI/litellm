@@ -2334,6 +2334,10 @@ def test_update_settings_model_group_alias_drops_cached_group_info():
     assert after.input_cost_per_token is not None and after.input_cost_per_token > 0
 
 
+_PAID_INPUT_COST_PER_TOKEN: Final = 3e-06
+_PAID_OUTPUT_COST_PER_TOKEN: Final = 1.5e-05
+
+
 def _free_ollama_deployment(model_name: str) -> dict:
     return {
         "model_name": model_name,
@@ -2346,11 +2350,23 @@ def _free_ollama_deployment(model_name: str) -> dict:
     }
 
 
+def _paid_openai_deployment(model_name: str, model: str) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": model,
+            "api_key": "fake",
+            "input_cost_per_token": _PAID_INPUT_COST_PER_TOKEN,
+            "output_cost_per_token": _PAID_OUTPUT_COST_PER_TOKEN,
+        },
+    }
+
+
 def _assert_priced(info: ModelGroupInfo | None, provider: str) -> None:
     assert info is not None
     assert info.providers == [provider]
-    assert info.input_cost_per_token is not None and info.input_cost_per_token > 0
-    assert info.output_cost_per_token is not None and info.output_cost_per_token > 0
+    assert info.input_cost_per_token == _PAID_INPUT_COST_PER_TOKEN
+    assert info.output_cost_per_token == _PAID_OUTPUT_COST_PER_TOKEN
 
 
 def _assert_free(info: ModelGroupInfo | None, provider: str) -> None:
@@ -2367,7 +2383,7 @@ def test_get_model_group_info_prices_an_alias_chain_from_the_group_it_routes_to(
     router = Router(
         model_list=[
             _free_ollama_deployment("local-free"),
-            {"model_name": "gpt-priced", "litellm_params": {"model": "gpt-4o", "api_key": "fake"}},
+            _paid_openai_deployment("gpt-priced", "gpt-4o"),
         ],
         model_group_alias={"chain-entry": "local-free", "local-free": "gpt-priced"},
     )
@@ -2382,7 +2398,7 @@ def test_get_model_group_info_prices_an_alias_chain_from_the_wildcard_route_serv
     target's."""
     router = Router(
         model_list=[
-            {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "fake"}},
+            _paid_openai_deployment("openai/*", "openai/*"),
             _free_ollama_deployment("local-free"),
         ],
         model_group_alias={"wildcard-entry": "openai/gpt-4o", "openai/gpt-4o": "local-free"},

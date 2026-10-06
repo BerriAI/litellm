@@ -1618,7 +1618,15 @@ def test_is_model_cost_zero_judges_an_alias_chain_by_the_deployment_its_entry_ro
                     "output_cost_per_token": 0,
                 },
             },
-            {"model_name": "paid-gpt", "litellm_params": {"model": "gpt-4o", "api_key": "fake"}},
+            {
+                "model_name": "paid-gpt",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "fake",
+                    "input_cost_per_token": 3e-06,
+                    "output_cost_per_token": 1.5e-05,
+                },
+            },
         ],
         model_group_alias={"chain-entry": "local-free", "local-free": "paid-gpt"},
     )
