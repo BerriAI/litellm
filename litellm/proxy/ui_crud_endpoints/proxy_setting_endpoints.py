@@ -1693,6 +1693,19 @@ def apply_runtime_general_settings_flags(ui_settings: Mapping[str, JsonValue]) -
     return MappingProxyType(flags)
 
 
+async def read_stored_ui_settings(prisma_client: object, *, use_writer: bool) -> dict[str, JsonValue]:
+    """Read the persisted UI settings row. Database errors propagate to the caller."""
+    db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client, use_writer=use_writer)).find_unique(
+        where={"id": "ui_settings"}
+    )
+    stored: Final = (db_record.ui_settings if db_record else None) or "{}"
+    return (
+        _UI_SETTINGS_OBJECT.validate_json(stored)
+        if isinstance(stored, str)
+        else _UI_SETTINGS_OBJECT.validate_python(stored)
+    )
+
+
 async def sync_ui_settings_to_general_settings(
     prisma_client: object, *, require_fresh: bool = False
 ) -> Mapping[str, JsonValue]:
@@ -1704,15 +1717,7 @@ async def sync_ui_settings_to_general_settings(
     and fail closed if the current settings cannot be read.
     """
     try:
-        db_record: Final = await _ui_settings_db(
-            UISettingsRepository(prisma_client, use_writer=require_fresh)
-        ).find_unique(where={"id": "ui_settings"})
-        stored: Final = (db_record.ui_settings if db_record else None) or "{}"
-        parsed: Final = (
-            _UI_SETTINGS_OBJECT.validate_json(stored)
-            if isinstance(stored, str)
-            else _UI_SETTINGS_OBJECT.validate_python(stored)
-        )
+        parsed: Final = await read_stored_ui_settings(prisma_client, use_writer=require_fresh)
     except Exception as e:
         verbose_proxy_logger.warning("Could not refresh UI settings from the database: %s", e)
         if require_fresh:
