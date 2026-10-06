@@ -23,11 +23,23 @@ export interface HistoryTabProps {
 
 export function HistoryTab({ lens }: HistoryTabProps) {
   const [offset, setOffset] = useState(0);
-  const history = useRunHistory(lens, offset);
+  return (
+    <TabsContent value="activity" className="pt-4 space-y-4">
+      <HistoryContent lens={lens} offset={offset} setOffset={setOffset} />
+    </TabsContent>
+  );
+}
+
+function HistoryContent({
+  lens,
+  offset,
+  setOffset,
+}: HistoryTabProps & { offset: number; setOffset: (offset: number) => void }) {
+  const history = useRunHistory(lens, offset, offset > 0);
   const { openRun } = useRunRoute();
   const rows = history.data ?? lens.jobs;
   return (
-    <TabsContent value="activity" className="pt-4 space-y-4">
+    <>
       {history.error && (
         <p role="alert" className="text-sm text-destructive">
           Could not load run history.{" "}
@@ -85,6 +97,6 @@ export function HistoryTab({ lens }: HistoryTabProps) {
           </Button>
         </div>
       )}
-    </TabsContent>
+    </>
   );
 }

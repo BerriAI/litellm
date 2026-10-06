@@ -156,7 +156,7 @@ function facts(job: Job | undefined, findings: readonly Finding[] | null | undef
   };
 }
 
-function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
+function Stat({ label, value, note }: { label: string; value: ReactNode; note?: string }) {
   return (
     <div className="min-w-0">
       <dt className="text-xs text-muted-foreground">{label}</dt>
@@ -187,18 +187,19 @@ function issueStat(job: Job, findings: readonly Finding[] | null | undefined) {
   return { value: issues.length.toLocaleString(), note: high ? `${high} high priority` : undefined };
 }
 
-function RunStats({ job, findings, now }: { job: Job; findings: readonly Finding[] | null | undefined; now: number }) {
+function RunDuration({ job }: { job: Job }) {
+  const now = useNow(isActive(job) ? 1000 : 60000);
+  const end = job.finished_at ? Date.parse(job.finished_at) : now;
+  return isActive(job) || job.finished_at ? analysisElapsed(job.created_at, end) : "–";
+}
+
+function RunStats({ job, findings }: { job: Job; findings: readonly Finding[] | null | undefined }) {
   const calls = (job.steps ?? []).filter((step) => step.kind === "model").length;
   const { screened = 0, selected = 0 } = job.coverage ?? {};
-  const end = job.finished_at ? Date.parse(job.finished_at) : now;
   return (
     <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
       <Stat label="Cost" value={money(job.cost ?? 0)} note={plural(calls, "model call")} />
-      <Stat
-        label="Duration"
-        value={isActive(job) || job.finished_at ? analysisElapsed(job.created_at, end) : "–"}
-        note={`Started ${shortTime(job.created_at)}`}
-      />
+      <Stat label="Duration" value={<RunDuration job={job} />} note={`Started ${shortTime(job.created_at)}`} />
       <Stat
         label="Runs reviewed"
         value={`${screened.toLocaleString()} / ${selected.toLocaleString()}`}
@@ -302,7 +303,6 @@ function nextAction(lens: Lens, job: Job | undefined, situation: RunSituation): 
 }
 
 export function RunReport({ lens, job, findings, connected, ready, busy, picker, actions, queue }: RunReportProps) {
-  const now = useNow(job && isActive(job) ? 1000 : 60000);
   const input: SituationInput = { lens, job, findings, connected };
   const situation = runSituation(input);
   const view = SITUATIONS[situation];
@@ -316,16 +316,16 @@ export function RunReport({ lens, job, findings, connected, ready, busy, picker,
           <h3 className="mt-0.5 text-base font-semibold">{view.headline(known)}</h3>
         </div>
         <div className="flex items-center gap-1">
-          {job && picker}
+          {picker}
           {action && actions && (
             <NextAction action={action} facts={known} ready={ready} busy={busy} onClick={actions[action]} />
           )}
         </div>
       </header>
-      {job && view.body === "progress" && <InvestigationProgress key={job.id} job={job} now={now} queue={queue} />}
+      {job && view.body === "progress" && <InvestigationProgress key={job.id} job={job} queue={queue} />}
       {job?.error && view.body === "partial" && <RunPartial job={job} connected={connected} />}
       {job?.error && view.body === "error" && <RunFailure job={job} connected={connected} />}
-      {job && <RunStats job={job} findings={findings} now={now} />}
+      {job && <RunStats job={job} findings={findings} />}
       {job && <RunLog job={job} />}
     </section>
   );
