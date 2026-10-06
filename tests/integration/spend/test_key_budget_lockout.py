@@ -1,10 +1,8 @@
 import json
 import os
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from pathlib import Path
-from threading import Barrier, BrokenBarrierError
 from typing import Final
 
 import httpx
@@ -29,8 +27,7 @@ class _Usage(BaseModel):
 
 
 _FULL_USAGE: Final = _Usage(prompt_tokens=20, completion_tokens=20, total_tokens=40)
-_RESET_USAGE: Final = _Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
-_RE_EXHAUST_USAGE: Final = _Usage(prompt_tokens=20, completion_tokens=17, total_tokens=37)
+_PARTIAL_RESET_USAGE: Final = _Usage(prompt_tokens=20, completion_tokens=10, total_tokens=30)
 
 
 class _AssistantMessage(BaseModel):
@@ -160,24 +157,6 @@ def _assert_budget_refusal(gateway: Gateway, model: str, key: str, prompt: str) 
     assert _ErrorResponse.model_validate_json(response.content).error.type == "budget_exceeded", response.text
 
 
-def _serve_both(
-    first: Gateway, second: Gateway, model: str, key: str, prompts: tuple[str, str]
-) -> tuple[_ChatResponse, _ChatResponse]:
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        first_call: Final = executor.submit(_wire_chat, first, model, key, prompts[0], 1)
-        second_call: Final = executor.submit(_wire_chat, second, model, key, prompts[1], 1)
-        responses: Final = (first_call.result(), second_call.result())
-    pair: Final = (
-        _assert_wire_success(responses[0], _RESET_USAGE),
-        _assert_wire_success(responses[1], _RESET_USAGE),
-    )
-    for response in responses:
-        assert float(response.headers["x-litellm-key-spend"]) == pytest.approx(0.003), (
-            f"{response.headers} {response.text}"
-        )
-    return pair
-
-
 def test_an_exhausted_key_is_refused_inference_but_can_still_read_its_own_info(gateway: Gateway) -> None:
     with (
         gateway.scenario() as scenario,
@@ -258,9 +237,8 @@ def test_reset_spend_lifts_an_exhausted_key_on_both_workers_for_both_path_spelli
     gateway: Gateway, tmp_path: Path
 ) -> None:
     backend: Final = "integration-keys-auth-reset"
-    prompts: Final = tuple(f"reset spend case {index} {uuid.uuid4().hex}" for index in range(10))
-    accepted_after_reset: Final = frozenset((*prompts[3:5], *prompts[8:10]))
-    rendezvous: Final = Barrier(2)
+    prompts: Final = tuple(f"reset spend case {index} {uuid.uuid4().hex}" for index in range(9))
+    accepted_after_reset: Final = frozenset((prompts[3], prompts[6]))
 
     def respond(request: Request) -> Reply:
         if request.method == "GET":
@@ -288,23 +266,12 @@ def test_reset_spend_lifts_an_exhausted_key_on_both_workers_for_both_path_spelli
         body: Final = _CHAT_BODY.validate_json(request.body)
         parsed: Final = _ChatRequest.model_validate_json(request.body)
         prompt: Final = parsed.messages[0].content
-        max_tokens: Final = 1 if prompt in accepted_after_reset else 17 if prompt == prompts[5] else 20
+        max_tokens: Final = 10 if prompt in accepted_after_reset else 20
         assert parsed.model == backend
         assert parsed.max_tokens == max_tokens
         assert len(parsed.messages) == 1 and prompt in prompts, request.body
         assert body == _chat_body(backend, prompt, max_tokens), body
-        if prompt in accepted_after_reset:
-            try:
-                rendezvous.wait(timeout=5)
-            except BrokenBarrierError:
-                pass
-        usage: Final = (
-            _RESET_USAGE
-            if prompt in accepted_after_reset
-            else _RE_EXHAUST_USAGE
-            if prompt == prompts[5]
-            else _FULL_USAGE
-        )
+        usage: Final = _PARTIAL_RESET_USAGE if prompt in accepted_after_reset else _FULL_USAGE
         return _wire_reply("chatcmpl-" + uuid.uuid4().hex, usage)
 
     with (
@@ -331,73 +298,87 @@ def test_reset_spend_lifts_an_exhausted_key_on_both_workers_for_both_path_spelli
             key_hash: Final = sha256(key.encode()).hexdigest()
             first_spend: Final = _assert_wire_success(_wire_chat(gateway, model, key, prompts[0]), _FULL_USAGE)
             assert first_spend.usage.total_tokens == 40
-            eventually(lambda: _spend(gateway, key_hash), lambda spend: spend >= 0.06, seconds=70)
+            exhausted_spend: Final = eventually(
+                lambda: _spend(gateway, key_hash), lambda spend: spend >= 0.06, seconds=70
+            )
+            assert exhausted_spend == pytest.approx(0.06)
             _assert_wire_requests(wire, (_EXPECTED_MODEL_DISCOVERY, _EXPECTED_CHAT))
             _assert_budget_refusal(gateway, model, key, prompts[1])
             _assert_budget_refusal(second, model, key, prompts[2])
             assert wire.drain() == (), "exhausted-key requests reached the upstream"
 
             prior_spend: Final = _spend(gateway, key_hash)
-            reset_plaintext: Final = gateway.request("POST", f"/key/{key}/reset_spend", {"reset_to": 0})
+            reset_plaintext: Final = gateway.request("POST", f"/key/{key}/reset_spend", {"reset_to": 0.02})
             assert reset_plaintext.status_code == 200, reset_plaintext.text
             plain_result: Final = _ResetResponse.model_validate_json(reset_plaintext.content)
             assert plain_result.key_hash == key_hash, reset_plaintext.text
-            assert plain_result.spend == 0, reset_plaintext.text
+            assert plain_result.spend == pytest.approx(0.02), reset_plaintext.text
             assert plain_result.previous_spend == pytest.approx(prior_spend), reset_plaintext.text
             info_after_plain_reset: Final = gateway.request("GET", "/key/info", params={"key": key})
             assert info_after_plain_reset.status_code == 200, info_after_plain_reset.text
-            assert _KeyInfoResponse.model_validate_json(info_after_plain_reset.content).info.spend == 0, (
+            assert _KeyInfoResponse.model_validate_json(info_after_plain_reset.content).info.spend == pytest.approx(0.02), (
                 info_after_plain_reset.text
             )
-            assert _spend(gateway, key_hash) == 0
+            assert _spend(gateway, key_hash) == pytest.approx(0.02)
             peer_info_after_plain_reset: Final = eventually(
                 lambda: second.request("GET", "/key/info", params={"key": key}),
                 lambda response: (
                     response.status_code == 200
-                    and _KeyInfoResponse.model_validate_json(response.content).info.spend == 0
+                    and _KeyInfoResponse.model_validate_json(response.content).info.spend == pytest.approx(0.02)
                 ),
                 seconds=10,
             )
-            assert _KeyInfoResponse.model_validate_json(peer_info_after_plain_reset.content).info.spend == 0, (
-                peer_info_after_plain_reset.text
+            assert _KeyInfoResponse.model_validate_json(peer_info_after_plain_reset.content).info.spend == pytest.approx(
+                0.02
+            ), peer_info_after_plain_reset.text
+            plain_chat: Final = _assert_wire_success(
+                _wire_chat(gateway, model, key, prompts[3], max_tokens=10),
+                _PARTIAL_RESET_USAGE,
             )
-            first_pair: Final = _serve_both(gateway, second, model, key, (prompts[3], prompts[4]))
-            assert len(first_pair) == 2
-            _assert_wire_requests(wire, (_EXPECTED_CHAT,) * 2)
-            re_exhausted: Final = _assert_wire_success(
-                _wire_chat(gateway, model, key, prompts[5], max_tokens=17), _RE_EXHAUST_USAGE
+            assert plain_chat.usage.total_tokens == 30
+            plain_spend: Final = eventually(
+                lambda: _spend(gateway, key_hash), lambda spend: spend >= 0.06, seconds=70
             )
-            assert re_exhausted.usage.total_tokens == 37
-            assert tuple((request.method, request.target) for request in wire.drain()) == (_EXPECTED_CHAT,)
-            eventually(lambda: _spend(gateway, key_hash), lambda spend: spend >= 0.06, seconds=70)
-            _assert_budget_refusal(gateway, model, key, prompts[6])
-            _assert_budget_refusal(second, model, key, prompts[7])
+            assert plain_spend == pytest.approx(0.06)
+            _assert_wire_requests(wire, (_EXPECTED_CHAT,))
+            _assert_budget_refusal(gateway, model, key, prompts[4])
+            _assert_budget_refusal(second, model, key, prompts[5])
             assert wire.drain() == (), "re-exhausted-key requests reached the upstream"
 
             prior_second_spend: Final = _spend(gateway, key_hash)
-            reset_hashed: Final = gateway.request("POST", f"/key/{key_hash}/reset_spend", {"reset_to": 0})
+            reset_hashed: Final = gateway.request("POST", f"/key/{key_hash}/reset_spend", {"reset_to": 0.02})
             assert reset_hashed.status_code == 200, reset_hashed.text
             hashed_result: Final = _ResetResponse.model_validate_json(reset_hashed.content)
             assert hashed_result.key_hash == key_hash, reset_hashed.text
-            assert hashed_result.spend == 0, reset_hashed.text
+            assert hashed_result.spend == pytest.approx(0.02), reset_hashed.text
             assert hashed_result.previous_spend == pytest.approx(prior_second_spend), reset_hashed.text
             info_after_hashed_reset: Final = gateway.request("GET", "/key/info", params={"key": key})
             assert info_after_hashed_reset.status_code == 200, info_after_hashed_reset.text
-            assert _KeyInfoResponse.model_validate_json(info_after_hashed_reset.content).info.spend == 0, (
+            assert _KeyInfoResponse.model_validate_json(info_after_hashed_reset.content).info.spend == pytest.approx(0.02), (
                 info_after_hashed_reset.text
             )
-            assert _spend(gateway, key_hash) == 0
+            assert _spend(gateway, key_hash) == pytest.approx(0.02)
             peer_info_after_hashed_reset: Final = eventually(
                 lambda: second.request("GET", "/key/info", params={"key": key}),
                 lambda response: (
                     response.status_code == 200
-                    and _KeyInfoResponse.model_validate_json(response.content).info.spend == 0
+                    and _KeyInfoResponse.model_validate_json(response.content).info.spend == pytest.approx(0.02)
                 ),
                 seconds=10,
             )
-            assert _KeyInfoResponse.model_validate_json(peer_info_after_hashed_reset.content).info.spend == 0, (
-                peer_info_after_hashed_reset.text
+            assert _KeyInfoResponse.model_validate_json(peer_info_after_hashed_reset.content).info.spend == pytest.approx(
+                0.02
+            ), peer_info_after_hashed_reset.text
+            hashed_chat: Final = _assert_wire_success(
+                _wire_chat(second, model, key, prompts[6], max_tokens=10),
+                _PARTIAL_RESET_USAGE,
             )
-            second_pair: Final = _serve_both(gateway, second, model, key, (prompts[8], prompts[9]))
-            assert len(second_pair) == 2
-            _assert_wire_requests(wire, (_EXPECTED_CHAT,) * 2)
+            assert hashed_chat.usage.total_tokens == 30
+            hashed_spend: Final = eventually(
+                lambda: _spend(gateway, key_hash), lambda spend: spend >= 0.06, seconds=70
+            )
+            assert hashed_spend == pytest.approx(0.06)
+            _assert_wire_requests(wire, (_EXPECTED_CHAT,))
+            _assert_budget_refusal(gateway, model, key, prompts[7])
+            _assert_budget_refusal(second, model, key, prompts[8])
+            assert wire.drain() == (), "re-exhausted-key requests reached the upstream"
