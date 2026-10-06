@@ -239,7 +239,7 @@ function agentLabels(agents: readonly Span[], details: ReadonlyMap<string, SpanD
     const args = detail && isNativeAgent(agent) ? toolInput(detail.input, detail.input_ui) : undefined;
     const description = args && typeof args === "object" && "description" in args ? args.description : undefined;
     const name =
-      agent.framework === "claude-code" && (agent.actor_id || !isNativeAgent(agent))
+      agent.actor_id || (agent.framework === "claude-code" && !isNativeAgent(agent))
         ? agent.agent || agent.name || "Agent"
         : agent.name || agent.agent || "Agent";
     return { agent, name: typeof description === "string" && description ? description : name };

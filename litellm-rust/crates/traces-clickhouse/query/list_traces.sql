@@ -1,9 +1,12 @@
 WITH
-    (Framework IN ('claude-code', 'claude-agent-sdk') AND (SpanAttributes['session.id'] != '' OR SpanAttributes['agent_id'] != '')) AS native,
+    coalesce(nullIf(SpanAttributes['query_source_safe'], ''), SpanAttributes['query_source']) AS native_source,
+    ((Framework = 'claude-code' OR (Framework = 'claude-agent-sdk' AND
+      (startsWith(SpanName, 'claude_code.') OR SpanAttributes['agent_id'] != '' OR native_source != '')))
+      AND (SpanAttributes['session.id'] != '' OR SpanAttributes['agent_id'] != '')) AS native,
     if(SpanAttributes['session.id'] = '', TraceId, SpanAttributes['session.id']) AS native_session,
     (native AND SpanAttributes['agent_id'] != '') AS native_child,
     (native AND NOT native_child AND (SpanName = 'claude_code.interaction' OR
-        coalesce(nullIf(SpanAttributes['query_source_safe'], ''), SpanAttributes['query_source']) IN
+        native_source IN
         ('repl_main_thread', 'sdk', 'sdk_main_thread', 'generate_session_title', 'prompt_suggestion'))) AS native_root,
     page AS (
 SELECT TraceId AS trace_id,
@@ -45,11 +48,12 @@ LEFT JOIN (
            arraySort(groupUniqArrayIf(toString(Framework), Framework != '')) AS frameworks,
            groupUniqArrayIf(native_session, native_root) AS root_sessions,
            groupUniqArrayIf((native_session, SpanId), native_root AND SpanName = 'claude_code.interaction') AS root_interactions,
-           uniqExactIf((native_session, SpanAttributes['agent_id']), native_child)
-             + length(root_sessions) AS native_count,
+           groupUniqArrayIf((native_session, SpanAttributes['agent_id']), native_child) AS child_identities,
+           groupUniqArrayIf((native_session, SpanAttributes['agent_id'], SpanId), native_child AND SpanName = 'claude_code.interaction') AS child_interactions,
+           length(child_identities) + length(root_sessions) AS native_count,
            native_count + uniqExactIf(if(AgentName = '', SpanName, AgentName), ObservationType = 'agent' AND NOT native) AS agent_count,
            uniqExactIf(SpanId, ObservationType = 'agent' AND NOT native)
-             + uniqExactIf((native_session, SpanAttributes['agent_id']), native_child)
+             + arraySum(arrayMap(child -> greatest(1, arrayCount(interaction -> (interaction.1, interaction.2) = child, child_interactions)), child_identities))
              + arraySum(arrayMap(session -> greatest(1, arrayCount(interaction -> interaction.1 = session, root_interactions)), root_sessions)) AS resolved_invocations
     FROM otel_traces
     WHERE Timestamp >= (SELECT min(trace_start) FROM page)

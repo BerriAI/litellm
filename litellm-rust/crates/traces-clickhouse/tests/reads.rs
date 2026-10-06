@@ -841,6 +841,20 @@ async fn native_list_counts_each_root_session_and_does_not_count_children_as_roo
             "agent",
             "claude_code.interaction",
         ),
+        (
+            "child-resumed",
+            "session-a",
+            "child",
+            "agent",
+            "claude_code.interaction",
+        ),
+        (
+            "legacy-sdk",
+            "sdk-session",
+            "",
+            "agent",
+            "ClaudeAgentSDK.query",
+        ),
     ];
     insert_rows(client, &writer, DATABASE, InsertTable::OtelTraces, records.into_iter().map(|(id, session, actor, kind, name)| BTreeMap::from([
         ("Timestamp".into(), json!(1_790_000_000_000_000_000_i64)),
@@ -848,9 +862,9 @@ async fn native_list_counts_each_root_session_and_does_not_count_children_as_roo
         ("SpanId".into(), json!(id)),
         ("SpanName".into(), json!(name)),
         ("ObservationType".into(), json!(kind)),
-        ("Framework".into(), json!(framework)),
+        ("Framework".into(), json!(if id == "legacy-sdk" { "claude-agent-sdk" } else { framework })),
         ("AgentName".into(), json!("assistant")),
-        ("SpanAttributes".into(), json!({"session.id": session, "agent_id": actor, "query_source_safe": "sdk"})),
+        ("SpanAttributes".into(), json!({"session.id": session, "agent_id": actor, "query_source_safe": if id == "legacy-sdk" { "" } else { "sdk" }})),
         ("TeamId".into(), json!("team-a")),
         ("ApiKeyHash".into(), json!("key-a")),
     ])).collect()).await?;
@@ -879,10 +893,10 @@ async fn native_list_counts_each_root_session_and_does_not_count_children_as_roo
         .get_trace(&store, &access, "mixed-sessions", &summary.trace_ref)
         .await?
         .ok_or("missing trace")?;
-    assert_eq!((summary.agent_count, summary.agent_invocations), (3, 4));
+    assert_eq!((summary.agent_count, summary.agent_invocations), (4, 6));
     assert_eq!(
         (detail.summary.agent_count, detail.summary.agent_invocations),
-        (3, 4)
+        (4, 6)
     );
     Ok(())
 }

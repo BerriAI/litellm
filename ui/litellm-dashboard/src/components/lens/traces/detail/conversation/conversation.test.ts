@@ -616,41 +616,42 @@ describe("coding sessions", () => {
   });
 });
 
-it("keeps explicit native actors separate across workflow branches and background resumes", () => {
-  const span = (id: string, actor: string, parentActor: string | null, offset: number): Span => ({
-    ...root,
-    span_id: id,
-    name: "claude_code.llm_request",
-    type: "llm",
-    framework: "claude-code",
-    parent_span_id: "root",
-    actor_id: actor,
-    parent_actor_id: parentActor,
-    agent: "general-purpose",
-    start_offset_ms: offset,
-  });
-  const spans = [
-    { ...root, framework: "claude-code", actor_id: "root-actor", parent_actor_id: null, agent: "claude-code" },
-    span("first", "actor-one", "root-actor", 1),
-    span("second", "actor-two", "root-actor", 2),
-    span("nested", "actor-three", "actor-one", 3),
-    { ...span("resumed", "actor-one", "root-actor", 4), parent_span_id: null },
-  ];
-  const details = new Map(spans.map((span) => [span.span_id, detail(span.span_id, "", `Reply ${span.span_id}`)]));
-  const items = buildConversation(spans, details, true);
-  expect(items.filter((item) => item.span.span_id === "resumed").map((item) => item.agentId)).toEqual(["actor-one"]);
-  const groups = groupConversation(items, spans);
-  const branches = groups.filter((group) => group.kind === "branch");
-  expect(branches.map((group) => group.id)).toEqual(["actor-one", "actor-two"]);
-  expect(branches[0].children.map((group) => (group.kind === "branch" ? group.id : group.item.span.span_id))).toEqual([
-    "first",
-    "actor-three",
-    "resumed",
-  ]);
-  expect(
-    items.filter((item) => ["first", "resumed"].includes(item.span.span_id)).map((item) => item.agentName),
-  ).toEqual(["general-purpose (1)", "general-purpose (1)"]);
-});
+it.each(["claude-code", "claude-agent-sdk"])(
+  "keeps explicit %s actors separate across workflow branches and background resumes",
+  (framework) => {
+    const span = (id: string, actor: string, parentActor: string | null, offset: number): Span => ({
+      ...root,
+      span_id: id,
+      name: "claude_code.llm_request",
+      type: "llm",
+      framework,
+      parent_span_id: "root",
+      actor_id: actor,
+      parent_actor_id: parentActor,
+      agent: "general-purpose",
+      start_offset_ms: offset,
+    });
+    const spans = [
+      { ...root, framework, actor_id: "root-actor", parent_actor_id: null, agent: "claude-code" },
+      span("first", "actor-one", "root-actor", 1),
+      span("second", "actor-two", "root-actor", 2),
+      span("nested", "actor-three", "actor-one", 3),
+      { ...span("resumed", "actor-one", "root-actor", 4), parent_span_id: null },
+    ];
+    const details = new Map(spans.map((span) => [span.span_id, detail(span.span_id, "", `Reply ${span.span_id}`)]));
+    const items = buildConversation(spans, details, true);
+    expect(items.filter((item) => item.span.span_id === "resumed").map((item) => item.agentId)).toEqual(["actor-one"]);
+    const groups = groupConversation(items, spans);
+    const branches = groups.filter((group) => group.kind === "branch");
+    expect(branches.map((group) => group.id)).toEqual(["actor-one", "actor-two"]);
+    expect(branches[0].children.map((group) => (group.kind === "branch" ? group.id : group.item.span.span_id))).toEqual(
+      ["first", "actor-three", "resumed"],
+    );
+    expect(
+      items.filter((item) => ["first", "resumed"].includes(item.span.span_id)).map((item) => item.agentName),
+    ).toEqual(["general-purpose (1)", "general-purpose (1)"]);
+  },
+);
 
 it.each([false, true])("preserves legacy history while isolating unconfirmed actors (%s)", (unassigned) => {
   const spans: Span[] = [

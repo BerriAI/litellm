@@ -1700,3 +1700,45 @@ fn unresolved_native_actors_are_distinguished_from_legacy_grouping(
     assert_eq!(trace.spans[0].actor_id, None);
     assert_eq!(trace.spans[0].actor_unassigned, unassigned);
 }
+
+#[rstest]
+fn openinference_sdk_session_keeps_recorded_root_ownership() {
+    let root = TraceSpansRow {
+        framework: "claude-agent-sdk".into(),
+        session_id: "sdk-session".into(),
+        ..row("root", "", "ClaudeAgentSDK.query", "agent", "sdk-reader")
+    };
+    let trace = resolve_trace("trace", "ref", &[root], &[]).unwrap();
+    assert_eq!(trace.summary.agent_count, 1);
+    assert_eq!(trace.agents[0].name, "sdk-reader");
+    assert!(!trace.spans[0].actor_unassigned);
+}
+
+#[rstest]
+fn inherited_native_actor_identity_and_labels_have_bounded_size() {
+    let root = TraceSpansRow {
+        framework: "claude-code".into(),
+        session_id: "s".into(),
+        native_agent_id: "a".repeat(65_536),
+        query_source: format!("agent.custom.{}", "n".repeat(65_536)),
+        ..row("root", "", "claude_code.interaction", "agent", "assistant")
+    };
+    let children = (0..1_024).map(|index| TraceSpansRow {
+        framework: "claude-code".into(),
+        session_id: "s".into(),
+        ..row(
+            &format!("child-{index}"),
+            "root",
+            "Read",
+            "tool",
+            "assistant",
+        )
+    });
+    let rows: Vec<_> = std::iter::once(root).chain(children).collect();
+    let trace = resolve_trace("trace", "ref", &rows, &[]).unwrap();
+    assert_eq!(trace.summary.agent_count, 1);
+    assert!(trace.spans.iter().all(|span| {
+        span.actor_id.as_ref().is_some_and(|id| id.len() <= 80) && span.agent.len() <= 1_024
+    }));
+    assert!(serde_json::to_vec(&trace).unwrap().len() < 3_000_000);
+}

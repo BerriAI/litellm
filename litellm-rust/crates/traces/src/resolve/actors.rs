@@ -1,11 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use sha2::{Digest, Sha256};
+
 use crate::query::named::TraceSpansRow;
 
 use super::graph::Graph;
 
 pub(super) fn native(row: &TraceSpansRow) -> bool {
-    matches!(row.framework.as_str(), "claude-code" | "claude-agent-sdk")
+    (row.framework == "claude-code"
+        || (row.framework == "claude-agent-sdk"
+            && (row.name.starts_with("claude_code.")
+                || !row.native_agent_id.is_empty()
+                || !row.query_source.is_empty())))
         && (!row.session_id.is_empty() || !row.native_agent_id.is_empty())
 }
 
@@ -15,7 +21,15 @@ fn identity(row: &TraceSpansRow, agent: &str) -> String {
     } else {
         &row.session_id
     };
-    format!("claude-code:{}:{session}:{agent}", session.len())
+    let mut digest = Sha256::new();
+    digest.update((session.len() as u64).to_be_bytes());
+    digest.update(session);
+    digest.update(agent);
+    format!("claude-code:{:x}", digest.finalize())
+}
+
+fn label(value: &str) -> String {
+    value.chars().take(256).collect()
 }
 
 fn root(row: &TraceSpansRow) -> String {
@@ -112,7 +126,7 @@ impl Actors {
                 id: id.clone(),
                 parent: (id != &root(row)).then(|| root(row)),
                 name: if id == &root(row) {
-                    row.agent.clone()
+                    label(&row.agent)
                 } else {
                     "Subagent".to_owned()
                 },
@@ -138,7 +152,7 @@ impl Actors {
                 if let Some((_, name)) = name
                     && !name.is_empty()
                 {
-                    actor.name = name.to_owned();
+                    actor.name = label(name);
                 }
             }
         }
