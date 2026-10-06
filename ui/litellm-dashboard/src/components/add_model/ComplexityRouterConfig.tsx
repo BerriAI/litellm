@@ -237,7 +237,7 @@ const TierSetToolbar: React.FC<{
     {editing && (
       <span className="block mt-1 text-xs text-muted-foreground">
         Add or remove tiers to define your own set. Every custom tier needs a definition the classifier routes on, and
-        an edited set requires the LLM or Jev classification method
+        an edited set requires the LLM or OSS classification method
       </span>
     )}
     {editing && keywordRulesError && (
@@ -405,6 +405,9 @@ export interface ComplexityRouterConfigValue {
    */
   enable_context_window_escalation?: boolean;
   context_window_escalation_buffer?: number;
+  cache_aware_routing?: boolean;
+  cache_aware_routing_output_tokens?: number;
+  cache_aware_routing_timeout_ms?: number;
   /**
    * Heuristic scorer knobs. Undefined means the operator never touched them, which keeps the key out of the
    * payload so the router tracks the backend defaults rather than freezing today's numbers.

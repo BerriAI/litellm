@@ -17,6 +17,7 @@ from litellm.llms.vertex_ai.batches.transformation import (
 )
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import ModelInfo, Usage
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
 
 
@@ -43,7 +44,7 @@ def _uses_native_vertex_output(
 ) -> bool:
     if custom_llm_provider != "vertex_ai":
         return False
-    if model_name and getattr(litellm, "disable_vertex_batch_output_transformation", False):
+    if model_name and litellm.disable_vertex_batch_output_transformation:
         return True
     return first_row is not None and is_native_vertex_batch_output_row(first_row)
 
@@ -127,7 +128,7 @@ async def _handle_completed_batch(
         return BatchCostUsageResult(
             cost=0.0,
             usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
-            models=[],  # mutable-ok: no output file means no model was ever priced; BatchCostUsageResult.models requires list[str]
+            models=[],
             successful_requests=0,
             failed_requests=await count_error_file_failed_requests(
                 batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
@@ -543,6 +544,9 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
             "max_retries",
             "_litellm_internal_model_credentials",
             *AWS_CREDENTIAL_KWARGS_KEYS,
+            # A federated deployment holds no api_key, so without these the fetch that reads a
+            # finished batch's output has nothing to authenticate with and its cost is never billed.
+            *sorted(ANTHROPIC_WIF_KWARGS_KEYS),
         )
         for key in credential_keys:
             if key in litellm_params:
@@ -706,6 +710,10 @@ def _get_batch_job_usage_from_response_body(
     if ResponseAPILoggingUtils._is_response_api_usage(_usage_dict):
         return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_usage_dict)
     usage: Final[Usage] = Usage(**_usage_dict)
+    if custom_llm_provider == "xai":
+        from litellm.llms.xai.chat.transformation import XAIChatConfig
+
+        XAIChatConfig.fold_reasoning_tokens_into_completion(usage)
     return usage
 
 

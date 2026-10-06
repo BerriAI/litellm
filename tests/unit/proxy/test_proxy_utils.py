@@ -1577,14 +1577,14 @@ def test_get_model_group_info():
                 "model_name": "openai/tts-1",
                 "litellm_params": {
                     "model": "openai/tts-1",
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                 },
             },
             {
                 "model_name": "openai/gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "openai/gpt-3.5-turbo",
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                 },
             },
         ]
@@ -1881,9 +1881,10 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
         }
     },
 )
-def test_custom_openapi(mock_get_openapi_schema):
-    from litellm.proxy.proxy_server import custom_openapi
+def test_custom_openapi(mock_get_openapi_schema, monkeypatch):
+    from litellm.proxy.proxy_server import app, custom_openapi
 
+    monkeypatch.setattr(app, "openapi_schema", None)
     openapi_schema = custom_openapi()
     assert openapi_schema is not None
 

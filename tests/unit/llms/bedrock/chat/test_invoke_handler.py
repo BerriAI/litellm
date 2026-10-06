@@ -1,7 +1,9 @@
 import base64
 import binascii
 import datetime
+import itertools
 import json
+import re
 import struct
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
@@ -11,15 +13,23 @@ import httpx
 import pytest
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock.chat.invoke_handler import (
+    AmazonOpenAICompatibleStreamDecoder,
     AWSEventStreamDecoder,
     make_call,
     make_sync_call,
 )
+from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_stream_event_statuses
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import ModelResponseStream
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    slow_upstream_async_client,
+    slow_upstream_sync_client,
+)
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -210,9 +220,7 @@ def test_bedrock_converse_streaming_consistent_id():
     expected_id = f"chatcmpl-{native_conversation_id}"
 
     for response in parsed_responses:
-        assert (
-            response.id == expected_id
-        ), "All chunk IDs must match the one captured from the messageStart event"
+        assert response.id == expected_id, "All chunk IDs must match the one captured from the messageStart event"
 
 
 def test_converse_streaming_usage_uses_provider_thinking_tokens():
@@ -713,17 +721,26 @@ async def test_async_invoke_streaming_non_200_forwards_bedrock_response_headers(
     assert exc_info.value.response.headers["x-amzn-requestid"] == "req-non200-async"
 
 
-def _bedrock_event_stream_frame(chunk: Mapping[str, object]) -> bytes:
+def _event_stream_frame(event_type: str, payload: bytes) -> bytes:
     def header(name: str, value: str) -> bytes:
         return bytes([len(name)]) + name.encode() + bytes([7]) + struct.pack(">H", len(value)) + value.encode()
 
-    headers: Final = header(":event-type", "chunk") + header(":content-type", "application/json") + header(
+    headers: Final = header(":event-type", event_type) + header(":content-type", "application/json") + header(
         ":message-type", "event"
     )
-    payload: Final = json.dumps({"bytes": base64.b64encode(json.dumps(chunk).encode()).decode()}).encode()
     prelude: Final = struct.pack(">II", 12 + len(headers) + len(payload) + 4, len(headers))
     body: Final = prelude + struct.pack(">I", binascii.crc32(prelude)) + headers + payload
     return body + struct.pack(">I", binascii.crc32(body))
+
+
+def _bedrock_event_stream_frame(chunk: Mapping[str, object]) -> bytes:
+    return _event_stream_frame(
+        "chunk", json.dumps({"bytes": base64.b64encode(json.dumps(chunk).encode()).decode()}).encode()
+    )
+
+
+def _converse_event_frame(event_type: str, body: Mapping[str, object]) -> bytes:
+    return _event_stream_frame(event_type, json.dumps(body).encode())
 
 
 def _openai_stream_chunk(delta: Mapping[str, str], finish_reason: str | None = None) -> Mapping[str, object]:
@@ -799,3 +816,338 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
     )
 
     _assert_moonshot_stream_content([chunk async for chunk in stream])
+
+
+def _truncated_frame() -> bytes:
+    return _bedrock_event_stream_frame(_openai_stream_chunk({"role": "assistant"}))[:-8]
+
+
+def _event_stream_headers() -> httpx.Headers:
+    return httpx.Headers({"content-type": "application/vnd.amazon.eventstream", "x-amzn-RequestId": "req-empty-1"})
+
+
+_UNDECODABLE_STREAM_BODIES: Final = (
+    pytest.param(b"", id="empty"),
+    pytest.param(b"\x00\x00\x00\x05", id="shorter-than-a-prelude"),
+    pytest.param(_truncated_frame(), id="truncated-first-message"),
+)
+
+
+def _assert_no_events_error(error: BedrockError, body: bytes) -> None:
+    assert error.status_code == 502
+    assert "HTTP 200" in error.message
+    assert "decoded to no events" in error.message
+    assert f"{len(body)} bytes received" in error.message
+    assert "application/vnd.amazon.eventstream" in error.message
+    assert "req-empty-1" in error.message
+    assert f"first bytes={body[:200]!r}" in error.message
+
+
+@pytest.mark.parametrize("body", _UNDECODABLE_STREAM_BODIES)
+def test_iter_bytes_raises_when_a_200_body_decodes_to_no_events(body: bytes) -> None:
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(iter([body]), response_headers=_event_stream_headers()))
+
+    _assert_no_events_error(exc_info.value, body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", _UNDECODABLE_STREAM_BODIES)
+async def test_aiter_bytes_raises_when_a_200_body_decodes_to_no_events(body: bytes) -> None:
+    async def _chunks() -> AsyncIterator[bytes]:
+        yield body
+
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+
+    with pytest.raises(BedrockError) as exc_info:
+        _ = [chunk async for chunk in decoder.aiter_bytes(_chunks(), response_headers=_event_stream_headers())]
+
+    _assert_no_events_error(exc_info.value, body)
+
+
+def test_iter_bytes_raises_when_the_stream_ends_mid_message() -> None:
+    decoder: Final = AmazonOpenAICompatibleStreamDecoder(model="moonshot.kimi-k2-thinking", sync_stream=True)
+    stream: Final = decoder.iter_bytes(iter([_MOONSHOT_RAW_STREAM, _truncated_frame()]))
+
+    chunks: Final = list(itertools.islice(stream, 4))
+    with pytest.raises(BedrockError) as exc_info:
+        next(stream)
+
+    _assert_moonshot_stream_content(chunks)
+    assert exc_info.value.status_code == 502
+    assert f"{len(_truncated_frame())} undecoded bytes after 4 events" in exc_info.value.message
+    assert "first bytes=" not in exc_info.value.message
+
+
+def test_iter_bytes_yields_a_complete_stream_without_raising() -> None:
+    decoder: Final = AmazonOpenAICompatibleStreamDecoder(model="moonshot.kimi-k2-thinking", sync_stream=True)
+
+    chunks: Final = list(decoder.iter_bytes(iter([_MOONSHOT_RAW_STREAM[:100], _MOONSHOT_RAW_STREAM[100:]])))
+
+    _assert_moonshot_stream_content(chunks)
+
+
+def _assert_empty_stream_surfaced_as_bad_gateway(error: MidStreamFallbackError) -> None:
+    assert error.status_code == 502
+    assert error.is_pre_first_chunk is True
+    assert isinstance(error.original_exception, litellm.BadGatewayError)
+    assert "decoded to no events" in str(error)
+    assert "req-empty-1" in str(error)
+
+
+def test_converse_stream_with_an_empty_200_body_raises_instead_of_an_empty_turn(_aws_test_credentials: None) -> None:
+    response: Final = MagicMock(status_code=200, headers=_event_stream_headers())
+    response.iter_bytes = lambda chunk_size=None: iter([b""])
+    client: Final = HTTPHandler()
+    client.post = MagicMock(return_value=response)
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        list(
+            litellm.completion(
+                model="bedrock/us.moonshotai.kimi-k3",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                client=client,
+            )
+        )
+
+    _assert_empty_stream_surfaced_as_bad_gateway(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_async_converse_stream_with_an_empty_200_body_raises_instead_of_an_empty_turn(
+    _aws_test_credentials: None,
+) -> None:
+    async def _aiter_bytes(chunk_size: int | None = None) -> AsyncIterator[bytes]:
+        yield b""
+
+    response: Final = MagicMock(status_code=200, headers=_event_stream_headers())
+    response.aiter_bytes = _aiter_bytes
+    client: Final = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=response)
+
+    stream: Final = await litellm.acompletion(
+        model="bedrock/us.moonshotai.kimi-k3",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+    )
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        _ = [chunk async for chunk in stream]
+
+    _assert_empty_stream_surfaced_as_bad_gateway(exc_info.value)
+
+
+_UPSTREAM_REJECTION: Final = "structured output schema uses unsupported regex negative look-ahead"
+_CUSTOMER_REJECTION_EVENT_TYPE: Final = "validationException"
+
+
+def _modeled_exception_event_types() -> tuple[str, ...]:
+    statuses: Final = get_bedrock_stream_event_statuses()
+    assert statuses is not None
+    return tuple(sorted(name for name, status in statuses.items() if status is not None))
+
+
+def _modeled_status(event_type: str) -> int:
+    statuses: Final = get_bedrock_stream_event_statuses()
+    assert statuses is not None
+    status: Final = statuses[event_type]
+    assert status is not None
+    return status
+
+
+_CONVERSE_CONTENT_FRAMES: Final = (
+    _converse_event_frame("messageStart", {"role": "assistant"}),
+    _converse_event_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "hi"}}),
+    _converse_event_frame("contentBlockStop", {"contentBlockIndex": 0}),
+    _converse_event_frame("messageStop", {"stopReason": "end_turn"}),
+)
+
+
+def _unknown_event_frame() -> bytes:
+    return _converse_event_frame("somethingBedrockAddedLater", {"message": _UPSTREAM_REJECTION})
+
+
+@pytest.mark.parametrize("event_type", _modeled_exception_event_types())
+def test_iter_bytes_raises_the_modeled_error_for_an_exception_named_event_frame(event_type: str) -> None:
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+    frame: Final = _converse_event_frame(event_type, {"message": _UPSTREAM_REJECTION})
+
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(iter([frame]), response_headers=_event_stream_headers()))
+
+    assert exc_info.value.status_code == _modeled_status(event_type)
+    assert exc_info.value.status_code != 200
+    assert exc_info.value.message.startswith(event_type)
+    assert _UPSTREAM_REJECTION in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_aiter_bytes_raises_the_modeled_error_for_an_exception_named_event_frame() -> None:
+    event_type: Final = _CUSTOMER_REJECTION_EVENT_TYPE
+
+    async def _chunks() -> AsyncIterator[bytes]:
+        yield _converse_event_frame(event_type, {"message": _UPSTREAM_REJECTION})
+
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+
+    with pytest.raises(BedrockError) as exc_info:
+        _ = [chunk async for chunk in decoder.aiter_bytes(_chunks(), response_headers=_event_stream_headers())]
+
+    assert exc_info.value.status_code == _modeled_status(event_type)
+    assert _UPSTREAM_REJECTION in exc_info.value.message
+
+
+def _assert_unknown_event_stream_error(error: BedrockError, body: bytes) -> None:
+    assert error.status_code == 502
+    assert "HTTP 200" in error.message
+    assert "none of its 1 events carried a known event type" in error.message
+    assert "somethingBedrockAddedLater" in error.message
+    assert _UPSTREAM_REJECTION in error.message
+    assert f"{len(body)} bytes received" in error.message
+    assert "req-empty-1" in error.message
+
+
+def test_iter_bytes_raises_when_no_event_carries_a_known_event_type() -> None:
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+    body: Final = _unknown_event_frame()
+
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(iter([body]), response_headers=_event_stream_headers()))
+
+    _assert_unknown_event_stream_error(exc_info.value, body)
+
+
+@pytest.mark.asyncio
+async def test_aiter_bytes_raises_when_no_event_carries_a_known_event_type() -> None:
+    body: Final = _unknown_event_frame()
+
+    async def _chunks() -> AsyncIterator[bytes]:
+        yield body
+
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+
+    with pytest.raises(BedrockError) as exc_info:
+        _ = [chunk async for chunk in decoder.aiter_bytes(_chunks(), response_headers=_event_stream_headers())]
+
+    _assert_unknown_event_stream_error(exc_info.value, body)
+
+
+def test_iter_bytes_keeps_a_stream_whose_unknown_event_sits_beside_known_frames() -> None:
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+    frames: Final = (_CONVERSE_CONTENT_FRAMES[0], _unknown_event_frame(), *_CONVERSE_CONTENT_FRAMES[1:])
+
+    chunks: Final = list(decoder.iter_bytes(iter(frames), response_headers=_event_stream_headers()))
+
+    texts: Final = [chunk.choices[0].delta.content for chunk in chunks if isinstance(chunk, ModelResponseStream)]
+    assert "".join(text or "" for text in texts) == "hi"
+    finish_reasons: Final = [
+        chunk.choices[0].finish_reason for chunk in chunks if isinstance(chunk, ModelResponseStream)
+    ]
+    assert "stop" in finish_reasons
+
+
+def _assert_exception_event_surfaced_with_its_modeled_status(error: BaseException, event_type: str) -> None:
+    assert not isinstance(error, litellm.BadGatewayError)
+    assert getattr(error, "status_code", None) == _modeled_status(event_type)
+    assert event_type in str(error)
+    assert _UPSTREAM_REJECTION in str(error)
+
+
+def test_converse_stream_with_an_exception_event_frame_raises_instead_of_an_empty_turn(
+    _aws_test_credentials: None,
+) -> None:
+    event_type: Final = _CUSTOMER_REJECTION_EVENT_TYPE
+    frame: Final = _converse_event_frame(event_type, {"message": _UPSTREAM_REJECTION})
+    response: Final = MagicMock(status_code=200, headers=_event_stream_headers())
+    response.iter_bytes = lambda chunk_size=None: iter([frame])
+    client: Final = HTTPHandler()
+    client.post = MagicMock(return_value=response)
+
+    with pytest.raises(Exception, match=re.escape(_UPSTREAM_REJECTION)) as exc_info:
+        list(
+            litellm.completion(
+                model="bedrock/us.moonshotai.kimi-k3",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                client=client,
+            )
+        )
+
+    _assert_exception_event_surfaced_with_its_modeled_status(exc_info.value, event_type)
+
+
+@pytest.mark.asyncio
+async def test_async_converse_stream_with_an_exception_event_frame_raises_instead_of_an_empty_turn(
+    _aws_test_credentials: None,
+) -> None:
+    event_type: Final = _CUSTOMER_REJECTION_EVENT_TYPE
+
+    async def _aiter_bytes(chunk_size: int | None = None) -> AsyncIterator[bytes]:
+        yield _converse_event_frame(event_type, {"message": _UPSTREAM_REJECTION})
+
+    response: Final = MagicMock(status_code=200, headers=_event_stream_headers())
+    response.aiter_bytes = _aiter_bytes
+    client: Final = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=response)
+
+    stream: Final = await litellm.acompletion(
+        model="bedrock/us.moonshotai.kimi-k3",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+    )
+    with pytest.raises(Exception, match=re.escape(_UPSTREAM_REJECTION)) as exc_info:
+        _ = [chunk async for chunk in stream]
+
+    _assert_exception_event_surfaced_with_its_modeled_status(exc_info.value, event_type)
+
+
+def test_converse_stream_made_only_of_unknown_events_raises_instead_of_an_empty_turn(
+    _aws_test_credentials: None,
+) -> None:
+    response: Final = MagicMock(status_code=200, headers=_event_stream_headers())
+    response.iter_bytes = lambda chunk_size=None: iter([_unknown_event_frame()])
+    client: Final = HTTPHandler()
+    client.post = MagicMock(return_value=response)
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        list(
+            litellm.completion(
+                model="bedrock/us.moonshotai.kimi-k3",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                client=client,
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.is_pre_first_chunk is True
+    assert isinstance(exc_info.value.original_exception, litellm.BadGatewayError)
+    assert "somethingBedrockAddedLater" in str(exc_info.value)
+    assert _UPSTREAM_REJECTION in str(exc_info.value)
+
+
+def _invoke_streaming_kwargs() -> dict[str, object]:
+    return {
+        "model": "bedrock/invoke/anthropic.claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "timeout": STREAM_TIMEOUT_SECONDS,
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_streaming_fails_at_the_request_timeout_not_the_upstreams_pace() -> None:
+    with pytest.raises(litellm.Timeout):
+        await litellm.acompletion(client=slow_upstream_async_client(), **_invoke_streaming_kwargs())
+
+
+def test_sync_invoke_streaming_fails_at_the_request_timeout_not_the_upstreams_pace() -> None:
+    with pytest.raises(litellm.Timeout):
+        litellm.completion(client=slow_upstream_sync_client(), **_invoke_streaming_kwargs())

@@ -1,6 +1,8 @@
+from typing import Final
 from unittest.mock import Mock
 
 import httpx
+import pytest
 
 import litellm
 from litellm.llms.xai.chat.transformation import (
@@ -16,7 +18,7 @@ from litellm.types.utils import (
 
 
 class TestXAIReasoningTokenFolding:
-    """``_fold_reasoning_tokens_into_completion`` re-aligns xAI Usage to the OpenAI invariant."""
+    """``fold_reasoning_tokens_into_completion`` re-aligns xAI Usage to the OpenAI invariant."""
 
     @staticmethod
     def _make_response(
@@ -45,7 +47,7 @@ class TestXAIReasoningTokenFolding:
             reasoning_tokens=312,
         )
 
-        XAIChatConfig._fold_reasoning_tokens_into_completion(response)
+        XAIChatConfig.fold_reasoning_tokens_into_completion(response)
 
         usage = response.usage
         assert usage.completion_tokens == 322
@@ -59,7 +61,7 @@ class TestXAIReasoningTokenFolding:
             reasoning_tokens=312,
         )
 
-        XAIChatConfig._fold_reasoning_tokens_into_completion(response)
+        XAIChatConfig.fold_reasoning_tokens_into_completion(response)
 
         assert response.usage.completion_tokens == 322
 
@@ -71,7 +73,7 @@ class TestXAIReasoningTokenFolding:
             reasoning_tokens=0,
         )
 
-        XAIChatConfig._fold_reasoning_tokens_into_completion(response)
+        XAIChatConfig.fold_reasoning_tokens_into_completion(response)
 
         assert response.usage.completion_tokens == 10
 
@@ -84,7 +86,7 @@ class TestXAIReasoningTokenFolding:
             reasoning_tokens=312,
         )
 
-        XAIChatConfig._fold_reasoning_tokens_into_completion(response)
+        XAIChatConfig.fold_reasoning_tokens_into_completion(response)
 
         assert response.usage.completion_tokens == 10
         assert response.usage.total_tokens == 999
@@ -203,6 +205,56 @@ class TestXAIChatWebSearchBilling:
 
         assert response.usage.prompt_tokens_details is None
         assert getattr(response.usage, "server_side_tool_usage_details", None) is None
+
+    @pytest.mark.parametrize(
+        ("tool_details", "expected_web_search_requests"),
+        [(_TOOL_DETAILS, 3), (None, None)],
+    )
+    def test_transform_response_reads_tool_usage_details_from_the_response_body(
+        self,
+        tool_details: dict[str, int] | None,
+        expected_web_search_requests: int | None,
+    ):
+        raw_response: Final = httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-xai",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "grok-4",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "hi"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120,
+                    "server_side_tool_usage_details": tool_details,
+                },
+            },
+        )
+
+        response: Final = XAIChatConfig().transform_response(
+            model="grok-4",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=Mock(),
+            request_data={},
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert getattr(response.usage, "server_side_tool_usage_details", None) == tool_details
+        assert (
+            getattr(response.usage.prompt_tokens_details, "web_search_requests", None) == expected_web_search_requests
+        )
+        assert response.usage.total_tokens == 120
 
 
 class TestXAIReportedCost:

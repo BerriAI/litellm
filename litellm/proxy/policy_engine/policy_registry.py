@@ -421,7 +421,7 @@ class PolicyRegistry:
             if policy_request.condition is not None:
                 data["condition"] = json.dumps(policy_request.condition.model_dump())
             if policy_request.pipeline is not None:
-                validated_pipeline: Final = GuardrailPipeline(**policy_request.pipeline)
+                validated_pipeline: Final = GuardrailPipeline.model_validate(policy_request.pipeline)
                 data["pipeline"] = json.dumps(validated_pipeline.model_dump())
 
             created_policy: Final = await _policy_table(prisma_client).create(data=data)
@@ -496,7 +496,7 @@ class PolicyRegistry:
             if policy_request.condition is not None:
                 update_data["condition"] = json.dumps(policy_request.condition.model_dump())
             if policy_request.pipeline is not None:
-                validated_pipeline: Final = GuardrailPipeline(**policy_request.pipeline)
+                validated_pipeline: Final = GuardrailPipeline.model_validate(policy_request.pipeline)
                 update_data["pipeline"] = json.dumps(validated_pipeline.model_dump())
 
             updated_policy: Final = await _policy_table(prisma_client).update(

@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm._internal_context import current_service_target
 from litellm.caching.caching import DualCache
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -394,6 +395,33 @@ def _slack_alerting_with_env_resolution() -> SlackAlerting:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event_group, expected_prefix",
+    [
+        (Litellm_EntityType.TEAM_MEMBER, "Team Member Budget: Budget Crossed"),
+        (Litellm_EntityType.KEY, "Key Budget: Budget Crossed"),
+    ],
+)
+async def test_max_budget_alert_labels_team_member_budget(event_group, expected_prefix):
+    slack_alerting: Final = _slack_alerting_with_env_resolution()
+    slack_alerting.send_alert = AsyncMock()
+
+    await slack_alerting.budget_alerts(
+        type="max_budget_alert",
+        user_info=CallInfo(
+            spend=10.5,
+            max_budget=10.0,
+            token="hashed_key",
+            user_id="member_1",
+            team_id="team_a",
+            event_group=event_group,
+        ),
+    )
+
+    assert slack_alerting.send_alert.await_args.kwargs["message"].startswith(expected_prefix)
+
+
+@pytest.mark.asyncio
 async def test_send_alert_falls_back_to_alerting_webhook_url_env(monkeypatch):
     monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
     monkeypatch.setenv("ALERTING_WEBHOOK_URL", "https://chat.example.com/hooks/abc")
@@ -552,3 +580,32 @@ async def test_update_values_repeated_alerting_reload_keeps_single_periodic_flus
                 await t
             except asyncio.CancelledError:
                 pass
+
+
+@pytest.mark.asyncio
+async def test_daily_report_schedule_cache_calls_declare_their_key_family():
+    """The report_sent read and write run inside ``service_target("daily_report_schedule")``
+    so the background spans read ``redis.get daily_report_schedule`` rather than a bare
+    ``redis.get`` with no owner."""
+    slack_alerting: Final = await _slack_alerting_with_due_daily_report()
+    cache: Final = slack_alerting.internal_usage_cache
+    seen: list[tuple[str, str | None]] = []
+    real_get, real_set = cache.async_get_cache, cache.async_set_cache
+
+    async def _get(*args, **kwargs):
+        seen.append(("get", current_service_target()))
+        return await real_get(*args, **kwargs)
+
+    async def _set(*args, **kwargs):
+        seen.append(("set", current_service_target()))
+        return await real_set(*args, **kwargs)
+
+    with (
+        patch.object(cache, "async_get_cache", side_effect=_get),
+        patch.object(cache, "async_set_cache", side_effect=_set),
+    ):
+        result: Final = await slack_alerting._run_scheduler_helper(llm_router=MagicMock(), pod_lock_manager=None)
+
+    assert result is True
+    assert seen == [("get", "daily_report_schedule"), ("set", "daily_report_schedule")]
+    assert current_service_target() is None

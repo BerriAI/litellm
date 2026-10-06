@@ -113,6 +113,8 @@ _supported_callback_params: Final[tuple[str, ...]] = (
     "dd_agent_port",
     "newrelic_api_key",
     "newrelic_region",
+    "signoz_ingestion_endpoint",
+    "signoz_ingestion_key",
     "turn_off_message_logging",
 )
 
@@ -126,6 +128,8 @@ _request_blocked_callback_params: Final = frozenset(
         "dd_agent_port",
         "newrelic_api_key",
         "newrelic_region",
+        "signoz_ingestion_endpoint",
+        "signoz_ingestion_key",
     }
 )
 
@@ -138,11 +142,13 @@ _trusted_overlay_callback_params: Final = frozenset(
     {
         "newrelic_api_key",
         "newrelic_region",
+        "signoz_ingestion_endpoint",
+        "signoz_ingestion_key",
     }
 )
 
 
-def get_trusted_callback_params(kwargs: Mapping[str, Any] | None) -> tuple[tuple[str, str], ...]:
+def get_trusted_callback_params(kwargs: Mapping[str, object] | None) -> tuple[tuple[str, str], ...]:
     """
     Read callback params the proxy itself stamped from admin-configured team/key callback settings.
 

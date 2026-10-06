@@ -35,11 +35,13 @@ from ..common_utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
+_CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
+
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
-    def __init__(self) -> None:
+    def __init__(self, authenticator: Authenticator | None = None) -> None:
         super().__init__()
-        self.authenticator = Authenticator()
+        self.authenticator = authenticator if authenticator is not None else Authenticator()
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -108,7 +110,11 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "truncation",
         }
 
-        return {k: v for k, v in request.items() if k in allowed_keys}
+        filtered: Final = {k: v for k, v in request.items() if k in allowed_keys}
+        service_tier: Final = _CHATGPT_SERVICE_TIERS.get(request.get("service_tier"))
+        if service_tier is not None:
+            filtered["service_tier"] = service_tier
+        return filtered
 
     def transform_response_api_response(
         self,

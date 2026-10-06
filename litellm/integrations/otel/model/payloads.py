@@ -124,6 +124,20 @@ class LLMUsage:
     total_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
+    reasoning_tokens: int | None = None
+
+    @property
+    def uncached_input_tokens(self) -> int | None:
+        if self.input_tokens is None:
+            return None
+        cached: Final = (self.cache_read_input_tokens or 0) + (self.cache_creation_input_tokens or 0)
+        return max(self.input_tokens - cached, 0)
+
+    @property
+    def non_reasoning_output_tokens(self) -> int | None:
+        if self.output_tokens is None:
+            return None
+        return max(self.output_tokens - (self.reasoning_tokens or 0), 0)
 
     @classmethod
     def from_standard_logging_payload(cls, payload: StandardLoggingPayload) -> LLMUsage:
@@ -134,6 +148,10 @@ class LLMUsage:
         raw_details: Final = usage_object.get("prompt_tokens_details")
         prompt_details: Final[Mapping[str, object]] = (
             raw_details if isinstance(raw_details, Mapping) else MappingProxyType({})
+        )
+        raw_completion_details: Final = usage_object.get("completion_tokens_details")
+        completion_details: Final[Mapping[str, object]] = (
+            raw_completion_details if isinstance(raw_completion_details, Mapping) else MappingProxyType({})
         )
         return cls(
             input_tokens=as_int(payload.get("prompt_tokens")),
@@ -150,6 +168,7 @@ class LLMUsage:
                 prompt_details.get("cached_tokens"),
                 usage_object.get("prompt_cache_hit_tokens"),
             ),
+            reasoning_tokens=_cache_token_value(completion_details.get("reasoning_tokens")),
         )
 
 
@@ -305,16 +324,21 @@ class GuardrailSpanData:
         )
 
 
+MetadataScalar = str | int | float | bool
+
+
 @dataclass(frozen=True)
 class ServiceSpanData:
     service_name: str
     call_type: str | None = None
+    caller: str | None = None
+    target: str | None = None
     error: SpanError | None = None
     # Caller-supplied attributes to stamp on the service span, passed through
     # from ``async_service_*_hook(event_metadata=...)``. The mapper owns how
     # these are namespaced: the canonical vocabulary uses ``litellm.metadata.*``
     # keys, the semconv-ai / Traceloop vocabulary uses the bare key names.
-    event_metadata: Mapping[str, str] = field(default_factory=dict)
+    event_metadata: Mapping[str, MetadataScalar] = field(default_factory=dict)
 
     @classmethod
     def from_payload(
@@ -330,6 +354,8 @@ class ServiceSpanData:
         return cls(
             service_name=payload.service.value,
             call_type=payload.call_type,
+            caller=payload.caller,
+            target=payload.target,
             error=SpanError(message=payload.error) if payload.error else None,
             event_metadata=sanitize_event_metadata(event_metadata),
         )
@@ -406,6 +432,7 @@ class LLMCallSpanData:
     output_type: GenAIOutputType | None = None
     call_type: str | None = None
     request_route: str | None = None
+    request_purpose: str | None = None
     trace: TraceControls = field(default_factory=TraceControls)
     session_id: str | None = None
     embedding_output: EmbeddingOutput | None = None
@@ -417,6 +444,7 @@ class LLMCallSpanData:
         capture_content: bool = False,
         time_to_first_chunk_seconds: float | None = None,
         request_route: str | None = None,
+        request_purpose: str | None = None,
         trace: TraceControls | None = None,
         session_id: str | None = None,
     ) -> LLMCallSpanData:
@@ -464,6 +492,7 @@ class LLMCallSpanData:
             output_type=resolve_output_type(call_type),
             call_type=call_type or None,
             request_route=request_route or context.identity.request_route,
+            request_purpose=request_purpose,
             trace=trace or TraceControls(),
             session_id=session_id or None,
             embedding_output=embedding_output if capture_content else None,
@@ -628,17 +657,18 @@ _MAX_METADATA_ITEMS: Final = 32
 
 def sanitize_event_metadata(
     event_metadata: Mapping[str, object] | None,
-) -> dict[str, str]:
-    """Reduce caller-supplied ``event_metadata`` to span-safe string attributes.
+) -> dict[str, MetadataScalar]:
+    """Reduce caller-supplied ``event_metadata`` to span-safe primitive attributes.
 
-    Keeps only primitive values (str/int/float/bool) under non-sensitive keys —
-    never ``repr()``-ing objects, dicts, or lists, never stamping secrets/headers,
-    and bounding the count and per-value length. This is the single chokepoint:
-    both the GenAI and legacy mappers read the cleaned result.
+    Keeps only primitive values (str/int/float/bool, each in its own type so a
+    count stays a number) under non-sensitive keys — never ``repr()``-ing objects,
+    dicts, or lists, never stamping secrets/headers, and bounding the count and
+    per-string length. This is the single chokepoint: both the GenAI and legacy
+    mappers read the cleaned result.
     """
     if not event_metadata:
         return {}
-    clean: Final[dict[str, str]] = {}
+    clean: Final[dict[str, MetadataScalar]] = {}
     for key, value in event_metadata.items():
         if len(clean) >= _MAX_METADATA_ITEMS:
             break
@@ -649,8 +679,10 @@ def sanitize_event_metadata(
             continue
         # ``bool`` is a subclass of ``int``, so it's covered. Non-primitive values
         # (objects, dicts, lists) are dropped rather than stringified.
-        if isinstance(value, (str, int, float)):
-            clean[key] = str(value)[:_MAX_METADATA_VALUE_LEN]
+        if isinstance(value, str):
+            clean[key] = value[:_MAX_METADATA_VALUE_LEN]
+        elif isinstance(value, (int, float)):
+            clean[key] = value
     return clean
 
 
@@ -782,7 +814,7 @@ def _joined_choice(parts: tuple[str, ...]) -> tuple[_Choice, ...]:
 def _text_completion_choice(choice: Mapping[str, object], text: str) -> Mapping[str, object]:
     synthesized: Final = _text_choice(text, as_str(choice.get("finish_reason")))
     merged: Final = (*choice.items(), *synthesized.items())
-    return {k: v for k, v in merged if k != "text"}  # mutable-ok: mappers json.dumps and isinstance(dict) it
+    return {k: v for k, v in merged if k != "text"}
 
 
 def _completion_choices(response: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:

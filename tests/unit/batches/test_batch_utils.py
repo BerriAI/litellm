@@ -464,6 +464,40 @@ def test_total_cost_applies_the_long_context_batch_tier_per_line():
     assert result.cost == pytest.approx((300_000 * 2e-6) + (10 * 6e-6) + (100 * 1e-6) + (10 * 4e-6))
 
 
+def test_xai_output_lines_bill_reasoning_tokens_as_completion_tokens():
+    row = _success_row(
+        model="grok-4.3",
+        usage={
+            "prompt_tokens": 615,
+            "completion_tokens": 3,
+            "total_tokens": 993,
+            "completion_tokens_details": {"reasoning_tokens": 375},
+        },
+    )
+
+    result = bu._aggregate_batch_cost_usage_models(
+        entries=[row],
+        custom_llm_provider="xai",
+        model_info=ModelInfo(
+            key="xai/grok-4.3",
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            input_cost_per_token=1.25e-6,
+            output_cost_per_token=2.5e-6,
+            litellm_provider="xai",
+            mode="chat",
+            supported_openai_params=None,
+            input_cost_per_token_batches=1e-6,
+            output_cost_per_token_batches=2e-6,
+        ),
+    )
+
+    assert result.usage.completion_tokens == 378
+    assert result.usage.total_tokens == 993
+    assert result.cost == pytest.approx((615 * 1e-6) + (378 * 2e-6))
+
+
 def test_total_usage_empty_is_zero():
     result = bu._aggregate_batch_cost_usage_models(entries=[], custom_llm_provider="openai")
     assert result.cost == 0.0
@@ -1854,6 +1888,40 @@ def test_unparsable_bedrock_batch_usage_warns(caplog):
     assert usage.total_tokens == 0
     assert "does not understand" in caplog.text
     assert "inputTextTokenCount" in caplog.text
+
+
+class TestFileAccessCredentialsCarryFederation:
+    """A federated deployment holds no api_key, so the fetch that reads a finished batch's output
+    has to inherit the federation fields or it cannot authenticate and the batch is never billed."""
+
+    def test_federation_fields_survive_extraction(self):
+        from litellm.batches.batch_utils import _extract_file_access_credentials
+
+        credentials = _extract_file_access_credentials(
+            {
+                "model": "anthropic/claude-sonnet-4-5",
+                "anthropic_federation_rule_id": "fdrl_x",
+                "anthropic_organization_id": "org-x",
+                "anthropic_identity_token_file": "/var/run/secrets/anthropic.com/token",
+                "something_unrelated": "dropped",
+            }
+        )
+
+        assert credentials["anthropic_federation_rule_id"] == "fdrl_x"
+        assert credentials["anthropic_organization_id"] == "org-x"
+        assert credentials["anthropic_identity_token_file"] == "/var/run/secrets/anthropic.com/token"
+        assert "something_unrelated" not in credentials
+
+    def test_every_federation_field_is_carried(self):
+        """Derived from the kwargs set, so a new federation field is carried without an edit here."""
+        from litellm.batches.batch_utils import _extract_file_access_credentials
+        from litellm.litellm_core_utils.get_litellm_params import ANTHROPIC_WIF_KWARGS_KEYS
+
+        params = {name: f"value-{name}" for name in ANTHROPIC_WIF_KWARGS_KEYS}
+
+        credentials = _extract_file_access_credentials(params)
+
+        assert set(credentials) == set(ANTHROPIC_WIF_KWARGS_KEYS)
 
 
 def test_total_cost_bills_cached_tokens_per_line_at_the_batch_cached_rate():

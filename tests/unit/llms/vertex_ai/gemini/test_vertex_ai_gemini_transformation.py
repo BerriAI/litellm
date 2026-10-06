@@ -1,7 +1,14 @@
 import base64
+from collections.abc import Sequence
+from itertools import chain
+from pathlib import Path
+from typing import Final
 
+import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
@@ -12,7 +19,7 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     _get_highest_media_resolution,
     _extract_max_media_resolution_from_messages,
 )
-from litellm.types.llms.vertex_ai import BlobType
+from litellm.types.llms.vertex_ai import BlobType, ContentType, PartType
 from litellm.types.utils import Message
 
 
@@ -2727,3 +2734,95 @@ def test_gemini_server_side_tool_signature_not_duplicated_on_text():
     assert "thoughtSignature" not in text_part
     tool_call_part = next(p for p in parts if "toolCall" in p)
     assert tool_call_part["thoughtSignature"] == "server_side_signature"
+
+
+WHITE_PNG: Final = (Path(__file__).parents[4] / "white_100x100.png").read_bytes()
+
+
+@respx.mock
+def test_convert_tool_response_with_url_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    image_url: Final = "https://tool-result-images.test/gemini-tool-response.png"
+    respx.get(image_url).mock(return_value=httpx.Response(200, content=WHITE_PNG, headers={"content-type": "image/png"}))
+    tool_message: Final = {
+        "role": "tool",
+        "tool_call_id": "call_test456",
+        "content": [
+            {"type": "text", "text": '{"url": "https://example.com"}'},
+            {"type": "input_image", "image_url": image_url},
+        ],
+    }
+    last_message_with_tool_calls: Final = {
+        "tool_calls": [
+            {
+                "id": "call_test456",
+                "function": {"name": "type_text_at", "arguments": '{"x": 300, "y": 400, "text": "hello"}'},
+            }
+        ]
+    }
+
+    result: Final = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert "inline_data" not in result[0]
+    function_response: Final = result[0]["function_response"]
+    assert function_response["name"] == "type_text_at"
+    assert len(function_response["parts"]) == 1
+    inline_data: Final[BlobType] = function_response["parts"][0]["inline_data"]
+    assert inline_data == {"data": base64.b64encode(WHITE_PNG).decode(), "mime_type": "image/png"}
+
+
+CLAUDE_THINKING_SIGNATURE: Final = "EqQBCkYIBxgCKkCfQ2x0b3VkZS1zaWduYXR1cmUtbm90LW1pbnRlZC1ieS1nZW1pbmkSDJ3lXf5sD+QVqpFQmRoM"
+
+
+def _parts_of(contents: Sequence[ContentType]) -> list[PartType]:
+    return list(chain.from_iterable(content["parts"] for content in contents))
+
+
+def test_thinking_block_signature_is_not_forwarded_to_gemini() -> None:
+    thinking: Final = "The user wants the capital of France."
+    messages: Final = [
+        {"role": "user", "content": "Capital of France?"},
+        {
+            "role": "assistant",
+            "content": "Paris.",
+            "reasoning_content": thinking,
+            "thinking_blocks": [{"type": "thinking", "thinking": thinking, "signature": CLAUDE_THINKING_SIGNATURE}],
+        },
+        {"role": "user", "content": "And of Spain?"},
+    ]
+
+    parts: Final = _parts_of(_gemini_convert_messages_with_history(messages=messages, model="gemini-3.8-flash"))
+
+    assert all("thoughtSignature" not in part for part in parts)
+    assert [part for part in parts if part.get("text") == thinking] == [{"thought": True, "text": thinking}]
+
+
+def test_anthropic_messages_history_replays_to_gemini_without_claude_signature() -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import _get_dummy_thought_signature
+    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+
+    thinking: Final = "I should look the weather up before answering."
+    anthropic_messages: Final = [
+        {"role": "user", "content": "Weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": thinking, "signature": CLAUDE_THINKING_SIGNATURE},
+                {"type": "text", "text": "Let me check."},
+                {"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01A", "content": "Sunny, 22C"}]},
+    ]
+
+    chat_messages: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
+    parts: Final = _parts_of(_gemini_convert_messages_with_history(messages=chat_messages, model="gemini-3.8-flash"))
+
+    signatures: Final = [part["thoughtSignature"] for part in parts if "thoughtSignature" in part]
+    assert signatures == [_get_dummy_thought_signature()]
+    assert [part for part in parts if part.get("text") == thinking] == [{"thought": True, "text": thinking}]
+    assert next(part for part in parts if "function_call" in part)["thoughtSignature"] == _get_dummy_thought_signature()
