@@ -264,6 +264,8 @@ def test_non_admin_keys_scoped_to_the_submission_routes_get_403_from_the_admin_c
         member: Final = scenario.member(team_id)
         team_admin: Final = scenario.member(team_id, role="admin")
         registration_key: Final = scenario.key(user_id=member, team_id=team_id, models=[model])
+        plain_member_key: Final = scenario.key(user_id=member, team_id=team_id, models=[model])
+        plain_team_admin_key: Final = scenario.key(user_id=team_admin, team_id=team_id, models=[model])
         member_key: Final = scenario.key(
             user_id=member,
             team_id=team_id,
@@ -292,6 +294,15 @@ def test_non_admin_keys_scoped_to_the_submission_routes_get_403_from_the_admin_c
             gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/reject", key=member_key),
         )
         _assert_submission_actions_are_forbidden(responses)
+        plain_responses: Final = (
+            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/approve", key=plain_team_admin_key),
+            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/reject", key=plain_team_admin_key),
+            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/approve", key=plain_member_key),
+            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/reject", key=plain_member_key),
+        )
+        assert all(response.status_code in (401, 403) for response in plain_responses), tuple(
+            r.text for r in plain_responses
+        )
         _assert_submission_status(guardrail_id, "pending_review", team_id)
         assert guardrail.drain() == ()
         response: Final = _chat(gateway, model, registration_key, _PROMPT_PENDING, name)
