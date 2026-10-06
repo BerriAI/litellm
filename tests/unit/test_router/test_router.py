@@ -2408,6 +2408,42 @@ def test_get_model_group_info_prices_an_alias_chain_from_the_wildcard_route_serv
     _assert_free(router.get_model_group_info(model_group="openai/gpt-4o"), "ollama")
 
 
+def _served_models(deployments: list[DeploymentTypedDict] | None) -> list[str]:
+    return [deployment["litellm_params"]["model"] for deployment in deployments or ()]
+
+
+def test_get_model_list_of_routed_group_reads_the_groups_own_deployments_only():
+    """The router resolves an alias once, so a group reached as an alias target is served by
+    its own deployments. get_model_list composes the group's own alias target too, the hop a
+    request to that group by name takes."""
+    router = Router(
+        model_list=[
+            _free_ollama_deployment("local-free"),
+            _paid_openai_deployment("gpt-priced", "gpt-4o"),
+        ],
+        model_group_alias={"local-free": "gpt-priced"},
+    )
+
+    assert _served_models(router.get_model_list_of_routed_group("local-free")) == ["ollama/qwen3:0.6b"]
+    assert _served_models(router.get_model_list(model_name="local-free")) == ["ollama/qwen3:0.6b", "gpt-4o"]
+
+
+def test_get_model_list_of_routed_group_falls_back_to_the_wildcard_route_serving_it():
+    router = Router(
+        model_list=[
+            _paid_openai_deployment("openai/*", "openai/*"),
+            _free_ollama_deployment("local-free"),
+        ],
+        model_group_alias={"openai/gpt-4o": "local-free"},
+    )
+
+    routed = router.get_model_list_of_routed_group("openai/gpt-4o")
+
+    assert [deployment["model_name"] for deployment in routed] == ["openai/gpt-4o"]
+    assert _served_models(routed) == ["openai/gpt-4o"]
+    assert _served_models(router.get_model_list(model_name="openai/gpt-4o")) == ["ollama/qwen3:0.6b"]
+
+
 def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selector():
     router = _alias_cost_router()
 
