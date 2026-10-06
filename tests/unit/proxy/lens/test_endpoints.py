@@ -15,15 +15,29 @@ from litellm.proxy.lens.endpoints import (
     result,
     run_settings,
     run_window,
+    trace_findings,
     user_scope,
     validate_model,
     watchable,
     watching,
     worker_supports_model,
 )
-from litellm.proxy.lens.models import ActivitySelection, Coverage, Lens, LensSettings, Result, RunRequest, Scope
+from litellm.proxy.lens.models import (
+    ActivitySelection,
+    Coverage,
+    Lens,
+    LensSettings,
+    Result,
+    RunAssessment,
+    RunRequest,
+    Sample,
+    Scope,
+    TraceFindingsRequest,
+    TraceIdentity,
+)
 from litellm.proxy.lens.repository import Row
 from litellm.proxy.lens.state import claim_job, queue_job, replace_job
+from tests.unit.proxy.lens.test_agent_workspace import execution
 from tests.unit.proxy.lens.test_state import NOW, lens, worker
 
 
@@ -63,8 +77,9 @@ class ResultDatabase:
     ids=("review-diagnostic", "investigation-diagnostic", "interrupted-worker", "empty-success"),
 )
 @pytest.mark.asyncio
+@pytest.mark.parametrize("assessed", (False, True))
 async def test_result_persists_final_coverage_but_keeps_progress_when_worker_is_interrupted(
-    monkeypatch: pytest.MonkeyPatch, final_coverage: Coverage, error: str, expected: Coverage
+    monkeypatch: pytest.MonkeyPatch, final_coverage: Coverage, error: str, expected: Coverage, assessed: bool
 ) -> None:
     from litellm.proxy import proxy_server
 
@@ -73,16 +88,22 @@ async def test_result_persists_final_coverage_but_keeps_progress_when_worker_is_
         update={
             "lease_until": datetime.max.replace(tzinfo=timezone.utc),
             "coverage": Coverage(eligible=2, selected=2, screened=1),
+            "sample": Sample(executions=(execution("run"),), eligible=1),
         }
     )
     db: Final = ResultDatabase(replace_job(assigned, active))
     monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
-    saved: Final = await result("lens", "job", Result(coverage=final_coverage, error=error), worker(), None)
+    assessments: Final = (RunAssessment(execution_id="run"),) if assessed else ()
+    saved: Final = await result(
+        "lens", "job", Result(coverage=final_coverage, error=error, assessments=assessments), worker(), None
+    )
 
     assert saved == db.stored
     assert saved.jobs[0].coverage == expected
     assert saved.jobs[0].error == error
-    assert saved.jobs[0].status == ("failed" if error else "completed")
+    assert saved.jobs[0].status == ("failed" if error and not assessed else "completed")
+    assert saved.jobs[0].assessments == assessments
+    assert saved.last_scan_at == (None if error else active.end)
 
 
 @pytest.fixture
@@ -191,6 +212,15 @@ async def test_agent_discovery_without_trace_storage_still_requires_admin_access
     auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
     with pytest.raises(HTTPException) as error:
         await list_agents(auth, None)
+    assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_trace_finding_counts_require_investigation_read_access() -> None:
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+    request: Final = TraceFindingsRequest(traces=(TraceIdentity(trace_id="trace"),))
+    with pytest.raises(HTTPException) as error:
+        await trace_findings(request, auth)
     assert error.value.status_code == 403
 
 

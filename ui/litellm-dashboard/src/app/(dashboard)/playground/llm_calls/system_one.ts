@@ -3,7 +3,8 @@ import { withRequiredHeaders } from "@/components/llm_calls/request_headers";
 import { createApiClient } from "@/lib/http/client";
 import {
   systemOneResponseSchema,
-  type SystemOneRequest,
+  type DecisionEndpoint,
+  type PlaygroundRequest,
   type SystemOneResponse,
 } from "../components/systemOneUI/lib/schemas";
 
@@ -13,10 +14,10 @@ export interface SystemOneResult {
 }
 
 export async function makeSystemOneRequest(
-  payload: SystemOneRequest,
+  payload: PlaygroundRequest,
   accessToken: string,
   customBaseUrl?: string,
-  signal?: AbortSignal,
+  { signal, endpoint = "/typesafe/v1/systemone" }: { signal?: AbortSignal; endpoint?: DecisionEndpoint } = {},
 ): Promise<SystemOneResult> {
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
@@ -29,7 +30,7 @@ export async function makeSystemOneRequest(
     },
   );
   const client = createApiClient({ getBaseUrl: () => normalizedBaseUrl });
-  const body = await client.post<unknown>("/typesafe/v1/systemone", { body: payload, headers, signal });
+  const body = await client.post<unknown>(endpoint, { body: payload, headers, signal });
   const parsed = systemOneResponseSchema.safeParse(body);
   if (!parsed.success) {
     throw new Error("System One response has an invalid shape.");

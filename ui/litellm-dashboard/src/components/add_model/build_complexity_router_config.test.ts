@@ -57,6 +57,41 @@ const baseParams: BuildComplexityRouterConfigParams = {
 };
 
 describe("buildComplexityRouterConfig", () => {
+  it.each([undefined, false, true])(
+    "keeps cache routing opt-in and uses eligible single-model tiers only when enabled: %s",
+    (enabled) => {
+      const config = buildComplexityRouterConfig({ ...baseParams, cacheAwareRouting: enabled });
+      expect(config.cache_aware_routing).toBe(enabled);
+      expect(Object.hasOwn(config, "cache_aware_routing")).toBe(enabled !== undefined);
+      expect(config.tiers).toEqual(
+        enabled ? Object.fromEntries(Object.entries(tiers).map(([tier, models]) => [tier, models[0]])) : tiers,
+      );
+      expect(config).not.toHaveProperty("cache_aware_routing_output_tokens");
+      expect(config).not.toHaveProperty("cache_aware_routing_timeout_ms");
+      expect(config).not.toHaveProperty("enable_context_window_escalation");
+      expect(config).not.toHaveProperty("max_tokens_from_tier_model");
+    },
+  );
+
+  it("keeps zero-output estimates and drops empty tiers without flattening real model pools", () => {
+    const params = {
+      ...baseParams,
+      cacheAwareRouting: true,
+      tiers: { ...tiers, MEDIUM: [], COMPLEX: ["first", "second"] },
+      cacheAwareRoutingOutputTokens: 0,
+      cacheAwareRoutingTimeoutMs: 750,
+    };
+    const config = buildComplexityRouterConfig(params);
+    const expected = {
+      cache_aware_routing: true,
+      cache_aware_routing_output_tokens: 0,
+      cache_aware_routing_timeout_ms: 750,
+      tiers: { SIMPLE: tiers.SIMPLE[0], COMPLEX: ["first", "second"], REASONING: tiers.REASONING[0] },
+    };
+    expect(config).toMatchObject(expected);
+    expect(config.tiers).not.toHaveProperty("MEDIUM");
+  });
+
   it("accepts built-in JEV defaults without an LLM classifier model", () => {
     expect(getClassifierModelError({ classifier_type: "jev" })).toBeNull();
   });

@@ -338,6 +338,14 @@ exclude = [
 ]
 
 [tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "rust-toolchain.toml" },
+    { file = ".cargo/config.toml" },
+    { file = "litellm-rust/Cargo.lock" },
+    { file = "litellm-rust/Cargo.toml" },
+    { file = "litellm-rust/crates/**/*" },
+]
 constraint-dependencies = [
     "tornado>=6.5.8",
     "aiohttp>=3.14.2,<4.0",

@@ -175,21 +175,28 @@ async def structured_response_with_history(
     parsed, problem = await checked_response(response, schema, validate)
     if parsed is not None:
         return parsed, (*request.messages, ModelMessage(role="assistant", content=response.content))
-    correction: Final = (
-        "\nYour previous response did not match the required response contract. Generate a new response "
-        "from the original evidence, correcting these validation errors: " + problem
+    correction: Final = "\n" + json.dumps(
+        {
+            "instruction": (
+                "Your previous response did not match the required response contract. Generate a new response "
+                "from the original evidence, correcting the validation errors. Follow the complete object "
+                "structure in response_schema. If the schema allows tools, you may request them to inspect "
+                "evidence before finalizing."
+            ),
+            "validation_errors": problem,
+            "response_schema": schema.model_json_schema(),
+        },
+        ensure_ascii=False,
     )
     repair: Final = request.model_copy(
         update=MappingProxyType(
             {
                 "messages": (
-                    *request.messages,
+                    *request.conversation(),
                     ModelMessage(role="assistant", content=response.content),
-                    ModelMessage(role="user", content=correction),
+                    ModelMessage(role="system", content=correction),
                 )
             }
-            if request.messages
-            else {"prompt": request.prompt + correction}
         )
     )
     repaired: Final = await model(repair)
@@ -330,7 +337,7 @@ async def extract_stored(
         content: Final = await read(execution.id, previous, request.offset)
         return tuple(p for p in content.parts if p.span_id == request.span_id)
 
-    async def examine(catalog: tuple[tuple[str, str, str, str, str], ...]) -> Examined:
+    async def examine(catalog: tuple[tuple[str, str, str, str, str, str, str], ...]) -> Examined:
         feedback_page = 0  # rebind-ok: navigate bounded feedback pages
         feedback_seen: set[int] = {0}  # mutable-ok: detect feedback navigation loops
         must_decide = False  # rebind-ok: unavailable evidence requires a final decision
@@ -356,7 +363,15 @@ async def extract_stored(
                     "checks": tuple(c.model_dump() for c in claim.job.settings.analysis_checks),
                     "execution": execution.model_dump(),
                     "catalog_complete": page.next_cursor is None and len(catalog) == span_count,
-                    "catalog_fields": ("span_id", "parent_span_id", "name", "kind", "preview"),
+                    "catalog_fields": (
+                        "span_id",
+                        "parent_span_id",
+                        "name",
+                        "kind",
+                        "preview",
+                        "start_time",
+                        "end_time",
+                    ),
                     "catalog": catalog,
                     "task_and_outcome": tuple(
                         p.model_copy(update=MappingProxyType({"content": overview_content(p, root_count)})).model_dump()
