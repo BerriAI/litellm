@@ -1518,16 +1518,9 @@ class DBSpendUpdateWriter:
             )
         )
         if prisma_client is not None and spend_logs_url is not None or prisma_client is not None:
-            from litellm.proxy.spend_tracking.spend_tracking_utils import (
-                configured_spend_logs_metadata_fields,
-                spend_log_row_with_retained_metadata,
-            )
             from litellm.proxy.utils import enqueue_spend_logs, request_spend_log_flush
 
-            await enqueue_spend_logs(
-                prisma_client,
-                (spend_log_row_with_retained_metadata(payload, configured_spend_logs_metadata_fields()),),
-            )
+            await enqueue_spend_logs(prisma_client, (payload,))
             if payload.get("call_type") in RESPONSES_SESSION_CALL_TYPES:
                 request_spend_log_flush(prisma_client)
         else:

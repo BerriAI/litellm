@@ -27,6 +27,7 @@ def _config(
     *,
     model_list: tuple[Mapping[str, JsonValue], ...] = (),
     litellm_settings: Mapping[str, JsonValue] | None = None,
+    guardrails: tuple[Mapping[str, JsonValue], ...] = (),
 ) -> Path:
     retention: Final = (
         {} if spend_logs_metadata_fields is None else {"spend_logs_metadata_fields": dict(spend_logs_metadata_fields)}
@@ -45,6 +46,7 @@ def _config(
                     **retention,
                 },
                 "litellm_settings": dict(litellm_settings or {}),
+                "guardrails": [dict(guardrail) for guardrail in guardrails],
             }
         )
     )
@@ -124,6 +126,57 @@ def test_included_metadata_fields_are_the_only_ones_stored_besides_always_kept(
     row, _ = _stored_row_after_one_chat(gateway, tmp_path, {"include": ["user_api_key_alias"]})
 
     assert set(object_value(row["metadata"])) == {"status", "cold_storage_object_key", "user_api_key_alias"}
+
+
+def test_guardrail_usage_is_tracked_when_guardrail_information_is_not_stored(gateway: Gateway, tmp_path: Path) -> None:
+    guardrail_name: Final = f"metadata-fields-guardrail-{uuid4()}"
+    with (
+        wire_server(lambda _: Reply(body=b'{"action":"NONE"}')) as policy,
+        wire_server(_respond) as wire,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {},
+            config=_config(
+                tmp_path,
+                {"exclude": ["guardrail_information"]},
+                guardrails=(
+                    {
+                        "guardrail_name": guardrail_name,
+                        "litellm_params": {
+                            "guardrail": "generic_guardrail_api",
+                            "mode": "pre_call",
+                            "default_on": True,
+                            "api_base": policy.url,
+                            "api_key": "synthetic-guardrail-key",
+                        },
+                    },
+                ),
+            ),
+        ) as isolated,
+        isolated.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url, api_key="synthetic-openai-key")
+        response_id: Final = string_value(isolated.chat(model, key=scenario.key(models=[model]))["id"])
+        assert len(policy.drain()) == 1
+        rows: Final = eventually(
+            lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (response_id,)),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        assert "guardrail_information" not in object_value(rows[0]["metadata"]), rows[0]
+        indexed: Final = eventually(
+            lambda: read_rows(
+                'SELECT guardrail_id FROM "LiteLLM_SpendLogGuardrailIndex" WHERE request_id=%s', (response_id,)
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        metrics: Final = read_rows(
+            'SELECT requests_evaluated, passed_count FROM "LiteLLM_DailyGuardrailMetrics" WHERE guardrail_id=%s',
+            (string_value(indexed[0]["guardrail_id"]),),
+        )
+        assert metrics == [{"requests_evaluated": 1, "passed_count": 1}], metrics
 
 
 EXCLUDED: Final = ("model_map_information", "user_api_key_alias")
