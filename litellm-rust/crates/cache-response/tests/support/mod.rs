@@ -1,3 +1,5 @@
+#![allow(dead_code)] // each test binary compiles this module on its own and uses a different subset
+
 use std::{sync::Arc, time::Duration};
 
 use litellm_cache::ExactCacheContext;
