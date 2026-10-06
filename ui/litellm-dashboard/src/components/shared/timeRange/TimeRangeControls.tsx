@@ -12,61 +12,55 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
 
-import type { TimeWindow } from "./Timeline";
-
-export const RANGE_PRESETS = [
-  { hours: 1, label: "Last hour" },
-  { hours: 6, label: "Last 6 hours" },
-  { hours: 24, label: "Last 24 hours" },
-  { hours: 168, label: "Last 7 days" },
-  { hours: 720, label: "Last 30 days" },
-] as const;
+import { isLive, presetLabel, RANGE_PRESETS, type RelativeRange, type TimeWindow, timeWindow } from "./timeRange";
 
 const RANGE_LABEL_FORMAT = "MMM D, h:mm A";
 
 const fixedRangeLabel = (range: TimeWindow): string =>
   `${moment(range.startMs).format(RANGE_LABEL_FORMAT)} to ${moment(range.endMs).format(RANGE_LABEL_FORMAT)}`;
 
-const presetLabel = (hours: number): string =>
-  RANGE_PRESETS.find((preset) => preset.hours === hours)?.label ?? `Last ${hours} hours`;
+/** A zoom or a paused range names its actual bounds; a live range names its preset. */
+const rangeLabel = (range: RelativeRange, zoom: TimeWindow | null): string => {
+  if (zoom) return fixedRangeLabel(zoom);
+  return range.anchorMs === null ? presetLabel(range.hours) : fixedRangeLabel(timeWindow(range, range.anchorMs));
+};
 
 const SEGMENT = "inline-flex h-full items-center gap-1.5 px-3 text-sm outline-none focus-visible:bg-accent";
 
 interface TimeRangeControlsProps {
-  fixedRange: TimeWindow | null;
-  rangeHours: number;
-  onRangeHoursChange: (hours: number) => void;
-  live: boolean;
+  range: RelativeRange;
+  zoom: TimeWindow | null;
+  onHoursChange: (hours: number) => void;
   showLive?: boolean;
   onLiveChange: (live: boolean) => void;
 }
 
 /** Joined control group: the time range (opens presets) and Live. */
 export function TimeRangeControls({
-  fixedRange,
-  rangeHours,
-  onRangeHoursChange,
-  live,
+  range,
+  zoom,
+  onHoursChange,
   showLive = true,
   onLiveChange,
 }: TimeRangeControlsProps) {
-  const label = fixedRange ? fixedRangeLabel(fixedRange) : presetLabel(rangeHours);
+  const live = isLive(range);
+  const label = rangeLabel(range, zoom);
   return (
-    <div className="flex min-w-0 max-w-full items-stretch divide-x divide-border border-l border-border">
+    <div className="flex min-w-0 max-w-full items-stretch border-l border-border">
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Time range"
-          className={cn(SEGMENT, "min-w-0 text-foreground hover:bg-muted/60")}
+          className={cn(SEGMENT, "min-w-0 justify-between text-foreground hover:bg-muted/60 sm:min-w-40")}
           title={label}
           data-testid="time-range-trigger"
         >
           <span className="truncate tabular-nums">{label}</span>
           <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-auto min-w-44">
+        <DropdownMenuContent align="end" sideOffset={1} className="rounded-t-none">
           <DropdownMenuRadioGroup
-            value={String(rangeHours)}
-            onValueChange={(value: string) => onRangeHoursChange(Number(value))}
+            value={String(range.hours)}
+            onValueChange={(value: string) => onHoursChange(Number(value))}
           >
             {RANGE_PRESETS.map((preset) => (
               <DropdownMenuRadioItem key={preset.hours} value={String(preset.hours)} className="text-sm">
@@ -83,7 +77,7 @@ export function TimeRangeControls({
           onClick={() => onLiveChange(!live)}
           className={cn(
             SEGMENT,
-            "shrink-0",
+            "shrink-0 border-l border-border",
             live ? "bg-info/10 text-info hover:bg-info/15" : "text-muted-foreground hover:text-foreground",
           )}
         >
