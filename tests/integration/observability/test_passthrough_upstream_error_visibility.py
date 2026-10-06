@@ -11,7 +11,7 @@ import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, NotFoundError, OpenAI
 from pydantic import JsonValue
 
@@ -704,7 +704,11 @@ _RESPONSE_OBJECT: Final[dict[str, JsonValue]] = {
     },
 }
 _RESPONSE_EVENTS: Final[tuple[dict[str, JsonValue], ...]] = (
-    {"type": "response.created", "sequence_number": 0, "response": {**_RESPONSE_OBJECT, "status": "in_progress", "output": []}},
+    {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {**_RESPONSE_OBJECT, "status": "in_progress", "output": []},
+    },
     {
         "type": "response.output_text.delta",
         "sequence_number": 1,
@@ -765,8 +769,62 @@ def _assert_openai_upstream_auth(request: Request, key: str) -> None:
     assert key.encode() not in request.body, request.body
 
 
+def _assert_openai_sdk_request(
+    wire: Wire,
+    sent: list[httpx.Request],
+    key: str,
+    method: str,
+    target: str,
+    expected_body: dict[str, JsonValue] | None,
+) -> Request:
+    received: Final = wire.drain()
+    assert [(request.method, request.target) for request in received] == [(method, target)], received
+    assert len(sent) == 1, sent
+    client_request: Final = sent[0]
+    upstream: Final = received[0]
+    _assert_openai_upstream_auth(upstream, key)
+    if expected_body is None:
+        assert client_request.content == b"", client_request.content
+        assert upstream.body == b"", upstream.body
+    else:
+        assert json.loads(client_request.content) == expected_body, client_request.content
+        assert json.loads(upstream.body) == expected_body, upstream.body
+    return upstream
+
+
+_OPENAI_CHAT_BODY: Final[dict[str, JsonValue]] = {
+    "model": "gpt-4o-mini",
+    "messages": [{"role": "user", "content": "hi"}],
+    "user": "end-user-1",
+    "store": True,
+    "temperature": 0.2,
+}
+_OPENAI_RESPONSES_BODY: Final[dict[str, JsonValue]] = {
+    "model": "gpt-4o-mini",
+    "input": "hi",
+    "store": False,
+    "user": "end-user-1",
+    "temperature": 0.2,
+}
+_OPENAI_RESPONSES_STREAM_BODY: Final[dict[str, JsonValue]] = {
+    **_OPENAI_RESPONSES_BODY,
+    "stream": True,
+}
+
+
+@pytest.mark.parametrize(
+    ("base_path", "surface"),
+    [
+        pytest.param("/openai", "chat", id="openai-chat"),
+        pytest.param("/openai_passthrough", "chat", id="openai-passthrough-chat"),
+        pytest.param("/openai_passthrough", "responses", id="openai-passthrough-responses"),
+        pytest.param("/openai_passthrough", "responses-stream", id="openai-passthrough-responses-stream"),
+        pytest.param("/openai", "assistants", id="openai-assistants"),
+        pytest.param("/openai_passthrough", "assistants", id="openai-passthrough-assistants"),
+    ],
+)
 def test_openai_passthrough_sdk_success_on_both_aliases_forwards_the_native_request(
-    gateway: Gateway, tmp_path: Path
+    gateway: Gateway, tmp_path: Path, base_path: str, surface: str
 ) -> None:
     path: Final = tmp_path / "openai-success.yaml"
     with wire_server(_openai_peer) as wire:
@@ -776,46 +834,61 @@ def test_openai_passthrough_sdk_success_on_both_aliases_forwards_the_native_requ
             with candidate.scenario() as scenario:
                 key: Final = scenario.key()
                 sent: Final[list[httpx.Request]] = []
-                with _openai_sdk(candidate, key, "/openai", sent) as sdk:
-                    chat: Final = sdk.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": "hi"}],
-                        user="end-user-1",
-                        store=True,
-                        temperature=0.2,
-                    )
-                    assistants: Final = sdk.beta.assistants.list(limit=2, order="desc")
-                with _openai_sdk(candidate, key, "/openai_passthrough", sent) as sdk:
-                    response: Final = sdk.responses.create(
-                        model="gpt-4o-mini", input="hi", store=False, user="end-user-1", temperature=0.2
-                    )
-                    events: Final = tuple(
-                        sdk.responses.create(model="gpt-4o-mini", input="hi", store=False, stream=True)
-                    )
-            streamed_text: Final = "".join(
-                event.delta for event in events if event.type == "response.output_text.delta"
-            )
-            final: Final = next(event.response for event in events if event.type == "response.completed")
-            assert [event.type for event in events] == [event["type"] for event in _RESPONSE_EVENTS], events
-            assert chat.model_dump(exclude_unset=True) == _CHAT_REPLY, chat
-            assert [assistant.id for assistant in assistants.data] == ["asst_scripted"], assistants
-            assert response.output_text == "scripted response", response
-            assert response.id == "resp_scripted", response
-            assert streamed_text == "scripted response"
-            assert final.output_text == "scripted response", final
-            received: Final = wire.drain()
-            assert [(request.method, request.target) for request in received] == [
-                ("POST", "/v1/chat/completions"),
-                ("GET", "/v1/assistants?limit=2&order=desc"),
-                ("POST", "/v1/responses"),
-                ("POST", "/v1/responses"),
-            ], received
-            assert len(sent) == len(received), sent
-            for client_request, upstream in zip(sent, received, strict=True):
-                _assert_openai_upstream_auth(upstream, key)
-                if client_request.method == "POST":
-                    assert json.loads(upstream.body) == json.loads(client_request.content), upstream.body
-            assert received[1].headers["openai-beta"] == "assistants=v2", received[1].headers
+                with _openai_sdk(candidate, key, base_path, sent) as sdk:
+                    if surface == "chat":
+                        chat: Final = sdk.chat.completions.create(
+                            model="gpt-4o-mini",
+                            messages=[{"role": "user", "content": "hi"}],
+                            user="end-user-1",
+                            store=True,
+                            temperature=0.2,
+                        )
+                        assert chat.model_dump(exclude_unset=True) == _CHAT_REPLY, chat
+                        _assert_openai_sdk_request(wire, sent, key, "POST", "/v1/chat/completions", _OPENAI_CHAT_BODY)
+                    elif surface == "responses":
+                        response: Final = sdk.responses.create(
+                            model="gpt-4o-mini",
+                            input="hi",
+                            store=False,
+                            user="end-user-1",
+                            temperature=0.2,
+                        )
+                        assert response.output_text == "scripted response", response
+                        assert response.id == "resp_scripted", response
+                        _assert_openai_sdk_request(wire, sent, key, "POST", "/v1/responses", _OPENAI_RESPONSES_BODY)
+                    elif surface == "responses-stream":
+                        events: Final = tuple(
+                            sdk.responses.create(
+                                model="gpt-4o-mini",
+                                input="hi",
+                                store=False,
+                                user="end-user-1",
+                                temperature=0.2,
+                                stream=True,
+                            )
+                        )
+                        streamed_text: Final = "".join(
+                            event.delta for event in events if event.type == "response.output_text.delta"
+                        )
+                        final: Final = next(event.response for event in events if event.type == "response.completed")
+                        assert [event.type for event in events] == [event["type"] for event in _RESPONSE_EVENTS], events
+                        assert streamed_text == "scripted response", events
+                        assert final.output_text == "scripted response", final
+                        _assert_openai_sdk_request(
+                            wire, sent, key, "POST", "/v1/responses", _OPENAI_RESPONSES_STREAM_BODY
+                        )
+                    else:
+                        assistants: Final = sdk.beta.assistants.list(limit=2, order="desc")
+                        assert [assistant.id for assistant in assistants.data] == ["asst_scripted"], assistants
+                        upstream: Final = _assert_openai_sdk_request(
+                            wire,
+                            sent,
+                            key,
+                            "GET",
+                            "/v1/assistants?limit=2&order=desc",
+                            None,
+                        )
+                        assert upstream.headers["openai-beta"] == "assistants=v2", upstream.headers
 
 
 def test_openai_passthrough_responses_metadata_reaches_upstream(gateway: Gateway, tmp_path: Path) -> None:

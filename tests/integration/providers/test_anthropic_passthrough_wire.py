@@ -44,7 +44,11 @@ _SSE_EVENTS: Final[tuple[dict[str, JsonValue], ...]] = (
     {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
     {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": _TEXT}},
     {"type": "content_block_stop", "index": 0},
-    {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 3}},
+    {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+        "usage": {"output_tokens": 3},
+    },
     {"type": "message_stop"},
 )
 _SSE_FRAMES: Final = tuple(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in _SSE_EVENTS)
@@ -163,6 +167,53 @@ def test_anthropic_sdk_call_reaches_upstream_with_full_body_and_proxy_key(
         upstream: Final = _only_upstream_request(wire)
         assert len(sent) == 1, sent
         _assert_sdk_call_reached_upstream_intact(upstream, sent[0], key)
+
+
+@pytest.mark.parametrize("auth_style", ["api-key", "oauth"])
+def test_anthropic_proxy_credentials_override_caller_credentials(
+    api_key_proxy: Gateway, oauth_proxy: Gateway, wire: Wire, auth_style: str
+) -> None:
+    proxy: Final = api_key_proxy if auth_style == "api-key" else oauth_proxy
+    caller_api_key: Final = f"caller-anthropic-key-{auth_style}"
+    caller_authorization: Final = f"Bearer caller-anthropic-token-{auth_style}"
+    body: Final[dict[str, JsonValue]] = {
+        "model": _MODEL,
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    with (
+        proxy.scenario() as scenario,
+        httpx.Client(base_url=str(proxy.client.base_url), timeout=30, trust_env=False) as client,
+    ):
+        key: Final = scenario.key()
+        response: Final = client.post(
+            "/anthropic/v1/messages",
+            json=body,
+            headers={
+                "x-litellm-api-key": key,
+                "x-api-key": caller_api_key,
+                "Authorization": caller_authorization,
+            },
+        )
+        assert response.status_code == 200, response.text
+        message: Final = anthropic.types.Message.model_validate_json(response.content)
+        assert message.model_dump(exclude_none=True) == anthropic.types.Message.model_validate(_MESSAGE).model_dump(
+            exclude_none=True
+        ), response.text
+        upstream: Final = _only_upstream_request(wire)
+        assert _JSON_OBJECT.validate_json(upstream.body) == body, upstream.body
+        assert {
+            name: value
+            for name, value in upstream.headers.items()
+            if caller_api_key in value or caller_authorization in value
+        } == {}, upstream.headers
+        if auth_style == "api-key":
+            assert upstream.headers["x-api-key"] == _API_KEY, upstream.headers
+            assert "authorization" not in upstream.headers, upstream.headers
+        else:
+            assert upstream.headers["authorization"] == f"Bearer {_OAUTH_TOKEN}", upstream.headers
+            assert "x-api-key" not in upstream.headers, upstream.headers
+        _assert_virtual_key_absent(upstream, key)
 
 
 def test_claude_code_bearer_stream_merges_caller_beta_with_the_credential_beta(

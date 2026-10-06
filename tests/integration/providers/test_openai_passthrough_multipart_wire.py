@@ -1,8 +1,10 @@
 import io
 import json
+import threading
 from collections.abc import Iterator
 from email.parser import BytesParser
 from email.policy import HTTP
+from itertools import accumulate, dropwhile
 from pathlib import Path
 from typing import Final
 
@@ -24,6 +26,11 @@ _AUDIO: Final = b"RIFF\x24\x00\x00\x00WAVEscripted-audio"
 _JSONL: Final = b'{"custom_id":"1","method":"POST","url":"/v1/chat/completions","body":{}}\n'
 _EDITED: Final = "c2NyaXB0ZWQtZWRpdA=="
 _TRANSCRIPT: Final = "scripted transcript"
+_IMAGE_STREAM_FRAMES: Final = (
+    b'event: image_generation.partial_image\ndata: {"type":"image_generation.partial_image"}\n\n',
+    b'event: image_generation.completed\ndata: {"type":"image_generation.completed"}\n\n',
+)
+_IMAGE_STREAM_GATE: Final = threading.Event()
 _FILE_OBJECT: Final = {
     "id": "file-scripted",
     "object": "file",
@@ -51,6 +58,14 @@ def _respond(request: Request) -> Reply:
         return Reply(body=_TRANSCRIPT.encode(), content_type="text/plain")
     if request.target == "/v1/files":
         return Reply(body=json.dumps(_FILE_OBJECT).encode())
+    if request.target == "/v1/images/edits":
+        parts: Final = _parts(request.headers["content-type"], request.body)
+        if ("stream", None, None, b"true") in parts:
+            return Reply(
+                chunks=_IMAGE_STREAM_FRAMES,
+                content_type="text/event-stream",
+                gate_after_first=_IMAGE_STREAM_GATE,
+            )
     return Reply(body=json.dumps({"created": 1, "data": [{"b64_json": _EDITED}]}).encode())
 
 
@@ -108,32 +123,62 @@ def _sdk(proxy: Gateway, key: str, prefix: str) -> OpenAI:
     )
 
 
+@pytest.mark.parametrize("stream", [False, True], ids=["stream-false", "stream-true"])
 def test_curl_image_edit_forwards_repeated_image_parts_mask_and_string_typed_fields(
-    proxy: Gateway, wire: Wire
+    proxy: Gateway, wire: Wire, stream: bool
 ) -> None:
+    if stream:
+        pytest.skip("BUG: multipart image edits with stream=true do not relay the SSE response incrementally")
     with proxy.scenario() as scenario:
         key: Final = scenario.key()
-        response: Final = proxy.client.post(
-            "/openai/v1/images/edits",
-            headers={"Authorization": f"Bearer {key}"},
-            files=[
-                ("model", (None, "gpt-image-1")),
-                ("prompt", (None, "make them match")),
-                ("n", (None, "2")),
-                ("stream", (None, "false")),
-                ("image[]", ("a.png", _PNG_A, "image/png")),
-                ("image[]", ("b.png", _PNG_B, "image/png")),
-                ("mask", ("m.png", _MASK, "image/png")),
-            ],
-        )
-        assert response.status_code == 200, response.text
-        assert _ImageResponse.model_validate_json(response.content).data == (_Image(b64_json=_EDITED),), response.text
+        files: Final = [
+            ("model", (None, "gpt-image-1")),
+            ("prompt", (None, "make them match")),
+            ("n", (None, "2")),
+            ("stream", (None, "true" if stream else "false")),
+            ("image[]", ("a.png", _PNG_A, "image/png")),
+            ("image[]", ("b.png", _PNG_B, "image/png")),
+            ("mask", ("m.png", _MASK, "image/png")),
+        ]
+        if stream:
+            _IMAGE_STREAM_GATE.clear()
+            with proxy.client.stream(
+                "POST",
+                "/openai/v1/images/edits",
+                headers={"Authorization": f"Bearer {key}"},
+                files=files,
+            ) as response:
+                raw: Final = iter(response.iter_raw())
+                try:
+                    assert response.status_code == 200, response.status_code
+                    assert response.headers.get("content-type") == "text/event-stream", response.headers
+                    first_frame: Final = next(
+                        dropwhile(
+                            lambda buffered: b"\n\n" not in buffered,
+                            accumulate(raw, lambda buffered, chunk: buffered + chunk, initial=b""),
+                        )
+                    )
+                    assert first_frame == _IMAGE_STREAM_FRAMES[0], first_frame
+                finally:
+                    _IMAGE_STREAM_GATE.set()
+                streamed: Final = first_frame + b"".join(raw)
+                assert streamed == b"".join(_IMAGE_STREAM_FRAMES), streamed
+        else:
+            response: Final = proxy.client.post(
+                "/openai/v1/images/edits",
+                headers={"Authorization": f"Bearer {key}"},
+                files=files,
+            )
+            assert response.status_code == 200, response.text
+            assert _ImageResponse.model_validate_json(response.content).data == (_Image(b64_json=_EDITED),), (
+                response.text
+            )
         upstream: Final = _only_upstream(wire, "/v1/images/edits")
         assert _parts(upstream.headers["content-type"], upstream.body) == (
             ("model", None, None, b"gpt-image-1"),
             ("prompt", None, None, b"make them match"),
             ("n", None, None, b"2"),
-            ("stream", None, None, b"false"),
+            ("stream", None, None, b"true" if stream else b"false"),
             ("image[]", "a.png", "image/png", _PNG_A),
             ("image[]", "b.png", "image/png", _PNG_B),
             ("mask", "m.png", "image/png", _MASK),

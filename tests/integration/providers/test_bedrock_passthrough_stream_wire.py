@@ -94,9 +94,7 @@ _INVOKE_REPLY: Final[dict[str, JsonValue]] = {
 }
 
 
-_CONVERSE_STREAM_FRAMES: Final = tuple(
-    _aws_event_frame(kind, payload, "sc", "u") for kind, payload in _EVENTS
-)
+_CONVERSE_STREAM_FRAMES: Final = tuple(_aws_event_frame(kind, payload, "sc", "u") for kind, payload in _EVENTS)
 _INVOKE_STREAM_FRAMES: Final = (
     _aws_event_frame(
         "chunk",
@@ -179,13 +177,7 @@ def test_boto3_converse_invoke_and_stream_methods_forward_full_bodies_for_deploy
         config_path: Final = tmp_path / "bedrock-passthrough.yaml"
         config_path.write_text(yaml.safe_dump(config))
         with (
-            owned_proxy(
-                gateway,
-                tmp_path,
-                {},
-                config=config_path,
-                workers=1,
-            ) as candidate,
+            owned_proxy(gateway, tmp_path, {}, config=config_path, workers=1) as candidate,
             candidate.scenario() as scenario,
         ):
             key: Final = scenario.key()
@@ -205,13 +197,15 @@ def test_boto3_converse_invoke_and_stream_methods_forward_full_bodies_for_deploy
             assert tuple(
                 {name: reply[name] for name in _CONVERSE_REPLY} for reply in (router_converse, profile_converse)
             ) == (_CONVERSE_REPLY, _CONVERSE_REPLY), (router_converse, profile_converse)
-            assert tuple(
-                json.loads(response["body"].read()) for response in (raw_invoke, profile_invoke)
-            ) == (_INVOKE_REPLY, _INVOKE_REPLY), (raw_invoke, profile_invoke)
+            assert tuple(json.loads(response["body"].read()) for response in (raw_invoke, profile_invoke)) == (
+                _INVOKE_REPLY,
+                _INVOKE_REPLY,
+            ), (raw_invoke, profile_invoke)
             expected_converse_events: Final = [{kind: payload} for kind, payload in _EVENTS]
-            assert [
-                list(response["stream"]) for response in (raw_converse_stream, profile_converse_stream)
-            ] == [expected_converse_events, expected_converse_events], (raw_converse_stream, profile_converse_stream)
+            assert [list(response["stream"]) for response in (raw_converse_stream, profile_converse_stream)] == [
+                expected_converse_events,
+                expected_converse_events,
+            ], (raw_converse_stream, profile_converse_stream)
             assert [
                 [json.loads(event["chunk"]["bytes"]) for event in response["body"]]
                 for response in (raw_invoke_stream, profile_invoke_stream)
@@ -239,5 +233,69 @@ def test_boto3_converse_invoke_and_stream_methods_forward_full_bodies_for_deploy
                 _INVOKE_BODY,
                 _INVOKE_BODY,
             ), tuple(request.body for request in received)
+            for request in received:
+                _assert_signed_with_the_deployment_key(request, key)
+
+
+def test_boto3_direct_raw_model_ids_forward_full_bodies(gateway: Gateway, tmp_path: Path) -> None:
+    direct_raw_id: Final = f"anthropic.claude-direct-{uuid.uuid4().hex[:12]}-v1:0"
+    with wire_server(_full_body_peer) as wire:
+        config_path: Final = tmp_path / "bedrock-direct.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [{"model_name": "bedrock/*", "litellm_params": {"model": "bedrock/*"}}],
+                    "general_settings": {"supported_db_objects": []},
+                }
+            )
+        )
+        aws_environment: Final = {
+            "AWS_ACCESS_KEY_ID": "AKIASCRIPTEDPROVIDER",
+            "AWS_SECRET_ACCESS_KEY": "scripted-secret",
+            "AWS_REGION_NAME": "us-east-1",
+            "AWS_BEDROCK_RUNTIME_ENDPOINT": wire.url,
+        }
+        with (
+            owned_proxy(
+                gateway,
+                tmp_path,
+                aws_environment,
+                config=config_path,
+                remove_environment=(
+                    "AWS_ACCESS_KEY_ID",
+                    "AWS_SECRET_ACCESS_KEY",
+                    "AWS_SESSION_TOKEN",
+                    "AWS_SECURITY_TOKEN",
+                    "AWS_BEARER_TOKEN_BEDROCK",
+                    "AWS_PROFILE",
+                    "AWS_DEFAULT_PROFILE",
+                    "AWS_SHARED_CREDENTIALS_FILE",
+                    "AWS_CONFIG_FILE",
+                    "AWS_WEB_IDENTITY_TOKEN_FILE",
+                    "AWS_ROLE_ARN",
+                    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+                    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+                    "AWS_REGION",
+                    "AWS_DEFAULT_REGION",
+                ),
+                workers=1,
+            ) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            key: Final = scenario.key()
+            runtime: Final = _boto3_runtime(candidate, key)
+            direct_converse: Final = runtime.converse(modelId=direct_raw_id, **_CONVERSE_BODY)
+            direct_invoke: Final = runtime.invoke_model(modelId=direct_raw_id, body=json.dumps(_INVOKE_BODY))
+            assert {name: direct_converse[name] for name in _CONVERSE_REPLY} == _CONVERSE_REPLY, direct_converse
+            assert json.loads(direct_invoke["body"].read()) == _INVOKE_REPLY, direct_invoke
+
+            received: Final = wire.drain()
+            assert [(request.method, request.target) for request in received] == [
+                ("POST", f"/model/{direct_raw_id}/converse"),
+                ("POST", f"/model/{direct_raw_id}/invoke"),
+            ], received
+            assert tuple(json.loads(request.body) for request in received) == (_CONVERSE_BODY, _INVOKE_BODY), tuple(
+                request.body for request in received
+            )
             for request in received:
                 _assert_signed_with_the_deployment_key(request, key)

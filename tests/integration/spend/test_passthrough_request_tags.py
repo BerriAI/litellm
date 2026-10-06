@@ -452,9 +452,7 @@ def _readback(gateway: Gateway, endpoint_id: str) -> list[dict[str, JsonValue]]:
 
 
 def _stored_endpoint_ids() -> list[JsonValue]:
-    rows: Final = read_rows(
-        "SELECT param_value FROM \"LiteLLM_Config\" WHERE param_name = %s", ("general_settings",)
-    )
+    rows: Final = read_rows('SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s', ("general_settings",))
     assert len(rows) == 1, rows
     settings: Final = object_value(rows[0]["param_value"])
     stored: Final = _ENDPOINTS.validate_python(settings.get("pass_through_endpoints") or [])
@@ -462,9 +460,7 @@ def _stored_endpoint_ids() -> list[JsonValue]:
 
 
 def _stored_endpoint(endpoint_id: str) -> dict[str, JsonValue]:
-    rows: Final = read_rows(
-        "SELECT param_value FROM \"LiteLLM_Config\" WHERE param_name = %s", ("general_settings",)
-    )
+    rows: Final = read_rows('SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s', ("general_settings",))
     assert len(rows) == 1, rows
     settings: Final = object_value(rows[0]["param_value"])
     stored: Final = _ENDPOINTS.validate_python(settings.get("pass_through_endpoints") or [])
@@ -620,7 +616,6 @@ def test_renaming_a_subpath_endpoint_moves_both_routes_keeps_stored_fields_and_n
                 "target": f"{wire.url}/base",
                 "include_subpath": True,
                 "auth": True,
-                "forward_headers": True,
                 "headers": {"x-static": "v1"},
             },
         )
@@ -678,9 +673,7 @@ def test_renaming_a_subpath_endpoint_moves_both_routes_keeps_stored_fields_and_n
         renamed: Final = candidate.request("POST", renamed_path, body, key=key, headers=caller_headers)
         assert renamed.status_code == 200, renamed.text
         assert renamed.json() == {"received": "/base"}, renamed.text
-        renamed_subpath: Final = candidate.request(
-            "POST", f"{renamed_path}/sub", body, key=key, headers=caller_headers
-        )
+        renamed_subpath: Final = candidate.request("POST", f"{renamed_path}/sub", body, key=key, headers=caller_headers)
         assert renamed_subpath.status_code == 200, renamed_subpath.text
         assert renamed_subpath.json() == {"received": "/base/sub"}, renamed_subpath.text
         anonymous: Final = candidate.client.post(f"{renamed_path}/sub", json=body, headers=caller_headers)

@@ -68,7 +68,11 @@ _CLAUDE_EVENTS: Final[tuple[dict[str, JsonValue], ...]] = (
     {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
     {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "scripted claude"}},
     {"type": "content_block_stop", "index": 0},
-    {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 2}},
+    {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+        "usage": {"output_tokens": 2},
+    },
     {"type": "message_stop"},
 )
 _CLAUDE_SSE: Final = tuple(
@@ -406,17 +410,18 @@ def test_credential_less_vertex_project_forwards_the_caller_google_token_and_str
         response: Final = rig.proxy.client.post(
             f"/vertex_ai{model_path}:rawPredict",
             json=body,
-            headers={"x-litellm-api-key": key, "Authorization": f"Bearer {_CALLER_GOOGLE_TOKEN}"},
+            headers={"Authorization": f"Bearer {key}", "x-goog-api-key": _CALLER_GOOGLE_TOKEN},
         )
         assert response.status_code == 200, response.text
         assert response.json() == _CLAUDE_REPLY, response.text
         received: Final = rig.vertex.drain()
-        assert [(request.method, request.target) for request in received] == [
-            ("POST", f"{model_path}:rawPredict")
-        ], received
+        assert [(request.method, request.target) for request in received] == [("POST", f"{model_path}:rawPredict")], (
+            received
+        )
         assert rig.tunnel.drain() == [_BYO]
         upstream: Final = received[0]
-        assert upstream.headers["authorization"] == f"Bearer {_CALLER_GOOGLE_TOKEN}", upstream.headers
-        assert "x-litellm-api-key" not in upstream.headers, upstream.headers
+        assert upstream.headers["x-goog-api-key"] == _CALLER_GOOGLE_TOKEN, upstream.headers
         assert {name: value for name, value in upstream.headers.items() if key in value} == {}, upstream.headers
+        assert "authorization" not in upstream.headers, upstream.headers
+        assert "x-litellm-api-key" not in upstream.headers, upstream.headers
         assert _JSON_OBJECT.validate_json(upstream.body) == body, upstream.body
