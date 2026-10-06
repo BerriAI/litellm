@@ -8,8 +8,8 @@ use litellm_cache::{
 };
 use litellm_cache_azure_blob::AzureBlobCache;
 use litellm_cache_response::{
-    CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheCodec,
-    ResponseCacheRequest, get_cache_key,
+    CacheEntry, CacheKeyField, CacheKeyInput, CacheKeyParticipation, ResponseCache,
+    ResponseCacheCodec, ResponseCacheRequest, get_cache_key,
 };
 use rstest::{fixture, rstest};
 use serde_json::json;
@@ -32,8 +32,7 @@ fn request(model: &str) -> ResponseCacheRequest {
         fields: vec![CacheKeyField {
             name: "model".into(),
             value: Some(model.into()),
-            api_parameter: true,
-            internal_parameter: false,
+            participation: CacheKeyParticipation::Always,
         }],
         ..Default::default()
     })
@@ -322,7 +321,7 @@ fn batch_get_preserves_order_and_marks_misses_and_invalid_entries(fixture: Fixtu
         .seed_blob(&get_cache_key(&requests[2].key), b"nope");
     let hits = response_cache.lookup_batch(&requests, now()).unwrap();
     assert_eq!(hits.values, vec![Some(json!("HIT")), None, None]);
-    assert_eq!(hits.missing_indices, vec![1, 2]);
+    assert_eq!(hits.missing_indices(), vec![1, 2]);
     let async_hits = fixture
         .runtime
         .block_on(response_cache.async_lookup_batch(&requests, now()))

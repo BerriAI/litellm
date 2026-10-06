@@ -1,24 +1,77 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub enum CacheMode {
-    #[default]
-    #[serde(rename = "default_on")]
-    DefaultOn,
-    #[serde(rename = "default_off")]
-    DefaultOff,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheKeyParticipation {
+    Always,
+    ProviderOptIn,
+    Never,
+}
+
+impl CacheKeyParticipation {
+    pub fn from_legacy_flags(api_parameter: bool, internal_parameter: bool) -> Self {
+        match (api_parameter, internal_parameter) {
+            (true, _) => Self::Always,
+            (false, false) => Self::ProviderOptIn,
+            (false, true) => Self::Never,
+        }
+    }
+
+    pub fn includes(self, include_provider_parameters: bool) -> bool {
+        match self {
+            Self::Always => true,
+            Self::ProviderOptIn => include_provider_parameters,
+            Self::Never => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(from = "LegacyCacheKeyField", into = "LegacyCacheKeyField")]
 pub struct CacheKeyField {
     pub name: String,
     pub value: Option<String>,
-    pub api_parameter: bool,
-    pub internal_parameter: bool,
+    pub participation: CacheKeyParticipation,
+}
+
+#[derive(Deserialize, Serialize)]
+struct LegacyCacheKeyField {
+    name: String,
+    value: Option<String>,
+    api_parameter: bool,
+    internal_parameter: bool,
+}
+
+impl From<LegacyCacheKeyField> for CacheKeyField {
+    fn from(field: LegacyCacheKeyField) -> Self {
+        Self {
+            name: field.name,
+            value: field.value,
+            participation: CacheKeyParticipation::from_legacy_flags(
+                field.api_parameter,
+                field.internal_parameter,
+            ),
+        }
+    }
+}
+
+impl From<CacheKeyField> for LegacyCacheKeyField {
+    fn from(field: CacheKeyField) -> Self {
+        let (api_parameter, internal_parameter) = match field.participation {
+            CacheKeyParticipation::Always => (true, false),
+            CacheKeyParticipation::ProviderOptIn => (false, false),
+            CacheKeyParticipation::Never => (false, true),
+        };
+        Self {
+            name: field.name,
+            value: field.value,
+            api_parameter,
+            internal_parameter,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -54,15 +107,13 @@ impl CacheKeyInput {
                 .map(|(name, value)| CacheKeyField {
                     name,
                     value: (!value.is_null()).then(|| value.to_string()),
-                    api_parameter: true,
-                    internal_parameter: false,
+                    participation: CacheKeyParticipation::Always,
                 })
                 .collect(),
             value => vec![CacheKeyField {
                 name: "request".into(),
                 value: Some(value.to_string()),
-                api_parameter: true,
-                internal_parameter: false,
+                participation: CacheKeyParticipation::Always,
             }],
         };
         Self {
@@ -98,10 +149,6 @@ pub struct CacheKeyContext {
 }
 
 impl CacheKeyContext {
-    pub fn apply(&self, input: &mut CacheKeyInput) {
-        *input = self.project(input.clone());
-    }
-
     pub fn project(&self, input: CacheKeyInput) -> CacheKeyInput {
         let group = self
             .model_group
@@ -149,7 +196,9 @@ pub fn get_cache_key(input: &CacheKeyInput) -> String {
     }
     let mut digest = Sha256::new();
     for field in &input.fields {
-        if (field.api_parameter || (input.include_provider_parameters && !field.internal_parameter))
+        if field
+            .participation
+            .includes(input.include_provider_parameters)
             && let Some(value) = &field.value
         {
             digest.update(field.name.as_bytes());
@@ -171,55 +220,4 @@ pub fn get_cache_key(input: &CacheKeyInput) -> String {
         .as_deref()
         .filter(|namespace| !namespace.is_empty())
         .map_or(hash.clone(), |namespace| format!("{namespace}:{hash}"))
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
-pub struct CacheControls {
-    pub supported_call_type: bool,
-    pub configured: bool,
-    pub native_backend: bool,
-    pub default_on: bool,
-    pub caching: Option<bool>,
-    pub no_cache: bool,
-    pub no_store: bool,
-    #[serde(default)]
-    pub use_cache: bool,
-}
-
-impl CacheControls {
-    pub fn reads(self) -> bool {
-        self.supported_call_type
-            && self.configured
-            && self.caching.unwrap_or(true)
-            && !self.no_cache
-            && (self.default_on || self.use_cache)
-    }
-
-    pub fn writes(self) -> bool {
-        self.supported_call_type
-            && self.configured
-            && self.caching.unwrap_or(true)
-            && !self.no_store
-            && (self.default_on || self.use_cache)
-    }
-}
-
-pub fn should_use_cache(controls: CacheControls) -> bool {
-    controls.reads() || controls.writes()
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CacheEntry {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<f64>,
-    pub response: Value,
-}
-
-impl CacheEntry {
-    pub fn fresh(&self, now: Duration, max_age: Option<Duration>) -> bool {
-        self.timestamp.is_none_or(|timestamp| {
-            timestamp.is_finite()
-                && max_age.is_none_or(|age| now.as_secs_f64() - timestamp <= age.as_secs_f64())
-        })
-    }
 }

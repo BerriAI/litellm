@@ -1,5 +1,6 @@
-use std::{future::Future, pin::Pin, time::Duration};
+use std::time::Duration;
 
+use futures_util::future::BoxFuture;
 use litellm_cache::Error;
 use litellm_cache_response::{
     RequestRewrite, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
@@ -100,7 +101,7 @@ where
     fn get_cache_key<'a>(
         &'a self,
         request: &'a ResponseCacheRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<String, Error>> + Send + 'a>> {
+    ) -> BoxFuture<'a, Result<String, Error>> {
         Box::pin(async move {
             match request.rewrite {
                 RequestRewrite::Rewritten => Err(Error::UnsupportedOperation),
@@ -117,7 +118,7 @@ where
         &'a self,
         request: &'a ResponseCacheRequest,
         _: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, Error>> + Send + 'a>> {
+    ) -> BoxFuture<'a, Result<Option<Value>, Error>> {
         let Some(key) = request.key.preset.clone() else {
             return Box::pin(async { Err(Error::Unavailable) });
         };
@@ -136,7 +137,7 @@ where
         request: &'a ResponseCacheRequest,
         value: Value,
         _: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+    ) -> BoxFuture<'a, Result<(), Error>> {
         let Some(key) = request.key.preset.clone() else {
             return Box::pin(async { Err(Error::Unavailable) });
         };

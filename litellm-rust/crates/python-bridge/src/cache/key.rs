@@ -1,4 +1,6 @@
-use litellm_cache_response::{CacheKeyContext, CacheKeyField, CacheKeyInput};
+use litellm_cache_response::{
+    CacheKeyContext, CacheKeyField, CacheKeyInput, CacheKeyParticipation,
+};
 use pyo3::{prelude::*, types::PyDict};
 
 fn dictionary<'py>(parent: &Bound<'py, PyDict>, name: &str) -> PyResult<Bound<'py, PyDict>> {
@@ -107,11 +109,13 @@ pub(super) fn project_key(
         .iter()
         .map(|(name, value)| {
             let name: String = name.extract()?;
-            let api_parameter = api_parameters.contains(&name)?;
-            let internal_parameter = owned.call1((&name,))?.extract()?;
+            let participation = CacheKeyParticipation::from_legacy_flags(
+                api_parameters.contains(&name)?,
+                owned.call1((&name,))?.extract()?,
+            );
             let encoded = if name == "file"
                 || value.is_none()
-                || (!api_parameter && (!include_provider_parameters || internal_parameter))
+                || !participation.includes(include_provider_parameters)
             {
                 None
             } else {
@@ -120,8 +124,7 @@ pub(super) fn project_key(
             Ok(CacheKeyField {
                 name,
                 value: encoded,
-                api_parameter,
-                internal_parameter,
+                participation,
             })
         })
         .collect::<PyResult<_>>()?;
@@ -210,9 +213,12 @@ mod tests {
                     include_provider,
                 )
                 .unwrap();
-            let (mut input, context) = project_key(py, &arguments).unwrap();
-            context.apply(&mut input);
-            input.namespace = input.namespace.or(Some("default".into()));
+            let (input, context) = project_key(py, &arguments).unwrap();
+            let projected = context.project(input);
+            let namespaced = CacheKeyInput {
+                namespace: projected.namespace.or(Some("default".into())),
+                ..projected
+            };
             let expected: String = locals
                 .get_item("cache")
                 .unwrap()
@@ -227,7 +233,7 @@ mod tests {
                     previous,
                 )
                 .unwrap();
-            assert_eq!(get_cache_key(&input), expected);
+            assert_eq!(get_cache_key(&namespaced), expected);
         });
     }
 }

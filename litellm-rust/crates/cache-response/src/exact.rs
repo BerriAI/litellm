@@ -1,14 +1,13 @@
-use std::{future::Future, pin::Pin, time::Duration};
+use std::time::Duration;
 
+use futures_util::future::BoxFuture;
 use litellm_cache::{
     BaseCache, BatchCache, CacheConnectionResult, ConnectionCache, Error, ExactCacheContext,
     FlushCache,
 };
 use serde_json::Value;
 
-use crate::{CacheEntry, PartialHits, ResponseCache, ResponseCacheRequest};
-
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+use crate::{CacheEntry, PartialHits, PendingWrite, ResponseCache, ResponseCacheRequest};
 
 /// Object-safe view of a `ResponseCache` over an exact-match backend, so hosts can hold every
 /// exact backend behind one pointer without erasing which backend it is elsewhere.
@@ -58,7 +57,7 @@ pub trait ExactResponseCache: Send + Sync {
 
     fn async_store_entries<'a>(
         &'a self,
-        entries: Vec<(ResponseCacheRequest, Value, Duration)>,
+        entries: Vec<PendingWrite>,
     ) -> BoxFuture<'a, Result<(), Error>>;
 
     fn async_flush<'a>(&'a self) -> BoxFuture<'a, Result<(), Error>>;
@@ -149,7 +148,7 @@ where
 
     fn async_store_entries<'a>(
         &'a self,
-        entries: Vec<(ResponseCacheRequest, Value, Duration)>,
+        entries: Vec<PendingWrite>,
     ) -> BoxFuture<'a, Result<(), Error>> {
         Box::pin(ResponseCache::async_store_entries(self, entries))
     }

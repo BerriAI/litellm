@@ -107,17 +107,17 @@ async fn backends_without_a_connection_test_serve_every_response_operation(
         partial.values,
         vec![Some(json!({"v": 1})), None, Some(json!({"v": 2}))]
     );
-    assert_eq!(partial.missing_indices, vec![1]);
+    assert_eq!(partial.missing_indices(), vec![1]);
 
     cache
         .async_store_batch(vec![(missing.clone(), json!({"v": 3}))], now)
         .await
         .unwrap();
     let partial = cache.async_lookup_batch(&requests, now).await.unwrap();
-    assert!(partial.missing_indices.is_empty());
+    assert!(partial.missing_indices().is_empty());
     assert_eq!(partial.values[1], Some(json!({"v": 3})));
 
     cache.async_flush().await.unwrap();
     let partial = cache.async_lookup_batch(&requests, now).await.unwrap();
-    assert_eq!(partial.missing_indices, vec![0, 1, 2]);
+    assert_eq!(partial.missing_indices(), vec![0, 1, 2]);
 }

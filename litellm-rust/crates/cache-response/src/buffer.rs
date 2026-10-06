@@ -3,11 +3,11 @@ use std::{sync::Mutex, time::Duration};
 use litellm_cache::Error;
 use serde_json::Value;
 
-use crate::{ExactResponseCache, ResponseCacheRequest};
+use crate::{ExactResponseCache, PendingWrite, ResponseCacheRequest};
 
 pub struct WriteBuffer {
     flush_size: usize,
-    entries: Mutex<Vec<(ResponseCacheRequest, Value, Duration)>>,
+    entries: Mutex<Vec<PendingWrite>>,
 }
 
 impl WriteBuffer {
@@ -27,7 +27,11 @@ impl WriteBuffer {
     ) -> Result<(), Error> {
         let pending = {
             let mut entries = self.entries.lock().map_err(|_| Error::Unavailable)?;
-            entries.push((request.clone(), response, now));
+            entries.push(PendingWrite {
+                request: request.clone(),
+                response,
+                produced_at: now,
+            });
             (entries.len() >= self.flush_size).then(|| std::mem::take(&mut *entries))
         };
         // A failed flush drops its batch, as Python does. Requeueing would grow the

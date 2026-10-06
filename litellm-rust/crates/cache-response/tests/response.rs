@@ -14,8 +14,8 @@ use litellm_cache::{
 };
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheControls, CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheRequest,
-    WriteBuffer, get_cache_key,
+    CacheControls, CacheEntry, CacheKeyField, CacheKeyInput, CacheKeyParticipation, PendingWrite,
+    ResponseCache, ResponseCacheRequest, WriteBuffer, get_cache_key,
 };
 use redis_test::MockCmd;
 use rstest::{fixture, rstest};
@@ -440,8 +440,7 @@ fn generated_keys_preserve_namespace_and_explicit_keys(
         fields: vec![CacheKeyField {
             name: "model".into(),
             value: Some("a".into()),
-            api_parameter: true,
-            internal_parameter: false,
+            participation: CacheKeyParticipation::Always,
         }],
         namespace: namespace.map(str::to_owned),
         ..Default::default()
@@ -513,7 +512,7 @@ async fn batch_lookup_reports_partial_hits_and_batch_store_populates_misses(
         memory.lookup_batch(&requests, now).unwrap()
     };
     assert_eq!(partial.values, vec![Some(json!({"value": 1})), None, None]);
-    assert_eq!(partial.missing_indices, vec![1, 2]);
+    assert_eq!(partial.missing_indices(), vec![1, 2]);
 
     memory
         .async_store_batch(
@@ -551,7 +550,7 @@ async fn batch_lookup_with_no_readable_request_skips_the_backend(
         cache.lookup_batch(&requests, Duration::ZERO).unwrap()
     };
     assert_eq!(partial.values, vec![None, None]);
-    assert_eq!(partial.missing_indices, vec![0, 1]);
+    assert_eq!(partial.missing_indices(), vec![0, 1]);
 }
 
 #[rstest]
@@ -562,11 +561,11 @@ async fn deferred_entries_keep_the_time_they_were_produced(
 ) {
     request.max_age = Some(Duration::from_secs(10));
     memory
-        .async_store_entries(vec![(
-            request.clone(),
-            json!({"answer": 7}),
-            Duration::from_secs(100),
-        )])
+        .async_store_entries(vec![PendingWrite {
+            request: request.clone(),
+            response: json!({"answer": 7}),
+            produced_at: Duration::from_secs(100),
+        }])
         .await
         .unwrap();
 
@@ -753,7 +752,7 @@ async fn gcs_batch_reads_preserve_order_and_treat_invalid_entries_as_misses(
         .await
         .unwrap();
     assert_eq!(partial.values, vec![Some(json!({"answer":7})), None, None]);
-    assert_eq!(partial.missing_indices, vec![1, 2]);
+    assert_eq!(partial.missing_indices(), vec![1, 2]);
 }
 
 type Gcs = ResponseCache<litellm_cache_gcs::GcsCache<litellm_cache_response::ResponseCacheCodec>>;

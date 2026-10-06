@@ -1,6 +1,6 @@
 use litellm_cache_response::{
-    CacheControls, CacheKeyContext, CacheKeyField, CacheKeyInput, CacheKeyRequest,
-    CacheKeyTransport, get_cache_key, should_use_cache,
+    CacheControls, CacheKeyContext, CacheKeyField, CacheKeyInput, CacheKeyParticipation,
+    CacheKeyRequest, CacheKeyTransport, get_cache_key, should_use_cache,
 };
 use rstest::rstest;
 use sha2::{Digest, Sha256};
@@ -9,8 +9,7 @@ fn field(name: &str, value: Option<&str>) -> CacheKeyField {
     CacheKeyField {
         name: name.into(),
         value: value.map(str::to_owned),
-        api_parameter: true,
-        internal_parameter: false,
+        participation: CacheKeyParticipation::Always,
     }
 }
 
@@ -72,46 +71,108 @@ fn keys_match_python_order_groups_files_and_namespaces(
     #[case] prefix: &str,
     #[case] preimage: &[u8],
 ) {
-    let mut input = CacheKeyInput {
+    let input = context.project(CacheKeyInput {
         fields: vec![field("model", Some("deployment")), field("file", None)],
         namespace: namespace.map(str::to_owned),
         ..Default::default()
-    };
-    context.apply(&mut input);
+    });
     let expected = format!("{prefix}{}", hash(preimage));
     assert_eq!(get_cache_key(&input), expected);
 }
 
 #[rstest]
-#[case::api_parameter(true, false, false, true)]
-#[case::provider_parameter_when_included(false, false, true, true)]
-#[case::provider_parameter_when_excluded(false, false, false, false)]
-#[case::internal_parameter_never(false, true, true, false)]
+#[case::always_without_opt_in(CacheKeyParticipation::Always, false, true)]
+#[case::always_with_opt_in(CacheKeyParticipation::Always, true, true)]
+#[case::provider_parameter_when_included(CacheKeyParticipation::ProviderOptIn, true, true)]
+#[case::provider_parameter_when_excluded(CacheKeyParticipation::ProviderOptIn, false, false)]
+#[case::never_without_opt_in(CacheKeyParticipation::Never, false, false)]
+#[case::never_with_opt_in(CacheKeyParticipation::Never, true, false)]
 fn keys_hash_api_and_opted_in_provider_parameters(
-    #[case] api_parameter: bool,
-    #[case] internal_parameter: bool,
+    #[case] participation: CacheKeyParticipation,
     #[case] include_provider_parameters: bool,
     #[case] hashed: bool,
+    #[values(None, Some("x"))] value: Option<&str>,
 ) {
     let input = CacheKeyInput {
         fields: vec![
             field("model", Some("a")),
             CacheKeyField {
                 name: "extra".into(),
-                value: Some("x".into()),
-                api_parameter,
-                internal_parameter,
+                value: value.map(str::to_owned),
+                participation,
             },
         ],
         include_provider_parameters,
         ..Default::default()
     };
-    let preimage: &[u8] = if hashed {
+    let preimage: &[u8] = if hashed && value.is_some() {
         b"model: aextra: x"
     } else {
         b"model: a"
     };
     assert_eq!(get_cache_key(&input), hash(preimage));
+}
+
+#[rstest]
+#[case::api(true, false, CacheKeyParticipation::Always, true, true)]
+#[case::api_and_internal(true, true, CacheKeyParticipation::Always, true, true)]
+#[case::provider(false, false, CacheKeyParticipation::ProviderOptIn, false, true)]
+#[case::internal(false, true, CacheKeyParticipation::Never, false, false)]
+fn legacy_flags_preserve_key_participation(
+    #[case] api_parameter: bool,
+    #[case] internal_parameter: bool,
+    #[case] participation: CacheKeyParticipation,
+    #[case] included_without_opt_in: bool,
+    #[case] included_with_opt_in: bool,
+    #[values(false, true)] include_provider_parameters: bool,
+) {
+    let decoded: CacheKeyField = serde_json::from_value(serde_json::json!({
+        "name": "extra", "value": "x", "api_parameter": api_parameter,
+        "internal_parameter": internal_parameter,
+    }))
+    .unwrap();
+    assert_eq!(decoded.participation, participation);
+    let input = CacheKeyInput {
+        fields: vec![field("model", Some("a")), decoded],
+        include_provider_parameters,
+        ..Default::default()
+    };
+    let included = match include_provider_parameters {
+        true => included_with_opt_in,
+        false => included_without_opt_in,
+    };
+    let preimage: &[u8] = match included {
+        true => b"model: aextra: x",
+        false => b"model: a",
+    };
+    let expected = hash(preimage);
+    assert_eq!(get_cache_key(&input), expected);
+    let round_trip: CacheKeyInput =
+        serde_json::from_value(serde_json::to_value(&input).unwrap()).unwrap();
+    assert_eq!(get_cache_key(&round_trip), expected);
+}
+
+#[rstest]
+#[case::always(CacheKeyParticipation::Always, true, false)]
+#[case::provider(CacheKeyParticipation::ProviderOptIn, false, false)]
+#[case::never(CacheKeyParticipation::Never, false, true)]
+fn participation_serializes_to_compatible_python_fields(
+    #[case] participation: CacheKeyParticipation,
+    #[case] api_parameter: bool,
+    #[case] internal_parameter: bool,
+) {
+    let field = CacheKeyField {
+        name: "extra".into(),
+        value: Some("x".into()),
+        participation,
+    };
+    assert_eq!(
+        serde_json::to_value(field).unwrap(),
+        serde_json::json!({
+            "name": "extra", "value": "x", "api_parameter": api_parameter,
+            "internal_parameter": internal_parameter,
+        })
+    );
 }
 
 #[rstest]
@@ -155,7 +216,6 @@ fn typed_transport_preserves_existing_key_bytes(#[case] rewritten: bool) {
 const ENABLED: CacheControls = CacheControls {
     supported_call_type: true,
     configured: true,
-    native_backend: false,
     default_on: true,
     caching: None,
     no_cache: false,
