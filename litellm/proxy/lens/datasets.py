@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from functools import partial, reduce
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, Protocol, TypeAlias
+from typing import Annotated, Final, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm.constants import LENS_DATASET_MAX_CASE_CHARS, LENS_DATASET_MAX_CASES
@@ -52,6 +52,19 @@ class _TextLine(BaseModel):
     expected: str = ""
     source: CaseSource = CaseSource()
     agent_version: str = ""
+
+
+class _AssistantSummary(Record):
+    content: str | None
+    tool_names: tuple[str, ...]
+
+
+_SUMMARIES: Final[TypeAdapter[tuple[_AssistantSummary, ...]]] = TypeAdapter(
+    Annotated[tuple[_AssistantSummary, ...], Field(min_length=1)]
+)
+_RAW_MESSAGES: Final[TypeAdapter[tuple[DatasetMessage, ...]]] = TypeAdapter(
+    Annotated[tuple[DatasetMessage, ...], Field(min_length=1)]
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,19 +139,59 @@ def _tool_calls(messages: Iterable[UIMessage]) -> tuple[DatasetToolCall, ...]:
     return tuple(DatasetToolCall(name=c["name"], arguments=c["arguments"]) for c in calls)
 
 
+def _summary_messages(summaries: tuple[_AssistantSummary, ...]) -> tuple[DatasetMessage, ...]:
+    return tuple(
+        DatasetMessage(
+            role="assistant",
+            content=s.content or "",
+            tool_calls=tuple(DatasetToolCall(name=name, arguments="") for name in s.tool_names),
+        )
+        for s in summaries
+    )
+
+
+def _text_messages(text: str) -> tuple[DatasetMessage, ...] | None:
+    try:
+        return _summary_messages(_SUMMARIES.validate_json(text))
+    except ValidationError:
+        pass
+    try:
+        return tuple(_RAW_MESSAGES.validate_json(text))
+    except ValidationError:
+        pass
+    try:
+        return (DatasetMessage.model_validate_json(text),)
+    except ValidationError:
+        return None
+
+
+def _ui_text(ui: UIContent, raw: str) -> str:
+    return ui["text"] if ui["kind"] == "text" else raw
+
+
 def _conversation(ui: UIContent, raw: str) -> tuple[DatasetMessage, ...]:
     if ui["kind"] == "messages":
         return tuple(_message(m) for m in ui["messages"])
+    if decoded := _text_messages(_ui_text(ui, raw)):
+        return decoded
     return (DatasetMessage(role="user", content=raw),) if raw.strip() else ()
+
+
+def _assistant_reply(messages: tuple[DatasetMessage, ...]) -> _Reply:
+    replies: Final = tuple(m for m in messages if m.role == "assistant")
+    return _Reply(
+        "\n\n".join(m.content for m in replies if m.content),
+        tuple(chain.from_iterable(m.tool_calls for m in replies)),
+    )
 
 
 def _reply(ui: UIContent, raw: str) -> _Reply:
     if ui["kind"] == "messages":
-        replies: Final = tuple(m for m in ui["messages"] if m["role"] == "assistant")
-        return _Reply("\n\n".join(m["content"] for m in replies if m["content"]), _tool_calls(replies))
-    if ui["kind"] == "text":
-        return _Reply(ui["text"], ())
-    return _Reply(raw, ())
+        return _assistant_reply(tuple(_message(m) for m in ui["messages"]))
+    text: Final = _ui_text(ui, raw)
+    if decoded := _text_messages(text):
+        return _assistant_reply(decoded)
+    return _Reply(text, ())
 
 
 def case_from_span(detail: SpanDetail, source: CaseSource) -> Candidate:
