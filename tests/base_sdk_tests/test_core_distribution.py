@@ -52,12 +52,17 @@ def test_staging_stamps_release_version_without_modifying_sources(tmp_path: Path
 
 
 @pytest.fixture(scope="module")
-def distributions() -> tuple[Path, Path]:
+def distribution_directory() -> Path:
     directory: Final = os.environ.get("CORE_DISTRIBUTION_DIR")
     if directory is None:
         pytest.skip("CORE_DISTRIBUTION_DIR is supplied by the installed-distribution CI job")
-    wheels: Final = tuple(Path(directory).glob("litellm_core-*.whl"))
-    sdists: Final = tuple(Path(directory).glob("litellm_core-*.tar.gz"))
+    return Path(directory)
+
+
+@pytest.fixture(scope="module")
+def distributions(distribution_directory: Path) -> tuple[Path, Path]:
+    wheels: Final = tuple(distribution_directory.glob("litellm_core-*.whl"))
+    sdists: Final = tuple(distribution_directory.glob("litellm_core-*.tar.gz"))
     assert len(wheels) == len(sdists) == 1
     return wheels[0], sdists[0]
 
@@ -91,6 +96,18 @@ def test_core_wheel_metadata_and_resources(distributions: tuple[Path, Path]) -> 
         assert "litellm/proxy/proxy_cli.py" in names
         assert any(n.startswith("litellm/rust_bridge/_native.") and n.endswith((".so", ".pyd")) for n in names)
         assert not any(n.startswith("litellm/proxy/_experimental/out/") for n in names)
+
+
+@pytest.mark.parametrize("relative_path", ["rust-toolchain.toml", ".cargo/config.toml"])
+def test_core_sdist_preserves_native_build_configuration(distribution_directory: Path, relative_path: str) -> None:
+    sdists: Final = tuple(distribution_directory.glob("litellm_core-*.tar.gz"))
+    assert len(sdists) == 1
+    with tarfile.open(sdists[0]) as archive:
+        name: Final = f"{sdists[0].name.removesuffix('.tar.gz')}/{relative_path}"
+        assert name in archive.getnames(), f"Core source distribution is missing {relative_path}"
+        content: Final = archive.extractfile(name)
+        assert content is not None
+        assert content.read() == (ROOT / relative_path).read_bytes()
 
 
 def test_core_sdist_rebuilds_without_repository(distributions: tuple[Path, Path], tmp_path: Path) -> None:
