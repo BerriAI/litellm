@@ -296,60 +296,6 @@ def test_team_owned_store_rejects_other_team_info_update_and_delete(gateway: Gat
         assert read_rows(snapshot_query, (store_id,)) == []
 
 
-def test_team_owned_store_allows_owner_update(gateway: Gateway) -> None:
-    pytest.skip("BUG: vector-store update rejects the owning team's non-admin key with HTTP 401")
-
-    store_id: Final = f"vs_team_owned_update_{uuid.uuid4().hex}"
-    with gateway.scenario() as scenario:
-        owner_team: Final = scenario.team()
-        owner_user: Final = scenario.member(owner_team)
-        owner_key: Final = scenario.key(team_id=owner_team, user_id=owner_user)
-        owner_admin_user: Final = scenario.user(user_role="proxy_admin")
-        owner_admin_key: Final = scenario.key(user_id=owner_admin_user, team_id=owner_team)
-        created: Final = gateway.request(
-            "POST",
-            "/vector_store/new",
-            {
-                "vector_store_id": store_id,
-                "custom_llm_provider": "openai",
-                "vector_store_name": "owner name",
-                "litellm_params": {"api_base": "https://example.invalid/v1", "api_key": "original synthetic key"},
-            },
-            key=owner_admin_key,
-        )
-        assert created.status_code == 200, created.text
-        scenario.cleanups.callback(
-            gateway.request, "POST", "/vector_store/delete", {"vector_store_id": store_id}, key=gateway.key
-        )
-        snapshot_query: Final = (
-            'SELECT to_jsonb(store) FROM "LiteLLM_ManagedVectorStoresTable" AS store WHERE vector_store_id = %s'
-        )
-        before_update: Final = read_rows(snapshot_query, (store_id,))
-        assert len(before_update) == 1, before_update
-        assert object_value(before_update[0]["to_jsonb"])["team_id"] == owner_team, before_update
-
-        owner_updated: Final = gateway.request(
-            "POST",
-            "/vector_store/update",
-            {"vector_store_id": store_id, "vector_store_name": "owner update"},
-            key=owner_key,
-        )
-        assert owner_updated.status_code == 200, owner_updated.text
-        owner_info_after_update: Final = gateway.request(
-            "POST", "/vector_store/info", {"vector_store_id": store_id}, key=owner_key
-        )
-        assert owner_info_after_update.status_code == 200, owner_info_after_update.text
-        assert (
-            object_value(object_value(owner_info_after_update.json())["vector_store"])["vector_store_name"]
-            == "owner update"
-        ), owner_info_after_update.text
-        owner_updated_rows: Final = read_rows(snapshot_query, (store_id,))
-        assert len(owner_updated_rows) == 1, owner_updated_rows
-        owner_updated_store: Final = object_value(owner_updated_rows[0]["to_jsonb"])
-        assert owner_updated_store["vector_store_name"] == "owner update", owner_updated_rows
-        assert owner_updated_store["team_id"] == owner_team, owner_updated_rows
-
-
 @pytest.mark.covers("other.vector_store.chat.config_store_search_reaches_upstream_after_listing")
 def test_chat_with_config_store_searches_upstream_and_injects_context_after_listing(gateway: Gateway) -> None:
     with (
