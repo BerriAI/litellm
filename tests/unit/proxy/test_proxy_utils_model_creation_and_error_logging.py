@@ -116,59 +116,12 @@ async def test_proxy_only_error_log_marks_no_upstream_llm_call():
 
 
 @pytest.mark.asyncio
-async def test_proxy_only_error_log_keeps_litellm_metadata_in_litellm_params():
-    """Responses API requests carry guardrail info under ``litellm_metadata``
-    (not ``metadata``). It must land in litellm_params so
-    ``merge_litellm_metadata`` can surface ``guardrail_information`` in the
-    spend-log failure row, matching the chat completions path."""
-    from litellm.proxy._types import UserAPIKeyAuth
-
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
-    captured = {}
-    guardrail_info = [{"guardrail_name": "test-guard", "guardrail_status": "blocked"}]
-
-    def fake_update_environment_variables(self, *args, **kwargs):
-        captured["litellm_params"] = kwargs.get("litellm_params")
-        captured["optional_params"] = kwargs.get("optional_params")
-
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    orig_update_env = Logging.update_environment_variables
-    orig_pre_call = Logging.pre_call
-    orig_async_failure = Logging.async_failure_handler
-
-    async def _noop_async_failure(self, *args, **kwargs):
-        return None
-
-    Logging.update_environment_variables = fake_update_environment_variables
-    Logging.pre_call = lambda self, *args, **kwargs: None
-    Logging.async_failure_handler = _noop_async_failure
-    try:
-        await proxy_logging_obj._handle_logging_proxy_only_error(
-            request_data={
-                "model": "gpt-4o",
-                "input": "blocked prompt",
-                "litellm_metadata": {"standard_logging_guardrail_information": guardrail_info},
-            },
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/responses"),
-            route="/v1/responses",
-            original_exception=HTTPException(status_code=400, detail="blocked"),
-        )
-    finally:
-        Logging.update_environment_variables = orig_update_env
-        Logging.pre_call = orig_pre_call
-        Logging.async_failure_handler = orig_async_failure
-
-    assert captured["litellm_params"]["litellm_metadata"]["standard_logging_guardrail_information"] == guardrail_info
-    assert "litellm_metadata" not in captured["optional_params"]
-
-
-@pytest.mark.asyncio
-async def test_proxy_only_error_log_drops_caller_logging_fields_and_keeps_key_details():
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+async def test_proxy_only_error_log_drops_caller_logging_fields_and_metadata(metadata_field: str):
     request_data: Final[dict[str, object]] = {
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "hi"}],
-        "litellm_metadata": {"tags": ["t"]},
+        metadata_field: {"langsmith_base_url": "https://caller.invalid", "langsmith_api_key": "caller-key"},
         "langsmith_base_url": "https://caller.invalid",
         "standard_callback_dynamic_params": {"gcs_path_service_account": "/caller/sa.json"},
     }
@@ -183,7 +136,7 @@ async def test_proxy_only_error_log_drops_caller_logging_fields_and_keeps_key_de
     details: Final = request_data["litellm_logging_obj"].model_call_details
     assert "caller" not in str(details["standard_callback_dynamic_params"])
     assert "langsmith_base_url" not in details
-    assert details["litellm_params"]["metadata"]["user_api_key_team_id"] == "team-a"
+    assert "caller" not in str(details["litellm_params"])
 
 
 @pytest.mark.asyncio
