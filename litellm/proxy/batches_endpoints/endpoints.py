@@ -902,7 +902,7 @@ async def list_batches(
             proxy_config=proxy_config,
             route_type="alist_batches",
         )
-        data = dict(data)  # mutable-ok: the project resolution below drops or sets `project`
+        data = dict(data)  # rebind-ok: private copy so the project resolution below can drop or set `project`
         apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
 
         # Try to use managed objects table for listing batches (returns encoded IDs).
