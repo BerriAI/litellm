@@ -27,7 +27,6 @@ class ReportRow(BaseModel):
     model_details: list[ModelDetail]
 
 
-
 def _chat(gateway: Gateway, model: str, key: str) -> None:
     response: Final = gateway.request(
         "POST",
@@ -59,7 +58,7 @@ def _rows(
 def _logged(scope_column: str, scope_value: str) -> list[dict[str, object]]:
     return read_rows(
         f'SELECT api_key, model, spend, prompt_tokens, completion_tokens, team_id FROM "LiteLLM_SpendLogs" '
-        f'WHERE "startTime" >= (CURRENT_DATE AT TIME ZONE \'UTC\') AND {scope_column} = %s',
+        f"WHERE \"startTime\" >= (CURRENT_DATE AT TIME ZONE 'UTC') AND {scope_column} = %s",
         (scope_value,),
     )
 
@@ -105,12 +104,18 @@ def test_scoped_spend_reports_match_sql_and_enforce_caller_scope(gateway: Gatewa
         k1_hash: Final = sha256(k1.encode()).hexdigest()
         k2_hash: Final = sha256(k2.encode()).hexdigest()
         for column, value in (("api_key", k1_hash), ("api_key", k2_hash)):
-            eventually(lambda column=column, value=value: _logged(column, value), lambda rows: len(rows) == 1, seconds=70)
+            eventually(
+                lambda column=column, value=value: _logged(column, value), lambda rows: len(rows) == 1, seconds=70
+            )
 
         # k1's own scopes, no filter: key, user, team reports return only its rows
-        _assert_report_matches_db(_rows(gateway, "/key/spend/report", key=k1, params=window), _logged("api_key", k1_hash))
+        _assert_report_matches_db(
+            _rows(gateway, "/key/spend/report", key=k1, params=window), _logged("api_key", k1_hash)
+        )
         _assert_report_matches_db(_rows(gateway, "/user/spend/report", key=k1, params=window), _logged('"user"', user1))
-        _assert_report_matches_db(_rows(gateway, "/team/spend/report", key=k1, params=window), _logged("team_id", team1))
+        _assert_report_matches_db(
+            _rows(gateway, "/team/spend/report", key=k1, params=window), _logged("team_id", team1)
+        )
         # a key in a team under org1 has no org scope of its own: own-org reads are also refused
         own_org: Final = _report(gateway, "/organization/spend/report", key=k1, params=window)
         assert own_org.status_code == 403, own_org.text
@@ -142,9 +147,7 @@ def test_scoped_spend_reports_match_sql_and_enforce_caller_scope(gateway: Gatewa
         _assert_report_matches_db(
             _rows(gateway, "/team/spend/report", params={**window, "team_id": team2}), _logged("team_id", team2)
         )
-        org_report: Final = _rows(
-            gateway, "/organization/spend/report", params={**window, "organization_id": org2}
-        )
+        org_report: Final = _rows(gateway, "/organization/spend/report", params={**window, "organization_id": org2})
         _assert_report_matches_db(org_report, _logged("team_id", team2))
         assert {detail.team_id for entry in org_report for detail in entry.model_details} == {team2}, org_report
 
@@ -152,7 +155,5 @@ def test_scoped_spend_reports_match_sql_and_enforce_caller_scope(gateway: Gatewa
 def test_spend_report_rejects_missing_and_malformed_dates(gateway: Gateway) -> None:
     missing: Final = _report(gateway, "/key/spend/report")
     assert missing.status_code == 400, missing.text
-    malformed: Final = _report(
-        gateway, "/key/spend/report", params={"start_date": "2026-13-45", "end_date": _today()}
-    )
+    malformed: Final = _report(gateway, "/key/spend/report", params={"start_date": "2026-13-45", "end_date": _today()})
     assert malformed.status_code == 400, malformed.text

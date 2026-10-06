@@ -150,8 +150,9 @@ def test_lowering_a_tier_budget_below_spend_blocks_the_key(gateway: Gateway) -> 
         gateway.post("/budget/update", {"budget_id": budget_id, "max_budget": 0.01})
         eventually(
             lambda: _bounded_chat(gateway, model, key),
-            lambda response: response.status_code == 422
-            and object_value(response.json()["error"])["type"] == "budget_exceeded",
+            lambda response: (
+                response.status_code == 422 and object_value(response.json()["error"])["type"] == "budget_exceeded"
+            ),
             seconds=90,
         )
         upstream.get("/__observations").raise_for_status()

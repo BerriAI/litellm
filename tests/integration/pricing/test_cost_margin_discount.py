@@ -121,8 +121,9 @@ def test_discount_and_margin_reprice_a_request_and_survive_rejection(gateway: Ga
         assert estimate.input_cost_per_request == pytest.approx(0.02), estimate
         assert estimate.output_cost_per_request == pytest.approx(0.04), estimate
         discounted_subtotal: Final = estimate.cost_per_request - estimate.margin_cost_per_request
-        assert estimate.input_cost_per_request + estimate.output_cost_per_request - discounted_subtotal == pytest.approx(
-            0.06 * 0.05
+        assert (
+            estimate.input_cost_per_request + estimate.output_cost_per_request - discounted_subtotal
+            == pytest.approx(0.06 * 0.05)
         ), estimate
         assert estimate.margin_cost_per_request == pytest.approx(0.06 * 0.95 * 0.1 + 0.001), estimate
 
@@ -139,17 +140,11 @@ def test_discount_and_margin_reprice_a_request_and_survive_rejection(gateway: Ga
         assert _logged_spend(request_id) == pytest.approx(0.12)
 
         # Rejected writes leave the GET surface and the DB row untouched
-        margin_response: Final = gateway.request(
-            "PATCH", "/config/cost_margin_config", {"not_a_provider": 0.1}
-        )
+        margin_response: Final = gateway.request("PATCH", "/config/cost_margin_config", {"not_a_provider": 0.1})
         assert margin_response.status_code == 400, margin_response.text
-        discount_response: Final = gateway.request(
-            "PATCH", "/config/cost_discount_config", {"openai": 1.5}
-        )
+        discount_response: Final = gateway.request("PATCH", "/config/cost_discount_config", {"openai": 1.5})
         assert discount_response.status_code == 400, discount_response.text
-        global_discount: Final = gateway.request(
-            "PATCH", "/config/cost_discount_config", {"global": 0.1}
-        )
+        global_discount: Final = gateway.request("PATCH", "/config/cost_discount_config", {"global": 0.1})
         assert global_discount.status_code == 400, global_discount.text
         assert gateway.get("/config/cost_discount_config")["values"] == {}
         assert gateway.get("/config/cost_margin_config")["values"] == {"global": 1}

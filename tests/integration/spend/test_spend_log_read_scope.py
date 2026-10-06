@@ -285,9 +285,9 @@ def test_legacy_spend_logs_clamp_internal_user_filters_to_their_own_user(gateway
             "end_date": (now + timedelta(days=1)).strftime("%Y-%m-%d"),
         }
         summarized: Final = _legacy_spend_rows(gateway, key_a, {**window, "summarize": "true"})
-        assert user_b not in {
-            name for row in summarized for name in object_value(object_value(row)["users"])
-        }, summarized
+        assert user_b not in {name for row in summarized for name in object_value(object_value(row)["users"])}, (
+            summarized
+        )
         assert sum(float(str(object_value(row)["spend"])) for row in summarized) == pytest.approx(0.06), summarized
         unsummarized: Final = _legacy_spend_rows(gateway, key_a, {**window, "summarize": "false"})
         assert unsummarized != [], unsummarized

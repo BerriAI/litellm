@@ -32,7 +32,7 @@ def test_shortening_budget_duration_moves_reset_at_onto_the_new_schedule(gateway
 
 def _budget_row(budget_id: str) -> dict[str, JsonValue]:
     rows: Final = read_rows(
-        'SELECT max_budget, soft_budget, tpm_limit, rpm_limit, tpd_limit, model_max_budget, '
+        "SELECT max_budget, soft_budget, tpm_limit, rpm_limit, tpd_limit, model_max_budget, "
         'budget_duration, budget_reset_at::text AS reset_at FROM "LiteLLM_BudgetTable" WHERE budget_id = %s',
         (budget_id,),
     )
@@ -74,9 +74,7 @@ def test_partial_update_keeps_sibling_budget_fields(gateway: Gateway) -> None:
         assert object_value(info["model_max_budget"]) == model_budget, info
         assert float(str(info["soft_budget"])) == 5.0, info
 
-        cleared: Final = gateway.request(
-            "POST", "/budget/update", {"budget_id": budget_id, "soft_budget": None}
-        )
+        cleared: Final = gateway.request("POST", "/budget/update", {"budget_id": budget_id, "soft_budget": None})
         assert cleared.status_code == 200, cleared.text
         row = _budget_row(budget_id)
         assert row["soft_budget"] is None, row
@@ -84,9 +82,7 @@ def test_partial_update_keeps_sibling_budget_fields(gateway: Gateway) -> None:
         assert int(str(row["tpm_limit"])) == 1000, row
 
         # clearing the duration drops the recomputed reset time
-        response = gateway.request(
-            "POST", "/budget/update", {"budget_id": budget_id, "budget_duration": None}
-        )
+        response = gateway.request("POST", "/budget/update", {"budget_id": budget_id, "budget_duration": None})
         assert response.status_code == 200, response.text
         row = _budget_row(budget_id)
         assert row["budget_duration"] is None, row
