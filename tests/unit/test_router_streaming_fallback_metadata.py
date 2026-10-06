@@ -54,6 +54,30 @@ def test_apply_fallback_hidden_params_copies_from_fallback_response():
     }
 
 
+def test_apply_fallback_hidden_params_preserves_stream_chunk_cost():
+    chunk = litellm.ModelResponseStream(
+        id="test",
+        model="openai/internal-fallback",
+        choices=[],
+    )
+    chunk._hidden_params = {"response_cost": None}
+    fallback_response = MagicMock()
+    fallback_response._hidden_params = {
+        "model_id": "fallback-deployment",
+        "response_cost": 0.0,
+    }
+
+    Router._apply_fallback_hidden_params_to_item(
+        fallback_item=chunk,
+        prepared_fallback_hidden_params=Router._prepare_fallback_hidden_params(
+            fallback_response
+        ),
+    )
+
+    assert chunk._hidden_params["model_id"] == "fallback-deployment"
+    assert chunk._hidden_params["response_cost"] is None
+
+
 def _two_group_fallback_router() -> Router:
     return litellm.Router(
         model_list=[

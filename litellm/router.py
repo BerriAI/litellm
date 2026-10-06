@@ -2981,13 +2981,16 @@ class Router:
 
         fallback_hidden_params, fallback_headers = prepared_fallback_hidden_params
         item_hidden_params: Final = get_hidden_params_dict(fallback_item)
+        stream_fallback_hidden_params: Final = {
+            key: value for key, value in fallback_hidden_params.items() if key != "response_cost"
+        }
         item_headers = item_hidden_params.get("additional_headers")
         if not isinstance(item_headers, dict):
             item_headers = {}
 
         cast(_HiddenParamsHost, fallback_item)._hidden_params = {
             **item_hidden_params,
-            **fallback_hidden_params,
+            **stream_fallback_hidden_params,
             "additional_headers": {**item_headers, **fallback_headers},
         }
 
