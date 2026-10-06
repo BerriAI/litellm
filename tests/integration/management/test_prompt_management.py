@@ -13,7 +13,16 @@ from pydantic import JsonValue
 from litellm.types.prompts.init_prompts import ListPromptsResponse, PromptInfoResponse, PromptSpec
 
 _PROVIDER_KEY: Final = "synthetic-prompt-provider-key"
-_PROMPT_LIFECYCLE_STAGING_BODY: Final[dict[str, JsonValue]] = {
+_PROMPT_LIFECYCLE_STAGING_LATEST_BODY: Final[dict[str, JsonValue]] = {
+    "model": "gpt-4o-mini",
+    "messages": [
+        {"role": "system", "content": "staging three"},
+        {"role": "user", "content": "Hi x"},
+        {"role": "user", "content": "client turn"},
+    ],
+    "temperature": 0.2,
+}
+_PROMPT_LIFECYCLE_STAGING_V2_BODY: Final[dict[str, JsonValue]] = {
     "model": "gpt-4o-mini",
     "messages": [
         {"role": "system", "content": "staging two patched"},
@@ -66,20 +75,23 @@ def _create_prompt(
     return PromptSpec.model_validate_json(response.content)
 
 
-def _chat(gateway: Gateway, model: str, prompt_id: str, environment: str | None) -> httpx.Response:
-    extras: Final[dict[str, JsonValue]] = {
-        "prompt_id": prompt_id,
-        "prompt_variables": {"name": "x"},
-    }
-    if environment is not None:
-        extras["prompt_environment"] = environment
+def _chat(
+    gateway: Gateway,
+    model: str,
+    prompt_id: str,
+    environment: str | None,
+    version: int | None = None,
+) -> httpx.Response:
     return gateway.request(
         "POST",
         "/v1/chat/completions",
         {
             "model": model,
             "messages": [{"role": "user", "content": "client turn"}],
-            **extras,
+            "prompt_id": prompt_id,
+            "prompt_variables": {"name": "x"},
+            **({"prompt_environment": environment} if environment is not None else {}),
+            **({"prompt_version": version} if version is not None else {}),
         },
     )
 
@@ -281,7 +293,11 @@ def test_prompt_update_patch_and_environment_delete_are_isolated(gateway: Gatewa
         assert request.method == "POST"
         assert request.target == "/v1/chat/completions"
         body: Final[dict[str, JsonValue]] = json.loads(request.body)
-        assert body in (_PROMPT_LIFECYCLE_STAGING_BODY, _PROMPT_LIFECYCLE_PRODUCTION_BODY), body
+        assert body in (
+            _PROMPT_LIFECYCLE_STAGING_LATEST_BODY,
+            _PROMPT_LIFECYCLE_STAGING_V2_BODY,
+            _PROMPT_LIFECYCLE_PRODUCTION_BODY,
+        ), body
         return Reply(
             body=json.dumps(
                 {
@@ -318,6 +334,16 @@ def test_prompt_update_patch_and_environment_delete_are_isolated(gateway: Gatewa
         assert (updated.prompt_id, updated.version, updated.environment) == (f"{prompt_id}.v2", 2, "staging"), (
             updated_response.text
         )
+        latest_response: Final = gateway.request(
+            "PUT",
+            f"/prompts/{prompt_id}",
+            _prompt_request(prompt_id, model, "staging", "staging three"),
+        )
+        assert latest_response.status_code == 200, latest_response.text
+        latest: Final = PromptSpec.model_validate_json(latest_response.content)
+        assert (latest.prompt_id, latest.version, latest.environment) == (f"{prompt_id}.v3", 3, "staging"), (
+            latest_response.text
+        )
         versions_response: Final = gateway.request(
             "GET",
             f"/prompts/{prompt_id}/versions",
@@ -326,6 +352,7 @@ def test_prompt_update_patch_and_environment_delete_are_isolated(gateway: Gatewa
         assert versions_response.status_code == 200, versions_response.text
         staging_versions: Final = ListPromptsResponse.model_validate_json(versions_response.content)
         assert tuple((prompt.version, prompt.environment) for prompt in staging_versions.prompts) == (
+            (3, "staging"),
             (2, "staging"),
             (1, "staging"),
         ), versions_response.text
@@ -339,18 +366,13 @@ def test_prompt_update_patch_and_environment_delete_are_isolated(gateway: Gatewa
         assert base_patch.status_code == 200, base_patch.text
         base_info: Final = gateway.request(
             "GET",
-            f"/prompts/{prompt_id}/info",
+            f"/prompts/{prompt_id}.v3/info",
             params={"environment": "staging"},
         )
         assert base_info.status_code == 200, base_info.text
         base_spec: Final = PromptInfoResponse.model_validate_json(base_info.content).prompt_spec
-        assert base_spec.litellm_params.dotprompt_content == _template(model, "staging two"), base_info.text
+        assert base_spec.litellm_params.dotprompt_content == _template(model, "staging three"), base_info.text
         assert object_value(base_spec.prompt_info.model_dump(mode="json"))["label"] == "base-patched", base_info.text
-        staging_rows: Final = _prompt_rows(prompt_id, "staging")
-        assert tuple(_params(row)["dotprompt_content"] for row in staging_rows) == (
-            _template(model, "staging one"),
-            _template(model, "staging two"),
-        ), staging_rows
 
         version_patch: Final = gateway.request(
             "PATCH",
@@ -379,11 +401,38 @@ def test_prompt_update_patch_and_environment_delete_are_isolated(gateway: Gatewa
         assert object_value(version_spec.prompt_info.model_dump(mode="json"))["label"] == "version-patched", (
             version_info.text
         )
-        assert _params(_prompt_rows(prompt_id, "staging")[1])["dotprompt_content"] == _template(
-            model, "staging two patched"
+        staging_rows: Final = _prompt_rows(prompt_id, "staging")
+        assert tuple(_params(row)["dotprompt_content"] for row in staging_rows) == (
+            _template(model, "staging one"),
+            _template(model, "staging two patched"),
+            _template(model, "staging three"),
+        ), staging_rows
+        latest_info: Final = gateway.request(
+            "GET",
+            f"/prompts/{prompt_id}/info",
+            params={"environment": "staging"},
         )
+        assert latest_info.status_code == 200, latest_info.text
+        latest_spec: Final = PromptInfoResponse.model_validate_json(latest_info.content).prompt_spec
+        assert latest_spec.litellm_params.dotprompt_content == _template(model, "staging three"), latest_info.text
+        assert object_value(latest_spec.prompt_info.model_dump(mode="json"))["label"] == "base-patched", (
+            latest_info.text
+        )
+        patched_versions_response: Final = gateway.request(
+            "GET",
+            f"/prompts/{prompt_id}/versions",
+            params={"environment": "staging"},
+        )
+        assert patched_versions_response.status_code == 200, patched_versions_response.text
+        patched_versions: Final = ListPromptsResponse.model_validate_json(patched_versions_response.content)
+        assert tuple((prompt.version, prompt.environment) for prompt in patched_versions.prompts) == (
+            (3, "staging"),
+            (2, "staging"),
+            (1, "staging"),
+        ), patched_versions_response.text
 
         _assert_chat_response(_chat(gateway, model, prompt_id, "staging"))
+        _assert_chat_response(_chat(gateway, model, prompt_id, "staging", 2))
         deleted: Final = gateway.request(
             "DELETE",
             f"/prompts/{prompt_id}",
@@ -404,7 +453,8 @@ def test_prompt_update_patch_and_environment_delete_are_isolated(gateway: Gatewa
         _assert_chat_response(_chat(gateway, model, prompt_id, None))
         requests: Final = wire.drain()
         expected_requests: Final = [
-            ("POST", "/v1/chat/completions", _PROMPT_LIFECYCLE_STAGING_BODY),
+            ("POST", "/v1/chat/completions", _PROMPT_LIFECYCLE_STAGING_LATEST_BODY),
+            ("POST", "/v1/chat/completions", _PROMPT_LIFECYCLE_STAGING_V2_BODY),
             ("POST", "/v1/chat/completions", _PROMPT_LIFECYCLE_PRODUCTION_BODY),
         ]
         assert [

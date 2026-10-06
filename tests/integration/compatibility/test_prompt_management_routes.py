@@ -46,10 +46,10 @@ def _create_prompt(
     assert response.status_code == 200, response.text
 
 
-def _client(gateway: Gateway, key: str) -> OpenAI:
+def _client(gateway: Gateway, key: str, base_path: str = "/v1") -> OpenAI:
     return OpenAI(
         api_key=key,
-        base_url=f"{str(gateway.client.base_url).rstrip('/')}/v1",
+        base_url=f"{str(gateway.client.base_url).rstrip('/')}{base_path}",
         http_client=httpx.Client(trust_env=False),
     )
 
@@ -140,13 +140,15 @@ def _prompt_setup(
 
 
 @pytest.mark.parametrize(
-    ("version", "environment", "marker"),
+    ("version", "environment", "marker", "base_path"),
     (
-        (2, "staging", "staging two"),
-        ("2", "staging", "staging two"),
-        (1, "staging", "staging one"),
-        (None, "staging", "staging two"),
-        (None, None, "production one"),
+        (2, "staging", "staging two", "/v1"),
+        ("1", "staging", "staging one", "/v1"),
+        (1, "staging", "staging one", "/v1"),
+        (None, "staging", "staging two", "/v1"),
+        (None, None, "production one", "/v1"),
+        ("1", "staging", "staging one", ""),
+        (None, None, "production one", ""),
     ),
 )
 def test_chat_completion_resolves_prompt_id_by_version_and_environment(
@@ -154,6 +156,7 @@ def test_chat_completion_resolves_prompt_id_by_version_and_environment(
     version: int | str | None,
     environment: str | None,
     marker: str,
+    base_path: str,
 ) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
@@ -179,10 +182,11 @@ def test_chat_completion_resolves_prompt_id_by_version_and_environment(
         extras: Final[dict[str, JsonValue]] = {
             "prompt_id": prompt_id,
             "prompt_variables": {"name": "x"},
+            "prompt_label": "release",
             **({"prompt_version": version} if version is not None else {}),
             **({"prompt_environment": environment} if environment is not None else {}),
         }
-        with _client(gateway, key) as client:
+        with _client(gateway, key, base_path) as client:
             response: Final = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": "client turn"}],

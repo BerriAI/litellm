@@ -1,14 +1,40 @@
 import os
 import uuid
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
+from pydantic import JsonValue
 from redis import Redis
+
+
+def _tagged_request(
+    gateway: Gateway,
+    model: str,
+    tag: str,
+    tag_source: Literal["body", "header", "key"],
+    text: str,
+    *,
+    key: str | None = None,
+) -> httpx.Response:
+    body: Final[dict[str, JsonValue]] = {
+        "model": model,
+        "messages": [{"role": "user", "content": text}],
+        **({"metadata": {"tags": [tag]}} if tag_source == "body" else {}),
+    }
+    headers: Final[dict[str, str]] = {"x-litellm-tags": tag} if tag_source == "header" else {}
+    request_key: Final[str | None] = key if tag_source == "key" else None
+    return gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        body,
+        key=request_key,
+        headers=headers,
+    )
 
 
 def test_spend_over_a_tag_max_budget_rejects_the_next_request(gateway: Gateway) -> None:
@@ -318,7 +344,11 @@ def test_tag_budget_duration_resets_spend_and_unblocks_the_tag(gateway: Gateway,
         assert recovered == 200, recovered
 
 
-def test_tag_budget_update_invalidates_blocked_request(gateway: Gateway) -> None:
+@pytest.mark.parametrize("tag_source", ("body", "header", "key"), ids=("body-tags", "tag-header", "key-tags"))
+def test_tag_budget_update_invalidates_blocked_request(
+    gateway: Gateway,
+    tag_source: Literal["body", "header", "key"],
+) -> None:
     tag: Final = f"tag-budget-update-{uuid.uuid4().hex}"
 
     def delete_tag() -> None:
@@ -326,48 +356,29 @@ def test_tag_budget_update_invalidates_blocked_request(gateway: Gateway) -> None
 
     with gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
+        tag_key: Final = scenario.key(metadata={"tags": [tag]}) if tag_source == "key" else None
         gateway.post("/tag/new", {"name": tag, "max_budget": 0.0001})
         scenario.cleanups.callback(delete_tag)
-        first: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": f"tag budget update {tag}"}],
-                "metadata": {"tags": [tag]},
-            },
-        )
+        first: Final = _tagged_request(gateway, model, tag, tag_source, f"tag budget update {tag}", key=tag_key)
         assert first.status_code == 200, first.text
 
         def blocked_response() -> httpx.Response:
-            return gateway.request(
-                "POST",
-                "/v1/chat/completions",
-                {
-                    "model": model,
-                    "messages": [{"role": "user", "content": f"tag budget blocked {tag}"}],
-                    "metadata": {"tags": [tag]},
-                },
-            )
+            return _tagged_request(gateway, model, tag, tag_source, f"tag budget blocked {tag}", key=tag_key)
 
         blocked: Final = eventually(blocked_response, lambda response: response.status_code != 200, seconds=70)
         assert blocked.status_code == 422, blocked.text
         assert "budget" in blocked.text.lower(), blocked.text
         updated: Final = gateway.request("POST", "/tag/update", {"name": tag, "max_budget": 100})
         assert updated.status_code == 200, updated.text
-        restored: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": f"tag budget restored {tag}"}],
-                "metadata": {"tags": [tag]},
-            },
-        )
+        restored: Final = _tagged_request(gateway, model, tag, tag_source, f"tag budget restored {tag}", key=tag_key)
         assert restored.status_code == 200, restored.text
 
 
-def test_tag_rpm_update_invalidates_cached_limit(gateway: Gateway) -> None:
+@pytest.mark.parametrize("tag_source", ("body", "header", "key"), ids=("body-tags", "tag-header", "key-tags"))
+def test_tag_rpm_update_invalidates_cached_limit(
+    gateway: Gateway,
+    tag_source: Literal["body", "header", "key"],
+) -> None:
     tag: Final = f"tag-rpm-update-{uuid.uuid4().hex}"
 
     def delete_tag() -> None:
@@ -375,39 +386,16 @@ def test_tag_rpm_update_invalidates_cached_limit(gateway: Gateway) -> None:
 
     with gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
-        gateway.post("/tag/new", {"name": tag})
+        tag_key: Final = scenario.key(metadata={"tags": [tag]}) if tag_source == "key" else None
+        gateway.post("/tag/new", {"name": tag, "rpm_limit": 100})
         scenario.cleanups.callback(delete_tag)
-        initial: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": f"tag rpm initial {tag}"}],
-                "metadata": {"tags": [tag]},
-            },
-        )
-        assert initial.status_code == 200, initial.text
+        first: Final = _tagged_request(gateway, model, tag, tag_source, f"tag rpm first {tag}", key=tag_key)
+        assert first.status_code == 200, first.text
+        second: Final = _tagged_request(gateway, model, tag, tag_source, f"tag rpm second {tag}", key=tag_key)
+        assert second.status_code == 200, second.text
         updated: Final = gateway.request("POST", "/tag/update", {"name": tag, "rpm_limit": 1})
         assert updated.status_code == 200, updated.text
-        admitted: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": f"tag rpm admitted {tag}"}],
-                "metadata": {"tags": [tag]},
-            },
-        )
-        assert admitted.status_code == 200, admitted.text
-        blocked: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": f"tag rpm blocked {tag}"}],
-                "metadata": {"tags": [tag]},
-            },
-        )
+        blocked: Final = _tagged_request(gateway, model, tag, tag_source, f"tag rpm blocked {tag}", key=tag_key)
         assert blocked.status_code == 429, blocked.text
         assert tag in blocked.text, blocked.text
 
@@ -450,7 +438,11 @@ def test_tag_budget_duration_can_be_cleared_and_limits_are_read_back(gateway: Ga
         assert budget_rows == [{"budget_duration": None}], budget_rows
 
 
-def test_tag_delete_evicts_blocked_limit(gateway: Gateway) -> None:
+@pytest.mark.parametrize("tag_source", ("body", "header", "key"), ids=("body-tags", "tag-header", "key-tags"))
+def test_tag_delete_evicts_blocked_limit(
+    gateway: Gateway,
+    tag_source: Literal["body", "header", "key"],
+) -> None:
     tag: Final = f"tag-delete-cache-{uuid.uuid4().hex}"
 
     def delete_tag() -> None:
@@ -458,41 +450,18 @@ def test_tag_delete_evicts_blocked_limit(gateway: Gateway) -> None:
 
     with gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
+        tag_key: Final = scenario.key(metadata={"tags": [tag]}) if tag_source == "key" else None
         created: Final = gateway.request("POST", "/tag/new", {"name": tag, "rpm_limit": 1})
         assert created.status_code == 200, created.text
         scenario.cleanups.callback(delete_tag)
-        first: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": f"tag delete first {tag}"}],
-                "metadata": {"tags": [tag]},
-            },
-        )
+        first: Final = _tagged_request(gateway, model, tag, tag_source, f"tag delete first {tag}", key=tag_key)
         assert first.status_code == 200, first.text
-        blocked: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": f"tag delete blocked {tag}"}],
-                "metadata": {"tags": [tag]},
-            },
-        )
+        blocked: Final = _tagged_request(gateway, model, tag, tag_source, f"tag delete blocked {tag}", key=tag_key)
         assert blocked.status_code == 429, blocked.text
 
         deleted: Final = gateway.request("POST", "/tag/delete", {"name": tag})
         assert deleted.status_code == 200, deleted.text
-        restored: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": f"tag deleted {tag}"}],
-                "metadata": {"tags": [tag]},
-            },
-        )
+        restored: Final = _tagged_request(gateway, model, tag, tag_source, f"tag deleted {tag}", key=tag_key)
         assert restored.status_code == 200, restored.text
         tag_rows: Final = read_rows('SELECT tag_name FROM "LiteLLM_TagTable" WHERE tag_name = %s', (tag,))
         assert tag_rows == [], tag_rows
