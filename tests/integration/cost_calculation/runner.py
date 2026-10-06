@@ -1,0 +1,80 @@
+from hashlib import sha256
+from typing import Final
+
+import pytest
+from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
+from integration._support.database import read_rows
+from integration.cost_calculation.case import CostTrackingTestCase
+from integration.cost_calculation.conftest import register_scenario_deployment
+
+
+def assert_cost_tracking(case: CostTrackingTestCase, gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        deployment: Final = register_scenario_deployment(scenario, case, "chat-completions", key)
+        response: Final = gateway.request(
+            "POST", case.litellm_endpoint, {**case.litellm_request, "model": deployment.model_name}, key=key
+        )
+        assert response.status_code == case.expected_litellm_status_code, response.text
+        if case.expected_response_cost_header is None:
+            assert "x-litellm-response-cost" not in response.headers
+        else:
+            assert float(string_value(response.headers["x-litellm-response-cost"])) == pytest.approx(
+                case.expected_response_cost_header, rel=1e-6
+            )
+
+        key_hash: Final = sha256(key.encode()).hexdigest()
+        rows: Final = eventually(
+            lambda: read_rows(
+                "SELECT spend, status, prompt_tokens, completion_tokens, metadata "
+                'FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+                (key_hash,),
+            ),
+            lambda values: len(values) == 1,
+            seconds=60,
+        )
+        row: Final = JSON_OBJECT.validate_python(rows[0])
+        assert row["status"] == "success"
+        spend: Final = row["spend"]
+        prompt_tokens: Final = row["prompt_tokens"]
+        completion_tokens: Final = row["completion_tokens"]
+        assert isinstance(spend, (int, float)) and not isinstance(spend, bool)
+        assert isinstance(prompt_tokens, int) and not isinstance(prompt_tokens, bool)
+        assert isinstance(completion_tokens, int) and not isinstance(completion_tokens, bool)
+        metadata_value: Final = row["metadata"]
+        metadata: Final = (
+            JSON_OBJECT.validate_json(metadata_value)
+            if isinstance(metadata_value, str)
+            else JSON_OBJECT.validate_python(metadata_value)
+        )
+        breakdown: Final = object_value(metadata["cost_breakdown"])
+        actual: Final = {
+            "spend": spend,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            **breakdown,
+        }
+        expected: Final = dict(case.expected_spend_log)
+        assert actual.keys() == expected.keys()
+        actual_numeric: Final = {
+            field: value
+            for field, value in actual.items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        }
+        expected_numeric: Final = {
+            field: value
+            for field, value in expected.items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        }
+        assert actual_numeric == pytest.approx(expected_numeric, rel=1e-6)
+        actual_non_numeric: Final = {
+            field: value
+            for field, value in actual.items()
+            if not isinstance(value, (int, float)) or isinstance(value, bool)
+        }
+        expected_non_numeric: Final = {
+            field: value
+            for field, value in expected.items()
+            if not isinstance(value, (int, float)) or isinstance(value, bool)
+        }
+        assert actual_non_numeric == expected_non_numeric
