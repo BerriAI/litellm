@@ -371,7 +371,8 @@ class MetricBuckets:
     """Explicit histogram bucket boundaries for the :class:`Metric` instruments.
 
     Passed as ``explicit_bucket_boundaries_advisory`` when each histogram is
-    created, so they apply only when the operator has configured no View for the
+    created with ``LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS`` on (opentelemetry-api
+    >= 1.30.0), so they apply only when the operator has configured no View for the
     instrument; an operator's own View always takes precedence. Without them the
     SDK's default boundaries (0, 5, 10, 25, ... 10000), sized for milliseconds,
     put almost every seconds-valued latency into a single bucket.
