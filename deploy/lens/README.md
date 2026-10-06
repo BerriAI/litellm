@@ -116,7 +116,7 @@ Describe how the agent should behave and optionally add specific checks. Select 
 
 Choose your analysis model, parallelism and monthly budget. Parallelism controls simultaneous model calls, not the number of runs selected. New lenses run once by default. Turn on monitoring to repeat the same setup at a custom interval. **Run now** uses the same saved settings immediately, including the same lookback window and sampling. Each scan recalculates the window and reuses completed reviews when the selected trace content, expected behavior, enabled checks and analysis model are unchanged. Budget, name and schedule edits preserve reuse. Duplicate a lens when you want a separate investigation without changing an existing monitor
 
-Pausing stops future scheduled scans; cancel the active scan separately if needed. The worker polls every two seconds; creating a lens or clicking Run now queues a scan, and due schedules are queued when the worker polls. Scans for the same lens never overlap, and its next interval starts after completion. Closing the browser does not stop the worker. Configuration edits apply to the next scan. A running scan retains its settings and selected execution IDs across retries
+Pausing stops future scheduled scans; cancel the active scan separately if needed. The worker polls every two seconds; creating a lens or clicking Run now queues a scan, and due schedules are queued when the worker polls. Scans for the same lens never overlap, and its next interval starts after completion. Closing the browser does not stop the worker. A running scan retains its analysis settings and selected execution IDs across retries. Budget edits apply to subsequent model calls, including those in an active scan
 
 ## Read the results
 
