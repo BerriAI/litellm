@@ -2561,7 +2561,6 @@ def _batch_rate(
         "input_cost_per_audio_token_batches",
         "input_cost_per_image_token_batches",
         "input_cost_per_video_token_batches",
-        "output_cost_per_image_token_batches",
     ],
     fallback: float,
 ) -> float:
@@ -2664,10 +2663,10 @@ def batch_cost_calculator(
         cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
         total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
     text_rate: Final = _batch_or_half(batch_rates.output, output_cost_per_token)
-    image_rate: Final = _batch_rate(
-        model_info,
-        "output_cost_per_image_token_batches",
-        _batch_or_half(None, model_info.get("output_cost_per_image_token"), default=text_rate),
+    image_rate: Final = _batch_or_half(
+        model_info.get("output_cost_per_image_token_batches"),
+        model_info.get("output_cost_per_image_token"),
+        default=text_rate,
     )
     image_tokens: Final = _completion_image_tokens(usage)
     text_tokens: Final = usage.completion_tokens - image_tokens
