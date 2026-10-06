@@ -10,6 +10,7 @@ import litellm
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     OpenAIModerationResponse,
+    OpenAIVideoObject,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
@@ -645,3 +646,14 @@ def test_moderation_response_hidden_params_public_accessor_preserves_identity() 
     replacement: Final[dict[str, object]] = {"public_key": "visible"}
     response.hidden_params = replacement
     assert response._hidden_params is replacement
+
+
+def test_openai_video_object_hidden_params_public_accessor_preserves_identity() -> None:
+    video: Final = OpenAIVideoObject(id="video_test", object="video", status="completed", created_at=1)
+
+    assert video.hidden_params is video._hidden_params
+
+    replacement: Final = {**video.hidden_params, "public_key": "visible"}
+    video.hidden_params = replacement
+    assert video._hidden_params is replacement
+    assert video.hidden_params["public_key"] == "visible"

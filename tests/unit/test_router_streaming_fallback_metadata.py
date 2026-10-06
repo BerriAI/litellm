@@ -135,6 +135,20 @@ def _additional_headers(response: object) -> dict:
 
 
 @pytest.mark.asyncio
+async def test_fastest_response_marks_the_winning_response_hidden_params() -> None:
+    router: Final = _two_group_fallback_router()
+
+    response: Final = await router.abatch_completion_fastest_response(
+        model="primary-model, fallback-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        mock_testing_fallbacks=True,
+        mock_response="fastest response",
+    )
+
+    assert response.hidden_params["fastest_response_batch_completion"] is True
+
+
+@pytest.mark.asyncio
 async def test_include_fallback_errors_propagates_through_router():
     router = _two_group_fallback_router()
 

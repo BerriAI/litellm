@@ -27,6 +27,7 @@ from litellm.types.utils import (
     ImageResponse,
     ModelResponse,
     ModelResponseStream,
+    TextCompletionResponse,
     all_litellm_params,
     text_tokens_without_nested_reasoning,
 )
@@ -69,6 +70,26 @@ def test_hidden_params_public_accessor_preserves_identity_and_instance_isolation
     response.hidden_params = replacement
     assert response._hidden_params is replacement
     assert response.hidden_params is replacement
+
+
+def test_text_completion_response_hidden_params_setter_preserves_identity() -> None:
+    response: Final = TextCompletionResponse(id="response-id", choices=[], created=1, model="model")
+    replacement: Final = HiddenParams(model_id="replacement")
+
+    response.hidden_params = replacement
+
+    assert response._hidden_params is replacement
+    assert response.hidden_params["model_id"] == "replacement"
+
+
+def test_image_response_hidden_params_setter_preserves_identity() -> None:
+    response: Final = ImageResponse(created=1, data=[])
+    replacement: Final = {"response_cost": 0.25}
+
+    response.hidden_params = replacement
+
+    assert response._hidden_params is replacement
+    assert response.hidden_params["response_cost"] == 0.25
 
 
 @pytest.mark.parametrize(
