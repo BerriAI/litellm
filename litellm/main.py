@@ -5663,6 +5663,7 @@ def completion(
             messages = function_call_prompt(messages=messages, functions=functions_unsupported_model)
 
         # For logging - save the values of the litellm-specific params passed in
+        strict_stream_completion: bool | None = kwargs.get("strict_stream_completion", None)
         requested_litellm_params: Final = get_litellm_params(
             acompletion=acompletion,
             api_key=api_key,
@@ -5700,6 +5701,7 @@ def completion(
             prompt_variables=prompt_variables,
             ssl_verify=ssl_verify,
             merge_reasoning_content_in_choices=kwargs.get("merge_reasoning_content_in_choices", None),
+            strict_stream_completion=strict_stream_completion,
             use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
             api_version=api_version,
             azure_ad_token=kwargs.get("azure_ad_token"),

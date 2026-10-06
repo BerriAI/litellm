@@ -206,6 +206,7 @@ OPTION_NAMES: Final = (
     "merge_reasoning_content_in_choices",
     "enable_json_schema_validation",
     "complete_response",
+    "strict_stream_completion",
     "stream_chunk_size",
     "keepalive_seconds",
     "allow_client_keepalive_override",
