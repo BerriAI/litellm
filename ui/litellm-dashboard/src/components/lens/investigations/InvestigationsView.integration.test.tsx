@@ -190,6 +190,27 @@ describe("Lens findings and runs", () => {
     expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
   });
 
+  it("shows a completed reused run without hiding accumulated findings", async () => {
+    testQueryClient.clear();
+    const jobs = lens.jobs.map((job) => ({
+      ...job,
+      trigger: "manual" as const,
+      findings: [],
+      coverage: { ...job.coverage, selected: 1, reused: 1 },
+    }));
+    proxy.get.mockImplementation(async (path) => {
+      if (path === "/lens") return { lenses: [{ ...lens, jobs }], workers: [], tracing_enabled: true };
+      if (path === "/lens/lens/runs") return jobs;
+      return { data: [] };
+    });
+    renderWithProviders(<InvestigationsView readOnly />);
+    expect(await screen.findByText("No matching findings from this run")).toBeVisible();
+    expect(screen.queryByText("Ready for the first analysis")).not.toBeInTheDocument();
+    expect(screen.getByText("Previously reviewed traces were reused.", { exact: false })).toBeVisible();
+    fireEvent.change(screen.getByRole("combobox", { name: "Investigation run" }), { target: { value: "all" } });
+    expect(await screen.findByText(issue.title)).toBeVisible();
+  });
+
   const brief = {
     problem: "The workspace was not a Git repository, so the agent could not commit.",
     user_goal: "Open a pull request fixing a typo",

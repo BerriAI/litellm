@@ -9,6 +9,39 @@ from tests.unit.proxy.lens.test_state import NOW, finding, lens
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("problem", ("missing", "representative", "kind", "feedback"))
+async def test_invalid_semantic_merges_fail_without_discarding_evidence_or_feedback(problem: str) -> None:
+    from litellm.proxy.lens.analysis import AnalysisResponseError
+
+    first: Final = merge_finding(lens(), finding("first"), 1, NOW, "first-run")
+    second: Final = merge_finding(lens(), finding("second"), 1, NOW, "second-run").model_copy(
+        update={"id": "second-id", "status": "dismissed", "reason": "Expected recovery"}
+    )
+    incoming: Final = finding("new").model_copy(update={"kind": "pattern" if problem == "kind" else "issue"})
+    references: Final = ("new:0", f"saved:{first.id}", f"saved:{second.id}")
+    invalid: Final = FindingGroups(
+        groups=(
+            FindingGroup(
+                members=references[:1] if problem == "missing" else references,
+                representative="invented" if problem == "representative" else "new:0",
+            ),
+        )
+    )
+
+    async def model(_request: ModelRequest) -> ModelResult:
+        return ModelResult(content=invalid.model_dump_json(), cost=0)
+
+    expected: Final = {
+        "missing": "Partition every input",
+        "representative": "representative must be a member",
+        "kind": "Issues and positive patterns",
+        "feedback": "conflicting user feedback",
+    }
+    with pytest.raises(AnalysisResponseError, match=expected[problem]):
+        await reconcile_findings((incoming,), (first, second), model)
+
+
+@pytest.mark.asyncio
 async def test_reconciliation_unions_checks_and_evidence_and_reuses_prior_issue() -> None:
     saved: Final = merge_finding(lens(), finding("old-trace"), 1, NOW, "earlier-run")
     one: Final = finding("new-trace").model_copy(update={"title": "Failed lookup blocks the task"})

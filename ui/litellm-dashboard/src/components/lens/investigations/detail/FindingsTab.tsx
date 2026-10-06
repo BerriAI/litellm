@@ -20,7 +20,16 @@ const priorityColors = { high: "bg-destructive", medium: "bg-warning", low: "bg-
 function emptyFindingTitle(active: boolean, scanned: boolean, status?: string) {
   if (status === "failed" || status === "cancelled") return "No findings from this run";
   if (active) return "Your findings will appear here";
+  if (status === "completed") return "No matching findings from this run";
   return scanned ? "No matching findings" : "Ready for the first analysis";
+}
+
+function emptyFindingDescription(active: boolean, job?: Job) {
+  if (active) return "Lens is reviewing the selected activity.";
+  if (job?.status === "completed" && (job.coverage.reused ?? 0) > 0) {
+    return "Previously reviewed traces were reused. Choose All accumulated findings to see earlier findings.";
+  }
+  return "Findings reflect the runs analyzed, not a guarantee about all activity.";
 }
 
 export interface FindingsTabProps {
@@ -108,11 +117,7 @@ export function FindingsTab({ lens, job, findings, children }: FindingsTabProps)
             <div className="px-6 py-14 text-center">
               <CheckCircle2 className="mx-auto mb-3 size-5 text-muted-foreground" />
               <p className="text-sm font-medium">{emptyFindingTitle(active, !!lens.last_scan_at, job?.status)}</p>
-              <p className="mt-2 text-xs text-muted-foreground">
-                {active
-                  ? "Lens is reviewing the selected activity."
-                  : "Findings reflect the runs analyzed, not a guarantee about all activity."}
-              </p>
+              <p className="mt-2 text-xs text-muted-foreground">{emptyFindingDescription(active, job)}</p>
             </div>
           )}
         </div>

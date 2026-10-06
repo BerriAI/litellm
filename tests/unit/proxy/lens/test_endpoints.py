@@ -65,6 +65,80 @@ class ResultDatabase:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selected,check_id,quoted",
+    ((False, "retries", "run"), (True, "disabled", "run"), (True, "retries", "other")),
+)
+async def test_checkpoint_rejects_unselected_traces_disabled_checks_and_foreign_evidence(
+    monkeypatch: pytest.MonkeyPatch, selected: bool, check_id: str, quoted: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.endpoints import progress
+    from litellm.proxy.lens.models import Evidence, Extraction, Observation, Progress, Review
+
+    claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = claimed.jobs[0].model_copy(
+        update={
+            "lease_until": datetime.max.replace(tzinfo=timezone.utc),
+            "sample": Sample(executions=(execution("run"),), eligible=1) if selected else None,
+        }
+    )
+    stored: Final = replace_job(claimed, active)
+    db: Final = ResultDatabase(stored)
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    review: Final = Review(
+        execution_id="run",
+        trace_id="run",
+        agent="agent",
+        name="run",
+        model="test",
+        duration_ms=1,
+        at=NOW,
+        content_version="v1",
+        extraction=Extraction(
+            observations=(
+                Observation(
+                    check_id=check_id,
+                    summary="Failure",
+                    evidence=(Evidence(execution_id=quoted, span_id="s", quote="failed"),),
+                ),
+            )
+        ),
+    )
+    with pytest.raises(HTTPException) as error:
+        await progress("lens", "job", Progress(review=review), worker())
+    assert error.value.status_code == 422
+    assert db.stored == stored
+    assert db.completed == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reference", ("existing", "merged"))
+@pytest.mark.parametrize("foreign_kind", (False, True))
+async def test_findings_cannot_merge_missing_ids_or_positive_patterns_into_issues(
+    reference: str, foreign_kind: bool
+) -> None:
+    from litellm.proxy.lens.endpoints import validate_finding
+    from litellm.proxy.lens.state import merge_finding
+    from tests.unit.proxy.lens.test_state import finding
+
+    saved: Final = merge_finding(lens(), finding("old"), 1, NOW, "previous").model_copy(update={"kind": "pattern"})
+    identity: Final = saved.id if foreign_kind else "missing"
+    draft: Final = finding("new").model_copy(
+        update={
+            "existing_finding_id": identity if reference == "existing" else None,
+            "merged_finding_ids": (identity,) if reference == "merged" else (),
+        }
+    )
+    with pytest.raises(HTTPException) as error:
+        await validate_finding(
+            lens().model_copy(update={"findings": (saved,)}), Sample(executions=(), eligible=0), draft, None
+        )
+    assert error.value.status_code == 422
+    assert "finding must belong" in error.value.detail
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("selected", ("old-trace", "selected-without-quote"))
 async def test_unchanged_rerun_does_not_rediscover_old_or_quoteless_occurrences(
     monkeypatch: pytest.MonkeyPatch, selected: str
@@ -95,7 +169,9 @@ async def test_unchanged_rerun_does_not_rediscover_old_or_quoteless_occurrences(
 
 
 @pytest.mark.asyncio
-async def test_completed_checkpoints_are_sealed_despite_an_unrelated_trace_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_completed_checkpoints_are_sealed_despite_an_unrelated_trace_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy import proxy_server
 
     claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)

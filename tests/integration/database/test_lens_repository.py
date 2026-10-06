@@ -391,8 +391,10 @@ def test_review_migration_preserves_existing_lens_history_credentials_and_spend(
     )
     schema: Final = f"lens_reviews_{uuid4().hex}"
     legacy: Final = lens().model_dump_json(exclude={"criteria_updated_at", "reservations"})
-    job: Final = queue_job(lens(), NOW, "archived").jobs[0].model_dump_json(
-        exclude={"review_versions": True, "coverage": {"reused"}}
+    job: Final = (
+        queue_job(lens(), NOW, "archived")
+        .jobs[0]
+        .model_dump_json(exclude={"review_versions": True, "coverage": {"reused"}})
     )
     with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
         try:
@@ -405,9 +407,7 @@ def test_review_migration_preserves_existing_lens_history_credentials_and_spend(
             ):
                 connection.execute(sql.SQL((migrations / name / "migration.sql").read_text()))
             connection.execute('INSERT INTO "LiteLLM_Lens" VALUES (%s, 0, %s)', ("lens", legacy))
-            connection.execute(
-                'INSERT INTO "LiteLLM_LensRun" VALUES (%s, %s, %s, %s)', ("archived", "lens", NOW, job)
-            )
+            connection.execute('INSERT INTO "LiteLLM_LensRun" VALUES (%s, %s, %s, %s)', ("archived", "lens", NOW, job))
             connection.execute(
                 'INSERT INTO "LiteLLM_LensWorker" VALUES (%s, %s, %s)',
                 ("worker", "existing-token", worker().model_dump_json()),
@@ -415,6 +415,9 @@ def test_review_migration_preserves_existing_lens_history_credentials_and_spend(
             before: Final = tuple(
                 connection.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table))).fetchall()
                 for table in ("LiteLLM_Lens", "LiteLLM_LensRun", "LiteLLM_LensWorker")
+            )
+            connection.execute(
+                sql.SQL((migrations / "20261006000000_lens_review_checkpoints" / "migration.sql").read_text())
             )
             connection.execute(
                 sql.SQL((migrations / "20261006000000_lens_review_checkpoints" / "migration.sql").read_text())

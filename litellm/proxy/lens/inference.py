@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
@@ -279,13 +279,11 @@ def settle_amount(lens: Lens, reservation_id: str, cost: float, step: Step | Non
 async def wait_for_reservation(
     repo: LensRepository, lens_id: str, reservation_id: str, reserve: Callable[[Lens], Lens]
 ) -> None:
-    while True:
-        reserved: Final = await repo.update(lens_id, reserve)
-        if reserved is None:
-            raise HTTPException(409, "Could not reserve analysis budget")
+    while (reserved := await repo.update(lens_id, reserve)) is not None:
         if any(held.id == reservation_id for held in reserved.reservations):
             return
         await asyncio.sleep(0.25)
+    raise HTTPException(409, "Could not reserve analysis budget")
 
 
 async def analyze(
@@ -339,7 +337,7 @@ async def analyze(
         return settle_amount(e, reservation_id, cost, step)
 
     @asynccontextmanager
-    async def reserve_budget() -> AsyncIterator[None]:
+    async def reserve_budget() -> AsyncGenerator[None]:
         try:
             async with asyncio.timeout(request_timeout):
                 await wait_for_reservation(repo, lens.id, reservation_id, reserve)
