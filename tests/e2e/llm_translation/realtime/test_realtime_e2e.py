@@ -47,7 +47,7 @@ pytestmark = pytest.mark.e2e
 
 AZURE_REALTIME_MODEL: Final = "azure/gpt-realtime"
 
-TEXT_PARAMS = [
+TEXT_PARAMS: Final = tuple(
     pytest.param(
         p,
         id=p.id,
@@ -62,9 +62,9 @@ TEXT_PARAMS = [
         ),
     )
     for p in PROVIDERS
-]
+)
 
-TOOL_PARAMS = [
+TOOL_PARAMS: Final = tuple(
     pytest.param(
         p,
         id=p.id,
@@ -80,7 +80,7 @@ TOOL_PARAMS = [
         ),
     )
     for p in PROVIDERS
-]
+)
 
 WEATHER_TOOL = FunctionTool(
     name="get_weather",

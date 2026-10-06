@@ -24,6 +24,7 @@ Three test scenarios per provider:
 import asyncio
 import wave
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -74,7 +75,7 @@ from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService  # noq
 
 from pipecat_service import LiteLLMRealtimeLLMService  # noqa: E402
 
-TOOL_PARAMS = [
+TOOL_PARAMS: Final = tuple(
     pytest.param(
         p,
         id=p.id,
@@ -90,9 +91,9 @@ TOOL_PARAMS = [
         ),
     )
     for p in PROVIDERS
-]
+)
 
-AUDIO_OUTPUT_PARAMS = [
+AUDIO_OUTPUT_PARAMS: Final = tuple(
     pytest.param(
         p,
         id=p.id,
@@ -108,9 +109,9 @@ AUDIO_OUTPUT_PARAMS = [
         ),
     )
     for p in PROVIDERS
-]
+)
 
-AUDIO_INPUT_PARAMS = [
+AUDIO_INPUT_PARAMS: Final = tuple(
     pytest.param(
         p,
         id=p.id,
@@ -126,7 +127,7 @@ AUDIO_INPUT_PARAMS = [
         ),
     )
     for p in PROVIDERS
-]
+)
 
 # PCM16 24 kHz mono WAV of "What is the weather in Paris?" (generated via macOS
 # `say` and resampled with audioop). Used by the server-VAD audio-input test.
