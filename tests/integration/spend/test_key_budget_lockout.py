@@ -90,7 +90,7 @@ def _denied_with_budget_exceeded(gateway: Gateway, model: str, key: str) -> None
     assert object_value(denied.json()["error"])["type"] == "budget_exceeded"
 
 
-def test_raising_and_lowering_a_keys_tier_budget_moves_serving(gateway: Gateway) -> None:
+def test_raising_a_spent_tier_budget_restores_serving(gateway: Gateway) -> None:
     with (
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
@@ -128,7 +128,25 @@ def test_raising_and_lowering_a_keys_tier_budget_moves_serving(gateway: Gateway)
         )
         assert served.status_code == 200, served.text
         assert len(upstream.get("/__observations").json()["requests"]) == 1
-        upstream.get("/__observations").raise_for_status()
+
+
+def test_lowering_a_tier_budget_below_spend_blocks_the_key(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        budget_id: Final = scenario.budget(budget_id=f"tier-{uuid.uuid4().hex}", max_budget=1.0, budget_duration="30d")
+        key: Final = scenario.key(models=[model], budget_id=budget_id)
+        first: Final = _bounded_chat(gateway, model, key)
+        assert first.status_code == 200, first.text
+        eventually(
+            lambda: read_rows(
+                'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (sha256(key.encode()).hexdigest(),)
+            ),
+            lambda rows: len(rows) == 1 and float(str(rows[0]["spend"])) >= 0.06,
+            seconds=70,
+        )
         gateway.post("/budget/update", {"budget_id": budget_id, "max_budget": 0.01})
         eventually(
             lambda: _bounded_chat(gateway, model, key),
