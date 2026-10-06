@@ -223,7 +223,10 @@ function conversationBranch(span: Span, byId: ReadonlyMap<string, Span>): string
 }
 
 function agentIdentity(span: Span, details: ReadonlyMap<string, SpanDetail>): string {
-  return span.actor_id || (isNativeAgent(span) ? span.span_id : details.get(span.span_id)?.attributes["gen_ai.agent.id"] || span.span_id);
+  return (
+    span.actor_id ||
+    (isNativeAgent(span) ? span.span_id : details.get(span.span_id)?.attributes["gen_ai.agent.id"] || span.span_id)
+  );
 }
 
 function agentLabels(agents: readonly Span[], details: ReadonlyMap<string, SpanDetail>): ReadonlyMap<string, string> {
@@ -327,7 +330,9 @@ export function buildConversation(
     };
     if (combined.length || item.showError) items.push(item);
   }
-  const byBranch = new Map([...spans].sort((a, b) => b.start_offset_ms - a.start_offset_ms).map((span) => [branch(span), span]));
+  const byBranch = new Map(
+    [...spans].sort((a, b) => b.start_offset_ms - a.start_offset_ms).map((span) => [branch(span), span]),
+  );
   const agents = [...new Set(conversationSteps(spans).map(branch))].flatMap((id) => {
     const span = byId.get(id) ?? byBranch.get(id);
     return span ? [span] : [];
@@ -342,9 +347,10 @@ export function buildConversation(
     .map((item) => ({
       ...item,
       agentId: actor(branch(item.span)),
-      agentName: item.span.framework === "claude-code" && item.span.actor_id === null
-        ? "Unassigned"
-        : labels.get(actor(branch(item.span))) || item.span.agent,
+      agentName:
+        item.span.framework === "claude-code" && item.span.actor_id === null
+          ? "Unassigned"
+          : labels.get(actor(branch(item.span))) || item.span.agent,
       branchId: branch(item.span),
       parentBranchId: (() => {
         if (item.span.actor_id) return item.span.parent_actor_id || undefined;
@@ -367,7 +373,8 @@ export function groupConversation(items: readonly ConversationItem[], spans: rea
   const parentById = new Map(
     conversationSteps(spans).flatMap((span) => {
       if (span.actor_id) return [[span.actor_id, span.parent_actor_id || undefined] as const];
-      if (span.framework === "claude-code" && span.actor_id === null) return [[conversationBranch(span, byId), undefined] as const];
+      if (span.framework === "claude-code" && span.actor_id === null)
+        return [[conversationBranch(span, byId), undefined] as const];
       const branch = byId.get(conversationBranch(span, byId));
       if (!branch) return [];
       const parent = branch.parent_span_id ? byId.get(branch.parent_span_id) : undefined;
