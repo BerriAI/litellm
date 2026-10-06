@@ -846,6 +846,24 @@ it("stops the running job from the run report's primary action", async () => {
   await waitFor(() => expect(proxy.post).toHaveBeenCalledWith("/lens/lens/cancel", expect.anything()));
 });
 
+it("keeps Stop run on an older run while another run is active", async () => {
+  testQueryClient.clear();
+  window.history.replaceState({}, "", `/lens/?lens=lens&run=${lens.jobs[0].id}`);
+  const running = { ...lens.jobs[0], id: "live", status: "running" as const, stage: "Reading executions" };
+  proxy.get.mockImplementation(async (path) => {
+    if (path.endsWith("/reviews")) return { reviews: [], reviewed: 0 };
+    if (path === "/lens")
+      return { lenses: [{ ...lens, jobs: [running, lens.jobs[0]] }], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return [running, lens.jobs[0]];
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView />);
+  const report = await screen.findByRole("region", { name: "Run report" });
+  await user.click(await within(report).findByRole("button", { name: "Stop run" }));
+  await waitFor(() => expect(proxy.post).toHaveBeenCalledWith("/lens/lens/cancel", expect.anything()));
+});
+
 it("clears the open live stage when a worker reclaims the same investigation", async () => {
   testQueryClient.clear();
   const reading = {

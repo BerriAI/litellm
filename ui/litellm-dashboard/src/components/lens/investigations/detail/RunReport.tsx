@@ -30,7 +30,7 @@ import {
   type SituationInput,
 } from "../../model/runSituation";
 import type { Finding, Job, Lens } from "../../model/types";
-import { failedTaskSummary } from "../../model/status";
+import { activeJob, failedTaskSummary } from "../../model/status";
 import { InvestigationProgress } from "../InvestigationProgress";
 import type { QueueContext } from "../useQueueReason";
 import { StepFeed } from "../StepFeed";
@@ -40,13 +40,11 @@ export type RunActionHandlers = Record<RunAction, () => void>;
 export interface RunReportProps {
   readonly lens: Lens;
   readonly job: Job | undefined;
-  /** Null when the run predates saved result snapshots. */
   readonly findings: readonly Finding[] | null | undefined;
   readonly connected: boolean;
   readonly ready: boolean;
   readonly busy: boolean;
   readonly picker: ReactNode;
-  /** Absent for viewers who cannot act on the investigation. */
   readonly actions?: RunActionHandlers;
   readonly queue?: QueueContext;
 }
@@ -287,14 +285,18 @@ function NextAction({
   );
 }
 
+function nextAction(lens: Lens, job: Job | undefined, situation: RunSituation): RunAction | null {
+  if (job === undefined || job.id === lens.jobs[0]?.id) return NEXT_ACTION[situation];
+  return activeJob(lens.jobs) ? "stop" : null;
+}
+
 export function RunReport({ lens, job, findings, connected, ready, busy, picker, actions, queue }: RunReportProps) {
   const now = useNow(job && isActive(job) ? 1000 : 60000);
   const input: SituationInput = { lens, job, findings, connected };
   const situation = runSituation(input);
   const view = SITUATIONS[situation];
   const known = facts(job, findings);
-  const latest = job === undefined || job.id === lens.jobs[0]?.id;
-  const action = latest ? NEXT_ACTION[situation] : null;
+  const action = nextAction(lens, job, situation);
   return (
     <section aria-label="Run report" className="space-y-4 rounded-lg border p-4">
       <header className="flex flex-wrap items-start justify-between gap-3">

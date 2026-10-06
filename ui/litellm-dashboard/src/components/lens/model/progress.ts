@@ -61,7 +61,6 @@ export function analysisProgress(job: Job) {
 
 type Coverage = Job["coverage"];
 
-/** The three analysis stages in order, with their share of the overall progress and how each one counts its work. */
 export const ANALYSIS_STAGES = [
   { label: "Review runs", weight: 0.6, done: (c: Coverage) => c.screened, total: (c: Coverage) => c.selected },
   {
