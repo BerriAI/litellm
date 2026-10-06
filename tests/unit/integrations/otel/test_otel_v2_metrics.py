@@ -31,6 +31,7 @@ pytest.importorskip("opentelemetry")
 
 from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
+from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
 
 import litellm  # noqa: E402
 from litellm.constants import (  # noqa: E402
@@ -40,6 +41,7 @@ from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.config import (  # noqa: E402
     OpenTelemetryV2Config,
 )
+from litellm.integrations.otel.model.semconv import MetricBuckets
 from litellm.integrations.otel.plumbing.metrics import (  # noqa: E402
     GenAIMetricRecorder,
     create_genai_metrics,
@@ -65,6 +67,14 @@ ALL_METRICS = frozenset(
         RESPONSE_DURATION,
     }
 )
+
+EXPECTED_BOUNDARIES = {
+    OPERATION_DURATION: MetricBuckets.OPERATION_DURATION,
+    TOKEN_USAGE: MetricBuckets.TOKEN_USAGE,
+    TIME_TO_FIRST_TOKEN: MetricBuckets.TIME_TO_FIRST_TOKEN,
+    TIME_PER_OUTPUT_TOKEN: MetricBuckets.TIME_PER_OUTPUT_TOKEN,
+    RESPONSE_DURATION: MetricBuckets.RESPONSE_DURATION,
+}
 
 TOKEN_TYPE = "gen_ai.token.type"
 MODEL_KEY = "gen_ai.request.model"
@@ -168,6 +178,55 @@ def _drive_success(reader, callback_settings_attributes=None, **call_overrides):
         litellm.callback_settings = previous
     return _metrics_by_name(reader)
 
+@pytest.mark.parametrize("name, expected", EXPECTED_BOUNDARIES.items())
+def test_histograms_use_semconv_bucket_boundaries(name, expected):
+    """without explicit boundaries the SDK defaults
+    (0, 5, 10, ... sized for ms) put every seconds-valued latency in one bucket."""
+    metrics = _drive_success(InMemoryMetricReader())
+    points = metrics[name]
+    assert points, f"{name} recorded no data points"
+    for dp in points:
+        assert tuple(dp.explicit_bounds) == tuple(expected)
+
+def test_operator_view_overrides_default_boundaries():
+    """The boundaries are an advisory, so an operator's own View still wins."""
+    custom = (0.5, 1, 2, 5, 10, 30)
+    reader = InMemoryMetricReader()
+    logger = OpenTelemetryV2(
+        config=OpenTelemetryV2Config(exporter="in_memory", enable_metrics=True),
+        meter_provider=MeterProvider(
+            metric_readers=[reader],
+            views=[View(
+                instrument_name=OPERATION_DURATION,
+                aggregation=ExplicitBucketHistogramAggregation(boundaries=custom),
+            )],
+        ),
+    )
+    kwargs, response_obj, start, end = _build_call()
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    (dp,) = _metrics_by_name(reader)[OPERATION_DURATION]
+    assert tuple(dp.explicit_bounds) == custom
+
+def test_distinct_latencies_land_in_distinct_buckets():
+    """with the SDK's ms-sized defaults, a 0.3 s call and
+    a 4.9 s call shared the (0, 5] bucket, making percentiles meaningless."""
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    for seconds in (0.3, 4.9):
+        kwargs, response_obj, start, _ = _build_call()
+        end = start + timedelta(seconds=seconds)
+        kwargs["end_time"] = end
+        asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    (dp,) = _metrics_by_name(reader)[OPERATION_DURATION]
+    occupied = [i for i, count in enumerate(dp.bucket_counts) if count]
+    assert len(occupied) == 2, f"both calls collapsed into one bucket: {dp.bucket_counts}"
+
+@pytest.mark.parametrize("bounds", EXPECTED_BOUNDARIES.values())
+def test_bucket_boundaries_are_positive_and_strictly_increasing(bounds):
+    assert all(b > 0 for b in bounds)
+    assert all(a < b for a, b in zip(bounds, bounds[1:]))
 
 def test_all_six_metrics_emitted_when_enabled():
     """A successful streaming call with metrics on emits exactly the six
