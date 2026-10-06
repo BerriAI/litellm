@@ -9,15 +9,16 @@ use litellm_auth::AuthServices;
 use litellm_auth_gcp::{
     CredentialSource, VertexAuth, VertexAuthFuture, VertexProviderLoader, VertexTokenSource,
 };
+use litellm_http::{HttpSettings, Resolution};
+use litellm_inference::test_support::{RecordingSecrets, http_pool};
 use litellm_inference::{
     ocr::wire::{OcrWireRequest, decode_request},
     resources::CoreResources,
 };
-use litellm_http::{HttpSettings, Resolution};
 use litellm_llms::base_llm::ocr::settings::OcrSettings;
 use rstest::{fixture, rstest};
 use serde_json::json;
-use support::{ReceivedRequest, RecordingSecrets, http_pool, json_response, upstream};
+use support::{ReceivedRequest, json_response, upstream};
 
 struct TokenSource(String);
 

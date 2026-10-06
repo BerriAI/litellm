@@ -1,6 +1,7 @@
 use base64::Engine;
-use litellm_inference::ocr::types::OcrDocumentInput;
 use litellm_host::interceptors::WireRequest;
+use litellm_inference::ocr::types::OcrDocumentInput;
+use litellm_inference::test_support::{http_config, no_secrets, resources};
 use rstest::rstest;
 use wiremock::{Mock, matchers::any};
 

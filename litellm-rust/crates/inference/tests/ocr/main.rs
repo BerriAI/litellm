@@ -1,3 +1,7 @@
+use litellm_host::{
+    interceptors::{RequestContext, WireRequest},
+    lifecycle::CallEvent,
+};
 use litellm_inference::ocr::{
     OcrRoute,
     document::prepare_document,
@@ -5,10 +9,7 @@ use litellm_inference::ocr::{
     types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, decode_request},
 };
-use litellm_host::{
-    interceptors::{RequestContext, WireRequest},
-    lifecycle::CallEvent,
-};
+use litellm_inference::test_support::{http_config, no_secrets, resources};
 use litellm_llms::base_llm::ocr::{error::Error, settings::OcrSettings};
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument};
 use serde_json::{Map, Value, json};

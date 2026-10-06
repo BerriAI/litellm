@@ -3,11 +3,12 @@ use std::{
     time::Duration,
 };
 
+use litellm_http::{HttpSettings, Resolution};
 use litellm_inference::messages::{
     Error, MessagesCall, MessagesShaping,
     route::{Messages, MessagesMachine, MessagesOutput},
 };
-use litellm_http::{HttpSettings, Resolution};
+use litellm_inference::test_support::RecordingSecrets;
 use litellm_llms_types::formats::messages::{MessagesRequest, MessagesResponse};
 use litellm_secrets::source::SecretSource;
 use rstest::fixture;

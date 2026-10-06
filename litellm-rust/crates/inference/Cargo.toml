@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 litellm-cache.workspace = true
 litellm-cache-response.workspace = true
@@ -40,6 +43,7 @@ url.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+litellm-inference = { workspace = true, features = ["test-support"] }
 litellm-cache-memory.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-auth-gcp.workspace = true

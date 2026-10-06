@@ -5,11 +5,12 @@ use litellm_host::{
 use std::sync::Arc;
 
 use futures_util::TryStreamExt;
+use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
 use litellm_inference::responses::{
     route::Responses,
     types::{ResponsesCall, ResponsesOutput},
 };
-use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
+use litellm_inference::test_support::{RecordingSecrets, no_secrets};
 use rstest::{fixture, rstest};
 use serde_json::json;
 use wiremock::ResponseTemplate;

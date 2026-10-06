@@ -15,10 +15,6 @@ use litellm_cache_response::{
     CacheOptions, CachePolicy, CacheScope, ResponseCache, ResponseCacheConfig,
     ResponseCacheService, ResponseEnvelope,
 };
-use litellm_inference::{
-    RouteError,
-    caching::{Cachable, CacheRequest, StreamCachable, execute_streaming, execute_unary},
-};
 use litellm_host::{
     call::{CallOutput, OutputOf},
     interceptors::{
@@ -28,6 +24,10 @@ use litellm_host::{
     lifecycle::{CallEvent, ExecutionEvent},
     observation::observation_channel,
     protocol::Protocol,
+};
+use litellm_inference::{
+    RouteError,
+    caching::{Cachable, CacheRequest, StreamCachable, execute_streaming, execute_unary},
 };
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};

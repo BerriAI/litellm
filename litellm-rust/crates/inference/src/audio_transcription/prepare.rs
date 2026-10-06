@@ -1,3 +1,4 @@
+use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_http::request::string_headers;
 use litellm_http::request::with_default_headers;
 use litellm_llms::{
@@ -8,7 +9,6 @@ use litellm_llms::{
     bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG,
 };
 use litellm_secrets::source::SecretSource;
-use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
 use super::Error;
 use crate::audio_transcription::types::{

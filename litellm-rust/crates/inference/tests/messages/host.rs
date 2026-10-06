@@ -1,11 +1,12 @@
 use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::Mutex;
 
-use litellm_inference::messages::{MessagesCallResponse, route::Messages};
 use litellm_host::{
     interceptors::{ExecutionFacts, RequestContext, ResultSource, WireRequest},
     lifecycle::CallEvent,
 };
+use litellm_inference::messages::{MessagesCallResponse, route::Messages};
+use litellm_inference::test_support::{RecordingSecrets, no_secrets};
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
 use rstest::rstest;
 

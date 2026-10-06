@@ -12,6 +12,8 @@ pub mod outbound;
 pub mod provider;
 pub mod resources;
 pub mod responses;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 
 pub use error::RouteError;
 

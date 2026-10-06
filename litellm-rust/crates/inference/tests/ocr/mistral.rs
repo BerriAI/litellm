@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use litellm_http::{HttpSettings, Resolution};
+use litellm_inference::test_support::{RecordingSecrets, http_config, no_secrets, resources};
 use litellm_llms::{
     base_llm::ocr::transformation::{BaseOcrConfig, OCR_RESPONSE_MAX_BYTES},
     mistral::ocr::transformation::MistralOcrConfig,

@@ -4012,6 +4012,7 @@ dependencies = [
  "litellm-host",
  "litellm-host-native",
  "litellm-http",
+ "litellm-inference",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",

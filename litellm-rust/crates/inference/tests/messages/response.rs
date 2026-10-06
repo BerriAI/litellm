@@ -1,9 +1,12 @@
-use litellm_inference::messages::{MessagesCallResponse, messages_body};
 use litellm_host::{
     interceptors::{ExecutionFacts, ResultSource},
     lifecycle::ExecutionEvent,
 };
 use litellm_http::transport::Error as TransportError;
+use litellm_inference::messages::{MessagesCallResponse, messages_body};
+use litellm_inference::test_support::{
+    RecordingSecrets, http_config, no_secrets, provider_http, resources,
+};
 use rstest::rstest;
 
 use super::*;
@@ -268,7 +271,7 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
         ..HttpSettings::default()
     };
 
-    let resources = support::resources();
+    let resources = resources();
     let response = litellm_inference::messages::MessagesRoute::new(
         provider_http(&resources, &Resolution::from(&settings).config),
         resources.auth,

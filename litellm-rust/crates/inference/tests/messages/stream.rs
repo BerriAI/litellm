@@ -9,6 +9,7 @@ use litellm_inference::messages::{
     MessagesCallResponse,
     route::{Messages, MessagesStreamHead},
 };
+use litellm_inference::test_support::{RecordingSecrets, no_secrets};
 use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::rstest;
 use tokio::{

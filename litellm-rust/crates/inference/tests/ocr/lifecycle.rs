@@ -5,13 +5,13 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use litellm_inference::ocr::{
-    route::{Ocr, OcrCall, OcrOp},
-    types::OcrDocumentInput,
-};
 use litellm_host::{
     interceptors::{RequestContext, WireRequest},
     lifecycle::CallEvent,
+};
+use litellm_inference::ocr::{
+    route::{Ocr, OcrCall, OcrOp},
+    types::OcrDocumentInput,
 };
 use rstest::rstest;
 

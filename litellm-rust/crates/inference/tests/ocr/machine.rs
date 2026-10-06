@@ -6,16 +6,16 @@ use std::{
     time::Duration,
 };
 
-use litellm_inference::ocr::{
-    route::{OcrCall, OcrMachine, OcrOp},
-    types::OcrDocumentInput,
-};
 use litellm_host::{
     interceptors::{Interceptors, WireRequest},
     machine::{HostFailure, Machine, MachineStep},
     protocol::{HostRequest, InterceptRequest},
 };
 use litellm_host_native::services::HostCallHandler;
+use litellm_inference::ocr::{
+    route::{OcrCall, OcrMachine, OcrOp},
+    types::OcrDocumentInput,
+};
 use litellm_llms::base_llm::ocr::transformation::OcrTransportConfig;
 use rstest::rstest;
 use tokio::{io::AsyncReadExt, net::TcpListener, sync::Notify};

@@ -8,41 +8,18 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use futures_util::future::BoxFuture;
-use litellm_http::{
-    ClientVariant, HttpClientConfig, HttpClientPool, HttpSettings, Resolution,
-    media::PublicDnsResolver,
-};
-use litellm_secrets::{SecretValue, source::SecretSource};
+use litellm_http::HttpClientConfig;
+use litellm_inference::test_support::{http_config, no_secrets, provider_http, resources};
+use litellm_secrets::source::SecretSource;
 use serde_json::Value;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
 
 /// A port nothing listens on, for calls that must fail before any request is sent.
 pub const UNREACHABLE_BASE: &str = "http://127.0.0.1:1";
 
-pub fn http_pool() -> HttpClientPool {
-    HttpClientPool::new(Arc::new(PublicDnsResolver))
-}
-
-pub fn resources() -> litellm_inference::resources::CoreResources {
-    litellm_inference::resources::CoreResources::new(Arc::new(http_pool()))
-}
-
-pub fn no_secrets() -> Arc<dyn SecretSource> {
-    Arc::new(RecordingSecrets::empty())
-}
-
-pub fn provider_http(
-    resources: &litellm_inference::resources::CoreResources,
-    config: &HttpClientConfig,
-) -> litellm_http::Client {
-    resources
-        .pool
-        .client(config, ClientVariant::Provider)
-        .unwrap()
-}
-
-pub fn messages_route(secrets: Arc<dyn SecretSource>) -> litellm_inference::messages::MessagesRoute {
+pub fn messages_route(
+    secrets: Arc<dyn SecretSource>,
+) -> litellm_inference::messages::MessagesRoute {
     let resources = resources();
     litellm_inference::messages::MessagesRoute::new(
         provider_http(&resources, &http_config()),
@@ -60,7 +37,9 @@ pub fn chat_completions_route() -> litellm_inference::chat_completions::ChatComp
     )
 }
 
-pub fn responses_route(secrets: Arc<dyn SecretSource>) -> litellm_inference::responses::ResponsesRoute {
+pub fn responses_route(
+    secrets: Arc<dyn SecretSource>,
+) -> litellm_inference::responses::ResponsesRoute {
     let resources = resources();
     litellm_inference::responses::ResponsesRoute::new(
         provider_http(&resources, &http_config()),
@@ -69,7 +48,8 @@ pub fn responses_route(secrets: Arc<dyn SecretSource>) -> litellm_inference::res
     )
 }
 
-pub fn audio_transcription_route() -> litellm_inference::audio_transcription::AudioTranscriptionRoute {
+pub fn audio_transcription_route() -> litellm_inference::audio_transcription::AudioTranscriptionRoute
+{
     let resources = resources();
     litellm_inference::audio_transcription::AudioTranscriptionRoute::new(
         provider_http(&resources, &http_config()),
@@ -96,10 +76,6 @@ pub fn build_ocr_route(
         )
         .unwrap(),
     )
-}
-
-pub fn http_config() -> HttpClientConfig {
-    Resolution::from(&HttpSettings::default()).config
 }
 
 /// Starts an upstream that answers its n-th request with the n-th response and 404s after.
@@ -186,60 +162,6 @@ impl ReceivedRequest for Request {
         self.url
             .query_pairs()
             .find_map(|(key, value)| (key == name).then(|| value.into_owned()))
-    }
-}
-
-/// A secret source that answers from a fixed table and records every name it was asked for.
-pub struct RecordingSecrets {
-    values: Vec<(String, String)>,
-    fails: bool,
-    requested: Mutex<Vec<String>>,
-}
-
-impl RecordingSecrets {
-    pub fn new<'a>(values: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
-        Self {
-            values: values
-                .into_iter()
-                .map(|(name, value)| (name.to_string(), value.to_string()))
-                .collect(),
-            fails: false,
-            requested: Mutex::new(Vec::new()),
-        }
-    }
-
-    pub fn empty() -> Self {
-        Self::new([])
-    }
-
-    pub fn failing() -> Self {
-        Self {
-            fails: true,
-            ..Self::empty()
-        }
-    }
-
-    pub fn requested(&self) -> Vec<String> {
-        self.requested.lock().unwrap().clone()
-    }
-}
-
-impl SecretSource for RecordingSecrets {
-    fn get_secret_str<'a>(
-        &'a self,
-        name: &'a str,
-    ) -> BoxFuture<'a, Result<Option<SecretValue>, litellm_secrets::Error>> {
-        Box::pin(async move {
-            self.requested.lock().unwrap().push(name.to_string());
-            if self.fails {
-                return Err(litellm_secrets::Error::ManagedSecretMissing);
-            }
-            Ok(self
-                .values
-                .iter()
-                .find(|(key, _)| key == name)
-                .map(|(_, value)| SecretValue::new(value.clone())))
-        })
     }
 }
 
