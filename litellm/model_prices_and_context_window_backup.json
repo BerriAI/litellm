@@ -20435,15 +20435,21 @@
         "supports_video_input": true
     },
     "databricks/databricks-gemini-3-1-flash-image": {
+        "cache_creation_input_token_cost": 5e-07,
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 5e-07,
         "litellm_provider": "databricks",
         "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; endpoint metadata only."
+            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3.1-flash-image (standard tier only) until Databricks publishes DBU rates."
         },
         "mode": "chat",
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "output_cost_per_image": 0.045,
+        "output_cost_per_image_token": 6e-05,
+        "output_cost_per_token": 3e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
             "text",
             "image"
@@ -20453,18 +20459,25 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_prompt_caching": false,
         "supports_vision": true
     },
     "databricks/system.ai.gemini-3-1-flash-image": {
+        "cache_creation_input_token_cost": 5e-07,
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 5e-07,
         "litellm_provider": "databricks",
         "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; endpoint metadata only."
+            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3.1-flash-image (standard tier only) until Databricks publishes DBU rates."
         },
         "mode": "chat",
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "output_cost_per_image": 0.045,
+        "output_cost_per_image_token": 6e-05,
+        "output_cost_per_token": 3e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
             "text",
             "image"
@@ -20474,18 +20487,26 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_prompt_caching": false,
         "supports_vision": true
     },
     "databricks/databricks-gemini-3-pro-image": {
+        "cache_creation_input_token_cost": 2e-06,
+        "cache_read_input_token_cost": 2e-06,
+        "input_cost_per_image": 0.0011,
+        "input_cost_per_token": 2e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 65536,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; endpoint metadata only."
+            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3-pro-image (standard tier only) until Databricks publishes DBU rates."
         },
         "mode": "chat",
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "output_cost_per_image": 0.134,
+        "output_cost_per_image_token": 0.00012,
+        "output_cost_per_token": 1.2e-05,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
             "text",
             "image"
@@ -20495,18 +20516,26 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_prompt_caching": false,
         "supports_vision": true
     },
     "databricks/system.ai.gemini-3-pro-image": {
+        "cache_creation_input_token_cost": 2e-06,
+        "cache_read_input_token_cost": 2e-06,
+        "input_cost_per_image": 0.0011,
+        "input_cost_per_token": 2e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 65536,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; endpoint metadata only."
+            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3-pro-image (standard tier only) until Databricks publishes DBU rates."
         },
         "mode": "chat",
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "output_cost_per_image": 0.134,
+        "output_cost_per_image_token": 0.00012,
+        "output_cost_per_token": 1.2e-05,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
             "text",
             "image"
@@ -20516,6 +20545,7 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_prompt_caching": false,
         "supports_vision": true
     },
     "databricks/databricks-gemini-3-1-pro": {
@@ -20689,15 +20719,20 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-gemini-3-8-flash": {
+        "cache_creation_input_token_cost": 7.5e-07,
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 7.5e-07,
         "litellm_provider": "databricks",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; endpoint metadata only."
+            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3.8-flash (standard tier only) until Databricks publishes DBU rates."
         },
         "mode": "chat",
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "output_cost_per_reasoning_token": 3.75e-06,
+        "output_cost_per_token": 3.75e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
             "text",
             "image",
@@ -20708,20 +20743,26 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
     "databricks/system.ai.gemini-3-8-flash": {
+        "cache_creation_input_token_cost": 7.5e-07,
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 7.5e-07,
         "litellm_provider": "databricks",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; endpoint metadata only."
+            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3.8-flash (standard tier only) until Databricks publishes DBU rates."
         },
         "mode": "chat",
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "output_cost_per_reasoning_token": 3.75e-06,
+        "output_cost_per_token": 3.75e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
             "text",
             "image",
@@ -20732,20 +20773,26 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
     "databricks/databricks-gemini-3-7-flash": {
+        "cache_creation_input_token_cost": 7.5e-07,
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 7.5e-07,
         "litellm_provider": "databricks",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; endpoint metadata only."
+            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3.7-flash (standard tier only) until Databricks publishes DBU rates."
         },
         "mode": "chat",
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "output_cost_per_reasoning_token": 3.75e-06,
+        "output_cost_per_token": 3.75e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
             "text",
             "image",
@@ -20756,20 +20803,26 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
     "databricks/system.ai.gemini-3-7-flash": {
+        "cache_creation_input_token_cost": 7.5e-07,
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 7.5e-07,
         "litellm_provider": "databricks",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; endpoint metadata only."
+            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3.7-flash (standard tier only) until Databricks publishes DBU rates."
         },
         "mode": "chat",
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "output_cost_per_reasoning_token": 3.75e-06,
+        "output_cost_per_token": 3.75e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
             "text",
             "image",
@@ -20780,6 +20833,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true

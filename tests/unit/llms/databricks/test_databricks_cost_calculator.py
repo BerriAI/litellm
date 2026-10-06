@@ -1,6 +1,7 @@
 import json
 from decimal import Decimal
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -108,6 +109,22 @@ ENTRIES_STORING_LIST_RATE_DESPITE_PROMOTION: Final = (
 CACHE_FIELDS: Final = ("cache_creation_input_token_cost", "cache_read_input_token_cost")
 UNITY_CATALOG_PREFIX: Final = "databricks/system.ai."
 ENDPOINT_PREFIX: Final = "databricks/databricks-"
+ENTRIES_PRICED_AT_GOOGLE_LIST_RATE: Final = MappingProxyType(
+    {
+        "databricks/databricks-gemini-3-8-flash": "gemini/gemini-3.8-flash",
+        "databricks/databricks-gemini-3-7-flash": "gemini/gemini-3.7-flash",
+        "databricks/databricks-gemini-3-1-flash-image": "gemini/gemini-3.1-flash-image",
+        "databricks/databricks-gemini-3-pro-image": "gemini/gemini-3-pro-image",
+    }
+)
+GOOGLE_LIST_RATE_FIELDS: Final = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "output_cost_per_reasoning_token",
+    "input_cost_per_image",
+    "output_cost_per_image",
+    "output_cost_per_image_token",
+)
 
 
 def _model_info(model: str) -> ModelInfo:
@@ -209,6 +226,7 @@ def test_every_model_without_published_cache_dbu_bills_cache_at_its_own_input_ra
         if model.startswith(ENDPOINT_PREFIX)
         and info.get("input_cost_per_token")
         and model not in PUBLISHED_DBU_PER_MILLION
+        and model not in ENTRIES_PRICED_AT_GOOGLE_LIST_RATE
     ]
 
     for model in without_published_rates:
@@ -287,3 +305,19 @@ def test_unity_catalog_name_routes_to_databricks_and_bills_like_its_endpoint(loc
     assert (routed_model, provider) == ("system.ai.claude-opus-5", "databricks")
     assert cost_per_token(model=unity_model, usage=usage) == cost_per_token(model=endpoint_model, usage=usage)
     assert all(cost > 0 for cost in cost_per_token(model=unity_model, usage=usage))
+
+
+@pytest.mark.parametrize(("model", "google_model"), ENTRIES_PRICED_AT_GOOGLE_LIST_RATE.items())
+def test_unpublished_gemini_endpoints_bill_at_their_google_list_rate(
+    local_model_cost_map: None, model: str, google_model: str
+) -> None:
+    info: Final = _model_info(model)
+    google: Final = litellm.model_cost[google_model]
+
+    assert info["input_cost_per_token"] > 0
+    assert info["cache_creation_input_token_cost"] == pytest.approx(google["input_cost_per_token"])
+    assert info["cache_read_input_token_cost"] == pytest.approx(
+        google.get("cache_read_input_token_cost", google["input_cost_per_token"])
+    )
+    for field in GOOGLE_LIST_RATE_FIELDS:
+        assert info.get(field) == pytest.approx(google.get(field)), field
