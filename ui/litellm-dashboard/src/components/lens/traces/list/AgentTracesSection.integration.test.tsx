@@ -91,15 +91,7 @@ describe("AgentTracesSection", () => {
     const onInvestigate = vi.fn();
     const renderFiltered = (searchParams: string) =>
       renderWithProviders(
-        <AgentTracesSection
-          accessToken="sk-test"
-          isActive
-          startTime="2026-09-30T00:00Z"
-          endTime="2026-10-01T00:00Z"
-          isCustomDate
-          isLiveTail={false}
-          onInvestigate={onInvestigate}
-        />,
+        <AgentTracesSection accessToken="sk-test" isActive range={ROLLING_DAY} onInvestigate={onInvestigate} />,
         { searchParams },
       );
     for (const searchParams of [
