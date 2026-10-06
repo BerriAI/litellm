@@ -5,10 +5,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from types import MappingProxyType
 from typing import Final, Protocol
 
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.lens.models import Job, Lens, Scope, TraceFindingCount, TraceIdentity, Worker
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class Database(Protocol):
@@ -16,7 +17,7 @@ class Database(Protocol):
     def execute_raw(self, query: str, *args: object) -> Awaitable[int]: ...
 
 
-class Row(BaseModel):
+class Row(LiteLLMBaseModel):
     data: JsonValue
 
 

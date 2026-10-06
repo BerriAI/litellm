@@ -136,6 +136,7 @@ from litellm.router_utils.auto_router_model_naming import (
     validate_strategy_router_model_write,
 )
 from litellm.router_utils.auto_router_tuning_baseline import is_mutable_tuned_candidate, tuning_quota_violation
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsSessionTag
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AutoRouterClassifierDefaultPromptResponse,
@@ -174,7 +175,7 @@ async def update_team(*args, **kwargs):
     return await _legacy_update_team(*args, **kwargs)
 
 
-class UpdatePublicModelGroupsRequest(BaseModel):
+class UpdatePublicModelGroupsRequest(LiteLLMBaseModel):
     """Request model for updating public model groups"""
 
     model_groups: list[str] = Field(description="List of model group names to make public")
@@ -241,7 +242,7 @@ class _TransactionFactory(Protocol):
     def __call__(self, *, timeout: datetime.timedelta = ...) -> AbstractAsyncContextManager[_TxModelTables]: ...
 
 
-class _ModelTransactionClient(BaseModel):
+class _ModelTransactionClient(LiteLLMBaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
 
     tx: _TransactionFactory
@@ -3088,7 +3089,7 @@ def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[Complexity
     return _validated_labeled_tiers(parsed)
 
 
-class AutoRouterClassifierPromptPreviewRequest(BaseModel):
+class AutoRouterClassifierPromptPreviewRequest(LiteLLMBaseModel):
     """A POST rather than query params: the classification sections are the operator's own text,
     which must not reach access logs through a URL."""
 

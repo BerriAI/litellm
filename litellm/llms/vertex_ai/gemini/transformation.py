@@ -4,7 +4,6 @@ Transformation logic from OpenAI format to Gemini format.
 Why separate file? Make it easy to see how transformation works
 """
 
-import json
 import os
 import re
 from collections.abc import Mapping
@@ -881,29 +880,8 @@ def _gemini_convert_messages_with_history(
                 assistant_msg = ChatCompletionAssistantMessage(**msg_dict)
                 _message_content = assistant_msg.get("content", None)
                 reasoning_content = assistant_msg.get("reasoning_content", None)
-                thinking_blocks = assistant_msg.get("thinking_blocks")
                 if reasoning_content is not None:
                     assistant_content.append(PartType(thought=True, text=reasoning_content))
-                if thinking_blocks is not None:
-                    for block in thinking_blocks:
-                        if block["type"] == "thinking":
-                            block_thinking_str = block.get("thinking")
-                            block_signature = block.get("signature")
-                            if block_thinking_str is not None and block_signature is not None:
-                                try:
-                                    assistant_content.append(
-                                        PartType(
-                                            thoughtSignature=block_signature,
-                                            **json.loads(block_thinking_str),
-                                        )
-                                    )
-                                except Exception:
-                                    assistant_content.append(
-                                        PartType(
-                                            thoughtSignature=block_signature,
-                                            text=block_thinking_str,
-                                        )
-                                    )
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts = []
                     for element in _message_content:

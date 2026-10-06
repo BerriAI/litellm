@@ -25,6 +25,7 @@ pub(super) struct Resolution<'a> {
     ownership: Ownership<'a>,
     spend: &'a [SpendRow],
     types: HashMap<&'a str, ObservationType>,
+    tool_failures: HashMap<&'a str, &'a TraceSpansRow>,
     pub(super) model_calls: Vec<usize>,
 }
 
@@ -53,12 +54,44 @@ impl<'a> Resolution<'a> {
             graph,
             spend,
             types,
+            tool_failures: rows
+                .iter()
+                .filter(|row| {
+                    row.framework == "claude-code"
+                        && row.name == "claude_code.tool_result"
+                        && !row.tool_call_id.is_empty()
+                        && row.status == crate::SpanStatus::Error
+                })
+                .map(|row| (row.tool_call_id.as_str(), row))
+                .collect(),
             model_calls,
         }
     }
 
     pub(super) fn row(&self, index: usize) -> &'a TraceSpansRow {
         &self.graph.rows[index]
+    }
+
+    pub(super) fn status_source(&self, index: usize) -> &'a TraceSpansRow {
+        let row = self.row(index);
+        if row.framework != "claude-code"
+            || row.kind != ObservationType::Tool
+            || row.status == crate::SpanStatus::Error
+        {
+            return row;
+        }
+        self.graph
+            .children(index)
+            .into_iter()
+            .map(|child| self.row(child))
+            .find(|child| {
+                child.name == "claude_code.tool.execution"
+                    && !row.tool_call_id.is_empty()
+                    && child.tool_call_id == row.tool_call_id
+                    && child.status == crate::SpanStatus::Error
+            })
+            .or_else(|| self.tool_failures.get(row.tool_call_id.as_str()).copied())
+            .unwrap_or(row)
     }
 
     pub(super) fn kind(&self, index: usize) -> ObservationType {
