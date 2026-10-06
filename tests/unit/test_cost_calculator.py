@@ -3536,18 +3536,30 @@ def test_batch_cost_calculator_prices_image_completion_tokens_at_image_batch_rat
     assert costs[1] == pytest.approx(expected_completion_cost)
 
 
-def test_batch_cost_calculator_falls_back_to_global_pricing_for_image_only_deployment_rate(
+def test_batch_cost_calculator_merges_image_only_deployment_rate_with_global_pricing(
     _local_model_cost_map: None,
 ) -> None:
-    model: Final = "gemini/gemini-3.1-flash-image"
+    model: Final = "gemini/gemini-3-pro-image"
     global_model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="gemini")
     input_batch_rate: Final = global_model_info["input_cost_per_token_batches"]
     output_batch_rate: Final = global_model_info["output_cost_per_token_batches"]
+    global_image_batch_rate: Final = global_model_info["output_cost_per_image_token_batches"]
     assert input_batch_rate is not None
     assert output_batch_rate is not None
+    assert global_image_batch_rate is not None
 
-    usage: Final = Usage(prompt_tokens=1_000, completion_tokens=500, total_tokens=1_500)
-    model_info: Final = cast(ModelInfo, {"output_cost_per_image_token_batches": 1e-6})
+    deployment_image_batch_rate: Final = 1e-6
+    assert deployment_image_batch_rate != global_image_batch_rate
+
+    text_tokens: Final = 300
+    image_tokens: Final = 200
+    usage: Final = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=text_tokens + image_tokens,
+        total_tokens=1_500,
+        completion_tokens_details=CompletionTokensDetailsWrapper(image_tokens=image_tokens),
+    )
+    model_info: Final = ModelInfo(output_cost_per_image_token_batches=deployment_image_batch_rate)
 
     prompt_cost, completion_cost = batch_cost_calculator(
         usage=usage,
@@ -3559,7 +3571,10 @@ def test_batch_cost_calculator_falls_back_to_global_pricing_for_image_only_deplo
     assert prompt_cost > 0
     assert completion_cost > 0
     assert prompt_cost == pytest.approx(usage.prompt_tokens * input_batch_rate)
-    assert completion_cost == pytest.approx(usage.completion_tokens * output_batch_rate)
+    expected_completion_cost: Final = text_tokens * output_batch_rate + image_tokens * deployment_image_batch_rate
+    global_rate_completion_cost: Final = text_tokens * output_batch_rate + image_tokens * global_image_batch_rate
+    assert completion_cost == pytest.approx(expected_completion_cost)
+    assert completion_cost != pytest.approx(global_rate_completion_cost)
 
 
 def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate():

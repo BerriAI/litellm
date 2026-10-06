@@ -2622,13 +2622,15 @@ def batch_cost_calculator(
             "output_cost_per_token",
         )
     ):
-        # model_info was provided (e.g. deployment metadata with only id/db_model)
-        # but carries no pricing fields. Fall back to the global pricing table so
-        # that standard model pricing is used instead of silently returning $0.
+        # Fill missing rates from the global table while preserving deployment-specific pricing.
+        deployment_info: Final = model_info
         try:
             global_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
             if global_info:
-                model_info = global_info
+                model_info = {
+                    **global_info,
+                    **{key: value for key, value in deployment_info.items() if value is not None},
+                }
         except Exception:
             pass
 
