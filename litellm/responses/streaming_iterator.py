@@ -571,9 +571,7 @@ class BaseResponsesAPIStreamingIterator:
         """
         if not self._streamed_output_items:
             return []
-        return [
-            item for _, item in sorted(self._streamed_output_items.items())
-        ]
+        return [item for _, item in sorted(self._streamed_output_items.items())]
 
     def _log_completed_response(self, *, is_async: bool) -> None:
         if self._completed_response_logged:
