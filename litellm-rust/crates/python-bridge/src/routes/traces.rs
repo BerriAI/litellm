@@ -186,12 +186,14 @@ impl NativeTraceStorage {
         )
     }
 
+    #[pyo3(signature = (payload, content_type, tenant, logs=false))]
     fn ingest<'py>(
         &self,
         py: Python<'py>,
         payload: &[u8],
         content_type: Option<String>,
         #[pyo3(from_py_with = litellm_host_python::from_py_argument)] tenant: Tenant,
+        logs: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let payload = payload.to_vec();
         let max_value_bytes = self.config.max_attribute_value_bytes();
@@ -202,7 +204,12 @@ impl NativeTraceStorage {
             py,
             async move {
                 let rows = tokio::task::spawn_blocking(move || {
-                    litellm_traces::decode_otlp(&payload, content_type.as_deref()).map(|spans| {
+                    let decode = if logs {
+                        litellm_traces::decode_otlp_logs
+                    } else {
+                        litellm_traces::decode_otlp
+                    };
+                    decode(&payload, content_type.as_deref()).map(|spans| {
                         litellm_traces_clickhouse::span_rows(spans, &tenant, max_value_bytes)
                     })
                 })

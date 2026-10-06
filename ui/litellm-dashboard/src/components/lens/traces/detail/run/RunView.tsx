@@ -122,8 +122,12 @@ function LoadedRun({
   const refreshTrace = () => queryClient.resetQueries({ queryKey, exact: true });
   const failure = traceQuery.error ? classifyTraceReadFailure(traceQuery.error) : null;
   const trace = useMemo(() => {
-    const [first, ...rest] = traceQuery.data.pages;
-    return { ...first, spans: [first, ...rest].flatMap((page) => page.spans) };
+    const pages = traceQuery.data.pages;
+    return {
+      ...pages[0],
+      spans: pages.flatMap((page) => page.spans),
+      next_cursor: pages[pages.length - 1].next_cursor,
+    };
   }, [traceQuery.data]);
   const seekingSpan = !switching && selectedSpanMissing(trace, selection.spanId);
   const { hasNextPage, isFetching, isError, fetchNextPage } = traceQuery;

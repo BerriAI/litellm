@@ -1,5 +1,5 @@
 import type { TraceMessage, UIContent, UIMessage } from "../../types";
-import { parseJson, parseMessages } from "../../utils";
+import { parseAssistantSummary, parseJson, parseMessages } from "../../utils";
 
 export type TextFormat = "markdown" | "code" | "plain";
 
@@ -63,6 +63,8 @@ const singleText = (messages: readonly UIMessage[]): string | null =>
   messages.length === 1 && !messages[0].tool_calls?.length ? messages[0].content : null;
 
 function textView(text: string): PayloadView {
+  const messages = parseMessages(text);
+  if (messages?.length) return { kind: "messages", messages };
   return { kind: "text", text, format: textFormat(text) };
 }
 
@@ -93,6 +95,75 @@ function rawView(raw: string, toolOutput: boolean): PayloadView {
 }
 
 /** How a span's input or output reads best: the standard UI shape when the store sent one, else the raw payload. */
-export function payloadView(raw: string, content: UIContent | undefined, toolOutput: boolean): PayloadView {
+export function payloadView(
+  raw: string,
+  content: UIContent | undefined,
+  toolOutput: boolean,
+  assistantOutput = false,
+): PayloadView {
+  if (assistantOutput && (!content || content.kind === "text")) {
+    const messages = parseAssistantSummary(content?.text ?? raw);
+    if (messages) return { kind: "messages", messages };
+  }
   return content ? standardView(content, raw, toolOutput) : rawView(raw, toolOutput);
+}
+
+export function toolInput(raw: string, content?: UIContent): unknown {
+  const parsed = parseJson(raw);
+  if (parsed !== null) return parsed;
+  if (content?.kind === "fields") return Object.fromEntries(content.fields.map(({ key, value }) => [key, value]));
+  return content?.kind === "text" ? content.text : raw;
+}
+
+const ACTION_KEYS = ["command", "cmd", "code", "patch", "file_path", "path", "file", "query", "pattern", "url"];
+
+export function toolAction(value: unknown): { key: string; text: string } | null {
+  if (typeof value === "string") {
+    const parsed = parseJson(value);
+    if (parsed !== null && typeof parsed === "object") return toolAction(parsed);
+    return value ? { key: "arguments", text: value } : null;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  for (const key of ACTION_KEYS) {
+    const text: unknown = Reflect.get(value, key);
+    if (typeof text === "string" && text) return { key, text };
+  }
+  return null;
+}
+
+export function toolSummary(raw: unknown): string {
+  const action = toolAction(raw);
+  if (action && (action.key !== "arguments" || !looksLikeJson(action.text))) return action.text.replace(/\s+/g, " ");
+  if (typeof raw !== "string") return "";
+  const match = /"(?:command|cmd|code|patch|file_path|path|file|query|pattern|url)"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(raw);
+  if (!match) return "";
+  const text = match[1].replace(/\\u[0-9a-fA-F]{0,3}$|\\$/, "");
+  const decoded = parseJson(`"${text}"`);
+  return (typeof decoded === "string" ? decoded : text).replace(/\s+/g, " ");
+}
+
+export function toolResult(result: string): { body: FieldNode; metadata: readonly FieldEntry[] } {
+  const parsed = parseJson(result);
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const entries = Object.entries(parsed);
+    const output = entries.find(([key, value]) => key === "output" && typeof value === "string");
+    if (output)
+      return {
+        body: fieldNode(output[1]),
+        metadata: entries.filter(([key]) => key !== "output").map(([key, value]) => [key, fieldNode(value)]),
+      };
+    const content: unknown = Reflect.get(parsed, "content");
+    const isTextBlock = (block: unknown): block is { type: "text"; text: string } => {
+      if (!block || typeof block !== "object") return false;
+      const hasText = Reflect.get(block, "type") === "text" && typeof Reflect.get(block, "text") === "string";
+      return hasText && Object.keys(block).every((key) => key === "type" || key === "text");
+    };
+    if (Array.isArray(content) && content.length && content.every(isTextBlock)) {
+      return {
+        body: fieldNode(content.map((block) => block.text).join("\n\n")),
+        metadata: entries.filter(([key]) => key !== "content").map(([key, value]) => [key, fieldNode(value)]),
+      };
+    }
+  }
+  return { body: fieldNode(typeof parsed === "string" ? parsed : result), metadata: [] };
 }

@@ -4,16 +4,18 @@ import shutil
 import subprocess
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
+import psycopg
 import pytest
 from integration._support.client import Gateway, object_value, string_value
 from integration._support.database import read_rows, scratch_database
-from integration._support.process import owned_proxy
+from integration._support.process import owned_proxy, proxy_database_environment
 from integration._support.wire import Reply, Request, wire_server
+from psycopg import sql
 from pydantic import JsonValue, TypeAdapter
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
@@ -90,6 +92,18 @@ def _run_migration_entrypoint(database_url: str) -> subprocess.CompletedProcess[
     )
 
 
+def _scratch_replica_environment(database_url: str) -> Mapping[str, str]:
+    replica_url: Final = proxy_database_environment().get("DATABASE_URL_READ_REPLICA")
+    if replica_url is None:
+        return {}
+    replica: Final = urlsplit(replica_url)
+    reader: Final = replica.username
+    assert reader, "the read replica URL must name its role"
+    with psycopg.connect(database_url, autocommit=True) as admin:
+        admin.execute(sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA public TO {}").format(sql.Identifier(reader)))
+    return {"DATABASE_URL_READ_REPLICA": urlunsplit(replica._replace(path=urlsplit(database_url).path))}
+
+
 def _provider(store: str, provider_file_id: str) -> Callable[[Request], Reply]:
     page: Final[dict[str, JsonValue]] = {
         "object": "list",
@@ -146,7 +160,12 @@ def test_migration_entrypoint_adds_the_gin_index_and_the_upgraded_proxy_maps_man
         assert GIN_MIGRATION in _applied_migrations(database_url), entrypoint.stdout
         store: Final = "vs_" + uuid.uuid4().hex
         provider_file_id: Final = "file-" + uuid.uuid4().hex[:16]
-        upgraded_environment: Final = {"DATABASE_URL": database_url, "DISABLE_SCHEMA_UPDATE": "true"}
+        replica_environment: Final = _scratch_replica_environment(database_url)
+        upgraded_environment: Final = {
+            "DATABASE_URL": database_url,
+            "DISABLE_SCHEMA_UPDATE": "true",
+            **replica_environment,
+        }
         with (
             wire_server(_provider(store, provider_file_id)) as wire,
             owned_proxy(gateway, tmp_path, upgraded_environment) as upgraded,
@@ -177,6 +196,16 @@ def test_migration_entrypoint_adds_the_gin_index_and_the_upgraded_proxy_maps_man
                 database_url=database_url,
             ) == [{"flat_model_file_ids": [provider_file_id]}]
             assert _listed_ids(upgraded, store, model) == (managed,)
+            connected_roles: Final = {
+                string_value(row["usename"])
+                for row in read_rows(
+                    "SELECT DISTINCT usename FROM pg_stat_activity WHERE datname = current_database() AND usename IS NOT NULL",
+                    (),
+                    database_url=database_url,
+                )
+            }
+            expected_roles: Final = {urlsplit(url).username for url in (database_url, *replica_environment.values())}
+            assert expected_roles <= connected_roles, "every configured proxy role must hold a scratch connection"
 
 
 def test_db_push_creates_a_valid_gin_index_on_the_flat_provider_file_ids(gateway: Gateway) -> None:

@@ -3711,7 +3711,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
- "litellm-framing",
+ "litellm-framer",
  "litellm-host",
  "litellm-host-native",
  "litellm-http",
@@ -3796,7 +3796,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-framing"
+name = "litellm-framer"
 version = "0.1.0"
 dependencies = [
  "aws-smithy-eventstream",
@@ -4053,7 +4053,7 @@ dependencies = [
  "litellm-auth-azure",
  "litellm-auth-gcp",
  "litellm-core-utils",
- "litellm-framing",
+ "litellm-framer",
  "litellm-host",
  "litellm-http",
  "litellm-llms-types",
@@ -4450,6 +4450,8 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "serde_with",
+ "sha2 0.10.9",
  "strum",
  "thiserror 2.0.19",
  "time",
