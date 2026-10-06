@@ -111,13 +111,15 @@ _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
+NATIVE_COMPACTION_PROVIDERS: Final = frozenset({"anthropic", "vertex_ai"})
+
 
 def requires_native_compaction_beta(
     custom_llm_provider: str,
     optional_params: Mapping[str, object],
     messages: Sequence[object],
 ) -> bool:
-    return custom_llm_provider == "anthropic" and (
+    return custom_llm_provider in NATIVE_COMPACTION_PROVIDERS and (
         optional_params.get("compaction") is not None
         or any(
             isinstance(block, Mapping)

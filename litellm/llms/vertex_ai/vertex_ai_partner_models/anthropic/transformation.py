@@ -7,14 +7,18 @@ import httpx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, inline_remote_image_urls
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 from ....anthropic.chat.transformation import AnthropicConfig
+from ....anthropic.common_utils import requires_native_compaction_beta
 from .output_params_utils import sanitize_vertex_anthropic_output_params
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_VERTEX_HEADER_ONLY_BETAS: Final = frozenset({ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value})
 
 
 class VertexAIError(Exception):
@@ -131,6 +135,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         if context_management:
             self._add_context_management_beta_headers(beta_set, context_management)
 
+        if requires_native_compaction_beta("vertex_ai", optional_params, data["messages"]):
+            beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
+
         extra_headers: Final = optional_params.get("extra_headers") or {}
         anthropic_beta_value: Final = extra_headers.get("anthropic-beta", "")
         if isinstance(anthropic_beta_value, str) and anthropic_beta_value:
@@ -143,9 +150,13 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         data.pop("extra_headers", None)
 
-        if beta_set:
-            data["anthropic_beta"] = list(beta_set)
-            headers["anthropic-beta"] = ",".join(beta_set)
+        body_betas: Final = beta_set - _VERTEX_HEADER_ONLY_BETAS
+        if body_betas:
+            data["anthropic_beta"] = list(body_betas)
+        existing_beta: Final = headers.get("anthropic-beta", "")
+        header_betas: Final = beta_set | {beta.strip() for beta in existing_beta.split(",") if beta.strip()}
+        if header_betas:
+            headers["anthropic-beta"] = ",".join(header_betas)
 
         return data
 

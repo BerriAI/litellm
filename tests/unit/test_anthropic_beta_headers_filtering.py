@@ -83,7 +83,7 @@ class TestAnthropicBetaHeadersFiltering:
         filtered = filter_and_transform_beta_headers(
             beta_headers=all_headers, provider=provider
         )
-        assert ("compact-2026-09-04" in filtered) is (provider == "anthropic")
+        assert ("compact-2026-09-04" in filtered) is (provider in ("anthropic", "vertex_ai"))
 
         for header in unsupported_headers:
             assert (
@@ -405,14 +405,16 @@ class TestAnthropicBetaHeadersFiltering:
             ), f"Header '{test_case['input']}' should be mapped to '{test_case['expected']}' for {test_case['provider']}, but got: {filtered}"
 
     def test_filter_and_transform_beta_headers_vertex_ai_keeps_compact(self):
-        """Vertex AI supports compact context edits, so the compact beta header
-        must be forwarded instead of stripped (it was previously mapped to null,
-        which broke compact_20260112 context edits over /v1/messages)."""
+        """Vertex AI serves both compaction betas (threshold compaction behind compact-2026-01-12
+        and on-demand compaction behind compact-2026-09-04, Google Cloud: beta on
+        https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand, read 2026-10-05),
+        so the Vertex filter forwards both instead of stripping them: a dropped header makes
+        Vertex answer 400 "compaction: Extra inputs are not permitted"."""
         filtered = filter_and_transform_beta_headers(
-            beta_headers=["compact-2026-01-12"], provider="vertex_ai"
+            beta_headers=["compact-2026-01-12", "compact-2026-09-04"], provider="vertex_ai"
         )
 
-        assert filtered == ["compact-2026-01-12"]
+        assert filtered == ["compact-2026-01-12", "compact-2026-09-04"]
 
     @pytest.mark.parametrize("provider", ["bedrock_converse", "bedrock"])
     def test_fine_grained_tool_streaming_forwarded_for_bedrock(self, provider):

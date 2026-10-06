@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
@@ -126,7 +127,7 @@ def test_no_safeguards_leaves_dangerous_tool_use_beta_header_out():
     assert "dangerous-tool-use-2026-09-03" not in updated_headers.get("anthropic-beta", "")
 
 
-def _validate_vertex_headers(client_headers, messages):
+def _validate_vertex_headers(client_headers, messages, optional_params=None):
     config = VertexAIPartnerModelsAnthropicMessagesConfig()
     litellm_params = {
         "vertex_ai_project": "test-project",
@@ -142,7 +143,7 @@ def _validate_vertex_headers(client_headers, messages):
             headers=client_headers,
             model="claude-opus-5-5",
             messages=messages,
-            optional_params={"max_tokens": 64},
+            optional_params=optional_params or {"max_tokens": 64},
             litellm_params=litellm_params,
             api_base=None,
         )
@@ -726,3 +727,43 @@ def test_vertex_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_f
         and info.get("supports_mid_conversation_system") is not True
     ]
     assert missing == []
+
+
+_SIGNED_COMPACTION_BLOCK = {"type": "compaction", "content": "summary so far", "signature": "sig"}
+
+
+@pytest.mark.parametrize(
+    "client_headers",
+    [{"anthropic-beta": "compact-2026-09-04"}, {}],
+    ids=["client_sends_beta", "client_omits_beta"],
+)
+@pytest.mark.parametrize(
+    "optional_params,messages",
+    [
+        ({"max_tokens": 64, "compaction": {"type": "summarize"}}, [{"role": "user", "content": "Hello"}]),
+        (
+            {"max_tokens": 64},
+            [{"role": "assistant", "content": [_SIGNED_COMPACTION_BLOCK]}, {"role": "user", "content": "Go on"}],
+        ),
+    ],
+    ids=["compaction_param", "signed_compaction_block"],
+)
+def test_native_compaction_reaches_vertex_with_compact_2026_09_04_beta(
+    local_beta_headers_config, client_headers, optional_params, messages
+):
+    """Vertex serves on-demand compaction only behind compact-2026-09-04 (Google Cloud: beta on
+    https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand, read 2026-10-05)
+    and answers 400 "compaction: Extra inputs are not permitted" without it, so the beta rides
+    along with the `compaction` param or a signed compaction block exactly once, whether or not
+    the client sent it, and survives the Vertex beta filter."""
+    headers = _validate_vertex_headers(client_headers, messages, optional_params)
+
+    filtered = update_headers_with_filtered_beta(headers=headers, provider="vertex_ai")
+
+    assert filtered["anthropic-beta"].split(",").count("compact-2026-09-04") == 1
+
+
+def test_no_compaction_signal_leaves_compact_2026_09_04_beta_out():
+    headers = _validate_vertex_headers({}, [{"role": "user", "content": "Hello"}])
+
+    assert "compact-2026-09-04" not in headers.get("anthropic-beta", "")
