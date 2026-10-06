@@ -5,7 +5,7 @@ import { useTracesApi, type TracesApi } from "../../api";
 import type { Span, SpanDetail, Trace } from "../../types";
 import { CONVERSATION_PAGE_SIZE, conversationSteps } from "./conversation";
 
-async function readBatch(traces: TracesApi, traceId: string, ids: string[], traceRef: string): Promise<SpanDetail[]> {
+async function readBatch(traces: TracesApi, traceId: string, ids: string[], traceRef?: string): Promise<SpanDetail[]> {
   try {
     return await traces.spans(traceId, ids, traceRef);
   } catch (error) {
