@@ -10,16 +10,21 @@ import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
+from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
-from pydantic import BaseModel
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
-from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK, PROXY_REJECTED_BEFORE_ROUTING_KEY
+from litellm.constants import (
+    PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,
+    PROXY_LLM_PROVIDER_FALLBACK,
+    PROXY_REJECTED_BEFORE_ROUTING_KEY,
+)
 from litellm.exceptions import (
     validate_rate_limit_category,
     validate_rate_limit_type,
@@ -31,6 +36,10 @@ from litellm.integrations.prometheus_helpers import (
 )
 from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker import (
     BoundedPrometheusSeriesTracker,
+    PrometheusSeriesLimits,
+)
+from litellm.integrations.prometheus_helpers.shared_prometheus_series_admissions import (
+    SharedPrometheusSeriesAdmissions,
 )
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
@@ -164,30 +173,131 @@ def _customer_budget_metrics_enabled() -> bool:
     return litellm.enable_end_user_cost_tracking_prometheus_only is True and not litellm.disable_end_user_cost_tracking
 
 
-class _ExcludedLabelMetric:
-    """Proxies a prometheus metric whose declared ``labelnames`` had globally
-    excluded labels removed, dropping those labels from every ``labels(...)``
-    call so the emitted arguments always match the metric's real label set."""
+class _LabeledMetric:
+    """Proxies a labeled prometheus metric. Globally excluded labels are dropped from every ``labels(...)``
+    call so the emitted arguments match the metric's real label set. With ``limits.max_series`` set, only that
+    many label sets get a series of their own: a counter or histogram records every later label set on one
+    series whose labels are all ``other``, so totals stay exact, and a gauge skips it, since one shared gauge
+    value would mean nothing. In multi-process mode the tracker is the one the workers share, and ``remove`` does
+    nothing there, since the prometheus client cannot remove a series."""
+
+    __slots__ = (
+        "_excluded_labels",
+        "_limits",
+        "_metric",
+        "_metric_name",
+        "_original_labelnames",
+        "_overflow_child",
+        "_tracker",
+    )
 
     def __init__(
         self,
         metric: MetricWrapperBase,
+        metric_name: str,
         original_labelnames: tuple[str, ...],
         excluded_labels: frozenset[str],
+        tracker: BoundedPrometheusSeriesTracker | SharedPrometheusSeriesAdmissions,
+        limits: PrometheusSeriesLimits,
+        shares_overflow_series: bool,
     ) -> None:
+        kept_label_count: Final = len(tuple(name for name in original_labelnames if name not in excluded_labels))
         self._metric = metric
+        self._metric_name = metric_name
         self._original_labelnames = original_labelnames
         self._excluded_labels = excluded_labels
-
-    def labels(self, *labelvalues: str, **labelkwargs: str) -> MetricWrapperBase:
-        values: Final = labelvalues or tuple(labelkwargs[name] for name in self._original_labelnames)
-        kept_values: Final = tuple(
-            value for name, value in zip(self._original_labelnames, values) if name not in self._excluded_labels
+        self._tracker = tracker
+        self._limits = limits
+        self._overflow_child: Callable[[], MetricWrapperBase | NoOpMetric] = (
+            partial(metric.labels, *(PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,) * kept_label_count)
+            if shares_overflow_series
+            else NoOpMetric
         )
-        return self._metric.labels(*kept_values) if kept_values else self._metric
+
+    def labels(self, *labelvalues: object, **labelkwargs: object) -> MetricWrapperBase | NoOpMetric:
+        values: Final = labelvalues or tuple(labelkwargs[name] for name in self._original_labelnames)
+        kept_values: Final = self._kept_values(values)
+        if not kept_values:
+            return self._metric
+        if not self._limits.enabled:
+            return self._metric.labels(*kept_values)
+        with self._tracker.lock:
+            if self._admits(kept_values):
+                return self._metric.labels(*kept_values)
+        return self._overflow_child()
+
+    def remove(self, *labelvalues: object) -> None:
+        match self._tracker:
+            case SharedPrometheusSeriesAdmissions():
+                pass
+            case BoundedPrometheusSeriesTracker():
+                kept_values: Final = self._kept_values(labelvalues)
+                with self._tracker.lock:
+                    self._tracker.forget_series(self._metric_name, kept_values)
+                    self._metric.remove(*kept_values)
+            case _:
+                assert_never(self._tracker)
+
+    def _admits(self, kept_values: tuple[str, ...]) -> bool:
+        if isinstance(self._tracker, SharedPrometheusSeriesAdmissions):
+            return self._limits.max_series is None or self._tracker.admit_series(
+                metric_name=self._metric_name, label_values=kept_values, max_series=self._limits.max_series
+            )
+        return self._tracker.admit_series(
+            metric=self._metric, metric_name=self._metric_name, label_values=kept_values, limits=self._limits
+        )
+
+    def _kept_values(self, values: tuple[object, ...]) -> tuple[str, ...]:
+        return tuple(
+            str(value) for name, value in zip(self._original_labelnames, values) if name not in self._excluded_labels
+        )
 
 
-_MetricLike: TypeAlias = "NoOpMetric | _ExcludedLabelMetric | MetricWrapperBase"
+_MetricLike: TypeAlias = "NoOpMetric | _LabeledMetric | MetricWrapperBase"
+
+_SeriesLimitT: Final = TypeVar("_SeriesLimitT", int, float)
+_POSITIVE_SERIES_CAP: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field(gt=0)])
+_POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(gt=0)])
+_SERIES_CLEANUP_INTERVAL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=0)])
+_DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS: Final = 60.0
+
+
+def _number_or_none(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return limit.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _positive_or_ignored(setting: str, value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:
+    if value is None:
+        return None
+    validated: Final = _number_or_none(value, limit)
+    if validated is not None:
+        return validated
+    verbose_logger.warning(
+        "%s is ignored because it is not a number greater than 0 (got %r). Prometheus metrics are emitted without it",
+        setting,
+        value,
+    )
+    return None
+
+
+def _cleanup_interval_or_default(value: object) -> float | None:
+    if value is None:
+        return None
+    validated: Final = _number_or_none(value, _SERIES_CLEANUP_INTERVAL)
+    if validated is not None:
+        return validated
+    verbose_logger.warning(
+        "prometheus_metrics_cleanup_interval_seconds is ignored because it is not a number of at least 0 (got %r). "
+        "Idle series are checked every %s seconds",
+        value,
+        _DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS,
+    )
+    return _DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS
 
 
 def _get_budget_metrics_per_request_timeout() -> float:
@@ -301,10 +411,17 @@ class PrometheusLogger(CustomLogger):
             _custom_buckets: Final = litellm.prometheus_latency_buckets
             self.latency_buckets = tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
             self._bounded_prometheus_series_tracker = BoundedPrometheusSeriesTracker()
+            _multiproc_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+            self._series_cap_tracker = (
+                BoundedPrometheusSeriesTracker()
+                if _multiproc_dir is None
+                else SharedPrometheusSeriesAdmissions(directory=_multiproc_dir)
+            )
+            self._series_limits = self._configured_series_limits(multiprocess_mode=_multiproc_dir is not None)
 
             # Create metric factory functions
             self._counter_factory = self._create_metric_factory(Counter)
-            self._gauge_factory = self._create_metric_factory(Gauge)
+            self._gauge_factory = self._create_metric_factory(Gauge, shares_overflow_series=False)
             self._histogram_factory = self._create_metric_factory(Histogram)
 
             self.litellm_proxy_failed_requests_metric = self._counter_factory(
@@ -694,13 +811,13 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_successful_fallbacks = self._counter_factory(
                 "litellm_deployment_successful_fallbacks",
                 "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model",
-                self.get_labels_for_metric("litellm_deployment_successful_fallbacks"),
+                labelnames=self.get_labels_for_metric("litellm_deployment_successful_fallbacks"),
             )
 
             self.litellm_deployment_failed_fallbacks = self._counter_factory(
                 "litellm_deployment_failed_fallbacks",
                 "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
-                self.get_labels_for_metric("litellm_deployment_failed_fallbacks"),
+                labelnames=self.get_labels_for_metric("litellm_deployment_failed_fallbacks"),
             )
 
             # Callback Logging Failure Metrics
@@ -1182,26 +1299,54 @@ class PrometheusLogger(CustomLogger):
 
         return metric_name in self.enabled_metrics
 
-    def _create_metric_factory(self, metric_class):
+    def _create_metric_factory(self, metric_class, shares_overflow_series: bool = True):
         """Create a factory function that returns either a real metric or a no-op metric"""
 
         def factory(*args, **kwargs):
             # Extract metric name from the first argument or 'name' keyword argument
-            metric_name: Final = args[0] if args else kwargs.get("name", "")
+            metric_name: Final = str(args[0] if args else kwargs.get("name", ""))
 
             if not self._is_metric_enabled(metric_name):
                 return NoOpMetric()
 
             original_labelnames: Final = tuple(kwargs.get("labelnames") or ())
-            if not (frozenset(original_labelnames) & self.exclude_labels):
+            kept: Final = tuple(name for name in original_labelnames if name not in self.exclude_labels)
+            if not original_labelnames or (kept == original_labelnames and not self._series_limits.enabled):
                 return metric_class(*args, **kwargs)
 
-            kept: Final = tuple(name for name in original_labelnames if name not in self.exclude_labels)
-            kept_kwargs: Final = {**kwargs, "labelnames": kept}
-            real_metric: Final = metric_class(*args, **kept_kwargs)
-            return _ExcludedLabelMetric(real_metric, original_labelnames, self.exclude_labels)
+            return _LabeledMetric(
+                metric=metric_class(*args, **{**kwargs, "labelnames": kept}),
+                metric_name=metric_name,
+                original_labelnames=original_labelnames,
+                excluded_labels=self.exclude_labels,
+                tracker=self._series_cap_tracker,
+                limits=self._series_limits,
+                shares_overflow_series=shares_overflow_series,
+            )
 
         return factory
+
+    @staticmethod
+    def _configured_series_limits(multiprocess_mode: bool) -> PrometheusSeriesLimits:
+        limits: Final = PrometheusSeriesLimits(
+            max_series=_positive_or_ignored(
+                "prometheus_metrics_max_series_per_metric",
+                litellm.prometheus_metrics_max_series_per_metric,
+                _POSITIVE_SERIES_CAP,
+            ),
+            ttl_seconds=_positive_or_ignored(
+                "prometheus_metrics_ttl_seconds", litellm.prometheus_metrics_ttl_seconds, _POSITIVE_SERIES_TTL
+            ),
+            cleanup_interval_seconds=_cleanup_interval_or_default(litellm.prometheus_metrics_cleanup_interval_seconds),
+        )
+        if limits.ttl_seconds is None or not multiprocess_mode:
+            return limits
+        verbose_logger.warning(
+            "prometheus_metrics_ttl_seconds is ignored while PROMETHEUS_MULTIPROC_DIR is set: the prometheus "
+            "client cannot remove a series in multi-process mode. prometheus_metrics_max_series_per_metric "
+            "still applies"
+        )
+        return replace(limits, ttl_seconds=None)
 
     def get_labels_for_metric(self, metric_name: DEFINED_PROMETHEUS_METRICS) -> list[str]:
         """
