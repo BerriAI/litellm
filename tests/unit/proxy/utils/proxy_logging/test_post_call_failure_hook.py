@@ -574,9 +574,9 @@ async def test_post_call_failure_hook_omits_provider_when_a_deployment_does_not_
 async def test_handle_logging_proxy_only_path_attributes_with_read_only_metadata(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
-    """With a logging object already on the request, its metadata is taken as given;
-    a read-only mapping there must not crash the stamp, and the failure handler
-    still receives the provider attribution."""
+    """With a logging object already on the request, a read-only metadata mapping
+    must not crash the stamp, the failure handler still receives the provider
+    attribution, and the request's metadata is not copied into the update."""
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(
@@ -613,7 +613,7 @@ async def test_handle_logging_proxy_only_path_attributes_with_read_only_metadata
     update_kwargs = logging_obj.update_environment_variables.call_args.kwargs
     assert update_kwargs["custom_llm_provider"] == "openai"
     assert update_kwargs["litellm_params"]["custom_llm_provider"] == "openai"
-    assert update_kwargs["litellm_params"]["metadata"] == {"user_api_key_alias": "frozen"}
+    assert "user_api_key_alias" not in update_kwargs["litellm_params"]["metadata"]
 
 
 @pytest.mark.asyncio

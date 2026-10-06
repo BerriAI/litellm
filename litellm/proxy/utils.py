@@ -1485,7 +1485,7 @@ client can neither hide a guardrail block nor force a row by sending the key or 
 
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
-    {"model", "messages", "input", "prompt", "user", "stream", "metadata", "litellm_metadata", "litellm_call_id"}
+    {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
 )
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
