@@ -310,7 +310,9 @@ class OpenTelemetryConfig:
     headers: str | None = None
     enable_metrics: bool = False
     enable_events: bool = False
-    semconv_histogram_buckets: bool = False
+    semconv_histogram_buckets: bool = field(
+        default_factory=lambda: os.getenv("LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS", "false").lower() == "true"
+    )
     service_name: str | None = None
     deployment_environment: str | None = None
     model_id: str | None = None
@@ -376,9 +378,6 @@ class OpenTelemetryConfig:
         )  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
         enable_metrics: Final[bool] = os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", "false").lower() == "true"
         enable_events: Final[bool] = os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", "false").lower() == "true"
-        semconv_histogram_buckets: Final[bool] = (
-            os.getenv("LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS", "false").lower() == "true"
-        )
         service_name: Final = os.getenv("OTEL_SERVICE_NAME", "litellm")
         deployment_environment: Final = os.getenv("OTEL_ENVIRONMENT_NAME", "production")
         model_id: Final = os.getenv("OTEL_MODEL_ID", service_name)
@@ -391,7 +390,6 @@ class OpenTelemetryConfig:
             headers=headers,  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
             enable_metrics=enable_metrics,
             enable_events=enable_events,
-            semconv_histogram_buckets=semconv_histogram_buckets,
             service_name=service_name,
             deployment_environment=deployment_environment,
             model_id=model_id,
