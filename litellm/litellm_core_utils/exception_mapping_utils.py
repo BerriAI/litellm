@@ -551,6 +551,13 @@ def _map_anthropic_exception(
             model=model,
             llm_provider="anthropic",
         )
+    if "billing_error" in error_str or "credit balance is too low" in error_str:
+        raise PaymentRequiredError(
+            message=f"AnthropicException - {error_str}",
+            model=model,
+            llm_provider="anthropic",
+            response=getattr(original_exception, "response", None),
+        )
     if "Invalid API Key" in error_str:
         raise AuthenticationError(
             message=f"AnthropicError - {error_str}",

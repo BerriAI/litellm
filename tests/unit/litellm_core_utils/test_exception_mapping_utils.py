@@ -1,3 +1,5 @@
+from typing import Final
+
 import httpx
 import openai
 import pytest
@@ -385,6 +387,55 @@ def test_anthropic_context_window_error_mapping(error_message):
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.llm_provider == "anthropic"
+
+
+@pytest.mark.parametrize("status_code", (400, 402))
+@pytest.mark.parametrize(
+    "provider_message",
+    [
+        '{"type":"error","error":{"type":"billing_error","message":"Your credit balance is too low"}}',
+        (
+            '{"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"Your credit balance is too low to access the Anthropic API. '
+            'Please go to Plans & Billing to upgrade or purchase credits."}}'
+        ),
+    ],
+)
+def test_anthropic_billing_errors_map_to_payment_required(status_code: int, provider_message: str) -> None:
+    original_exception: Final = OpenAIError(
+        status_code=status_code,
+        message=provider_message,
+        headers={},
+    )
+
+    with pytest.raises(litellm.PaymentRequiredError) as excinfo:
+        exception_type(
+            model="claude-sonnet-4-5",
+            original_exception=original_exception,
+            custom_llm_provider="anthropic",
+        )
+
+    assert isinstance(excinfo.value, litellm.BadRequestError)
+    assert excinfo.value.status_code == 402
+
+
+def test_anthropic_unrelated_invalid_request_remains_bad_request() -> None:
+    original_exception: Final = OpenAIError(
+        status_code=400,
+        message='{"type":"error","error":{"type":"invalid_request_error","message":"Unsupported response format"}}',
+        headers={},
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="claude-sonnet-4-5",
+            original_exception=original_exception,
+            custom_llm_provider="anthropic",
+        )
+
+    assert type(excinfo.value) is litellm.BadRequestError
+    assert not isinstance(excinfo.value, litellm.PaymentRequiredError)
+    assert excinfo.value.status_code == 400
 
 
 # Test cases for Vertex AI RateLimitError mapping
