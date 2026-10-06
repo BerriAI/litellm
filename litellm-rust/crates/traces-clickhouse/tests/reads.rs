@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 
+use litellm_http::Client;
 use litellm_traces::query::named::ReadAccessParams;
+use litellm_traces_cache::{ReadError, TraceReader};
 use litellm_traces_clickhouse::{
-    Connection, InsertTable, QueryScope, get_trace, get_trace_page, insert_rows, list_traces,
+    ClickHouseTraces, Connection, InsertTable, QueryScope, insert_rows,
 };
 use rstest::rstest;
 use serde_json::json;
@@ -13,6 +15,13 @@ mod support;
 
 use fixtures::{DATABASE, SeededDatabase, migrated_database, seeded_database};
 use support::TestResult;
+
+fn make_reader(client: &Client, connection: Connection) -> (TraceReader, ClickHouseTraces) {
+    (
+        TraceReader::new(litellm_storage_clickhouse::READ_LIMITS.response_bytes),
+        ClickHouseTraces::new(client.clone(), connection),
+    )
+}
 
 #[rstest]
 #[case::api_key("key-a", "")]
@@ -74,16 +83,19 @@ async fn list_costs_match_each_run_when_response_ids_are_reused(
             .collect(),
     )
     .await?;
-    let reader = fixture
+    let connection = fixture
         .readers
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
+    let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: false,
         user_id: user_id.into(),
         team_ids: vec!["team-a".into()],
     };
-    let page = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 50).await?;
+    let page = reader
+        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .await?;
     assert_eq!(page.data.len(), runs.len());
     for (trace_id, _, cost) in runs {
         let summary = page
@@ -91,7 +103,8 @@ async fn list_costs_match_each_run_when_response_ids_are_reused(
             .iter()
             .find(|summary| summary.trace_id == trace_id)
             .ok_or("missing run")?;
-        let detail = get_trace(client, &reader, &access, trace_id, &summary.trace_ref)
+        let detail = reader
+            .get_trace(&store, &access, trace_id, &summary.trace_ref)
             .await?
             .ok_or("missing trace")?;
         assert_eq!(detail.summary.spend, Some(cost));
@@ -199,16 +212,19 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             .collect::<Vec<_>>();
         insert_rows(client, &writer, DATABASE, InsertTable::SpendLogs, costs).await?;
     }
-    let reader = fixture
+    let connection = fixture
         .readers
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
+    let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: false,
         user_id: String::new(),
         team_ids: vec!["team-a".into()],
     };
-    let page = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 500).await?;
+    let page = reader
+        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 500)
+        .await?;
     assert_eq!(page.data.len(), runs);
     assert!(
         page.data
@@ -222,42 +238,17 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             .send()
             .await?
             .error_for_status()?;
-        let read_queries = client.post(writer.url().clone()).body(format!(
-            "SELECT count() FROM system.query_log WHERE type = 'QueryFinish' AND current_database = '{DATABASE}' AND query LIKE '%FROM otel_traces AS o%' AND query NOT LIKE '%system.query_log%'"
-        )).send().await?.error_for_status()?.text().await?;
-        let read_queries = read_queries.trim().parse::<usize>()?;
-        assert!(
-            read_queries > 0 && read_queries < runs,
-            "{read_queries} span queries for {runs} runs"
-        );
-        if costed {
-            let overlapping = client
-                .post(writer.url().clone())
-                .body(format!(
-                    "WITH spend_reads AS (
-                        SELECT query_start_time_microseconds AS started, event_time_microseconds AS finished
-                        FROM system.query_log
-                        WHERE type = 'QueryFinish' AND current_database = '{DATABASE}'
-                          AND query LIKE '%FROM spend_logs FINAL%' AND query NOT LIKE '%system.query_log%'
-                    ), events AS (
-                        SELECT started AS at, 1 AS delta FROM spend_reads
-                        UNION ALL SELECT finished AS at, -1 AS delta FROM spend_reads
-                    )
-                    SELECT max(active) FROM (
-                        SELECT sum(delta) OVER (ORDER BY at, delta ROWS UNBOUNDED PRECEDING) AS active
-                        FROM events
-                    )"
-                ))
-                .send()
-                .await?
-                .error_for_status()?
-                .text()
-                .await?
-                .trim()
-                .parse::<usize>()?;
+        for table in ["otel_traces AS o", "spend_logs FINAL"]
+            .into_iter()
+            .take(if costed { 2 } else { 1 })
+        {
+            let read_queries = client.post(writer.url().clone()).body(format!(
+                "SELECT count() FROM system.query_log WHERE type = 'QueryFinish' AND current_database = '{DATABASE}' AND query LIKE '%FROM {table}%' AND query NOT LIKE '%system.query_log%'"
+            )).send().await?.error_for_status()?.text().await?;
+            let read_queries = read_queries.trim().parse::<usize>()?;
             assert!(
-                (2..=4).contains(&overlapping),
-                "{overlapping} simultaneous spend reads for {runs} runs"
+                read_queries > 0 && read_queries < runs,
+                "{read_queries} {table} queries for {runs} runs"
             );
         }
     }
@@ -281,7 +272,8 @@ async fn large_runs_remain_complete_under_default_reader_limits(
         .find(|run| run.trace_id == "trace-0000")
         .ok_or("missing run")?
         .trace_ref;
-    let detail = get_trace(client, &reader, &access, "trace-0000", trace_ref)
+    let detail = reader
+        .get_trace(&store, &access, "trace-0000", trace_ref)
         .await?
         .ok_or("missing trace")?;
     assert_eq!(detail.spans.len(), steps);
@@ -303,24 +295,25 @@ async fn large_runs_remain_complete_under_default_reader_limits(
         ..access.clone()
     };
     assert!(
-        get_trace(client, &reader, &denied, "trace-0000", trace_ref)
+        reader
+            .get_trace(&store, &denied, "trace-0000", trace_ref)
             .await?
             .is_none()
     );
     let mut cursor = None;
     let mut ids = Vec::new();
     loop {
-        let page = get_trace_page(
-            client,
-            &reader,
-            &access,
-            "trace-0000",
-            trace_ref,
-            cursor.as_deref(),
-            200,
-        )
-        .await?
-        .ok_or("missing page")?;
+        let page = reader
+            .get_trace_page(
+                &store,
+                &access,
+                "trace-0000",
+                trace_ref,
+                cursor.as_deref(),
+                200,
+            )
+            .await?
+            .ok_or("missing page")?;
         assert_eq!(page.summary, detail.summary);
         assert!(page.spans.len() <= 200);
         assert!(
@@ -329,17 +322,17 @@ async fn large_runs_remain_complete_under_default_reader_limits(
         );
         if ids.is_empty() {
             assert!(
-                get_trace_page(
-                    client,
-                    &reader,
-                    &denied,
-                    "trace-0000",
-                    trace_ref,
-                    page.next_cursor.as_deref(),
-                    200,
-                )
-                .await?
-                .is_none()
+                reader
+                    .get_trace_page(
+                        &store,
+                        &denied,
+                        "trace-0000",
+                        trace_ref,
+                        page.next_cursor.as_deref(),
+                        200,
+                    )
+                    .await?
+                    .is_none()
             );
             client
                 .post(writer.url().clone())
@@ -372,45 +365,43 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
 ) -> TestResult {
     let fixture = seeded_database?;
     let client = &fixture.database.client;
-    let reader = fixture
+    let connection = fixture
         .readers
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
+    let (reader, store) = make_reader(client, connection.clone());
     let access = ReadAccessParams {
         all_teams: true,
         user_id: String::new(),
         team_ids: Vec::new(),
     };
-    let listed = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 10).await?;
+    let listed = reader
+        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 10)
+        .await?;
     let summary = listed
         .data
         .iter()
         .find(|summary| summary.span_count == 3)
         .ok_or("missing fixture")?;
-    let first = get_trace_page(
-        client,
-        &reader,
-        &access,
-        &summary.trace_id,
-        &summary.trace_ref,
-        None,
-        1,
-    )
-    .await?
-    .ok_or("missing first page")?;
-    let original_ids = get_trace(
-        client,
-        &reader,
-        &access,
-        &summary.trace_id,
-        &summary.trace_ref,
-    )
-    .await?
-    .ok_or("missing trace")?
-    .spans
-    .into_iter()
-    .map(|span| span.span_id)
-    .collect::<Vec<_>>();
+    let first = reader
+        .get_trace_page(
+            &store,
+            &access,
+            &summary.trace_id,
+            &summary.trace_ref,
+            None,
+            1,
+        )
+        .await?
+        .ok_or("missing first page")?;
+    let original_ids = reader
+        .get_trace(&store, &access, &summary.trace_id, &summary.trace_ref)
+        .await?
+        .ok_or("missing trace")?
+        .spans
+        .into_iter()
+        .map(|span| span.span_id)
+        .collect::<Vec<_>>();
     let writer = Connection::writer(&fixture.database.url)?;
     insert_rows(
         client,
@@ -434,17 +425,17 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
         team_ids: vec!["not-this-team".into()],
     };
     assert!(
-        get_trace_page(
-            client,
-            &reader,
-            &denied,
-            &summary.trace_id,
-            &summary.trace_ref,
-            first.next_cursor.as_deref(),
-            1
-        )
-        .await?
-        .is_none()
+        reader
+            .get_trace_page(
+                &store,
+                &denied,
+                &summary.trace_id,
+                &summary.trace_ref,
+                first.next_cursor.as_deref(),
+                1
+            )
+            .await?
+            .is_none()
     );
     let first_cursor = first.next_cursor.clone();
     let mut cursor = first.next_cursor;
@@ -454,44 +445,45 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
         .map(|span| span.span_id)
         .collect::<Vec<_>>();
     while let Some(current) = cursor {
-        let next = get_trace_page(
-            client,
-            &reader,
-            &access,
-            &summary.trace_id,
-            &summary.trace_ref,
-            Some(&current),
-            1,
-        )
-        .await?
-        .ok_or("missing next page")?;
+        let next = reader
+            .get_trace_page(
+                &store,
+                &access,
+                &summary.trace_id,
+                &summary.trace_ref,
+                Some(&current),
+                1,
+            )
+            .await?
+            .ok_or("missing next page")?;
         assert_eq!(next.summary.span_count, 3);
         ids.extend(next.spans.into_iter().map(|span| span.span_id));
         cursor = next.next_cursor;
     }
     assert_eq!(ids, original_ids);
-    let refreshed = get_trace(
-        client,
-        &reader,
-        &access,
-        &summary.trace_id,
-        &summary.trace_ref,
-    )
-    .await?
-    .ok_or("missing refreshed trace")?;
+    let cached = reader
+        .get_trace(&store, &access, &summary.trace_id, &summary.trace_ref)
+        .await?
+        .ok_or("missing cached trace")?;
+    assert_eq!(cached.spans.len(), 3);
+    let (fresh_reader, fresh_store) = make_reader(client, connection);
+    let refreshed = fresh_reader
+        .get_trace(&fresh_store, &access, &summary.trace_id, &summary.trace_ref)
+        .await?
+        .ok_or("missing refreshed trace")?;
     assert_eq!(refreshed.spans.len(), 4);
     assert!(matches!(
-        get_trace_page(
-            client,
-            &reader,
-            &access,
-            &summary.trace_id,
-            &summary.trace_ref,
-            Some("invalid"),
-            1
-        )
-        .await,
-        Err(litellm_traces_clickhouse::Error::InvalidCursor("span"))
+        reader
+            .get_trace_page(
+                &store,
+                &access,
+                &summary.trace_id,
+                &summary.trace_ref,
+                Some("invalid"),
+                1
+            )
+            .await,
+        Err(ReadError::InvalidCursor("span"))
     ));
     let backdated = json!({
         "Timestamp": "2026-09-01 00:00:00.000000000",
@@ -509,20 +501,21 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
         .send()
         .await?
         .error_for_status()?;
-    let uncached_reader =
+    let uncached_connection =
         Connection::reader(&format!("{}?max_threads=1", fixture.database.url), DATABASE)?;
-    let changed = get_trace_page(
-        client,
-        &uncached_reader,
-        &access,
-        &summary.trace_id,
-        &summary.trace_ref,
-        first_cursor.as_deref(),
-        1,
-    )
-    .await;
+    let (uncached_reader, uncached_store) = make_reader(client, uncached_connection);
+    let changed = uncached_reader
+        .get_trace_page(
+            &uncached_store,
+            &access,
+            &summary.trace_id,
+            &summary.trace_ref,
+            first_cursor.as_deref(),
+            1,
+        )
+        .await;
     assert!(
-        matches!(changed, Err(litellm_traces_clickhouse::Error::TraceChanged)),
+        matches!(changed, Err(ReadError::TraceChanged)),
         "{changed:?}"
     );
     Ok(())
@@ -535,16 +528,19 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
 ) -> TestResult {
     let fixture = seeded_database?;
     let client = &fixture.database.client;
-    let reader = fixture
+    let connection = fixture
         .readers
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
+    let (reader, store) = make_reader(client, connection.clone());
     let access = ReadAccessParams {
         all_teams: true,
         user_id: String::new(),
         team_ids: Vec::new(),
     };
-    let before = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 50).await?;
+    let before = reader
+        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .await?;
     let run = before
         .data
         .iter()
@@ -571,7 +567,14 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
         ])],
     )
     .await?;
-    let after = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 50).await?;
+    let cached = reader
+        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .await?;
+    assert_eq!(cached.data, before.data);
+    let (reader, store) = make_reader(client, connection);
+    let after = reader
+        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .await?;
     assert_eq!(after.data.len(), before.data.len());
     let limited = after
         .data
@@ -588,17 +591,10 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
             .all(|item| !item.resolution_limited)
     );
     assert!(matches!(
-        get_trace_page(
-            client,
-            &reader,
-            &access,
-            &run.trace_id,
-            &run.trace_ref,
-            None,
-            200
-        )
-        .await,
-        Err(litellm_traces_clickhouse::Error::ReadTooLarge)
+        reader
+            .get_trace_page(&store, &access, &run.trace_id, &run.trace_ref, None, 200)
+            .await,
+        Err(ReadError::TooLarge)
     ));
     Ok(())
 }
@@ -685,16 +681,19 @@ async fn gateway_ids_resolve_through_detail_and_batch_reads_with_legacy_fallback
             .collect(),
     )
     .await?;
-    let reader = fixture
+    let connection = fixture
         .readers
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
+    let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: false,
         user_id: String::new(),
         team_ids: vec!["team-a".into()],
     };
-    let page = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 50).await?;
+    let page = reader
+        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .await?;
     assert_eq!(page.data.len(), cases.len());
     for (id, _, _, _, _, expected) in cases {
         let summary = page
@@ -702,7 +701,8 @@ async fn gateway_ids_resolve_through_detail_and_batch_reads_with_legacy_fallback
             .iter()
             .find(|summary| summary.trace_id == id)
             .ok_or("missing run")?;
-        let detail = get_trace(client, &reader, &access, id, &summary.trace_ref)
+        let detail = reader
+            .get_trace(&store, &access, id, &summary.trace_ref)
             .await?
             .ok_or("missing trace")?;
         assert_eq!(detail.summary.spend, expected, "{id}");

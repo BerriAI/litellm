@@ -65,6 +65,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
 )
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -136,13 +137,13 @@ else:
     SemanticRouter = Any
 
 
-class TierClassification(BaseModel):
+class TierClassification(LiteLLMBaseModel):
     """Structured response schema for the LLM-based complexity classifier."""
 
     tier: Literal["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
 
 
-class _LabeledTierClassification(BaseModel):
+class _LabeledTierClassification(LiteLLMBaseModel):
     """Parses the classifier's reply when the wire carries operator-chosen tier strings."""
 
     tier: str
@@ -2945,7 +2946,7 @@ class ComplexityRouter(CustomLogger):
             raise ValueError(f"No candidate models left for tier {tier_key} after routing-plugin filtering")
         return self._pick_from_tier_value(context.candidate_models, tier_key)
 
-    def _ensure_adaptive_router(self) -> Any | None:
+    def _ensure_adaptive_router(self) -> AdaptiveRouter | None:
         if not self.config.adaptive:
             return None
         if self.adaptive_router is not None:
@@ -3087,7 +3088,7 @@ class ComplexityRouter(CustomLogger):
         pools: Final = self._tier_pools()
         classified_candidates: Final = _allowed(tuple(pools.get(_tier_name(classified_tier), ())), fit_filter)
         cold_start_candidates: Final = tuple(
-            model for model in classified_candidates if adaptive._cells[(request_type, model)].total_samples == 0
+            model for model in classified_candidates if adaptive.cell(request_type, model).total_samples == 0
         )
         if cold_start_candidates:
             chosen_model: Final = random.choice(cold_start_candidates)
@@ -3106,7 +3107,7 @@ class ComplexityRouter(CustomLogger):
                         "candidates": [
                             {
                                 "model": model,
-                                "total_samples": adaptive._cells[(request_type, model)].total_samples,
+                                "total_samples": adaptive.cell(request_type, model).total_samples,
                             }
                             for model in cold_start_candidates
                         ],
@@ -3123,7 +3124,7 @@ class ComplexityRouter(CustomLogger):
         best_score = float("-inf")
         candidate_scores: Final[list[dict[str, object]]] = []
         for model in self._adaptive_candidate_models(classified_tier, hard_floor, hard_ceiling, fit_filter):
-            cell = adaptive._cells[(request_type, model)]
+            cell = adaptive.cell(request_type, model)
             quality_sample = thompson_sample(cell)
             cost_score = normalized_cost(adaptive.model_to_cost.get(model, 0.0), all_costs)
             if self.config.adaptive_eligible == "classified_tier":

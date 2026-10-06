@@ -16,7 +16,7 @@ from typing import Final, Literal, NamedTuple, NoReturn, TypeAlias
 import httpx
 import httpx2
 from mcp.types import Tool as MCPTool
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import assert_never
 
 from litellm.proxy._experimental.mcp_server.exceptions import (
@@ -24,6 +24,7 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPUpstreamAuthError,
 )
 from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
+from litellm.types.llms.base import LiteLLMBaseModel
 
 ListFaultCategory: TypeAlias = Literal[
     "auth_required",
@@ -35,13 +36,13 @@ ListFaultCategory: TypeAlias = Literal[
 ]
 
 
-class ServerListOk(BaseModel):
+class ServerListOk(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     tag: Literal["ok"] = "ok"
     tool_count: int
 
 
-class ServerListFault(BaseModel):
+class ServerListFault(LiteLLMBaseModel):
     """Why a server contributed nothing to a listing: the caller must authenticate upstream
     (``auth_required``/``forbidden``), the upstream did not answer (``timeout``/``unreachable``),
     the upstream answered outside its contract (``upstream_error``), or the gateway itself failed

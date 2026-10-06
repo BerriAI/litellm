@@ -7199,7 +7199,7 @@ class TestMCPServerManager:
         manager.tool_name_to_mcp_server_name_mapping["test_tool"] = "test-server"
         manager.tool_name_to_mcp_server_name_mapping["test-server-test_tool"] = "test-server"
         manager._create_prefixed_tools(listed_tools, server)
-        manager._record_listed_tools(server, listed_tools, caller)
+        manager.record_listed_tools(server, listed_tools, caller)
 
         mock_client = AsyncMock()
         mock_client.call_tool.return_value = MagicMock(spec=CallToolResult, content=[], isError=False)
@@ -7283,8 +7283,8 @@ class TestMCPServerManager:
     def test_get_listed_tool_resolves_the_bare_name_from_the_latest_listing(self):
         manager = MCPServerManager()
         server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
-        manager._record_listed_tools(server, [MCPTool(name="echo", description="v1", inputSchema={})], None)
-        manager._record_listed_tools(server, [MCPTool(name="echo", description="v2", inputSchema={})], None)
+        manager.record_listed_tools(server, [MCPTool(name="echo", description="v1", inputSchema={})], None)
+        manager.record_listed_tools(server, [MCPTool(name="echo", description="v2", inputSchema={})], None)
 
         latest = manager.get_listed_tool(server, "echo")
         assert latest is not None and latest.description == "v2"
@@ -7296,7 +7296,7 @@ class TestMCPServerManager:
         manager = MCPServerManager()
         server = MCPServer(server_id="srv-id", name="srv", alias="srv", transport=MCPTransport.http, url="http://srv")
         caller = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(api_key="sk-user", user_id="alice"))
-        manager._record_listed_tools(
+        manager.record_listed_tools(
             server,
             [
                 MCPTool(name="foo", description="Fetches foo records", inputSchema={"type": "object"}),
@@ -7357,8 +7357,8 @@ class TestMCPServerManager:
         manager = MCPServerManager()
         server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
         other = MCPServer(server_id="other", name="other", transport=MCPTransport.http, url="http://other")
-        manager._record_listed_tools(server, [MCPTool(name="echo", description="old", inputSchema={})], None)
-        manager._record_listed_tools(other, [MCPTool(name="ping", description="kept", inputSchema={})], None)
+        manager.record_listed_tools(server, [MCPTool(name="echo", description="old", inputSchema={})], None)
+        manager.record_listed_tools(other, [MCPTool(name="ping", description="kept", inputSchema={})], None)
 
         manager.invalidate_server_definition_caches(server.server_id)
 
@@ -7420,7 +7420,7 @@ class TestMCPServerManager:
         caller = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm", user_id="lister"))
 
         async def register_while_a_listing_records(server: MCPServer, *, initialize_mapping: bool = True) -> None:
-            manager._record_listed_tools(
+            manager.record_listed_tools(
                 server,
                 [MCPTool(name="search", description="pre-save", inputSchema={})],
                 caller,
@@ -7465,7 +7465,7 @@ class TestMCPServerManager:
             return [Prompt(name="greet")]
 
         async def register_while_discovery_fills(server: MCPServer, *, initialize_mapping: bool = True) -> None:
-            manager._record_listed_tools(
+            manager.record_listed_tools(
                 server,
                 [MCPTool(name="search", description="pre-save", inputSchema={})],
                 caller,
@@ -7499,7 +7499,7 @@ class TestMCPServerManager:
     async def test_user_oauth_refresh_keeps_listed_tools(self):
         manager = MCPServerManager()
         server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
-        manager._record_listed_tools(server, [MCPTool(name="echo", description="shared", inputSchema={})], None)
+        manager.record_listed_tools(server, [MCPTool(name="echo", description="shared", inputSchema={})], None)
 
         await manager.invalidate_user_oauth_token_cache("alice", server.server_id)
 
@@ -7519,12 +7519,12 @@ class TestMCPServerManager:
         bob = UserAPIKeyAuth(user_id="bob", token="hashed-bob")
         alice_schema = {"type": "object", "properties": {"path": {"type": "string"}}}
         bob_schema = {"type": "object", "properties": {"path": {"type": "string"}, "site": {"type": "string"}}}
-        manager._record_listed_tools(
+        manager.record_listed_tools(
             server,
             [MCPTool(name="read", description="alice view", inputSchema=alice_schema)],
             ListedToolsCaller(user_api_key_auth=alice),
         )
-        manager._record_listed_tools(
+        manager.record_listed_tools(
             server,
             [MCPTool(name="read", description="bob view", inputSchema=bob_schema)],
             ListedToolsCaller(user_api_key_auth=bob),
@@ -7541,7 +7541,7 @@ class TestMCPServerManager:
         assert manager.get_listed_tool(server, "read", carol) is None
 
         shared = MCPServer(server_id="shared", name="shared", transport=MCPTransport.http, url="http://shared")
-        manager._record_listed_tools(
+        manager.record_listed_tools(
             shared,
             [MCPTool(name="echo", description="everyone", inputSchema={})],
             ListedToolsCaller(user_api_key_auth=alice),
@@ -7597,8 +7597,8 @@ class TestMCPServerManager:
         server = MCPServer(
             **{"server_id": "srv", "name": "srv", "transport": MCPTransport.http, "url": "http://srv", **server_kwargs}
         )
-        manager._record_listed_tools(server, [MCPTool(name="turn", description="Catalog A", inputSchema={})], caller_a)
-        manager._record_listed_tools(server, [MCPTool(name="turn", description="Catalog B", inputSchema={})], caller_b)
+        manager.record_listed_tools(server, [MCPTool(name="turn", description="Catalog A", inputSchema={})], caller_a)
+        manager.record_listed_tools(server, [MCPTool(name="turn", description="Catalog B", inputSchema={})], caller_b)
 
         for_a = manager.get_listed_tool(server, "turn", caller_a)
         for_b = manager.get_listed_tool(server, "turn", caller_b)
@@ -7609,7 +7609,7 @@ class TestMCPServerManager:
     def test_shared_server_ignores_headers_it_never_forwards(self):
         manager = MCPServerManager()
         server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
-        manager._record_listed_tools(
+        manager.record_listed_tools(
             server,
             [MCPTool(name="turn", description="everyone", inputSchema={})],
             ListedToolsCaller(raw_headers={"authorization": "Bearer sk-litellm", "x-workspace": "A"}),
@@ -7842,7 +7842,7 @@ class TestMCPServerManager:
             "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.get_mcp_jwt_signer",
             return_value=signer,
         ):
-            manager._record_listed_tools(
+            manager.record_listed_tools(
                 server, [MCPTool(name="turn", description="alice view", inputSchema={})], alice
             )
             assert manager.get_listed_tool(server, "turn", bob) is None
@@ -7862,7 +7862,7 @@ class TestMCPServerManager:
             "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.get_mcp_jwt_signer",
             return_value=MagicMock(),
         ):
-            manager._record_listed_tools(server, [MCPTool(name="turn", description="slot a", inputSchema={})], alice)
+            manager.record_listed_tools(server, [MCPTool(name="turn", description="slot a", inputSchema={})], alice)
             assert manager.get_listed_tool(server, "turn", bob) is None
 
             same_key = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id="same-user", api_key="sk-alpha"))
@@ -7880,7 +7880,7 @@ class TestMCPServerManager:
         team_two: Final = ListedToolsCaller(
             user_api_key_auth=UserAPIKeyAuth(api_key=None, user_id=None, team_id="team-two")
         )
-        manager._record_listed_tools(
+        manager.record_listed_tools(
             server, [MCPTool(name="foo", description="Fetch rows FLAGWORD", inputSchema={})], team_one
         )
 
@@ -7898,7 +7898,7 @@ class TestMCPServerManager:
         alice_in_two: Final = ListedToolsCaller(
             user_api_key_auth=UserAPIKeyAuth(api_key=None, user_id="alice", team_id="team-two")
         )
-        manager._record_listed_tools(
+        manager.record_listed_tools(
             server, [MCPTool(name="foo", description="Fetch rows FLAGWORD", inputSchema={})], alice_in_one
         )
 
@@ -7919,7 +7919,7 @@ class TestMCPServerManager:
             user_api_key_auth=UserAPIKeyAuth(api_key=None, user_id=None, team_id="team-one"),
             raw_headers={"authorization": "Bearer jwt-bob"},
         )
-        manager._record_listed_tools(server, [MCPTool(name="foo", description="alice view", inputSchema={})], alice)
+        manager.record_listed_tools(server, [MCPTool(name="foo", description="alice view", inputSchema={})], alice)
 
         assert manager.get_listed_tool(server, "foo", bob) is None
         listed: Final = manager.get_listed_tool(server, "foo", alice)
@@ -7978,7 +7978,7 @@ class TestMCPServerManager:
             user_api_key_auth=UserAPIKeyAuth(api_key="sk-master"),
             raw_headers={"x-litellm-api-key": "Bearer sk-master", "authorization": "Bearer UP-B"},
         )
-        manager._record_listed_tools(
+        manager.record_listed_tools(
             server, [MCPTool(name="lookup", description="Workspace A lookup FLAGWORD", inputSchema={})], caller_a
         )
 
@@ -8055,18 +8055,18 @@ class TestMCPServerManager:
             url="http://srv",
             auth_type=MCPAuth.oauth2_token_exchange,
         )
-        manager._record_listed_tools(server, [MCPTool(name="read", description="shared", inputSchema={})], None)
+        manager.record_listed_tools(server, [MCPTool(name="read", description="shared", inputSchema={})], None)
         callers = [
             ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id=f"u{i}", api_key=f"k{i}"))
             for i in range(_LISTED_TOOLS_CALLERS_PER_SERVER + 1)
         ]
         for caller in callers:
-            manager._record_listed_tools(
+            manager.record_listed_tools(
                 server,
                 [MCPTool(name="read", description=caller.user_api_key_auth.user_id, inputSchema={})],
                 caller,
             )
-        manager._record_listed_tools(server, [MCPTool(name="read", description="u1 again", inputSchema={})], callers[1])
+        manager.record_listed_tools(server, [MCPTool(name="read", description="u1 again", inputSchema={})], callers[1])
 
         assert manager.get_listed_tool(server, "read", callers[0]) is None
         second = manager.get_listed_tool(server, "read", callers[1])
@@ -9188,6 +9188,8 @@ class TestMCPServerTimestamps:
                 authorization_url="https://idp.example.com/authorize",
                 token_url="https://idp.example.com/token",
                 registration_url="https://idp.example.com/register",
+                issuer="https://idp.example.com",
+                authorization_response_iss_parameter_supported=True,
             )
 
         blipped = MCPServer(
@@ -9202,6 +9204,16 @@ class TestMCPServerTimestamps:
         assert blipped.authorization_url == "https://idp.example.com/authorize"
         assert blipped.token_url == "https://idp.example.com/token"
         assert blipped.registration_url == "https://idp.example.com/register"
+        assert blipped.issuer == "https://idp.example.com"
+        assert blipped.authorization_response_iss_parameter_supported is True
+        fallback = MCPServerManager._merge_discovered_oauth_metadata(
+            blipped, MCPOAuthMetadata(from_origin_fallback=True),
+        )
+        assert fallback.authorization_response_iss_parameter_supported is True
+        refreshed = MCPServerManager._merge_discovered_oauth_metadata(
+            fallback, MCPOAuthMetadata(discovered_issuer="https://idp.example.com"),
+        )
+        assert refreshed.authorization_response_iss_parameter_supported is False
 
         same_authorize = MCPServer(
             server_id="s1",
@@ -9318,8 +9330,8 @@ class TestMCPServerTimestamps:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import _issuer_matches
 
         assert _issuer_matches("https://mcp.slack.com", "https://mcp.slack.com")
-        assert _issuer_matches("https://MCP.slack.com/", "https://mcp.slack.com")
-        assert _issuer_matches("https://mcp.slack.com:443", "https://mcp.slack.com")
+        assert not _issuer_matches("https://MCP.slack.com/", "https://mcp.slack.com")
+        assert not _issuer_matches("https://mcp.slack.com:443", "https://mcp.slack.com")
         assert _issuer_matches("https://login.example.com/tenant/v2.0", "https://login.example.com/tenant/v2.0")
         assert not _issuer_matches("https://attacker.example.com", "https://mcp.slack.com")
         assert not _issuer_matches("https://login.example.com/other/v2.0", "https://login.example.com/tenant/v2.0")

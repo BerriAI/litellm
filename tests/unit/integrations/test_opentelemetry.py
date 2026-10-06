@@ -6762,3 +6762,37 @@ class TestOpenTelemetryNonInferenceUsage(unittest.TestCase):
         self.assertEqual(
             self._time_per_output_token_calls("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ), 1
         )
+
+
+def _raw_response_span_attributes(original_response: str) -> dict[str, object]:
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    span = tracer_provider.get_tracer(__name__).start_span("raw_gen_ai_request")
+
+    OpenTelemetry(tracer_provider=tracer_provider).set_raw_request_attributes(
+        span,
+        {"litellm_params": {"custom_llm_provider": "vertex_ai"}, "original_response": original_response},
+        None,
+    )
+    span.end()
+
+    return dict(span_exporter.get_finished_spans()[0].attributes or {})
+
+
+@pytest.mark.parametrize(
+    ("original_response", "expected"),
+    [
+        ('{"id": "r1", "model": "m"}', {"llm.vertex_ai.id": "r1", "llm.vertex_ai.model": "m"}),
+        ("{}", {}),
+        ("not json", {"llm.vertex_ai.stringified_raw_response": "not json"}),
+        ("[1, 2]", {}),
+        ('"text"', {}),
+        ("7", {}),
+        ("null", {}),
+    ],
+)
+def test_set_raw_request_attributes_stamps_only_json_object_responses(
+    original_response: str, expected: dict[str, object]
+):
+    assert _raw_response_span_attributes(original_response) == expected

@@ -15,7 +15,9 @@ mod normalize;
 mod otlp;
 pub mod query;
 mod query_access;
+pub mod request;
 mod resolve;
+pub mod response;
 #[cfg(feature = "schema")]
 pub mod schema;
 mod shared;
@@ -30,7 +32,10 @@ pub use normalize::{
     AgentMetadata, AgentType, CallEvidence, CallEvidenceKind, CallKey, Integration, NormalizedSpan,
     ObservationType,
 };
-pub use otlp::{DecodeLimits, DecodedEvent, DecodedSpan, decode_otlp, decode_otlp_with_limits};
+pub use otlp::{
+    DecodeLimits, DecodedEvent, DecodedSpan, decode_otlp, decode_otlp_logs,
+    decode_otlp_logs_with_limits, decode_otlp_with_limits,
+};
 pub use query::ReadQuery;
 pub use query_access::QueryScope;
 pub use resolve::{SpendLookup, iso_time, listed_summary, resolve_trace};

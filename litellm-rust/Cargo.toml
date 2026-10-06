@@ -16,8 +16,6 @@ litellm-traces = { path = "crates/traces" }
 litellm-traces-cache = { path = "crates/traces-cache" }
 litellm-traces-clickhouse = { path = "crates/traces-clickhouse" }
 litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }
-litellm-migrate = { path = "crates/migrate" }
-litellm-migrate-macros = { path = "crates/migrate-macros" }
 litellm-core = { path = "crates/core" }
 litellm-gateway-mcp = { path = "crates/gateway-mcp" }
 litellm-gateway = { path = "crates/gateway" }
@@ -30,7 +28,7 @@ litellm-host = { path = "crates/host" }
 litellm-host-http = { path = "crates/host-http" }
 litellm-host-native = { path = "crates/host-native" }
 litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
-litellm-framing = { path = "crates/framer" }
+litellm-framer = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-types = { path = "crates/auth-types" }
 litellm-auth-aws = { path = "crates/auth-aws" }
