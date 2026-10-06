@@ -29,7 +29,7 @@ dependencies = [
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
     "aiohttp>=3.14.2,<4.0",
-    "async-timeout>=4.0,<6.0; python_version < '3.11'",
+    "async-timeout>=4.0.3,<6.0; python_version < '3.11'",
     "pydantic>=2.11.0,<3.0.0; python_version < '3.14'",
     "pydantic>=2.12.0,<3.0.0; python_version >= '3.14'",
     "pydantic-settings>=2.14.1,<3.0",
@@ -60,7 +60,6 @@ proxy = [
     "backoff>=2.2.1,<3.0",
     "pyyaml>=6.0.3,<7.0",
     "rq>=2.7.0,<3.0",
-    "redis>=5.0.0",
     "orjson>=3.11.6,<4.0",
     # redis-py's C response parser. It arrives with redis (via rq) either way; naming
     # it here is what makes redis-py select _HiredisParser instead of the Python one.

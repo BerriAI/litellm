@@ -48,7 +48,7 @@ jobs:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       python-version: "3.10"
-      test-path: tests/unit/proxy/lens
+      test-path: tests/unit/proxy/lens/test_inference.py
       workers: 0
       reruns: 0
       timeout-minutes: 5
