@@ -6,6 +6,8 @@ but litellm_params["litellm_metadata"] is None.
 """
 
 import threading
+import copy
+import json
 from typing import Final
 from types import SimpleNamespace
 
@@ -15,12 +17,66 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
+    _redacted_responses_api_response,
     perform_redaction,
     redact_streaming_responses_for_custom_logger,
     redacted_standard_logging_payload,
     should_redact_message_logging,
 )
 from litellm.responses.main import mock_responses_api_response
+
+
+@pytest.mark.parametrize("surface", ("typed", "dict", "standard", "callback", "helper"))
+def test_responses_redaction_removes_instructions_without_changing_the_response(surface: str) -> None:
+    response: Final = litellm.ResponsesAPIResponse.model_validate(
+        {
+            **mock_responses_api_response("private answer").model_dump(),
+            "instructions": "private system instructions",
+            "reasoning": {"effort": "low", "summary": "auto"},
+            "output": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_test",
+                    "summary": [{"type": "summary_text", "text": "private reasoning"}],
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_test",
+                    "call_id": "call_test",
+                    "name": "lookup",
+                    "arguments": "private arguments",
+                },
+            ],
+        }
+    )
+    original: Final = response.model_dump()
+    payload: Final = {"response": copy.deepcopy(original), "model": "test-model"}
+    logger: Final = CustomLogger()
+    logger.turn_off_message_logging = True
+
+    surfaces: Final = {
+        "typed": lambda: perform_redaction({}, response).model_dump(),
+        "dict": lambda: perform_redaction({}, original),
+        "helper": lambda: _redacted_responses_api_response(original),
+        "standard": lambda: redacted_standard_logging_payload(payload)["response"],
+        "callback": lambda: logger.redact_standard_logging_payload_from_model_call_details(
+            {"standard_logging_object": payload}
+        )["standard_logging_object"]["response"],
+    }
+    redacted: Final = surfaces[surface]()
+
+    assert redacted == {
+        **original,
+        "instructions": "redacted-by-litellm",
+        "reasoning": None,
+        "output": [
+            {**original["output"][0], "summary": [{"type": "summary_text", "text": "redacted-by-litellm"}]},
+            {**original["output"][1], "arguments": "redacted-by-litellm"},
+        ],
+    }
+    assert "private" not in json.dumps(redacted)
+    assert response.model_dump() == original
+    assert payload["response"] == original
 
 
 @pytest.fixture(autouse=True)
@@ -197,7 +253,7 @@ class TestPerformRedaction:
         result = {
             "output": [
                 {"text": "top-level result"},
-                {"content": [{"text": "nested result"}]},
+                {"content": [{"text": "nested result"}, "non-dict content item"]},
                 {"type": "reasoning", "summary": [{"text": "reasoning result"}]},
             ],
             "usage": {"total_tokens": 1},
@@ -224,6 +280,7 @@ class TestPerformRedaction:
         assert redacted["usage"] == {"total_tokens": 1}
         assert redacted["output"][0]["text"] == "redacted-by-litellm"
         assert redacted["output"][1]["content"][0]["text"] == "redacted-by-litellm"
+        assert redacted["output"][1]["content"][1] == "non-dict content item"
         assert redacted["output"][2]["summary"][0]["text"] == "redacted-by-litellm"
         assert result["output"][0]["text"] == "top-level result"
 
@@ -661,12 +718,14 @@ class TestPerformRedaction:
         none_dict = {"type": "output_text", "text": None, "content": [{"text": None}]}
         real_dict = {"type": "output_text", "text": "real answer", "content": [{"text": "real part"}]}
 
-        _redact_responses_api_output_dict([none_dict, real_dict], "redacted-by-litellm")
+        redacted: Final = _redact_responses_api_output_dict([none_dict, real_dict], "redacted-by-litellm")
 
-        assert none_dict["text"] is None
-        assert none_dict["content"][0]["text"] is None
-        assert real_dict["text"] == "redacted-by-litellm"
-        assert real_dict["content"][0]["text"] == "redacted-by-litellm"
+        assert redacted == [
+            {"type": "output_text", "text": None, "content": [{"text": None}]},
+            {"type": "output_text", "text": "redacted-by-litellm", "content": [{"text": "redacted-by-litellm"}]},
+        ]
+        assert none_dict == {"type": "output_text", "text": None, "content": [{"text": None}]}
+        assert real_dict == {"type": "output_text", "text": "real answer", "content": [{"text": "real part"}]}
 
     def test_skips_non_dict_response_output_items(self):
         result = {
