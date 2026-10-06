@@ -13,7 +13,7 @@ from typing import Final
 GROUPS: Final = MappingProxyType(
     {
         "management": ("management", "authorization", "configuration"),
-        "accounting": ("pricing", "spend"),
+        "accounting": ("pricing", "spend", "caching"),
         "database": ("database",),
         "providers": ("providers", "routing", "streaming", "messages_endpoint", "translation"),
         "extensions": ("observability", "compatibility"),

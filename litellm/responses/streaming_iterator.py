@@ -691,8 +691,10 @@ class BaseResponsesAPIStreamingIterator:
         if getattr(completed_response, "type", None) != openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
             return
 
+        from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
+
         response_obj: Final = self._get_completed_response_object()
-        if response_obj is None:
+        if response_obj is None or is_response_without_output(response_obj):
             return
 
         caching_handler: Final[LLMCachingHandler | None] = getattr(self.logging_obj, "_llm_caching_handler", None)
@@ -732,8 +734,6 @@ class BaseResponsesAPIStreamingIterator:
         if cached_response is None:
             return
         if is_async:
-            from litellm.caching.caching_handler import create_cache_write_task
-
             cache_write_task: Final = create_cache_write_task(
                 lambda: cache.async_add_cache(
                     cached_response,
