@@ -13,7 +13,7 @@ A skill holds a technique that applies anywhere in the workspace and is loaded b
 
 A feature that spans a few crates is not cross-cutting. Its rules go in the `AGENTS.md` of the crate that owns the contract, and the other crates' `AGENTS.md` point there in one line
 
-Rules every Rust change must follow regardless of task, such as test placement and error definitions, belong in `litellm-rust/AGENTS.md`
+`litellm-rust/AGENTS.md` is the index of skills, one line each saying when to follow it. Workspace conventions tied to a task, such as writing tests or defining errors, are skills too. Only a rule that applies to every Rust change regardless of task belongs in that file directly
 
 ## Placement
 
