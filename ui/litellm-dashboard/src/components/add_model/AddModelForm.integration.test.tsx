@@ -1,4 +1,4 @@
-import { fireEvent, renderHook, screen, waitFor, renderWithProviders } from "../../../tests/test-utils";
+import { fireEvent, renderHook, screen, waitFor, within, renderWithProviders } from "../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Team } from "../key_team_helpers/key_list";
@@ -398,6 +398,17 @@ describe("AddModelForm", () => {
         expect(props.form.getValues("litellm_credential_name")).toBe("anthropic-federated");
       });
       expect(props.mountedValues()).not.toHaveProperty("anthropic_federation_rule_id");
+    });
+
+    it("keeps the credential dialog on the model's provider", async () => {
+      const user = userEvent.setup();
+      await renderAsRole("proxy_admin", Providers.Anthropic);
+
+      await user.click(screen.getByRole("button", { name: "Use workload identity federation" }));
+
+      const providerSelect = within(await screen.findByRole("dialog")).getByPlaceholderText("Select a provider");
+      expect(providerSelect).toHaveValue("Anthropic");
+      expect(providerSelect).toBeDisabled();
     });
 
     it("is not offered for a provider without federation support", async () => {

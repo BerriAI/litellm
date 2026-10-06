@@ -492,6 +492,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
           mode="add"
           initialProvider={selectedProvider}
           initialAuthMethod="federation"
+          providerLocked
           onCancel={() => setIsFederatedCredentialModalOpen(false)}
           onSubmit={handleCreateFederatedCredential}
         />

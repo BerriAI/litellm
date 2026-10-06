@@ -56,6 +56,7 @@ interface CredentialModalProps {
   existingCredential?: CredentialItem | null;
   initialProvider?: string | null;
   initialAuthMethod?: AnthropicAuthMethod;
+  providerLocked?: boolean;
 }
 
 const sameProvider = (left: string | null | undefined, right: string | null | undefined): boolean =>
@@ -85,6 +86,7 @@ export default function CredentialModal({
   existingCredential = null,
   initialProvider = null,
   initialAuthMethod,
+  providerLocked = false,
 }: CredentialModalProps) {
   const isEdit = mode === "edit";
   const [selectedProvider, setSelectedProvider] = useState<string | null>(
@@ -187,6 +189,7 @@ export default function CredentialModal({
                     placeholder="Select a provider"
                     options={providerOptions}
                     value={typeof control.value === "string" ? control.value : null}
+                    disabled={providerLocked}
                     onValueChange={(value) => {
                       control.onChange(value);
                       resetCredentialFormOnProviderChange(formAdapterFor(value), value, setSelectedProvider);
