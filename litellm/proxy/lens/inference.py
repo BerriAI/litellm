@@ -1,26 +1,33 @@
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final
+from uuid import uuid4
 
 from fastapi import HTTPException, Request
 from pydantic import ConfigDict, Field, field_validator
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import ContextWindowExceededError, ModelNotMappedError
 from litellm.integrations.clickhouse.context import lens_analysis
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.proxy._types import ProxyException
 from litellm.proxy.lens.billing import complete, validate_key
-from litellm.proxy.lens.models import Job, Lens, ModelRequest, ModelResult, Step, Worker
+from litellm.proxy.lens.models import BudgetReservation, Job, Lens, ModelRequest, ModelResult, Step, Worker
 from litellm.proxy.lens.repository import LensRepository
 from litellm.proxy.lens.state import add_step, current_job, renew_budget, replace_job
 from litellm.types.integrations.anthropic_cache_control_hook import CacheControlMessageInjectionPoint
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CostPerToken, ModelResponse
+
+BUDGET_LEASE: Final = timedelta(minutes=5)
+BUDGET_RENEW_INTERVAL: Final = 30.0
+BUDGET_WAIT_TIMEOUT: Final = 60.0
 
 
 class DeploymentParams(LiteLLMBaseModel):
@@ -231,6 +238,143 @@ def quote(deployments: tuple[Deployment, ...], prompt: ModelRequest | str) -> fl
     return input_tokens * input_rate + output * output_rate
 
 
+def reserve_amount(lens: Lens, reservation: BudgetReservation, now: datetime | None = None) -> Lens:
+    available: Final = lens.settings.monthly_budget - lens.spent
+    if reservation.amount > available:
+        raise HTTPException(
+            402,
+            "Monthly lens budget reached; increase it or wait for next month"
+            if available <= 0
+            else f"This model request needs up to ${reservation.amount:.3f}, but ${available:.3f} remains "
+            "in the investigation budget. Use a smaller deployment output allowance or increase the limit.",
+        )
+    held: Final = sum(
+        item.amount
+        for item in lens.reservations
+        if item.month == reservation.month and (now is None or item.expires_at is None or item.expires_at > now)
+    )
+    if held + reservation.amount > available:
+        return lens
+    retained: Final = tuple(
+        item
+        for item in lens.reservations
+        if now is None or item.expires_at is None or item.expires_at > now - timedelta(days=1)
+    )
+    return lens.model_copy(update=MappingProxyType({"reservations": (*retained, reservation)}))
+
+
+def settle_amount(lens: Lens, reservation_id: str, cost: float, step: Step | None) -> Lens:
+    reservation: Final = next((item for item in lens.reservations if item.id == reservation_id), None)
+    if reservation is None:
+        return lens
+    settled: Final = lens.model_copy(
+        update=MappingProxyType(
+            {
+                "spent": lens.spent + cost if lens.budget_month == reservation.month else lens.spent,
+                "reservations": tuple(item for item in lens.reservations if item.id != reservation_id),
+            }
+        )
+    )
+    job: Final = next((item for item in lens.jobs if item.id == reservation.job_id), None)
+    if job is None:
+        return settled
+    charged: Final = job.model_copy(update=MappingProxyType({"cost": job.cost + cost}))
+    return replace_job(settled, add_step(charged, step) if step is not None else charged)
+
+
+def renew_reservation(lens: Lens, reservation_id: str, now: datetime) -> Lens:
+    reservation: Final = next((item for item in lens.reservations if item.id == reservation_id), None)
+    if reservation is None or (reservation.expires_at is not None and reservation.expires_at <= now):
+        raise HTTPException(503, "Analysis budget reservation expired; retry the investigation")
+    return lens.model_copy(
+        update=MappingProxyType(
+            {
+                "reservations": tuple(
+                    item.model_copy(update=MappingProxyType({"expires_at": now + BUDGET_LEASE}))
+                    if item.id == reservation_id
+                    else item
+                    for item in lens.reservations
+                )
+            }
+        )
+    )
+
+
+async def wait_for_reservation(
+    repo: LensRepository, lens_id: str, reservation_id: str, reserve: Callable[[Lens], Lens]
+) -> None:
+    while (reserved := await repo.update(lens_id, reserve)) is not None:
+        if any(held.id == reservation_id for held in reserved.reservations):
+            return
+        await asyncio.sleep(0.25)
+    raise HTTPException(409, "Could not reserve analysis budget")
+
+
+async def renew_budget_reservation(
+    repo: LensRepository, lens_id: str, reservation_id: str, admitted: asyncio.Event
+) -> None:
+    await admitted.wait()
+    while True:
+        await asyncio.sleep(BUDGET_RENEW_INTERVAL)
+        try:
+            async with asyncio.timeout(BUDGET_RENEW_INTERVAL):
+                if (
+                    await repo.update(
+                        lens_id, lambda e: renew_reservation(e, reservation_id, datetime.now(timezone.utc))
+                    )
+                    is None
+                ):
+                    raise HTTPException(503, "Could not renew analysis budget reservation")
+        except TimeoutError as error:
+            raise HTTPException(503, "Analysis budget reservation renewal timed out") from error
+
+
+async def model_with_renewal(
+    model: Coroutine[None, None, tuple[ModelResponse, float | None]], renew: Coroutine[None, None, None]
+) -> tuple[ModelResponse, float | None]:
+    call: Final = asyncio.create_task(model)
+    renewal: Final = asyncio.create_task(renew)
+    try:
+        await asyncio.wait((call, renewal), return_when=asyncio.FIRST_COMPLETED)
+        if not call.done():
+            await renewal
+        return await call
+    finally:
+        renewal.cancel()
+        call.cancel()
+        await asyncio.gather(call, renewal, return_exceptions=True)
+
+
+@asynccontextmanager
+async def release_failed_reservation(repo: LensRepository, lens_id: str, reservation_id: str) -> AsyncGenerator[None]:
+    try:
+        yield
+    except (Exception, asyncio.CancelledError):
+        try:
+            if await repo.update_locked(lens_id, lambda e: settle_amount(e, reservation_id, 0, None)) is None:
+                verbose_proxy_logger.warning("Lens budget cleanup found no investigation: %s", lens_id)
+        except Exception:
+            verbose_proxy_logger.exception("Lens budget cleanup failed; the reservation will expire: %s", lens_id)
+        raise
+
+
+@asynccontextmanager
+async def reserved_budget(
+    repo: LensRepository, lens_id: str, reservation_id: str, reserve: Callable[[Lens], Lens], admitted: asyncio.Event
+) -> AsyncGenerator[None]:
+    try:
+        async with asyncio.timeout(float(litellm.request_timeout)):
+            try:
+                async with asyncio.timeout(BUDGET_WAIT_TIMEOUT):
+                    await wait_for_reservation(repo, lens_id, reservation_id, reserve)
+            except TimeoutError as error:
+                raise HTTPException(504, "Analysis request timed out waiting for budget") from error
+            admitted.set()
+            yield
+    except TimeoutError as error:
+        raise HTTPException(504, "Analysis request timed out waiting for budget or model output") from error
+
+
 async def analyze(
     repo: LensRepository, lens: Lens, job: Job, worker: Worker, body: ModelRequest, request: Request
 ) -> ModelResult:
@@ -251,9 +395,11 @@ async def analyze(
     if exceeds_context(deployments, body):
         return ModelResult(content="", cost=0, context_exceeded=True)
     estimate: Final = quote(deployments, body)
-    now: Final = datetime.now(timezone.utc)
+    reservation_id: Final = str(uuid4())
+    admitted: Final = asyncio.Event()
 
     def reserve(e: Lens) -> Lens:
+        now: Final = datetime.now(timezone.utc)
         current: Final = renew_budget(e, now)
         active: Final = current_job(current)
         if (
@@ -264,33 +410,17 @@ async def analyze(
             or active.lease_until <= datetime.now(timezone.utc)
         ):
             raise HTTPException(409, "Job was cancelled or reassigned")
-        if current.spent + estimate > current.settings.monthly_budget:
-            raise HTTPException(402, "Monthly lens budget reached; increase it or wait for next month")
-        return replace_job(
-            current, active.model_copy(update=MappingProxyType({"cost": active.cost + estimate}))
-        ).model_copy(update=MappingProxyType({"spent": current.spent + estimate}))
-
-    def settle(e: Lens, cost: float, step: Step | None) -> Lens:
-        charged: Final = next((j for j in e.jobs if j.id == job.id), None)
-        adjusted: Final = (
-            e.model_copy(update=MappingProxyType({"spent": max(0, e.spent - estimate + cost)}))
-            if e.budget_month == now.strftime("%Y-%m")
-            else e
+        return reserve_amount(
+            current,
+            BudgetReservation(
+                id=reservation_id,
+                job_id=job.id,
+                amount=estimate,
+                month=now.strftime("%Y-%m"),
+                expires_at=now + BUDGET_LEASE,
+            ),
+            now,
         )
-        if charged is None:
-            return adjusted
-        refunded: Final = charged.model_copy(update=MappingProxyType({"cost": max(0, charged.cost - estimate + cost)}))
-        return replace_job(adjusted, add_step(refunded, step) if step is not None else refunded)
-
-    @asynccontextmanager
-    async def reserve_budget() -> AsyncIterator[None]:
-        if await repo.update(lens.id, reserve) is None:
-            raise HTTPException(409, "Could not reserve analysis budget")
-        try:
-            yield
-        except BaseException:
-            await repo.update(lens.id, lambda e: settle(e, 0, None))
-            raise
 
     data: Final[dict[str, object]] = {  # mutable-ok: proxy processing enriches request data
         "model": job.settings.model,
@@ -311,8 +441,17 @@ async def analyze(
     }
 
     try:
-        with lens_analysis(), inherit_message_logging_privacy(True):
-            response, billed_cost = await complete(worker.analysis_key_id, data, reserve_budget, request)
+        async with release_failed_reservation(repo, lens.id, reservation_id):
+            with lens_analysis(), inherit_message_logging_privacy(True):
+                response, billed_cost = await model_with_renewal(
+                    complete(
+                        worker.analysis_key_id,
+                        data,
+                        lambda: reserved_budget(repo, lens.id, reservation_id, reserve, admitted),
+                        request,
+                    ),
+                    renew_budget_reservation(repo, lens.id, reservation_id, admitted),
+                )
     except (ProxyException, ContextWindowExceededError) as error:
         if context_failure(error):
             return ModelResult(content="", cost=0, context_exceeded=True)
@@ -320,7 +459,8 @@ async def analyze(
     cost: Final = billed_cost if billed_cost is not None else completion_charge(deployments, response, estimate)
 
     step: Final = model_step(response, body, job.settings.model, cost)
-    await repo.update(lens.id, lambda e: settle(e, cost, step))
+    if await repo.update_locked(lens.id, lambda e: settle_amount(e, reservation_id, cost, step)) is None:
+        raise HTTPException(503, "Could not record analysis spend; investigation was deleted")
     parsed: Final = Completion.model_validate_json(response.model_dump_json())
     choice: Final = parsed.choices[0]
     return ModelResult(

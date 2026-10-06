@@ -65,6 +65,7 @@ from litellm.proxy.auth.user_api_key_auth import (
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
+from tests._master_key import MASTER_KEY
 
 
 class _RoutingRequest:
@@ -75,9 +76,9 @@ class _RoutingRequest:
 
 
 def test_get_api_key():
-    bearer_token = "Bearer sk-12345678"
-    api_key = "sk-12345678"
-    passed_in_key = "Bearer sk-12345678"
+    bearer_token = "Bearer sk-98765678"
+    api_key = "sk-98765678"
+    passed_in_key = "Bearer sk-98765678"
     assert get_api_key(
         custom_litellm_key_header=None,
         api_key=bearer_token,
@@ -2821,7 +2822,7 @@ class TestJWTOAuth2Coexistence:
     def test_is_jwt_rejects_opaque_tokens(self):
         """Opaque OAuth2 tokens do not have 3 dot-separated parts."""
         assert JWTHandler.is_jwt("some-opaque-oauth2-token") is False
-        assert JWTHandler.is_jwt("sk-12345678") is False
+        assert JWTHandler.is_jwt("sk-98765678") is False
         assert JWTHandler.is_jwt("Bearer token") is False
         assert JWTHandler.is_jwt("two.parts") is False
 
@@ -9717,7 +9718,7 @@ async def test_websocket_auth_hands_the_reservation_to_the_socket_state():
         scope={
             "type": "websocket",
             "path": "/v1/realtime",
-            "headers": [(b"authorization", b"Bearer sk-1234")],
+            "headers": [(b"authorization", b"Bearer sk-9876")],
             "query_string": b"model=gpt-realtime",
         },
         receive=AsyncMock(),
@@ -9814,8 +9815,8 @@ def test_identity_prefetch_keys_match_what_auth_reads_for_the_request():
     )
     from litellm.proxy.utils import hash_token
 
-    assert _identity_cache_keys("sk-1234", end_user_id="eu-1", key_is_resolved=False) == (
-        hash_token("sk-1234"),
+    assert _identity_cache_keys(MASTER_KEY, end_user_id="eu-1", key_is_resolved=False) == (
+        hash_token(MASTER_KEY),
         end_user_cache_key("eu-1"),
         end_user_restricted_registry_cache_key(),
         model_access_group_registry_cache_key(),
@@ -9827,7 +9828,7 @@ def test_identity_prefetch_keys_match_what_auth_reads_for_the_request():
     master_key_keys = _identity_cache_keys("my-master-key", end_user_id=None, key_is_resolved=False)
     assert master_key_keys == (hash_token("my-master-key"), model_access_group_registry_cache_key())
     assert "my-master-key" not in master_key_keys, "a bearer that is not an sk- key must not be sent to Redis as is"
-    assert _identity_cache_keys("sk-1234", end_user_id=None, key_is_resolved=True) == (
+    assert _identity_cache_keys(MASTER_KEY, end_user_id=None, key_is_resolved=True) == (
         model_access_group_registry_cache_key(),
     )
 

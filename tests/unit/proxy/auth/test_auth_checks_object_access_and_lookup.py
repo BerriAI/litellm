@@ -95,6 +95,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.utils import get_utc_datetime
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+from tests._master_key import MASTER_KEY
 
 
 def _rendered_log_message(call):
@@ -106,7 +107,7 @@ def _rendered_log_message(call):
 @pytest.fixture(autouse=True)
 def set_salt_key(monkeypatch):
     """Automatically set LITELLM_SALT_KEY for all tests"""
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
 
 
 @pytest.fixture

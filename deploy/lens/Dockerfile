@@ -27,6 +27,7 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY litellm/proxy/lens/__init__.py litellm/proxy/lens/models.py litellm/proxy/lens/trace_store.py litellm/proxy/lens/analysis.py litellm/proxy/lens/worker.py litellm/proxy/lens/release.py /app/lens/
 COPY litellm/proxy/lens/context_pipeline.py litellm/proxy/lens/agent_review.py litellm/proxy/lens/agent_runtime.py litellm/proxy/lens/agent_workspace.py litellm/proxy/lens/python_tool.py litellm/proxy/lens/activity.py litellm/proxy/lens/agent_context.py /app/lens/
+COPY litellm/proxy/lens/reviews.py litellm/proxy/lens/reconciliation.py /app/lens/
 COPY litellm/proxy/lens/prompts/ /app/lens/prompts/
 COPY --from=builder /app/python.seccomp /app/lens/python.seccomp
 COPY deploy/lens/python_runtime.py /tmp/python_runtime.py

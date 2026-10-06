@@ -43,6 +43,7 @@ from litellm.proxy.proxy_server import (
 from litellm.tracing.config import trace_storage_config
 
 from .conftest import normalize
+from tests._master_key import MASTER_KEY
 
 
 @pytest.mark.asyncio
@@ -1564,7 +1565,7 @@ async def test_ProxyConfig_get_config_from_a_bucket_merges_includes(monkeypatch)
     objects = {
         "lit6982/config.yaml": {
             "include": ["model_config.yaml"],
-            "general_settings": {"master_key": "sk-1234"},
+            "general_settings": {"master_key": MASTER_KEY},
         },
         "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
     }
@@ -3221,7 +3222,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_on_arbitrary_field(monkey
     ["true", "os.environ/DROP_PARAMS_FLAG"],
 )
 def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(monkeypatch, stored_drop_params):
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
     monkeypatch.setenv("DROP_PARAMS_FLAG", "true")
     fake_router = MagicMock()
     fake_router.upsert_deployment = MagicMock(return_value=True)
@@ -3246,7 +3247,7 @@ def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(m
 
 
 def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_params(monkeypatch):
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
     fake_router = MagicMock()
     fake_router.upsert_deployment = MagicMock(return_value=True)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)

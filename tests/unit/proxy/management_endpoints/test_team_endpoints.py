@@ -80,6 +80,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamMemberAddResult,
 )
 from litellm.types.utils import StandardAuditLogPayload
+from tests._master_key import MASTER_KEY
 from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
@@ -11760,7 +11761,7 @@ async def test_clear_team_member_budget_duration_calls_update_budget():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -11808,7 +11809,7 @@ async def test_clear_team_member_budget_clears_max_budget():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -11854,7 +11855,7 @@ async def test_clear_team_member_rpm_tpm_limits():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -11904,7 +11905,7 @@ async def test_clear_all_team_member_fields_at_once():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -11991,7 +11992,7 @@ async def test_clear_team_member_budget_fields_no_budget_row_skips_update():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -13175,7 +13176,7 @@ def test_get_team_metadata_schema_route_requires_auth():
         parse_team_metadata_schema,
     )
 
-    with patch("litellm.proxy.proxy_server.master_key", "sk-1234"):
+    with patch("litellm.proxy.proxy_server.master_key", MASTER_KEY):
         response = client.get("/team/metadata_schema")
     assert response.status_code == 401
 

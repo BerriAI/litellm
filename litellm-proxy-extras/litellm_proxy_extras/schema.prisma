@@ -1940,6 +1940,7 @@ model LiteLLM_BackgroundInteractionSettlement {
 }
 
 model LiteLLM_Lens {
+  reviews LiteLLM_LensReview[]
   id      String @id
   version Int @default(0)
   data    Json
@@ -1952,6 +1953,16 @@ model LiteLLM_LensRun {
   data       Json
 
   @@index([lens_id, created_at])
+}
+
+model LiteLLM_LensReview {
+  lens_id String
+  criteria_key String
+  execution_id String
+  data Json
+  lens LiteLLM_Lens @relation(fields: [lens_id], references: [id], onDelete: Cascade)
+
+  @@id([lens_id, criteria_key, execution_id])
 }
 
 model LiteLLM_LensWorker {

@@ -12103,7 +12103,7 @@ async def chat_completion(
 
     -H "Content-Type: application/json" \
 
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     -d '{
         "model": "gpt-4o",
@@ -12267,7 +12267,7 @@ async def completion(
 
     -H "Content-Type: application/json" \
 
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     -d '{
         "model": "gpt-3.5-turbo-instruct",
@@ -12451,7 +12451,7 @@ async def embeddings(
 
     -H "Content-Type: application/json" \
 
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     -d '{
         "model": "text-embedding-ada-002",
@@ -12559,7 +12559,7 @@ async def moderations(
     ```
     curl --location 'http://0.0.0.0:4000/moderations' \
     --header 'Content-Type: application/json' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
     ```
     """
@@ -14213,7 +14213,7 @@ async def supported_openai_params(model: str):
     Example curl:
     ```
     curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
@@ -14258,7 +14258,7 @@ async def model_info_lookup(model: str, custom_llm_provider: str | None = None):
     Example curl:
     ```
     curl -X GET --location 'http://localhost:4000/utils/model_info?model=gpt-4o&custom_llm_provider=openai' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     detail: Final = {"error": f"model={model}, custom_llm_provider={custom_llm_provider} is not in the model cost map"}
@@ -15502,7 +15502,7 @@ async def model_info_v2(
     Example request:
     ```
     curl -X GET 'http://localhost:4000/v2/model/info?include_team_models=true&page=1&size=50' \\
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example response:
@@ -16452,7 +16452,7 @@ async def model_deprecations(
     Example:
     ```shell
     curl -X GET 'http://localhost:4000/model/deprecations' \\
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     return collect_model_deprecations(llm_router=llm_router, warn_within_days=warn_within_days)
@@ -16514,7 +16514,7 @@ async def model_group_info(
     curl -X 'GET' \
     'http://localhost:4000/model_group/info' \
     -H 'accept: application/json' \
-    -H 'x-api-key: sk-1234'
+    -H "x-api-key: $LITELLM_MASTER_KEY"
     ```
 
     Example Request (Specific Model Group):
@@ -16522,7 +16522,7 @@ async def model_group_info(
     curl -X 'GET' \
     'http://localhost:4000/model_group/info?model_group=rerank-english-v3.0' \
     -H 'accept: application/json' \
-    -H 'Authorization: Bearer sk-1234'
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml)
@@ -16530,7 +16530,7 @@ async def model_group_info(
     curl -X 'GET' \
     'http://localhost:4000/model_group/info?model_group=openai/tts-1'
     -H 'accept: application/json' \
-    -H 'Authorization: Bearersk-1234'
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Learn how to use and set wildcard models [here](https://docs.litellm.ai/docs/wildcard_routing)
