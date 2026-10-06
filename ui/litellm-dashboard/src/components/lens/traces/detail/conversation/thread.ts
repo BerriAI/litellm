@@ -78,7 +78,13 @@ interface TurnHead {
 function lastReply(pieces: readonly Piece[]): { item: ConversationItem; message: TraceMessage } | null {
   const direct = pieces.flatMap((p) => (p.work.kind === "step" ? [p.work.item] : []));
   const nested = pieces.flatMap((p) => (p.work.kind === "subagent" ? flatItems(p.work.groups) : []));
-  const item = direct.findLast((i) => i.messages.some(isReply)) ?? nested.findLast((i) => i.messages.some(isReply));
+  const latest = (items: readonly ConversationItem[]) =>
+    items
+      .filter((i) => i.messages.some(isReply))
+      .reduce<
+        ConversationItem | undefined
+      >((best, i) => (!best || itemSpanMs(i).end >= itemSpanMs(best).end ? i : best), undefined);
+  const item = direct.findLast((i) => i.messages.some(isReply)) ?? latest(nested);
   const message = item?.messages.findLast(isReply);
   return item && message ? { item, message } : null;
 }
@@ -147,6 +153,19 @@ export function buildThread(groups: readonly ConversationGroup[]): ThreadTurn[] 
     const turnHead: TurnHead = { id: headItem?.id ?? `turn-${start}`, prompt, context, promptStart };
     return [closeTurn(turnHead, body)];
   });
+}
+
+export function replyErrorSpanIds(turns: readonly ThreadTurn[]): ReadonlySet<string> {
+  return new Set(turns.flatMap((turn) => (turn.replyItem?.showError ? [turn.replyItem.span.span_id] : [])));
+}
+
+export function withoutErrorsOf(turn: ThreadTurn, spanIds: ReadonlySet<string>): ThreadTurn {
+  const work = turn.work.flatMap((w): ThreadWork[] => {
+    if (w.kind !== "step" || !w.item.showError || !spanIds.has(w.item.span.span_id)) return [w];
+    const item = { ...w.item, showError: false };
+    return item.messages.length || item.toolResult !== undefined ? [{ kind: "step", item }] : [];
+  });
+  return { ...turn, work };
 }
 
 export function threadDurationMs(turn: ThreadTurn): number | null {
