@@ -1965,3 +1965,12 @@ model LiteLLM_LensWorker {
   token_hash String @unique
   data       Json
 }
+
+model LiteLLM_LensDataset {
+  id         String
+  revision   Int
+  created_at DateTime
+  data       Json
+
+  @@id([id, revision])
+}
