@@ -3831,10 +3831,13 @@ class TestStreamingOverheadHeader:
 class TestDDSpanTaggerTagRequest:
     """Tests for DDSpanTagger.tag_request - key/model DD span tagging."""
 
-    def _make_user_api_key_dict(self, key_alias=None, token=None, user_email=None):
-        from litellm.proxy._types import UserAPIKeyAuth
-
-        d = UserAPIKeyAuth()
+    def _make_user_api_key_dict(
+        self,
+        key_alias: str | None = None,
+        token: str | None = None,
+        user_email: str | None = None,
+    ) -> ProxyUserAPIKeyAuth:
+        d = ProxyUserAPIKeyAuth()
         d.key_alias = key_alias
         d.token = token
         d.user_email = user_email

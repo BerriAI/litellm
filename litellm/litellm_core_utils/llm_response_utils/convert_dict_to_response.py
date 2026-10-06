@@ -175,8 +175,13 @@ def _coerce_missing_choices_status(value: object) -> int | None:
 def _get_missing_choices_error_args(response_object: Mapping[str, object]) -> tuple[int, str]:
     error = response_object.get("error")
     top_level_status_values = tuple(response_object.get(field) for field in ("status", "status_code"))
+    nested_error: Mapping[str, object] | None = (
+        cast(Mapping[str, object], error) if isinstance(error, Mapping) else None
+    )
     nested_status_values = (
-        tuple(error.get(field) for field in ("code", "status", "status_code")) if isinstance(error, Mapping) else ()
+        tuple(nested_error.get(field) for field in ("code", "status", "status_code"))
+        if nested_error is not None
+        else ()
     )
     status_values = (
         *(value for value in top_level_status_values if isinstance(value, int) and not isinstance(value, bool)),
@@ -188,8 +193,8 @@ def _get_missing_choices_error_args(response_object: Mapping[str, object]) -> tu
         500,
     )
     nested_message_values = (
-        tuple(error.get(field) for field in ("message", "response"))
-        if isinstance(error, Mapping)
+        tuple(nested_error.get(field) for field in ("message", "response"))
+        if nested_error is not None
         else (error,)
         if isinstance(error, str)
         else ()

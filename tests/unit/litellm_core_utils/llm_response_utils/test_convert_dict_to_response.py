@@ -142,12 +142,14 @@ def test_coerce_missing_choices_status(value: object, expected: int | None) -> N
         ({"message": "  "}, (500, "LiteLLM: provider returned a response with no 'choices'. Raw keys: ['message']")),
     ],
 )
-def test_get_missing_choices_error_args(response_object: dict, expected: tuple[int, str]) -> None:
+def test_get_missing_choices_error_args(
+    response_object: dict[str, object], expected: tuple[int, str]
+) -> None:
     assert _get_missing_choices_error_args(response_object) == expected
 
 
 @pytest.mark.parametrize("code", [401, "401"])
-def test_non_openai_error_uses_nested_error_object(code):
+def test_non_openai_error_uses_nested_error_object(code: int | str) -> None:
     with pytest.raises(APIError) as exc_info:
         convert_to_model_response_object(
             response_object={
@@ -168,7 +170,9 @@ def test_non_openai_error_uses_nested_error_object(code):
         ("Provider request failed", 500, "Provider request failed"),
     ],
 )
-def test_non_openai_error_uses_nested_error_message_variants(error, expected_status, expected_message):
+def test_non_openai_error_uses_nested_error_message_variants(
+    error: dict[str, object] | str, expected_status: int, expected_message: str
+) -> None:
     with pytest.raises(APIError) as exc_info:
         convert_to_model_response_object(
             response_object={"error": error, "choices": None},
