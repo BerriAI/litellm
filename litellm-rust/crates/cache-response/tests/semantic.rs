@@ -1,10 +1,7 @@
 mod support;
 
 use std::{
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -12,15 +9,10 @@ use litellm_cache::{
     BaseCache, Error, SemanticCacheContext,
     semantic::{SemanticCache, SemanticLookup},
 };
-use litellm_cache_memory::InMemoryCache;
-use litellm_cache_response::{
-    CacheAccess, CacheEntry, CacheKeyField, CacheKeyInput, CacheKeyParticipation, PendingWrite,
-    ResponseCache, ResponseCacheRequest, WriteBuffer, get_cache_key,
-};
-use redis_test::MockCmd;
-use rstest::{fixture, rstest};
+use litellm_cache_response::{CacheEntry, ResponseCache, ResponseCacheRequest};
+use rstest::rstest;
 use serde_json::{Value, json};
-use support::{keyed, memory, redis, request};
+use support::{keyed, request};
 
 #[derive(Default)]
 struct SemanticBackend {
@@ -114,7 +106,7 @@ async fn batch_store_preserves_semantic_context_without_batch_reads(
                 .map(|request| {
                     (
                         request.clone(),
-                        json!({"answer": get_cache_key(&request.key)}),
+                        json!({"answer": cache.key(request).as_str()}),
                     )
                 })
                 .collect(),
@@ -130,7 +122,7 @@ async fn batch_store_preserves_semantic_context_without_batch_reads(
     for request in requests {
         assert_eq!(
             cache.async_lookup(&request, now).await.unwrap(),
-            Some(json!({"answer": get_cache_key(&request.key)}))
+            Some(json!({"answer": cache.key(&request).as_str()}))
         );
     }
 }

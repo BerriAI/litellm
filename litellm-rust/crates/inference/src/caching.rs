@@ -8,7 +8,7 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_response::{
-    CacheKeyInput, CacheKeyRequest, CacheKeyTransport, CacheOptions, CachePolicy,
+    CacheKey, CacheKeyInput, CacheKeyRequest, CacheKeyTransport, CacheOptions, CachePolicy,
     ResponseCacheRequest, ResponseCacheService, ResponseEnvelope, ScopedCache,
 };
 use litellm_host::{
@@ -130,7 +130,7 @@ pub enum CachedOutput<R> {
 struct CacheSession {
     service: Arc<dyn ResponseCacheService>,
     request: ResponseCacheRequest,
-    key: String,
+    key: CacheKey,
 }
 
 impl CacheSession {
@@ -150,29 +150,12 @@ impl CacheSession {
         service: Arc<dyn ResponseCacheService>,
         request: ResponseCacheRequest,
     ) -> Option<Self> {
-        let key = match service.get_cache_key(&request).await {
+        let key = match service.key(&request).await {
             Ok(key) => key,
             Err(_) => {
                 tracing::warn!("response cache lookup failed");
                 return None;
             }
-        };
-        let ResponseCacheRequest {
-            key: input,
-            access,
-            context,
-            max_age,
-            rewrite,
-        } = request;
-        let request = ResponseCacheRequest {
-            key: CacheKeyInput {
-                preset: Some(key.clone()),
-                ..input
-            },
-            access,
-            context,
-            max_age,
-            rewrite,
         };
         Some(Self {
             service,
@@ -188,7 +171,7 @@ impl CacheSession {
         if !self.request.access.reads {
             return None;
         }
-        match self.service.lookup(&self.request, now()).await {
+        match self.service.lookup(&self.key, &self.request, now()).await {
             Ok(Some(value)) => {
                 serde_json::from_value::<ResponseEnvelope<CachedOutput<P::Response>>>(value)
                     .ok()
@@ -208,7 +191,7 @@ impl CacheSession {
         }
         if self
             .service
-            .store(&self.request, entry, now())
+            .store(&self.key, &self.request, entry, now())
             .await
             .is_err()
         {
@@ -253,7 +236,7 @@ where
     let session = CacheSession::prepare::<P>(cache, options, &request).await;
     let hit = match &session {
         Some(session) => session.lookup::<P>().await.and_then(|entry| match entry {
-            CachedOutput::Response(response) => Some((response, session.key.clone())),
+            CachedOutput::Response(response) => Some((response, session.key.as_str().to_owned())),
             CachedOutput::Stream(_) => None,
         }),
         None => None,
@@ -354,7 +337,7 @@ impl<P: StreamCachable> CallCache<P> {
         Some((
             output,
             ResultSource::Cache {
-                key: session.key.clone(),
+                key: session.key.as_str().to_owned(),
             },
         ))
     }

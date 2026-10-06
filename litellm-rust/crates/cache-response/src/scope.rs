@@ -4,8 +4,8 @@ use litellm_cache::ExactCacheContext;
 use serde_json::Value;
 
 use crate::{
-    CacheAccess, CacheKeyContext, CacheKeyField, CacheKeyInput, CacheKeyParticipation,
-    RequestRewrite, ResponseCacheRequest, ResponseCacheService,
+    CacheAccess, CacheKeyField, CacheKeyInput, RequestRewrite, ResponseCacheRequest,
+    ResponseCacheService,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,8 +41,6 @@ impl CachePolicy {
 pub struct CacheOptions {
     pub policy: CachePolicy,
     pub scope: CacheScope,
-    pub key_context: CacheKeyContext,
-    pub key_input: Option<CacheKeyInput>,
 }
 
 impl CacheOptions {
@@ -50,8 +48,6 @@ impl CacheOptions {
         Self {
             policy: CachePolicy::default(),
             scope,
-            key_context: CacheKeyContext::default(),
-            key_input: None,
         }
     }
 
@@ -65,22 +61,6 @@ impl CacheOptions {
         surface: &str,
         input: CacheKeyInput,
     ) -> ResponseCacheRequest {
-        let selected = match self.key_input {
-            Some(selected) => CacheKeyInput {
-                rewritten_request: input.rewritten_request,
-                ..selected
-            },
-            None => input,
-        };
-        let sharing_group = self
-            .key_context
-            .model_group
-            .as_ref()
-            .is_some_and(|group| !group.is_empty());
-        let input = self.key_context.project(CacheKeyInput {
-            transport: selected.transport.filter(|_| !sharing_group),
-            ..selected
-        });
         let isolated = matches!(self.scope, CacheScope::Isolated(_));
         let isolated_preset = isolated && input.preset.is_some();
         let rewrite = RequestRewrite::from(&input);
@@ -88,16 +68,16 @@ impl CacheOptions {
             Some(preset) => vec![CacheKeyField {
                 name: "preset".into(),
                 value: Some(preset.clone()),
-                participation: CacheKeyParticipation::Always,
             }],
             None => input.fields,
         };
-        let scope = match self.scope {
+        let scope = match &self.scope {
             CacheScope::Shared => String::new(),
             CacheScope::Isolated(scope) => serde_json::json!(["isolated", scope]).to_string(),
         };
         ResponseCacheRequest {
             rewrite,
+            scope: self.scope,
             key: CacheKeyInput {
                 namespace: Some(format!(
                     "{}:inference-v2",
@@ -108,7 +88,6 @@ impl CacheOptions {
                         .unwrap_or(namespace)
                 )),
                 preset: input.preset.filter(|_| !isolated),
-                include_provider_parameters: input.include_provider_parameters,
                 transport: input.transport.filter(|_| !isolated_preset),
                 rewritten_request: input.rewritten_request.filter(|_| !isolated_preset),
                 fields: [("surface", surface.to_owned()), ("scope", scope)]
@@ -116,7 +95,6 @@ impl CacheOptions {
                     .map(|(name, value)| CacheKeyField {
                         name: name.into(),
                         value: Some(value),
-                        participation: CacheKeyParticipation::Always,
                     })
                     .chain(fields)
                     .collect(),
@@ -134,38 +112,17 @@ impl CacheOptions {
 pub struct ScopedCache {
     pub service: Arc<dyn ResponseCacheService>,
     pub scope: CacheScope,
-    pub key_context: CacheKeyContext,
-    pub key_input: Option<CacheKeyInput>,
 }
 
 impl ScopedCache {
     pub fn new(service: Arc<dyn ResponseCacheService>, scope: CacheScope) -> Self {
-        Self {
-            service,
-            scope,
-            key_context: CacheKeyContext::default(),
-            key_input: None,
-        }
-    }
-
-    pub fn with_key_input(
-        self,
-        key_input: Option<CacheKeyInput>,
-        key_context: CacheKeyContext,
-    ) -> Self {
-        Self {
-            key_input,
-            key_context,
-            ..self
-        }
+        Self { service, scope }
     }
 
     pub fn options(&self, policy: Option<CachePolicy>) -> CacheOptions {
         CacheOptions {
             policy: policy.unwrap_or_default(),
             scope: self.scope.clone(),
-            key_context: self.key_context.clone(),
-            key_input: self.key_input.clone(),
         }
     }
 }

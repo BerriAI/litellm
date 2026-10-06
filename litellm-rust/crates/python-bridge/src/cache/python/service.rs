@@ -3,8 +3,8 @@ use std::time::Duration;
 use futures_util::future::BoxFuture;
 use litellm_cache::Error;
 use litellm_cache_response::{
-    RequestRewrite, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
-    ResponseEnvelope,
+    CacheKey, CacheScope, RequestRewrite, ResponseCacheConfig, ResponseCacheRequest,
+    ResponseCacheService, ResponseEnvelope,
 };
 use litellm_core::{
     caching::{Cachable, CachedOutput},
@@ -98,30 +98,32 @@ where
         &self.config
     }
 
-    fn get_cache_key<'a>(
+    fn key<'a>(
         &'a self,
         request: &'a ResponseCacheRequest,
-    ) -> BoxFuture<'a, Result<String, Error>> {
+    ) -> BoxFuture<'a, Result<CacheKey, Error>> {
         Box::pin(async move {
-            match request.rewrite {
-                RequestRewrite::Rewritten => Err(Error::UnsupportedOperation),
-                RequestRewrite::Unchanged => self
+            match (&request.scope, request.rewrite) {
+                (CacheScope::Isolated(_), _) | (_, RequestRewrite::Rewritten) => {
+                    Err(Error::UnsupportedOperation)
+                }
+                (CacheScope::Shared, RequestRewrite::Unchanged) => self
                     .services
                     .call(|reply| CacheCall::GetCacheKey { reply })
                     .await
-                    .map_err(|_| Error::Unavailable)?,
+                    .map_err(|_| Error::Unavailable)?
+                    .map(CacheKey::delegated),
             }
         })
     }
 
     fn lookup<'a>(
         &'a self,
-        request: &'a ResponseCacheRequest,
+        key: &'a CacheKey,
+        _: &'a ResponseCacheRequest,
         _: Duration,
     ) -> BoxFuture<'a, Result<Option<Value>, Error>> {
-        let Some(key) = request.key.preset.clone() else {
-            return Box::pin(async { Err(Error::Unavailable) });
-        };
+        let key = key.as_str().to_owned();
         Box::pin(async move {
             self.services
                 .call(|reply| CacheCall::Lookup { key, reply })
@@ -134,13 +136,12 @@ where
 
     fn store<'a>(
         &'a self,
-        request: &'a ResponseCacheRequest,
+        key: &'a CacheKey,
+        _: &'a ResponseCacheRequest,
         value: Value,
         _: Duration,
     ) -> BoxFuture<'a, Result<(), Error>> {
-        let Some(key) = request.key.preset.clone() else {
-            return Box::pin(async { Err(Error::Unavailable) });
-        };
+        let key = key.as_str().to_owned();
         Box::pin(async move {
             let value = to_python(value, self.surface)?;
             self.services

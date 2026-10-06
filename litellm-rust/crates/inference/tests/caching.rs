@@ -12,7 +12,7 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheKeyContext, CacheKeyInput, CacheOptions, CachePolicy, CacheScope, ResponseCache,
+    CacheKey, CacheKeyInput, CacheOptions, CachePolicy, CacheScope, ResponseCache,
     ResponseCacheConfig, ResponseCacheService, ResponseEnvelope,
 };
 use litellm_core::{
@@ -487,15 +487,21 @@ impl ResponseCacheService for InvalidEntryCache {
         self.0.config()
     }
 
+    fn key<'a>(
+        &'a self,
+        request: &'a litellm_cache_response::ResponseCacheRequest,
+    ) -> futures_util::future::BoxFuture<'a, Result<CacheKey, litellm_cache::Error>> {
+        ResponseCacheService::key(&self.0, request)
+    }
+
     fn lookup<'a>(
         &'a self,
+        key: &'a CacheKey,
         request: &'a litellm_cache_response::ResponseCacheRequest,
         now: Duration,
     ) -> futures_util::future::BoxFuture<'a, Result<Option<Value>, litellm_cache::Error>> {
         Box::pin(async move {
-            Ok(self
-                .0
-                .async_lookup(request, now)
+            Ok(ResponseCacheService::lookup(&self.0, key, request, now)
                 .await?
                 .or_else(|| Some(self.1.clone())))
         })
@@ -503,11 +509,12 @@ impl ResponseCacheService for InvalidEntryCache {
 
     fn store<'a>(
         &'a self,
+        key: &'a CacheKey,
         request: &'a litellm_cache_response::ResponseCacheRequest,
         response: Value,
         now: Duration,
     ) -> futures_util::future::BoxFuture<'a, Result<(), litellm_cache::Error>> {
-        Box::pin(self.0.async_store(request, response, now))
+        ResponseCacheService::store(&self.0, key, request, response, now)
     }
 }
 
@@ -522,15 +529,16 @@ impl ResponseCacheService for ResolveFailureCache {
         &self.config
     }
 
-    fn get_cache_key<'a>(
+    fn key<'a>(
         &'a self,
         _: &'a litellm_cache_response::ResponseCacheRequest,
-    ) -> futures_util::future::BoxFuture<'a, Result<String, litellm_cache::Error>> {
+    ) -> futures_util::future::BoxFuture<'a, Result<CacheKey, litellm_cache::Error>> {
         Box::pin(async { Err(litellm_cache::Error::Unavailable) })
     }
 
     fn lookup<'a>(
         &'a self,
+        _: &'a CacheKey,
         _: &'a litellm_cache_response::ResponseCacheRequest,
         _: Duration,
     ) -> futures_util::future::BoxFuture<'a, Result<Option<Value>, litellm_cache::Error>> {
@@ -540,6 +548,7 @@ impl ResponseCacheService for ResolveFailureCache {
 
     fn store<'a>(
         &'a self,
+        _: &'a CacheKey,
         _: &'a litellm_cache_response::ResponseCacheRequest,
         _: Value,
         _: Duration,
@@ -1222,9 +1231,6 @@ impl Interceptors<RouteError> for ChangingHooks {
 }
 
 #[rstest]
-#[case::chat_model_group("chat", "model_group")]
-#[case::messages_model_group("messages", "model_group")]
-#[case::responses_model_group("responses", "model_group")]
 #[case::chat_credentials("chat", "credentials")]
 #[case::chat_endpoint("chat", "endpoint")]
 #[case::chat_callback("chat", "callback")]
@@ -1259,7 +1265,7 @@ async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
     };
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(response.clone()))
-        .expect(if matches!(change, "endpoint" | "model_group") {
+        .expect(if change == "endpoint" {
             1
         } else {
             2
@@ -1291,18 +1297,8 @@ async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
         secrets
             .revision
             .store(usize::from(call >= 2), Ordering::SeqCst);
-        let cache = ScopedCache {
-            key_context: CacheKeyContext {
-                model_group: (change == "model_group").then(|| "logical-group".into()),
-                ..Default::default()
-            },
-            ..ScopedCache::new(cache.clone(), CacheScope::Shared)
-        };
-        let model = if change == "model_group" && call >= 2 {
-            "cache-alternate-model"
-        } else {
-            "cache-test-model"
-        };
+        let cache = ScopedCache::new(cache.clone(), CacheScope::Shared);
+        let model = "cache-test-model";
         match surface {
             "chat" => {
                 ChatCompletionsRoute::new(
@@ -1361,17 +1357,13 @@ async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
     {
         let facts = hooks.facts.lock().unwrap();
         assert_eq!(facts[0].source, ResultSource::Provider);
-        if change == "model_group" {
-            assert!(matches!(facts[2].source, ResultSource::Cache { .. }));
-        } else {
-            assert_eq!(facts[2].source, ResultSource::Provider);
-        }
+        assert_eq!(facts[2].source, ResultSource::Provider);
         let (ResultSource::Cache { key: first_key }, ResultSource::Cache { key: second_key }) =
             (&facts[1].source, &facts[3].source)
         else {
             panic!("unchanged effective requests must hit the cache");
         };
-        assert_eq!(first_key == second_key, change == "model_group");
+        assert_ne!(first_key, second_key);
     }
     let requests = first.received_requests().await.unwrap();
     if change == "credentials" {
@@ -1436,28 +1428,4 @@ async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheSer
             .all(|facts| facts.source == ResultSource::Provider)
     );
     upstream.verify().await;
-}
-
-#[rstest]
-#[tokio::test]
-async fn logical_model_groups_distinguish_identical_provider_inputs(
-    cache: Arc<dyn ResponseCacheService>,
-) {
-    let calls = AtomicUsize::new(0);
-    let options = |group: &str| {
-        Some(CacheOptions {
-            key_context: CacheKeyContext {
-                model_group: Some(group.into()),
-                ..Default::default()
-            },
-            ..CacheOptions::new(CacheScope::Shared)
-        })
-    };
-    let request = json!({"model":"deployment", "messages":[{"role":"user", "content":"hello"}]});
-    let first = call(&cache, options("first"), &calls, request.clone()).await;
-    let second = call(&cache, options("second"), &calls, request.clone()).await;
-    let replay = call(&cache, options("first"), &calls, request).await;
-    assert_ne!(first, second);
-    assert_eq!(first, replay);
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }

@@ -11,8 +11,8 @@ use litellm_cache::{CacheCodec, Error, ExactCacheContext};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::RedisCache;
 use litellm_cache_response::{
-    CacheAccess, CacheEntry, CacheKeyInput, ResponseCache, ResponseCacheCodec, ResponseCacheConfig,
-    ResponseCacheRequest, ResponseCacheService, get_cache_key,
+    CacheAccess, CacheEntry, CacheKey, CacheKeyInput, ResponseCache, ResponseCacheCodec,
+    ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
 };
 use redis_test::{MockCmd, MockRedisConnection};
 use rstest::{fixture, rstest};
@@ -37,12 +37,13 @@ async fn service_honors_per_call_expiry_and_freshness() {
             ..Default::default()
         })
     };
+    let key = cache.key(&request).await.unwrap();
     cache
-        .store(&request, json!({"answer":7}), Duration::ZERO)
+        .store(&key, &request, json!({"answer":7}), Duration::ZERO)
         .await
         .unwrap();
     assert_eq!(
-        cache.lookup(&request, Duration::ZERO).await.unwrap(),
+        cache.lookup(&key, &request, Duration::ZERO).await.unwrap(),
         Some(json!({"answer":7}))
     );
     let stale_request = ResponseCacheRequest {
@@ -52,14 +53,14 @@ async fn service_honors_per_call_expiry_and_freshness() {
     clock.store(2, Ordering::SeqCst);
     assert_eq!(
         cache
-            .lookup(&stale_request, Duration::from_secs(2))
+            .lookup(&key, &stale_request, Duration::from_secs(2))
             .await
             .unwrap(),
         None
     );
     assert!(
         cache
-            .lookup(&request, Duration::from_secs(2))
+            .lookup(&key, &request, Duration::from_secs(2))
             .await
             .unwrap()
             .is_some()
@@ -67,7 +68,7 @@ async fn service_honors_per_call_expiry_and_freshness() {
     clock.store(6, Ordering::SeqCst);
     assert_eq!(
         cache
-            .lookup(&request, Duration::from_secs(6))
+            .lookup(&key, &request, Duration::from_secs(6))
             .await
             .unwrap(),
         None
@@ -76,17 +77,29 @@ async fn service_honors_per_call_expiry_and_freshness() {
 
 #[rstest]
 #[tokio::test]
-async fn default_key_resolution_preserves_the_native_cache_key() {
+async fn native_service_reads_and_writes_under_the_key_it_is_given() {
     let cache: Arc<dyn ResponseCacheService> = Arc::new(ResponseCache::new(Arc::new(
         InMemoryCache::<CacheEntry>::default(),
     )));
-    let request = ResponseCacheRequest::new(CacheKeyInput {
-        namespace: Some("namespace".into()),
-        ..Default::default()
-    });
+    let stored = request("stored");
+    let other = request("other");
+    let key = cache.key(&stored).await.unwrap();
+    cache
+        .store(&key, &stored, json!({"answer":7}), Duration::ZERO)
+        .await
+        .unwrap();
     assert_eq!(
-        cache.get_cache_key(&request).await.unwrap(),
-        get_cache_key(&request.key)
+        cache.lookup(&key, &other, Duration::ZERO).await.unwrap(),
+        Some(json!({"answer":7}))
+    );
+    let other_key = cache.key(&other).await.unwrap();
+    assert_ne!(other_key, key);
+    assert_eq!(
+        cache
+            .lookup(&other_key, &stored, Duration::ZERO)
+            .await
+            .unwrap(),
+        None
     );
 }
 
@@ -124,8 +137,14 @@ async fn entry_limit_applies_to_sync_async_and_batch_writes() {
         .await
         .unwrap();
     let service: Arc<dyn ResponseCacheService> = Arc::new(cache);
+    let stored = request("service");
     service
-        .store(&request("service"), small.clone(), Duration::ZERO)
+        .store(
+            &service.key(&stored).await.unwrap(),
+            &stored,
+            small.clone(),
+            Duration::ZERO,
+        )
         .await
         .unwrap();
     for key in ["sync", "async", "batch-large"] {
@@ -133,7 +152,14 @@ async fn entry_limit_applies_to_sync_async_and_batch_writes() {
     }
     for key in ["batch-small", "service"] {
         assert_eq!(
-            service.lookup(&request(key), Duration::ZERO).await.unwrap(),
+            service
+                .lookup(
+                    &CacheKey::delegated(key.into()),
+                    &request(key),
+                    Duration::ZERO
+                )
+                .await
+                .unwrap(),
             Some(small.clone())
         );
     }
@@ -148,18 +174,33 @@ impl ResponseCacheService for SingleLookupService {
         &self.config
     }
 
-    fn lookup<'a>(
+    fn key<'a>(
         &'a self,
         request: &'a ResponseCacheRequest,
+    ) -> BoxFuture<'a, Result<CacheKey, Error>> {
+        Box::pin(async move {
+            request
+                .key
+                .preset
+                .clone()
+                .map(CacheKey::delegated)
+                .ok_or(Error::Unavailable)
+        })
+    }
+
+    fn lookup<'a>(
+        &'a self,
+        key: &'a CacheKey,
+        _: &'a ResponseCacheRequest,
         now: Duration,
     ) -> BoxFuture<'a, Result<Option<Value>, Error>> {
         Box::pin(async move {
             if now != Duration::from_secs(100) {
                 return Err(Error::Unavailable);
             }
-            match request.key.preset.as_deref() {
-                Some("hit") => Ok(Some(json!({"answer": 7}))),
-                Some("failure") => Err(Error::Unavailable),
+            match key.as_str() {
+                "hit" => Ok(Some(json!({"answer": 7}))),
+                "failure" => Err(Error::Unavailable),
                 _ => Ok(None),
             }
         })
@@ -167,6 +208,7 @@ impl ResponseCacheService for SingleLookupService {
 
     fn store<'a>(
         &'a self,
+        _: &'a CacheKey,
         _: &'a ResponseCacheRequest,
         _: Value,
         _: Duration,
@@ -180,6 +222,19 @@ fn request(key: &str) -> ResponseCacheRequest {
         preset: Some(key.into()),
         ..Default::default()
     })
+}
+
+async fn keyed(
+    service: &dyn ResponseCacheService,
+    requests: impl IntoIterator<Item = ResponseCacheRequest>,
+) -> Vec<(CacheKey, ResponseCacheRequest)> {
+    futures_util::future::try_join_all(
+        requests
+            .into_iter()
+            .map(|request| async move { Ok::<_, Error>((service.key(&request).await?, request)) }),
+    )
+    .await
+    .unwrap()
 }
 
 #[fixture]
@@ -200,11 +255,13 @@ async fn batch_fallback_preserves_single_lookup_results(
     #[case] keys: &[&str],
     #[case] missing: &[usize],
 ) {
-    let requests: Vec<_> = keys.iter().map(|key| request(key)).collect();
+    let requests = keyed(service.as_ref(), keys.iter().map(|key| request(key))).await;
     let now = Duration::from_secs(100);
     let batch = service.lookup_batch(&requests, now).await.unwrap();
     let expected: Vec<_> = futures_util::future::try_join_all(
-        requests.iter().map(|request| service.lookup(request, now)),
+        requests
+            .iter()
+            .map(|(key, request)| service.lookup(key, request, now)),
     )
     .await
     .unwrap();
@@ -219,11 +276,9 @@ async fn batch_fallback_preserves_single_lookup_results(
 #[rstest]
 #[tokio::test]
 async fn batch_fallback_preserves_storage_failures(service: Arc<dyn ResponseCacheService>) {
+    let requests = keyed(service.as_ref(), [request("hit"), request("failure")]).await;
     let result = service
-        .lookup_batch(
-            &[request("hit"), request("failure")],
-            Duration::from_secs(100),
-        )
+        .lookup_batch(&requests, Duration::from_secs(100))
         .await;
     assert_eq!(result, Err(Error::Unavailable));
 }
@@ -262,13 +317,17 @@ async fn response_service_uses_bulk_reads_and_applies_per_request_policy() {
         max_age: Some(Duration::from_secs(1)),
         ..request("stale")
     };
-    let requests = [
-        request("hit"),
-        disabled,
-        request("miss"),
-        request("hit"),
-        stale,
-    ];
+    let requests = keyed(
+        cache.as_ref(),
+        [
+            request("hit"),
+            disabled,
+            request("miss"),
+            request("hit"),
+            stale,
+        ],
+    )
+    .await;
     let batch = cache
         .lookup_batch(&requests, Duration::from_secs(102))
         .await

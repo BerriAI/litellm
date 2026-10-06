@@ -1,17 +1,3 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
-};
-
-use litellm_cache::ExactCacheContext;
-use litellm_cache_memory::InMemoryCache;
-use litellm_cache_response::{
-    CacheEntry, CacheKeyInput, CacheKeyRequest, CacheOptions, CacheScope, RequestRewrite,
-    ResponseCache, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, get_cache_key,
-};
 use rstest::rstest;
 use serde_json::json;
 

@@ -3,7 +3,7 @@ use std::time::Duration;
 use litellm_cache::{CacheContext, ExactCacheContext};
 use serde::Deserialize;
 
-use crate::CacheKeyInput;
+use crate::{CacheKeyInput, CacheScope};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,6 +46,7 @@ pub struct ResponseCacheRequest<C: CacheContext = ExactCacheContext> {
     pub context: C,
     pub max_age: Option<Duration>,
     pub rewrite: RequestRewrite,
+    pub scope: CacheScope,
 }
 
 impl<C: CacheContext + Default> ResponseCacheRequest<C> {
@@ -56,6 +57,7 @@ impl<C: CacheContext + Default> ResponseCacheRequest<C> {
             access: CacheAccess::READ_WRITE,
             context: C::default(),
             max_age: None,
+            scope: CacheScope::Shared,
         }
     }
 }
@@ -68,6 +70,7 @@ impl<C: CacheContext> ResponseCacheRequest<C> {
             context,
             max_age: self.max_age,
             rewrite: self.rewrite,
+            scope: self.scope,
         }
     }
 }

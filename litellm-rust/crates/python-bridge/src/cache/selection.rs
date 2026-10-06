@@ -1,6 +1,6 @@
-use super::{key::project_key, python};
+use super::python;
 use litellm_cache_response::{
-    CacheKeyContext, CacheOptions, CachePolicy, CacheScope, ResponseCacheConfig, ScopedCache,
+    CacheOptions, CachePolicy, CacheScope, ResponseCacheConfig, ScopedCache,
 };
 use litellm_core::caching::Cachable;
 use litellm_host::{
@@ -38,10 +38,6 @@ impl PythonCacheConfig {
             ScopedCache::new(
                 python::service(services, self.surface, self.config),
                 CacheScope::Shared,
-            )
-            .with_key_input(
-                self.options.key_input.clone(),
-                self.options.key_context.clone(),
             ),
             self.options,
         )
@@ -122,21 +118,12 @@ pub(crate) fn configure_python_cache<P: Cachable>(
             .transpose()
             .map(|value| value.unwrap_or(false))
     };
-    let (key_input, key_context) = match project_key(py, arguments) {
-        Ok((input, context)) => (Some(input), context),
-        Err(error) if error.is_instance_of::<pyo3::exceptions::PyException>(py) => {
-            (None, CacheKeyContext::default())
-        }
-        Err(error) => return Err(error),
-    };
     let options = CacheOptions {
         policy: CachePolicy {
             no_cache: boolean("no-cache")?,
             no_store: boolean("no-store")?,
             ..CachePolicy::default()
         },
-        key_input,
-        key_context,
         ..CacheOptions::new(CacheScope::Shared)
     };
     let namespace = cache

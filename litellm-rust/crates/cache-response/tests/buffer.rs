@@ -1,26 +1,12 @@
 mod support;
 
-use std::{
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
-use litellm_cache::{
-    BaseCache, Error, SemanticCacheContext,
-    semantic::{SemanticCache, SemanticLookup},
-};
 use litellm_cache_memory::InMemoryCache;
-use litellm_cache_response::{
-    CacheAccess, CacheEntry, CacheKeyField, CacheKeyInput, CacheKeyParticipation, PendingWrite,
-    ResponseCache, ResponseCacheRequest, WriteBuffer, get_cache_key,
-};
-use redis_test::MockCmd;
-use rstest::{fixture, rstest};
-use serde_json::{Value, json};
-use support::{keyed, memory, redis, request};
+use litellm_cache_response::{CacheEntry, ResponseCache, ResponseCacheRequest, WriteBuffer};
+use rstest::rstest;
+use serde_json::json;
+use support::{keyed, memory, request};
 
 type Memory = Arc<ResponseCache<InMemoryCache<CacheEntry>>>;
 

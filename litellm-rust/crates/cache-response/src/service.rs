@@ -4,7 +4,7 @@ use futures_util::{StreamExt, TryStreamExt, future::BoxFuture};
 use litellm_cache::{BaseCache, BatchCache, Error, ExactCacheContext};
 use serde_json::Value;
 
-use crate::{BatchLookup, CacheEntry, ResponseCache, ResponseCacheRequest, get_cache_key};
+use crate::{BatchLookup, CacheEntry, CacheKey, ResponseCache, ResponseCacheRequest};
 
 type CacheFuture<'a, T> = BoxFuture<'a, Result<T, Error>>;
 
@@ -26,24 +26,23 @@ impl Default for ResponseCacheConfig {
 pub trait ResponseCacheService: Send + Sync {
     fn config(&self) -> &ResponseCacheConfig;
 
-    fn get_cache_key<'a>(&'a self, request: &'a ResponseCacheRequest) -> CacheFuture<'a, String> {
-        Box::pin(async move { Ok(get_cache_key(&request.key)) })
-    }
+    fn key<'a>(&'a self, request: &'a ResponseCacheRequest) -> CacheFuture<'a, CacheKey>;
 
     fn lookup<'a>(
         &'a self,
+        key: &'a CacheKey,
         request: &'a ResponseCacheRequest,
         now: Duration,
     ) -> CacheFuture<'a, Option<Value>>;
 
     fn lookup_batch<'a>(
         &'a self,
-        requests: &'a [ResponseCacheRequest],
+        requests: &'a [(CacheKey, ResponseCacheRequest)],
         now: Duration,
     ) -> CacheFuture<'a, BatchLookup<Value>> {
         Box::pin(async move {
             let values = futures_util::stream::iter(requests)
-                .then(|request| self.lookup(request, now))
+                .then(|(key, request)| self.lookup(key, request, now))
                 .try_collect()
                 .await?;
             Ok(BatchLookup { values })
@@ -52,6 +51,7 @@ pub trait ResponseCacheService: Send + Sync {
 
     fn store<'a>(
         &'a self,
+        key: &'a CacheKey,
         request: &'a ResponseCacheRequest,
         response: Value,
         now: Duration,
@@ -66,28 +66,39 @@ where
         self.config()
     }
 
+    fn key<'a>(&'a self, request: &'a ResponseCacheRequest) -> CacheFuture<'a, CacheKey> {
+        Box::pin(async move { Ok(ResponseCache::key(self, request)) })
+    }
+
     fn lookup<'a>(
         &'a self,
+        key: &'a CacheKey,
         request: &'a ResponseCacheRequest,
         now: Duration,
     ) -> CacheFuture<'a, Option<Value>> {
-        Box::pin(self.async_lookup(request, now))
+        Box::pin(self.async_lookup_keyed(key, request, now))
     }
 
     fn lookup_batch<'a>(
         &'a self,
-        requests: &'a [ResponseCacheRequest],
+        requests: &'a [(CacheKey, ResponseCacheRequest)],
         now: Duration,
     ) -> CacheFuture<'a, BatchLookup<Value>> {
-        Box::pin(self.async_lookup_batch(requests, now))
+        Box::pin(
+            self.async_lookup_keyed_batch(
+                requests.iter().map(|(key, request)| (key, request)),
+                now,
+            ),
+        )
     }
 
     fn store<'a>(
         &'a self,
+        key: &'a CacheKey,
         request: &'a ResponseCacheRequest,
         response: Value,
         now: Duration,
     ) -> CacheFuture<'a, ()> {
-        Box::pin(self.async_store(request, response, now))
+        Box::pin(self.async_store_keyed(key, request, response, now))
     }
 }

@@ -4,7 +4,7 @@ use litellm_cache::{BaseCache, BatchCache, BatchEntry, CacheContext, Error, Exac
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 use serde_json::Value;
 
-use crate::{CacheEntry, ResponseCache, ResponseCacheRequest, get_cache_key};
+use crate::{CacheEntry, CacheKey, ResponseCache, ResponseCacheRequest};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BatchLookup<T> {
@@ -52,11 +52,12 @@ where
         requests: &[ResponseCacheRequest<B::Context>],
         now: Duration,
     ) -> Result<BatchLookup<Value>, Error> {
-        let readable = readable(requests);
+        let keys = self.keys(requests);
+        let readable = readable(keys.iter().zip(requests));
         let entries = match readable.first() {
-            Some((_, request)) => self
+            Some((_, _, request)) => self
                 .backend
-                .batch_get_cache(&keys(&readable), &request.context)?,
+                .batch_get_cache(&key_strings(&readable), &request.context)?,
             None => Vec::new(),
         };
         batch_lookup(requests.len(), readable, entries, now)
@@ -67,16 +68,34 @@ where
         requests: &[ResponseCacheRequest<B::Context>],
         now: Duration,
     ) -> Result<BatchLookup<Value>, Error> {
+        let keys = self.keys(requests);
+        self.async_lookup_keyed_batch(keys.iter().zip(requests), now)
+            .await
+    }
+
+    pub(crate) async fn async_lookup_keyed_batch<'a>(
+        &self,
+        requests: impl ExactSizeIterator<Item = (&'a CacheKey, &'a ResponseCacheRequest<B::Context>)>,
+        now: Duration,
+    ) -> Result<BatchLookup<Value>, Error>
+    where
+        B::Context: 'a,
+    {
+        let len = requests.len();
         let readable = readable(requests);
         let entries = match readable.first() {
-            Some((_, request)) => {
+            Some((_, _, request)) => {
                 self.backend
-                    .async_batch_get_cache(keys(&readable), request.context.clone())
+                    .async_batch_get_cache(key_strings(&readable), request.context.clone())
                     .await?
             }
             None => Vec::new(),
         };
-        batch_lookup(requests.len(), readable, entries, now)
+        batch_lookup(len, readable, entries, now)
+    }
+
+    fn keys(&self, requests: &[ResponseCacheRequest<B::Context>]) -> Vec<CacheKey> {
+        requests.iter().map(|request| self.key(request)).collect()
     }
 }
 
@@ -110,9 +129,12 @@ where
         let writable = writes
             .into_iter()
             .filter_map(|write| {
-                let (key, entry) =
-                    self.writable(&write.request, write.response, write.produced_at)?;
-                Some((key, entry, write.request.context))
+                let entry = self.writable(&write.request, write.response, write.produced_at)?;
+                Some((
+                    String::from(self.key(&write.request)),
+                    entry,
+                    write.request.context,
+                ))
             })
             .collect::<Vec<_>>();
         let Some((_, _, first_context)) = writable.first() else {
@@ -139,26 +161,28 @@ where
     }
 }
 
-fn readable<C: CacheContext>(
-    requests: &[ResponseCacheRequest<C>],
-) -> Vec<(usize, &ResponseCacheRequest<C>)> {
+type Readable<'a, C> = Vec<(usize, &'a CacheKey, &'a ResponseCacheRequest<C>)>;
+
+fn readable<'a, C: CacheContext + 'a>(
+    requests: impl Iterator<Item = (&'a CacheKey, &'a ResponseCacheRequest<C>)>,
+) -> Readable<'a, C> {
     requests
-        .iter()
         .enumerate()
-        .filter(|(_, request)| request.access.reads)
+        .filter(|(_, (_, request))| request.access.reads)
+        .map(|(index, (key, request))| (index, key, request))
         .collect()
 }
 
-fn keys<C: CacheContext>(readable: &[(usize, &ResponseCacheRequest<C>)]) -> Vec<String> {
+fn key_strings<C: CacheContext>(readable: &Readable<'_, C>) -> Vec<String> {
     readable
         .iter()
-        .map(|(_, request)| get_cache_key(&request.key))
+        .map(|(_, key, _)| key.as_str().to_owned())
         .collect()
 }
 
 fn batch_lookup<C: CacheContext>(
     len: usize,
-    readable: Vec<(usize, &ResponseCacheRequest<C>)>,
+    readable: Readable<'_, C>,
     entries: Vec<BatchEntry<CacheEntry>>,
     now: Duration,
 ) -> Result<BatchLookup<Value>, Error> {
@@ -166,7 +190,7 @@ fn batch_lookup<C: CacheContext>(
         return Err(Error::Unavailable);
     }
     let mut hits = BatchLookup::misses(len);
-    for ((index, request), entry) in readable.into_iter().zip(entries) {
+    for ((index, _, request), entry) in readable.into_iter().zip(entries) {
         if let BatchEntry::Hit(entry) = entry {
             hits.values[index] = entry.into_fresh(now, request.max_age);
         }

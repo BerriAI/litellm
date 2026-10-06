@@ -7,7 +7,7 @@ pub use batch::{BatchLookup, PendingWrite};
 use litellm_cache::{BaseCache, CacheConnectionResult, ConnectionCache, Error, FlushCache};
 use serde_json::Value;
 
-use crate::{CacheEntry, ResponseCacheConfig, ResponseCacheRequest, get_cache_key};
+use crate::{CacheEntry, CacheKey, ResponseCacheConfig, ResponseCacheRequest};
 
 pub struct ResponseCache<B: BaseCache<Value = CacheEntry>>
 where
@@ -59,6 +59,10 @@ where
         self.backend.test_connection().await
     }
 
+    pub fn key(&self, request: &ResponseCacheRequest<B::Context>) -> CacheKey {
+        CacheKey::derive(&request.key)
+    }
+
     pub fn lookup(
         &self,
         request: &ResponseCacheRequest<B::Context>,
@@ -69,7 +73,7 @@ where
         }
         let entry = self
             .backend
-            .get_cache(&get_cache_key(&request.key), &request.context);
+            .get_cache(self.key(request).as_str(), &request.context);
         fresh_hit(entry, now, request.max_age)
     }
 
@@ -78,12 +82,22 @@ where
         request: &ResponseCacheRequest<B::Context>,
         now: Duration,
     ) -> Result<Option<Value>, Error> {
+        self.async_lookup_keyed(&self.key(request), request, now)
+            .await
+    }
+
+    pub(crate) async fn async_lookup_keyed(
+        &self,
+        key: &CacheKey,
+        request: &ResponseCacheRequest<B::Context>,
+        now: Duration,
+    ) -> Result<Option<Value>, Error> {
         if !request.access.reads {
             return Ok(None);
         }
         let entry = self
             .backend
-            .async_get_cache(&get_cache_key(&request.key), &request.context)
+            .async_get_cache(key.as_str(), &request.context)
             .await;
         fresh_hit(entry, now, request.max_age)
     }
@@ -94,10 +108,11 @@ where
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
-        let Some((key, entry)) = self.writable(request, response, now) else {
+        let Some(entry) = self.writable(request, response, now) else {
             return Ok(());
         };
-        self.backend.set_cache(&key, entry, &request.context)
+        self.backend
+            .set_cache(self.key(request).as_str(), entry, &request.context)
     }
 
     pub async fn async_store(
@@ -106,11 +121,22 @@ where
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
-        let Some((key, entry)) = self.writable(request, response, now) else {
+        self.async_store_keyed(&self.key(request), request, response, now)
+            .await
+    }
+
+    pub(crate) async fn async_store_keyed(
+        &self,
+        key: &CacheKey,
+        request: &ResponseCacheRequest<B::Context>,
+        response: Value,
+        now: Duration,
+    ) -> Result<(), Error> {
+        let Some(entry) = self.writable(request, response, now) else {
             return Ok(());
         };
         self.backend
-            .async_set_cache(&key, entry, request.context.clone())
+            .async_set_cache(key.as_str(), entry, request.context.clone())
             .await
     }
 
@@ -119,13 +145,9 @@ where
         request: &ResponseCacheRequest<B::Context>,
         response: Value,
         produced_at: Duration,
-    ) -> Option<(String, CacheEntry)> {
-        (request.access.writes && self.fits(&response)).then(|| {
-            (
-                get_cache_key(&request.key),
-                CacheEntry::produced_at(response, produced_at),
-            )
-        })
+    ) -> Option<CacheEntry> {
+        (request.access.writes && self.fits(&response))
+            .then(|| CacheEntry::produced_at(response, produced_at))
     }
 
     fn fits(&self, response: &Value) -> bool {

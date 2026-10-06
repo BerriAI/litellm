@@ -6,7 +6,7 @@ use litellm_cache::{
 };
 use serde_json::Value;
 
-use crate::{CacheEntry, ResponseCache, ResponseCacheRequest, get_cache_key};
+use crate::{CacheEntry, ResponseCache, ResponseCacheRequest};
 
 impl<B> ResponseCache<B>
 where
@@ -25,7 +25,7 @@ where
         }
         let lookup = self
             .backend
-            .get_cache_with_similarity(&get_cache_key(&request.key), &request.context);
+            .get_cache_with_similarity(self.key(request).as_str(), &request.context);
         fresh_semantic(lookup, now, request.max_age)
     }
 
@@ -39,7 +39,7 @@ where
         }
         let lookup = self
             .backend
-            .async_get_cache_with_similarity(&get_cache_key(&request.key), &request.context)
+            .async_get_cache_with_similarity(self.key(request).as_str(), &request.context)
             .await;
         fresh_semantic(lookup, now, request.max_age)
     }

@@ -118,8 +118,8 @@ impl NativeCacheHandle {
     fn get(&self, py: Python<'_>, key: String) -> PyResult<Py<PyAny>> {
         self.check_process()?;
         let request = request(key, None)?;
-        let value =
-            release_gil(py, || self.backend.lookup(&request, now())).map_err(cache_error)?;
+        let value = release_gil(py, || self.backend.lookup(&request, now()))
+            .map_err(cache_error)?;
         to_py(py, &value)
     }
 
@@ -134,7 +134,10 @@ impl NativeCacheHandle {
         self.check_process()?;
         let request = request(key, ttl)?;
         let value: Value = from_py(value)?;
-        release_gil(py, || self.backend.store(&request, value, now())).map_err(cache_error)
+        release_gil(py, || {
+            self.backend.store(&request, value, now())
+        })
+        .map_err(cache_error)
     }
 
     fn async_get<'py>(&self, py: Python<'py>, key: String) -> PyResult<Bound<'py, PyAny>> {
@@ -162,7 +165,11 @@ impl NativeCacheHandle {
         let backend = self.backend.clone();
         crate::execution::run_async(
             py,
-            async move { backend.async_store(&request, value, now()).await },
+            async move {
+                backend
+                    .async_store(&request, value, now())
+                    .await
+            },
             cache_error,
         )
     }
@@ -183,7 +190,11 @@ impl NativeCacheHandle {
         let backend = self.backend.clone();
         crate::execution::run_async(
             py,
-            async move { backend.async_store_batch(entries, now()).await },
+            async move {
+                backend
+                    .async_store_batch(entries, now())
+                    .await
+            },
             cache_error,
         )
     }
@@ -254,4 +265,10 @@ fn duration(seconds: f64) -> PyResult<Duration> {
         .ok()
         .filter(|value| !value.is_zero())
         .ok_or_else(|| PyValueError::new_err("cache durations must be finite and positive"))
+}
+
+fn now() -> Duration {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
 }

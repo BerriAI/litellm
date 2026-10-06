@@ -4,29 +4,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CacheKeyParticipation {
-    Always,
-    ProviderOptIn,
-    Never,
-}
-
-impl CacheKeyParticipation {
-    pub fn includes(self, include_provider_parameters: bool) -> bool {
-        match self {
-            Self::Always => true,
-            Self::ProviderOptIn => include_provider_parameters,
-            Self::Never => false,
-        }
-    }
-}
-
 #[derive(Clone, Debug, Deserialize)]
 pub struct CacheKeyField {
     pub name: String,
     pub value: Option<String>,
-    pub participation: CacheKeyParticipation,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -49,7 +30,6 @@ pub struct CacheKeyInput {
     pub fields: Vec<CacheKeyField>,
     pub preset: Option<String>,
     pub namespace: Option<String>,
-    pub include_provider_parameters: bool,
     pub transport: Option<CacheKeyTransport>,
     pub rewritten_request: Option<CacheKeyRequest>,
 }
@@ -62,13 +42,11 @@ impl CacheKeyInput {
                 .map(|(name, value)| CacheKeyField {
                     name,
                     value: (!value.is_null()).then(|| value.to_string()),
-                    participation: CacheKeyParticipation::Always,
                 })
                 .collect(),
             value => vec![CacheKeyField {
                 name: "request".into(),
                 value: Some(value.to_string()),
-                participation: CacheKeyParticipation::Always,
             }],
         };
         Self {
@@ -93,69 +71,36 @@ fn canonical(value: Value) -> Value {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct CacheKeyContext {
-    pub model_group: Option<String>,
-    pub caching_groups: Vec<(Vec<String>, String)>,
-    pub file_checksum: Option<String>,
-    pub file_object_name: Option<String>,
-    pub metadata_file_name: Option<String>,
-    pub parameters_file_name: Option<String>,
-}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CacheKey(String);
 
-impl CacheKeyContext {
-    pub fn project(&self, input: CacheKeyInput) -> CacheKeyInput {
-        let group = self
-            .model_group
-            .as_ref()
-            .filter(|value| !value.is_empty())
-            .and_then(|model| {
-                self.caching_groups
-                    .iter()
-                    .find(|(models, _)| models.contains(model))
-            });
+impl CacheKey {
+    pub fn delegated(key: String) -> Self {
+        Self(key)
+    }
 
-        CacheKeyInput {
-            fields: input
-                .fields
-                .into_iter()
-                .map(|field| {
-                    let value = match field.name.as_str() {
-                        "model" => group
-                            .map(|(_, formatted)| formatted.clone())
-                            .or_else(|| self.model_group.clone().filter(|value| !value.is_empty()))
-                            .or(field.value),
-                        "file" => [
-                            &self.file_checksum,
-                            &self.file_object_name,
-                            &self.metadata_file_name,
-                            &self.parameters_file_name,
-                        ]
-                        .into_iter()
-                        .flatten()
-                        .find(|value| !value.is_empty())
-                        .cloned(),
-                        _ => field.value,
-                    };
-                    CacheKeyField { value, ..field }
-                })
-                .collect(),
-            ..input
-        }
+    pub(crate) fn derive(input: &CacheKeyInput) -> Self {
+        Self(get_cache_key(input))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-pub fn get_cache_key(input: &CacheKeyInput) -> String {
+impl From<CacheKey> for String {
+    fn from(key: CacheKey) -> Self {
+        key.0
+    }
+}
+
+fn get_cache_key(input: &CacheKeyInput) -> String {
     if let Some(preset) = &input.preset {
         return preset.clone();
     }
     let mut digest = Sha256::new();
     for field in &input.fields {
-        if field
-            .participation
-            .includes(input.include_provider_parameters)
-            && let Some(value) = &field.value
-        {
+        if let Some(value) = &field.value {
             digest.update(field.name.as_bytes());
             digest.update(b": ");
             digest.update(value.as_bytes());

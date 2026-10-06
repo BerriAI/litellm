@@ -841,6 +841,26 @@ async def test_rust_cache_preserves_caller_supplied_cache_key(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("chat", "messages", "responses"))
+async def test_rust_routes_key_python_storage_with_python_get_cache_key(
+    recording_server: RecordingServer, route: Literal["chat", "messages", "responses"]
+) -> None:
+    class FixedKeyCache(Cache):
+        def get_cache_key(self, **kwargs: object) -> str:
+            return "python-derived-key"
+
+    recording_server.expected_requests = 1
+    litellm.cache = FixedKeyCache()
+    first: Final = await invoke(route, recording_server, {"temperature": 1})
+    second: Final = await invoke(route, recording_server, {})
+    assert cache_key(first) is None
+    assert cache_key(second) == "python-derived-key"
+    assert litellm.cache.cache.get_cache("python-derived-key") is not None
+    assert payload(first) == payload(second)
+    assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_rust_cache_hit_refreshes_call_metadata_without_rewriting_the_entry(
     recording_server: RecordingServer,
 ) -> None:

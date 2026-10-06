@@ -1,12 +1,9 @@
-mod future;
-mod key;
 mod native;
 mod python;
 mod selection;
 
 pub(crate) use native::NativeCacheHandle;
 pub(crate) use python::{CacheCall, PythonCache};
-pub(crate) use runtime::ResolvedCache;
 pub(crate) use selection::{PythonCacheConfig, PythonCached, configure_python_cache};
 
 use litellm_cache::Error;

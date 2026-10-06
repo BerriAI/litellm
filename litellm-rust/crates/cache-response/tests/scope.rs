@@ -1,16 +1,10 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use litellm_cache::ExactCacheContext;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheAccess, CacheEntry, CacheKeyInput, CacheKeyRequest, CacheOptions, CacheScope, RequestRewrite,
-    ResponseCache, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, get_cache_key,
+    CacheAccess, CacheEntry, CacheKey, CacheKeyInput, CacheKeyRequest, CacheOptions, CacheScope,
+    RequestRewrite, ResponseCache, ResponseCacheRequest,
 };
 use rstest::rstest;
 use serde_json::json;
@@ -67,15 +61,9 @@ async fn isolated_policy_controls_actual_entry_reuse(
 
 #[rstest]
 fn policy_does_not_change_logical_identity() {
-    use litellm_cache_response::{CacheKeyContext, CacheOptions, CachePolicy, CacheScope};
+    use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope};
     let input = CacheKeyInput::from_parameters(json!({"model":"deployment", "input":"hello"}));
-    let baseline = CacheOptions {
-        key_context: CacheKeyContext {
-            model_group: Some("logical".into()),
-            ..Default::default()
-        },
-        ..CacheOptions::new(CacheScope::Shared)
-    };
+    let baseline = CacheOptions::new(CacheScope::Shared);
     let controlled = CacheOptions {
         policy: CachePolicy {
             ttl: Some(Duration::from_secs(9)),
@@ -88,7 +76,7 @@ fn policy_does_not_change_logical_identity() {
     }
     .request_with_key("test", "responses", input.clone());
     let original = baseline.request_with_key("test", "responses", input);
-    assert_eq!(get_cache_key(&original.key), get_cache_key(&controlled.key));
+    assert_eq!(key(&original), key(&controlled));
     assert_eq!(controlled.context.ttl, Some(Duration::from_secs(9)));
     assert_eq!(controlled.max_age, Some(Duration::from_secs(3)));
     assert_eq!(controlled.access, CacheAccess::NONE);
@@ -112,40 +100,8 @@ fn preset_keys_keep_isolated_callers_separate() {
         input.clone(),
     );
     let shared = CacheOptions::new(CacheScope::Shared).request_with_key("test", "responses", input);
-    assert_ne!(get_cache_key(&first.key), get_cache_key(&second.key));
-    assert_eq!(get_cache_key(&shared.key), "explicit");
-}
-
-#[rstest]
-fn retained_logical_parameters_override_provider_transformation() {
-    use litellm_cache_response::{CacheKeyContext, CacheOptions, CacheScope};
-    let logical = CacheKeyInput::from_parameters(json!({"model":"requested", "max_tokens":32}));
-    let context = CacheKeyContext {
-        model_group: Some("logical-group".into()),
-        ..Default::default()
-    };
-    let expected = CacheOptions {
-        key_context: context.clone(),
-        ..CacheOptions::new(CacheScope::Shared)
-    }
-    .request_with_key("test", "chat_completions", logical.clone());
-    let options = CacheOptions {
-        key_input: Some(logical),
-        key_context: context,
-        ..CacheOptions::new(CacheScope::Shared)
-    };
-    let first = options.clone().request_with_key(
-        "test",
-        "chat_completions",
-        CacheKeyInput::from_parameters(json!({"model":"deployment-a", "max_new_tokens":32})),
-    );
-    let second = options.request_with_key(
-        "test",
-        "chat_completions",
-        CacheKeyInput::from_parameters(json!({"model":"deployment-b", "max_new_tokens":64})),
-    );
-    assert_eq!(get_cache_key(&first.key), get_cache_key(&expected.key));
-    assert_eq!(get_cache_key(&second.key), get_cache_key(&expected.key));
+    assert_ne!(key(&first), key(&second));
+    assert_eq!(key(&shared).as_str(), "explicit");
 }
 
 #[rstest]
@@ -153,30 +109,21 @@ fn retained_logical_parameters_override_provider_transformation() {
 #[case::logical_with_rewrite(true, false)]
 #[case::preset(false, true)]
 #[case::preset_with_rewrite(true, true)]
-fn selected_key_input_retains_request_state(#[case] rewritten: bool, #[case] preset: bool) {
-    let logical = CacheKeyInput {
+fn isolated_presets_ignore_rewrites(#[case] rewritten: bool, #[case] preset: bool) {
+    let input = |rewritten: bool| CacheKeyInput {
         preset: preset.then(|| "explicit".into()),
-        ..CacheKeyInput::from_parameters(json!({"model":"logical", "input":"original"}))
+        rewritten_request: rewritten.then(|| CacheKeyRequest {
+            url: "https://provider.test/infer".into(),
+            headers: vec![],
+            body: json!({"input":"changed"}),
+        }),
+        ..CacheKeyInput::from_parameters(json!({"model":"provider"}))
     };
-    let options = CacheOptions {
-        key_input: Some(logical),
-        ..CacheOptions::new(CacheScope::Isolated("caller".into()))
-    };
+    let options = CacheOptions::new(CacheScope::Isolated("caller".into()));
     let baseline = options
         .clone()
-        .request("test", "responses", json!({"model":"provider"}));
-    let request = options.request_with_key(
-        "test",
-        "responses",
-        CacheKeyInput {
-            rewritten_request: rewritten.then(|| CacheKeyRequest {
-                url: "https://provider.test/infer".into(),
-                headers: vec![],
-                body: json!({"input":"changed"}),
-            }),
-            ..CacheKeyInput::from_parameters(json!({"model":"provider"}))
-        },
-    );
+        .request_with_key("test", "responses", input(false));
+    let request = options.request_with_key("test", "responses", input(rewritten));
     assert_eq!(
         request.rewrite,
         match rewritten {
@@ -184,10 +131,8 @@ fn selected_key_input_retains_request_state(#[case] rewritten: bool, #[case] pre
             false => RequestRewrite::Unchanged,
         }
     );
-    assert_eq!(
-        get_cache_key(&request.key) == get_cache_key(&baseline.key),
-        !rewritten || preset
-    );
+    assert_eq!(request.scope, CacheScope::Isolated("caller".into()));
+    assert_eq!(key(&request) == key(&baseline), !rewritten || preset);
     assert_eq!(
         request
             .clone()
@@ -195,4 +140,8 @@ fn selected_key_input_retains_request_state(#[case] rewritten: bool, #[case] pre
             .rewrite,
         request.rewrite
     );
+}
+
+fn key(request: &ResponseCacheRequest) -> CacheKey {
+    ResponseCache::new(Arc::new(InMemoryCache::<CacheEntry>::default())).key(request)
 }

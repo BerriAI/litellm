@@ -2,20 +2,16 @@ mod support;
 
 use std::{
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
 
-use litellm_cache::{
-    BaseCache, Error, SemanticCacheContext,
-    semantic::{SemanticCache, SemanticLookup},
-};
+use litellm_cache::BaseCache;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheAccess, CacheEntry, CacheKeyField, CacheKeyInput, CacheKeyParticipation, PendingWrite,
-    ResponseCache, ResponseCacheRequest, WriteBuffer, get_cache_key,
+    CacheAccess, CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheRequest,
 };
 use redis_test::MockCmd;
 use rstest::{fixture, rstest};
@@ -261,13 +257,12 @@ fn generated_keys_preserve_namespace_and_explicit_keys(
         fields: vec![CacheKeyField {
             name: "model".into(),
             value: Some("a".into()),
-            participation: CacheKeyParticipation::Always,
         }],
         namespace: namespace.map(str::to_owned),
         ..Default::default()
     };
     let generated = ResponseCacheRequest::new(key.clone());
-    let explicit = keyed(&get_cache_key(&key));
+    let explicit = keyed(memory.key(&generated).as_str());
     memory
         .store(&generated, json!({"value": 7}), Duration::from_secs(100))
         .unwrap();

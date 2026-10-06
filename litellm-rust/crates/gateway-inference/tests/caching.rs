@@ -5,7 +5,8 @@ use std::{sync::Arc, time::Duration};
 use axum::body::to_bytes;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheKeyInput, ResponseCache, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
+    CacheKey, CacheKeyInput, ResponseCache, ResponseCacheConfig, ResponseCacheRequest,
+    ResponseCacheService,
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -73,10 +74,8 @@ async fn all_inference_endpoints_share_native_cache(
     assert!(!cache_key.as_bytes().is_empty());
     let stored = cache
         .lookup(
-            &ResponseCacheRequest::new(CacheKeyInput {
-                preset: Some(cache_key.to_str().unwrap().into()),
-                ..Default::default()
-            }),
+            &CacheKey::delegated(cache_key.to_str().unwrap().into()),
+            &ResponseCacheRequest::new(CacheKeyInput::default()),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap(),
