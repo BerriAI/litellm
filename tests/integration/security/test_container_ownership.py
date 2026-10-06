@@ -21,6 +21,8 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 _FILE_ID: Final = "cfile_ownership"
 _FILE_BYTES: Final = b"tenant secret contents"
 _FORBIDDEN: Final = {"detail": "Forbidden"}
+# Non-admins overfetch upstream pages of 100, then trim to client limit; order/after and admin limits pass unchanged.
+_OWNED_LIST_UPSTREAM_PAGE_SIZE: Final = 100
 _Part = tuple[str, str | None, str, bytes]
 
 
@@ -302,31 +304,61 @@ def test_container_list_returns_only_the_callers_containers_across_upstream_page
         owner: Final = _client(gateway, owner_key, model)
         other: Final = _client(gateway, other_key, model)
         _routable_over_alias(gateway, model)
-        for index in range(3):
+        for index in range(2):
             _create(owner, model, index)
         for index in range(3, 5):
             _create(other, model, index)
-        assert len(wire.drain()) == 5
+        assert _requests(wire) == [
+            ("POST", "/v1/containers", f"Bearer {provider_key}"),
+            ("POST", "/v1/containers", f"Bearer {provider_key}"),
+            ("POST", "/v1/containers", f"Bearer {provider_key}"),
+            ("POST", "/v1/containers", f"Bearer {provider_key}"),
+        ]
 
         first: Final = owner.containers.with_raw_response.list(limit=2, order="desc", extra_query={"model": model})
-        assert _ContainerPage.model_validate_json(first.http_response.text) == _page((own_first, own_second), True), (
+        assert _ContainerPage.model_validate_json(first.http_response.text) == _page((own_first, own_second), False), (
             first.http_response.text
         )
         assert [container.id for container in first.parse().data] == [own_first, own_second]
         auth: Final = f"Bearer {provider_key}"
         assert _requests(wire) == [
-            ("GET", "/v1/containers?limit=100&order=desc", auth),
-            ("GET", f"/v1/containers?after={ownerless}&limit=100&order=desc", auth),
+            ("GET", f"/v1/containers?limit={_OWNED_LIST_UPSTREAM_PAGE_SIZE}&order=desc", auth),
+            (
+                "GET",
+                f"/v1/containers?after={ownerless}&limit={_OWNED_LIST_UPSTREAM_PAGE_SIZE}&order=desc",
+                auth,
+            ),
         ]
 
-        second: Final = gateway.client.get(
+        _create(owner, model, 2)
+        assert _requests(wire) == [("POST", "/v1/containers", f"Bearer {provider_key}")]
+
+        listed_after_create: Final = owner.containers.with_raw_response.list(
+            limit=2, order="desc", extra_query={"model": model}
+        )
+        assert _ContainerPage.model_validate_json(listed_after_create.http_response.text) == _page(
+            (own_first, own_second), True
+        ), listed_after_create.http_response.text
+        assert [container.id for container in listed_after_create.parse().data] == [own_first, own_second]
+        assert _requests(wire) == [
+            ("GET", f"/v1/containers?limit={_OWNED_LIST_UPSTREAM_PAGE_SIZE}&order=desc", auth),
+            (
+                "GET",
+                f"/v1/containers?after={ownerless}&limit={_OWNED_LIST_UPSTREAM_PAGE_SIZE}&order=desc",
+                auth,
+            ),
+        ]
+
+        alias_page: Final = gateway.client.get(
             "/containers",
             params={"limit": "2", "after": own_second, "order": "desc", "model": model},
             headers={"Authorization": f"Bearer {owner_key}"},
         )
-        assert second.status_code == 200, second.text
-        assert _ContainerPage.model_validate_json(second.text) == _page((own_third,), False), second.text
-        assert _requests(wire) == [("GET", f"/v1/containers?after={own_second}&limit=100&order=desc", auth)]
+        assert alias_page.status_code == 200, alias_page.text
+        assert _ContainerPage.model_validate_json(alias_page.text) == _page((own_third,), False), alias_page.text
+        assert _requests(wire) == [
+            ("GET", f"/v1/containers?after={own_second}&limit={_OWNED_LIST_UPSTREAM_PAGE_SIZE}&order=desc", auth)
+        ]
 
         admin: Final = _client(gateway, gateway.key, model).containers.with_raw_response.list(
             limit=2, order="desc", extra_query={"model": model}

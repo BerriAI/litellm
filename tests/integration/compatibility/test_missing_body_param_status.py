@@ -1816,6 +1816,175 @@ def test_documented_json_video_extension_routes_and_decodes_the_reference(gatewa
         assert len(wire.drain()) == 1
 
 
+def test_documented_json_video_edit_routes_and_decodes_the_reference(gateway: Gateway) -> None:
+    seen: Final[list[Request]] = []
+    with wire_server(_video_upstream(seen)) as wire, gateway.scenario() as scenario:
+        model: Final = _video_model(scenario, wire)
+        _routable_over_gateway(gateway, model)
+        encoded: Final = encode_video_id_with_provider("video-audit", "openai", model_id=model)
+        response: Final = gateway.request("POST", "/v1/videos/edits", {"prompt": "edit", "video": {"id": encoded}})
+        assert [_video_target(request) for request in seen] == [
+            ("POST", "/v1/videos/edits", f"Bearer {_VIDEO_PROVIDER_KEY}")
+        ], response.text
+        assert response.status_code == 200, response.text
+        video: Final = Video.model_validate_json(response.text)
+        assert video == _client_video(video.id, model, created=False), response.text
+        assert _upstream_video_id(video) == ("openai", _VIDEO_UPSTREAM_ID), response.text
+        assert JSON_OBJECT.validate_json(seen[0].body) == {
+            "prompt": "edit",
+            "video": {"id": "video-audit"},
+        }, seen[0].body
+        assert len(wire.drain()) == 1
+
+
+def test_multipart_bracketed_video_reference_reaches_upstream_as_a_decoded_id(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: multipart video[id]=<encoded id> to /v1/videos/edits and /v1/videos/extensions returns 404 and "
+        "never reaches the provider because the handler only reads a top-level video field"
+    )
+    seen: Final[list[Request]] = []
+    with wire_server(_video_upstream(seen)) as wire, gateway.scenario() as scenario:
+        model: Final = _video_model(scenario, wire)
+        _routable_over_gateway(gateway, model)
+        encoded: Final = encode_video_id_with_provider("video-source", "openai", model_id=model)
+        auth: Final = {"Authorization": f"Bearer {gateway.key}"}
+        edit_response: Final = gateway.client.post(
+            "/v1/videos/edits",
+            files={"prompt": (None, "edit"), "video[id]": (None, encoded)},
+            headers=auth,
+        )
+        extension_response: Final = gateway.client.post(
+            "/videos/extensions",
+            files={
+                "prompt": (None, "extend"),
+                "seconds": (None, "4"),
+                "video[id]": (None, encoded),
+            },
+            headers=auth,
+        )
+        responses: Final = (edit_response, extension_response)
+        assert [_video_target(request) for request in seen] == [
+            ("POST", "/v1/videos/edits", f"Bearer {_VIDEO_PROVIDER_KEY}"),
+            ("POST", "/v1/videos/extensions", f"Bearer {_VIDEO_PROVIDER_KEY}"),
+        ], [response.text for response in responses]
+        assert edit_response.status_code == 200, edit_response.text
+        assert extension_response.status_code == 200, extension_response.text
+        edit_video: Final = Video.model_validate_json(edit_response.text)
+        extension_video: Final = Video.model_validate_json(extension_response.text)
+        assert edit_video == _client_video(edit_video.id, model, created=False), edit_response.text
+        assert extension_video == _client_video(extension_video.id, model, created=False), extension_response.text
+        assert _upstream_video_id(edit_video) == ("openai", _VIDEO_UPSTREAM_ID), edit_response.text
+        assert _upstream_video_id(extension_video) == ("openai", _VIDEO_UPSTREAM_ID), extension_response.text
+        assert [JSON_OBJECT.validate_json(request.body) for request in seen] == [
+            {"prompt": "edit", "video": {"id": "video-source"}},
+            {"prompt": "extend", "seconds": "4", "video": {"id": "video-source"}},
+        ], [request.body for request in seen]
+        assert len(wire.drain()) == 2
+
+
+def test_multipart_object_input_reference_reaches_upstream_as_bracketed_text_parts(gateway: Gateway) -> None:
+    seen: Final[list[Request]] = []
+    with wire_server(_video_upstream(seen)) as wire, gateway.scenario() as scenario:
+        model: Final = _video_model(scenario, wire)
+        _routable_over_gateway(gateway, model)
+        auth: Final = {"Authorization": f"Bearer {gateway.key}"}
+        image_response: Final = gateway.client.post(
+            "/v1/videos",
+            files={
+                "model": (None, model),
+                "prompt": (None, "p"),
+                "input_reference[image_url]": (None, "https://example.com/a.png"),
+            },
+            headers=auth,
+        )
+        file_id_response: Final = gateway.client.post(
+            "/v1/videos",
+            files={
+                "model": (None, model),
+                "prompt": (None, "p"),
+                "input_reference[file_id]": (None, "file_abc"),
+            },
+            headers=auth,
+        )
+        responses: Final = (image_response, file_id_response)
+        assert [_video_target(request) for request in seen] == [
+            ("POST", "/v1/videos", f"Bearer {_VIDEO_PROVIDER_KEY}"),
+            ("POST", "/v1/videos", f"Bearer {_VIDEO_PROVIDER_KEY}"),
+        ], [response.text for response in responses]
+        assert image_response.status_code == 200, image_response.text
+        assert file_id_response.status_code == 200, file_id_response.text
+        image_video: Final = Video.model_validate_json(image_response.text)
+        file_id_video: Final = Video.model_validate_json(file_id_response.text)
+        assert image_video == _client_video(image_video.id, model, created=True), image_response.text
+        assert file_id_video == _client_video(file_id_video.id, model, created=True), file_id_response.text
+        assert _upstream_video_id(image_video) == ("openai", _VIDEO_UPSTREAM_ID), image_response.text
+        assert _upstream_video_id(file_id_video) == ("openai", _VIDEO_UPSTREAM_ID), file_id_response.text
+        assert sorted(_multipart_parts(seen[0])) == sorted(
+            (
+                ("model", None, "text/plain", b"sora-2"),
+                ("prompt", None, "text/plain", b"p"),
+                ("input_reference[image_url]", None, "text/plain", b"https://example.com/a.png"),
+            )
+        ), seen[0].body
+        assert sorted(_multipart_parts(seen[1])) == sorted(
+            (
+                ("model", None, "text/plain", b"sora-2"),
+                ("prompt", None, "text/plain", b"p"),
+                ("input_reference[file_id]", None, "text/plain", b"file_abc"),
+            )
+        ), seen[1].body
+        assert len(wire.drain()) == 2
+
+
+def test_json_object_input_reference_reaches_upstream_as_bracketed_text_parts(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: JSON input_reference {image_url} or {file_id} to /v1/videos returns 400 'dict' object has no "
+        "attribute 'read' and the provider gets an empty multipart body"
+    )
+    seen: Final[list[Request]] = []
+    with wire_server(_video_upstream(seen)) as wire, gateway.scenario() as scenario:
+        model: Final = _video_model(scenario, wire)
+        _routable_over_gateway(gateway, model)
+        image_response: Final = gateway.request(
+            "POST",
+            "/v1/videos",
+            {"model": model, "prompt": "p", "input_reference": {"image_url": "https://example.com/a.png"}},
+        )
+        file_id_response: Final = gateway.request(
+            "POST",
+            "/v1/videos",
+            {"model": model, "prompt": "p", "input_reference": {"file_id": "file_abc"}},
+        )
+        responses: Final = (image_response, file_id_response)
+        assert [_video_target(request) for request in seen] == [
+            ("POST", "/v1/videos", f"Bearer {_VIDEO_PROVIDER_KEY}"),
+            ("POST", "/v1/videos", f"Bearer {_VIDEO_PROVIDER_KEY}"),
+        ], [response.text for response in responses]
+        assert image_response.status_code == 200, image_response.text
+        assert file_id_response.status_code == 200, file_id_response.text
+        image_video: Final = Video.model_validate_json(image_response.text)
+        file_id_video: Final = Video.model_validate_json(file_id_response.text)
+        assert image_video == _client_video(image_video.id, model, created=True), image_response.text
+        assert file_id_video == _client_video(file_id_video.id, model, created=True), file_id_response.text
+        assert _upstream_video_id(image_video) == ("openai", _VIDEO_UPSTREAM_ID), image_response.text
+        assert _upstream_video_id(file_id_video) == ("openai", _VIDEO_UPSTREAM_ID), file_id_response.text
+        assert sorted(_multipart_parts(seen[0])) == sorted(
+            (
+                ("model", None, "text/plain", b"sora-2"),
+                ("prompt", None, "text/plain", b"p"),
+                ("input_reference[image_url]", None, "text/plain", b"https://example.com/a.png"),
+            )
+        ), seen[0].body
+        assert sorted(_multipart_parts(seen[1])) == sorted(
+            (
+                ("model", None, "text/plain", b"sora-2"),
+                ("prompt", None, "text/plain", b"p"),
+                ("input_reference[file_id]", None, "text/plain", b"file_abc"),
+            )
+        ), seen[1].body
+        assert len(wire.drain()) == 2
+
+
 def test_json_video_create_decodes_character_ids_into_text_parts(gateway: Gateway) -> None:
     seen: Final[list[Request]] = []
     with wire_server(_video_upstream(seen)) as wire, gateway.scenario() as scenario:
