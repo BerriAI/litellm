@@ -233,7 +233,7 @@ class Burst:
                     call.path, json=call.body, headers={"Authorization": f"Bearer {self._key}"}
                 )
             answer = Answer(call, response.status_code, response.text)
-        except httpx.HTTPError as error:  # a killed worker or a stopped proxy drops the in-flight request
+        except httpx.HTTPError as error:
             answer = Answer(call, None, f"{type(error).__name__}: {error}"[:200])
         with self._lock:
             self._answers += 1
@@ -333,7 +333,7 @@ def _proxy_url(gateway: Gateway) -> str:
     return str(gateway.client.base_url).rstrip("/")
 
 
-@pytest.mark.timeout(300)  # owned Redis, owned two-worker proxy boot, a 24-request burst, Redis restart
+@pytest.mark.timeout(300)
 def test_redis_stopped_mid_burst_answers_every_request_and_never_pins_an_empty_answer_after(
     gateway: Gateway, tmp_path: Path, record_property: RecordProperty
 ) -> None:
@@ -379,7 +379,7 @@ def test_redis_stopped_mid_burst_answers_every_request_and_never_pins_an_empty_a
             _assert_empty_answer_reaches_upstream_again(target, key, upstream, fleet.flip)
 
 
-@pytest.mark.timeout(300)  # owned Redis, owned two-worker proxy boot, a 24-request burst under CLIENT PAUSE
+@pytest.mark.timeout(300)
 def test_redis_paused_mid_burst_answers_every_request_and_never_pins_an_empty_answer_after(
     gateway: Gateway, tmp_path: Path, record_property: RecordProperty
 ) -> None:
@@ -414,7 +414,7 @@ def test_redis_paused_mid_burst_answers_every_request_and_never_pins_an_empty_an
             _assert_empty_answer_reaches_upstream_again(target, key, upstream, fleet.flip)
 
 
-@pytest.mark.timeout(300)  # owned two-worker proxy boot, a worker kill, a 12-request burst, the respawn
+@pytest.mark.timeout(300)
 def test_worker_killed_before_burst_leaves_the_survivor_serving_and_never_pins_an_empty_answer(
     gateway: Gateway, tmp_path: Path, record_property: RecordProperty
 ) -> None:
@@ -464,7 +464,7 @@ def _batch(target: str, key: str, body: dict[str, JsonValue], size: int) -> tupl
     return tuple(_chat(target, key, body) for _ in range(size))
 
 
-@pytest.mark.timeout(300)  # owned two-worker proxy boot with the in-memory response cache
+@pytest.mark.timeout(300)
 def test_in_memory_cache_mode_never_serves_an_empty_answer_from_a_worker_store(
     gateway: Gateway, tmp_path: Path
 ) -> None:
