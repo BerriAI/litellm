@@ -199,8 +199,14 @@ def _check_passthrough_routes_caller_permission(
         and (getattr(data, "denied_passthrough_routes", None) or None) != existing_denied
     ):
         raise _passthrough_routes_permission_error("denied_passthrough_routes", entity)
-    if isinstance(metadata, dict) and (metadata.get("denied_passthrough_routes") or None) != existing_denied:
+    if _metadata_changes_denied_routes(data, metadata, existing_denied):
         raise _passthrough_routes_permission_error("metadata.denied_passthrough_routes", entity)
+
+
+def _metadata_changes_denied_routes(data: BaseModel, metadata: object, existing_denied: object) -> bool:
+    if isinstance(metadata, dict):
+        return (metadata.get("denied_passthrough_routes") or None) != existing_denied
+    return metadata is None and "metadata" in data.model_fields_set and existing_denied is not None
 
 
 def _check_disable_global_guardrails_caller_permission(

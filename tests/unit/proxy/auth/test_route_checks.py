@@ -4572,6 +4572,31 @@ def test_dot_and_empty_segments_cannot_reach_a_denied_route(route):
     assert "Matched `/svc/admin` in `denied_passthrough_routes`" in exc_info.value.detail
 
 
+@pytest.mark.parametrize("route", ["/svc/admin", "/svc/admin/", "/svc/admin/users"])
+def test_trailing_slash_deny_entry_blocks_the_route_and_everything_under_it(route):
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin/"]},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_route_with_registered_routes(route=route, valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert "Matched `/svc/admin/` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+def test_trailing_slash_deny_entry_does_not_match_a_longer_segment():
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin/"]},
+    )
+
+    _check_route_with_registered_routes(route="/svc/administrator", valid_token=valid_token)
+
+
 def test_dot_segments_resolving_outside_a_denied_route_still_pass():
     valid_token = UserAPIKeyAuth(
         user_id="test_user",

@@ -705,6 +705,8 @@ class RouteChecks:
         clean_prefix_length: Final = next(
             (index for index, segment in enumerate(segments) if segment in ("", ".", "..")), len(segments)
         )
+        if clean_prefix_length == len(segments):
+            return frozenset(("/" + "/".join(segments),))
         resolved: Final = (
             RouteChecks._join_resolved_subpath(segments[:index], segments[index:])
             for index in range(clean_prefix_length + 1)
@@ -718,8 +720,9 @@ class RouteChecks:
 
     @staticmethod
     def _route_matches_denied_route(route: str, denied_route: str) -> bool:
+        normalized_denied_route: Final = denied_route.rstrip("/") or "/"
         return RouteChecks._route_matches_allowed_route(
-            route=route, allowed_route=denied_route
+            route=route, allowed_route=normalized_denied_route
         ) or RouteChecks.route_matches_wildcard_pattern(route=route, pattern=denied_route)
 
     @staticmethod
@@ -728,13 +731,17 @@ class RouteChecks:
         First ``denied_passthrough_routes`` entry across ``metadata_sources`` that matches ``route``.
         Unlike the allowlist (key list, else team list), every source's deny list applies.
         """
-        forwardable_routes: Final = RouteChecks._forwardable_routes(route)
-        denied_routes: Final = itertools.chain.from_iterable(
-            cast(  # cast-ok: management endpoints validate this metadata key as a list of route strings on write
-                "list[str]", (metadata or {}).get("denied_passthrough_routes") or []
+        denied_routes: Final = tuple(
+            itertools.chain.from_iterable(
+                cast(  # cast-ok: management endpoints validate this metadata key as a list of route strings on write
+                    "list[str]", (metadata or {}).get("denied_passthrough_routes") or []
+                )
+                for metadata in metadata_sources
             )
-            for metadata in metadata_sources
         )
+        if not denied_routes:
+            return None
+        forwardable_routes: Final = RouteChecks._forwardable_routes(route)
         return next(
             (
                 denied_route

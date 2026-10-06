@@ -744,8 +744,9 @@ class TestDeniedPassthroughRoutesCallerPermission:
             ({"denied_passthrough_routes": []}, "denied_passthrough_routes"),
             ({"denied_passthrough_routes": ["/v1/other"]}, "denied_passthrough_routes"),
             ({"metadata": {"team": "core"}}, "metadata.denied_passthrough_routes"),
+            ({"metadata": None}, "metadata.denied_passthrough_routes"),
         ],
-        ids=["cleared", "replaced", "dropped-by-metadata-replace"],
+        ids=["cleared", "replaced", "dropped-by-metadata-replace", "dropped-by-null-metadata"],
     )
     def test_non_admin_cannot_change_an_existing_deny_list(self, kwargs, field):
         from litellm.proxy.management_endpoints.common_utils import _check_passthrough_routes_caller_permission
@@ -776,6 +777,15 @@ class TestDeniedPassthroughRoutesCallerPermission:
             _DenyRouteData(**kwargs),
             UserAPIKeyAuth(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER),
             existing_metadata=_EXISTING_DENY,
+        )
+
+    def test_non_admin_may_send_null_metadata_when_no_deny_list_exists(self):
+        from litellm.proxy.management_endpoints.common_utils import _check_passthrough_routes_caller_permission
+
+        _check_passthrough_routes_caller_permission(
+            _DenyRouteData(metadata=None),
+            UserAPIKeyAuth(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER),
+            existing_metadata={"team": "core"},
         )
 
     def test_malformed_metadata_deny_entries_are_rejected_even_for_proxy_admins(self):

@@ -91,6 +91,20 @@ def test_dot_and_empty_segments_cannot_reach_a_denied_subpath(gateway: Gateway, 
         assert _upstream_targets(wire) == ()
 
 
+def test_trailing_slash_deny_entry_blocks_the_route_and_everything_under_it(gateway: Gateway) -> None:
+    with wire_server(_echo) as wire, gateway.scenario() as scenario:
+        path: Final = _registered_endpoint(gateway, scenario, wire)
+        key: Final = scenario.key(allowed_passthrough_routes=[path], denied_passthrough_routes=[f"{path}/admin/"])
+
+        _assert_denied(_call(gateway, f"{path}/admin", key), f"{path}/admin/")
+        _assert_denied(_call(gateway, f"{path}/admin/", key), f"{path}/admin/")
+        _assert_denied(_call(gateway, f"{path}/admin/users", key), f"{path}/admin/")
+        sibling: Final = _call(gateway, f"{path}/public", key)
+
+        assert sibling.status_code == 200, sibling.text
+        assert _upstream_targets(wire) == ("/upstream/public",)
+
+
 def test_trailing_wildcard_deny_blocks_every_route_with_that_prefix(gateway: Gateway) -> None:
     with wire_server(_echo) as wire, gateway.scenario() as scenario:
         path: Final = _registered_endpoint(gateway, scenario, wire)
