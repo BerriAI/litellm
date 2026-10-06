@@ -1155,6 +1155,26 @@ async def test_bedrock_apply_guardrail_response_uses_OUTPUT_source():
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_response_scans_every_choice_when_latest_role_only():
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {"action": "NONE", "outputs": []}
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["blocked choice", "clean choice"]},
+            request_data={"model": "gpt-4o"},
+            input_type="response",
+        )
+
+    synthetic = mock_api.call_args.kwargs["response"]
+    assert [choice.message.content for choice in synthetic.choices] == ["blocked choice", "clean choice"]
+
+
+@pytest.mark.asyncio
 async def test_bedrock_apply_guardrail_request_uses_INPUT_source():
     """input_type='request' must call Bedrock with source=INPUT and user messages."""
     guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")

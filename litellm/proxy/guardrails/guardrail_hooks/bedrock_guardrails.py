@@ -666,11 +666,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Decide which messages an apply_guardrail scan should cover.
 
         With ``experimental_use_latest_role_message_only`` enabled, request
-        scans must select by the ORIGINAL message roles. The flat `texts` list
-        has no role information, and wrapping it in role="user" mock messages
-        makes the latest-user filter degenerate to "latest text of any role",
-        leaking tool/assistant content to the INPUT scan
-        (https://github.com/BerriAI/litellm/issues/23476).
+        scans must select by the ORIGINAL message roles. Response scans still
+        cover every text, so a clean later choice cannot release an earlier one.
+        The flat `texts` list has no role information, and wrapping it in
+        role="user" mock messages makes the latest-user filter degenerate to
+        "latest text of any role", leaking tool/assistant content to the INPUT
+        scan (https://github.com/BerriAI/litellm/issues/23476).
         """
         mock_messages: list[AllMessageValues] = [ChatCompletionUserMessage(role="user", content=text) for text in texts]
 
@@ -695,10 +696,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             list[AllMessageValues] | None,
             inputs.get("structured_messages") or request_data.get("messages"),
         )
-        if input_type != "request" or not structured_messages:
+        if input_type != "request":
+            return ApplyGuardrailMessageSelection(
+                filtered_messages=mock_messages,
+                scanned_slice=None,
+                scanned_role_subset=False,
+            )
+        if not structured_messages:
             # No role information available (e.g. raw-text callers like
-            # /guardrails/apply_guardrail) — keep the legacy behavior of
-            # scanning the latest text only.
+            # /guardrails/apply_guardrail). Keep scanning the latest text only.
             filter_result: Final = self._prepare_guardrail_messages_for_role(messages=mock_messages)
             return ApplyGuardrailMessageSelection(
                 filtered_messages=filter_result.payload_messages or mock_messages,
