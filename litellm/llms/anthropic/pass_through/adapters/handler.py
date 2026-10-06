@@ -60,6 +60,31 @@ def _messages_have_compaction_block(messages: _AnthropicMessages) -> bool:
     return False
 
 
+def _store_response_cost_before_usage_flattening(completion_response: object, kwargs: Mapping[str, object]) -> None:
+    """Compute and store the response cost while ``completion_response`` still
+    carries its full usage breakdown.
+
+    ``translate_completion_output_params`` flattens the OpenAI-shaped usage into
+    the Anthropic response (a TypedDict), dropping
+    ``completion_tokens_details.image_tokens``. The proxy builds
+    ``x-litellm-response-cost`` by recomputing from the translated response when
+    the async success handler has not stored the cost yet — a race that priced
+    image output tokens at the text rate on some calls. Storing the cost here,
+    computed from the untouched ModelResponse, makes the header and the spend
+    row price the same usage.
+    """
+    litellm_logging_obj = litellm_logging_obj_from_kwargs(kwargs)
+    if litellm_logging_obj is None:
+        return
+    try:
+        cost = litellm_logging_obj._response_cost_calculator(result=cast(ModelResponse, completion_response))
+    except Exception:
+        verbose_logger.exception("Anthropic Adapter - failed to pre-compute response cost")
+        return
+    if isinstance(cost, (int, float)):
+        litellm_logging_obj.model_call_details["response_cost"] = cost
+
+
 def _proxy_router_fallback() -> "Router | None":
     try:
         from litellm.proxy.proxy_server import llm_router as _proxy_router
@@ -679,6 +704,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            _store_response_cost_before_usage_flattening(completion_response, kwargs)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
@@ -814,6 +840,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            _store_response_cost_before_usage_flattening(completion_response, kwargs)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
