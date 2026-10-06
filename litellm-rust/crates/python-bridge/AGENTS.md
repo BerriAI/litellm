@@ -82,7 +82,7 @@ GIL handling to `litellm-host-python`.
 ## Bridge Shape
 
 - Prefer one stable method per top-level LiteLLM route, for example
-  `messages(...)`, calling the matching `litellm-inference` entrypoint.
+  `messages(...)`, calling the matching `litellm-inference-<fmt>` entrypoint.
 - Do not add one exported PyO3 function per provider helper unless there is a
   measured reason.
 - Provider dispatch belongs in the `litellm-inference-*` route crate (e.g.
