@@ -33,6 +33,35 @@ from litellm.types.utils import CallTypes, ModelResponse
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
 
+def test_replay_original_streaming_text_reset_ignores_a_foreign_context():
+    import threading
+
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+        _replay_original_streaming_text,
+    )
+
+    entered = threading.Event()
+    release = threading.Event()
+    holder: dict[str, object] = {}
+
+    def _enter() -> None:
+        manager = _replay_original_streaming_text()
+        manager.__enter__()
+        holder["manager"] = manager
+        entered.set()
+        release.wait(2)
+
+    worker = threading.Thread(target=_enter)
+    worker.start()
+    assert entered.wait(2)
+    manager = holder["manager"]
+    assert hasattr(manager, "__exit__")
+    manager.__exit__(None, None, None)
+    release.set()
+    worker.join(2)
+    assert not worker.is_alive()
+
+
 @pytest.mark.asyncio
 async def test__redact_pii_matches_function():
     """Test the _redact_pii_matches function directly"""
@@ -1152,6 +1181,25 @@ async def test_bedrock_apply_guardrail_response_uses_OUTPUT_source():
         assert synthetic.choices[0].message.role == "assistant"
         assert synthetic.choices[1].message.content == "second line"
         assert synthetic.choices[1].message.role == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_keeps_rewritten_input_when_responses_key_is_present():
+    """A caller-supplied responses key must not turn a request scan into assistant output."""
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "outputs": [{"text": "contact {EMAIL}"}],
+        }
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["contact ada@example.com"]},
+            request_data={"model": "gpt-4o", "responses": []},
+            input_type="request",
+        )
+
+    assert result["texts"] == ["contact {EMAIL}"]
 
 
 @pytest.mark.asyncio
@@ -5622,6 +5670,7 @@ def test_initialize_bedrock_wires_streaming_flags():
     assert defaulted.streaming_sampling_rate == 5
     assert defaulted.streaming_end_of_stream_only is False
     assert defaulted.streaming_buffer_release_on_scan is False
+    assert defaulted._streams_incrementally() is False
 
 
 def test_initialize_bedrock_rejects_non_positive_sampling_rate():
@@ -5658,6 +5707,8 @@ def test_update_in_memory_litellm_params_round_trips_streaming_flags():
     assert guardrail.streaming_buffer_until_moderated is True
     assert guardrail.streaming_sampling_rate == 5
     assert guardrail.streaming_end_of_stream_only is False
+    assert guardrail.streaming_buffer_release_on_scan is False
+    assert guardrail._streams_incrementally() is False
 
 
 async def _run_streaming_hook_recording_order(guardrail: BedrockGuardrail) -> list:
@@ -5754,6 +5805,7 @@ async def test_buffered_default_hook_scans_before_any_chunk():
 
     events = await _run_streaming_hook_recording_order(guardrail)
 
+    assert guardrail._streams_incrementally() is False
     assert events[0] == "scan"
     assert all(e == "scan" or e[0] == "chunk" for e in events)
     assert len([e for e in events if e != "scan"]) >= 1
@@ -5775,6 +5827,97 @@ async def test_buffered_release_on_scan_hook_releases_each_window_after_its_scan
     events = await _run_streaming_hook_recording_order(guardrail)
 
     assert events == ["scan", ("chunk", "Hello"), "scan", ("chunk", " world"), ("chunk", "")]
+
+
+@pytest.mark.asyncio
+async def test_windowed_stream_withholds_text_bedrock_anonymized():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-window-anonymize",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        streaming_buffer_release_on_scan=True,
+    )
+    yielded: list[object] = []
+
+    async def mock_stream():
+        yield _chat_chunk("my ssn is 123-45-6789", None)
+        yield _chat_chunk("", "stop")
+
+    with patch.object(
+        guardrail,
+        "make_bedrock_api_request",
+        AsyncMock(
+            return_value={
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": "my ssn is {SSN}"}],
+                "assessments": [
+                    {
+                        "sensitiveInformationPolicy": {
+                            "piiEntities": [{"type": "US_SOCIAL_SECURITY_NUMBER", "action": "ANONYMIZED"}]
+                        }
+                    }
+                ],
+            }
+        ),
+    ):
+        async for item in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            response=mock_stream(),
+            request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+        ):
+            yielded.append(item)
+
+    rendered = b"".join(item if isinstance(item, bytes) else str(item).encode() for item in yielded)
+    assert b"123-45-6789" not in rendered
+    assert b"{SSN}" in rendered
+
+
+@pytest.mark.asyncio
+async def test_windowed_flags_hold_untranslatable_sse_for_one_scan():
+    guardrail = _sse_guardrail(streaming_buffer_release_on_scan=True, streaming_sampling_rate=1)
+    events: list[str] = []
+
+    async def record_scan(*args, **kwargs):
+        events.append("scan")
+        return {"action": "NONE", "outputs": []}
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(side_effect=record_scan)):
+        async for _chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(request_route="/not-a-translated-route"),
+            response=_anthropic_sse_stream(),
+            request_data={"model": "claude", "messages": [{"role": "user", "content": "hi"}]},
+        ):
+            events.append("chunk")
+
+    assert events[0] == "scan"
+    assert events.count("scan") == 1
+    assert events.count("chunk") == len(_ANTHROPIC_SSE_CHUNKS)
+
+
+@pytest.mark.asyncio
+async def test_end_of_stream_flags_still_release_a_messages_stream():
+    guardrail = _sse_guardrail(
+        streaming_buffer_until_moderated=False,
+        streaming_end_of_stream_only=True,
+    )
+    events: list[str] = []
+
+    async def record_scan(*args, **kwargs):
+        events.append("scan")
+        return {"action": "NONE", "assessments": [], "outputs": []}
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(side_effect=record_scan)):
+        async for _chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/messages"),
+            response=_anthropic_sse_stream(),
+            request_data={"model": "claude", "messages": [{"role": "user", "content": "hi"}]},
+        ):
+            events.append("chunk")
+
+    assert events[0] == "chunk"
+    assert events.index("scan") > 0
 
 
 @pytest.mark.asyncio

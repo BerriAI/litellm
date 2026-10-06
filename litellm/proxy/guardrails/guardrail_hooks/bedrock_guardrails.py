@@ -16,7 +16,8 @@ import json
 import re
 import sys
 import time
-from collections.abc import AsyncGenerator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Generator, Mapping, Sequence
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
 from types import MappingProxyType
@@ -221,6 +222,43 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
 
 
 _RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+
+
+async def _prepend_stream_chunk(first: object, rest: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+    yield first
+    async for item in rest:
+        yield item
+
+
+_STREAMING_REPLAYS_ORIGINAL_TEXT: Final[ContextVar[bool]] = ContextVar(
+    "bedrock_streaming_replays_original_text",
+    default=False,
+)
+
+
+@contextlib.contextmanager
+def _replay_original_streaming_text() -> Generator[None, None, None]:
+    token: Final = _STREAMING_REPLAYS_ORIGINAL_TEXT.set(True)
+    try:
+        yield
+    finally:
+        try:
+            _STREAMING_REPLAYS_ORIGINAL_TEXT.reset(token)
+        except ValueError:
+            # The stream was closed on another task, so this token's context is already gone.
+            pass
+
+
+def _streaming_route_is_translatable(request_route: str | None) -> bool:
+    if request_route is None:
+        return False
+    call_types: Final = get_call_types_for_route(request_route)
+    if not call_types:
+        return False
+    from litellm.llms import load_guardrail_translation_mappings
+
+    mappings: Final = load_guardrail_translation_mappings()
+    return any(call_type in mappings for call_type in call_types)
 
 
 def _is_responses_api_route(request_route: str | None) -> bool:
@@ -659,8 +697,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         if input_type != "request" or not structured_messages:
             # No role information available (e.g. raw-text callers like
-            # /guardrails/apply_guardrail) — keep the legacy behavior of
-            # scanning the latest text only.
+            # /guardrails/apply_guardrail). Keep scanning the latest text only.
             filter_result: Final = self._prepare_guardrail_messages_for_role(messages=mock_messages)
             return ApplyGuardrailMessageSelection(
                 filtered_messages=filter_result.payload_messages or mock_messages,
@@ -2738,28 +2775,42 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
-        Process streaming response chunks.
+        Process streaming response chunks with a post_call OUTPUT scan.
 
-        Collect content from the stream and run the bedrock OUTPUT scan
-        (post_call only validates the response).
+        The streaming flags decide whether chunks are held, released per window, or sent live.
+        Raw SSE on a route with no guardrail translation is held for one full scan even when
+        those flags would otherwise send chunks before the scan. A rewrite found on that
+        streaming path is sent in place of the original text.
         """
         if self._streams_incrementally():
-            from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
-                UnifiedLLMGuardrails,
-            )
-
-            async with contextlib.aclosing(
-                UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    response=response,
-                    request_data=request_data,
-                    guardrail_to_apply=self,
-                    buffer_until_moderated_default=False,
+            response_iterator: Final = response.__aiter__()
+            try:
+                first_chunk: Final = await response_iterator.__anext__()
+            except StopAsyncIteration:
+                return
+            continued: Final = _prepend_stream_chunk(first_chunk, response_iterator)
+            if isinstance(first_chunk, (bytes, str)) and not _streaming_route_is_translatable(
+                user_api_key_dict.request_route
+            ):
+                response = continued  # rebind-ok: untranslatable SSE must fall through to the assembler
+            else:
+                from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+                    UnifiedLLMGuardrails,
                 )
-            ) as guarded:
-                async for streamed_chunk in guarded:
-                    yield streamed_chunk
-            return
+
+                with _replay_original_streaming_text():
+                    async with contextlib.aclosing(
+                        UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            response=continued,
+                            request_data=request_data,
+                            guardrail_to_apply=self,
+                            buffer_until_moderated_default=False,
+                        )
+                    ) as guarded:
+                        async for streamed_chunk in guarded:
+                            yield streamed_chunk
+                return
 
         # Responses-API events are neither chat-completions chunks nor raw
         # Anthropic SSE, so the assembly below cannot scan them; the unified
@@ -2769,14 +2820,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 UnifiedLLMGuardrails,
             )
 
-            async for translated_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_data=request_data,
-                guardrail_to_apply=self,
-                buffer_until_moderated_default=True,
-            ):
-                yield translated_chunk
+            with _replay_original_streaming_text():
+                async for translated_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=response,
+                    request_data=request_data,
+                    guardrail_to_apply=self,
+                    buffer_until_moderated_default=True,
+                ):
+                    yield translated_chunk
             return
 
         # Import here to avoid circular imports
@@ -3148,6 +3200,27 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         return inputs
 
+    def _refuse_unreplayable_streaming_rewrite(
+        self,
+        texts: Sequence[object],
+        masked_texts: Sequence[object],
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+    ) -> None:
+        if input_type != "response" or not _STREAMING_REPLAYS_ORIGINAL_TEXT.get():
+            return
+        original_texts: Final = tuple(str(text) for text in texts)
+        rewritten_texts: Final = tuple(str(text) for text in masked_texts)
+        if original_texts == rewritten_texts:
+            return
+        safe_message: Final = "\n".join(rewritten_texts) if rewritten_texts else "Response withheld"
+        raise ModifyResponseException(
+            message=safe_message,
+            model=str(request_data.get("model") or "bedrock-guardrail"),
+            request_data=request_data,  # pyright: ignore[reportArgumentType] # exception takes a dict
+            guardrail_name=self.guardrail_name,
+        )
+
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
@@ -3274,6 +3347,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             verbose_proxy_logger.debug("Bedrock Guardrail: Successfully applied guardrail")
 
+            self._refuse_unreplayable_streaming_rewrite(
+                texts=texts,
+                masked_texts=masked_texts,  # pyright: ignore[reportUnknownArgumentType] # output list is untyped
+                request_data=request_data,  # pyright: ignore[reportUnknownArgumentType] # request dict is untyped
+                input_type=input_type,
+            )
             inputs["texts"] = masked_texts
             return inputs
 
