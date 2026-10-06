@@ -18,6 +18,7 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import UnknownApiError, unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from guardrails_client import (
     GuardrailsClient,
     OpenAIModerationParamsBody,
@@ -36,6 +37,14 @@ class TestOpenAIModerationGuardrail:
     @pytest.mark.covers(
         "guardrail.openai_moderations.pre_call.blocks",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_moderation_blocks_flagged_input(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
@@ -75,6 +84,14 @@ class TestOpenAIModerationGuardrail:
     @pytest.mark.covers(
         "guardrail.openai_moderations.pre_call.blocks",
         exercised_on=["messages"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.MESSAGES,
+            providers=(Provider.GEMINI,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_moderation_blocks_flagged_input_on_messages(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str

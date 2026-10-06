@@ -9,8 +9,10 @@ from datadog_reader import DdLogsReader
 from datadog_reader import _DdAuthHeaders  # pyright: ignore[reportPrivateUsage]  # verifies private auth-header serialization
 from e2e_config import DD_SEARCH_INTERVAL, POLL_TIMEOUT
 from e2e_http import StreamingResponse
+from e2e_metadata import Domain, Subject, meta
 
 
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_failure_diagnostics_hide_credentials_without_changing_auth_headers() -> None:
     api_key: Final = "test-datadog-api-secret"
     app_key: Final = "test-datadog-app-secret"
@@ -68,6 +70,7 @@ def _reader(responses: Sequence[StreamingResponse], clock: Clock) -> tuple[DdLog
     ), search
 
 
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_429_honors_server_reset_and_preserves_duplicate_events() -> None:
     clock: Final = Clock()
     reader, search = _reader(
@@ -83,6 +86,7 @@ def test_429_honors_server_reset_and_preserves_duplicate_events() -> None:
 
 
 @pytest.mark.parametrize("reset", ("", "invalid", "nan", "inf", "-1"))
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_invalid_reset_uses_search_interval(reset: str) -> None:
     clock: Final = Clock()
     reader, _ = _reader(
@@ -93,6 +97,7 @@ def test_invalid_reset_uses_search_interval(reset: str) -> None:
     assert clock.elapsed == DD_SEARCH_INTERVAL + 0.25
 
 
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_zero_reset_cannot_create_a_busy_retry_loop() -> None:
     clock: Final = Clock()
     reader, _ = _reader(
@@ -103,6 +108,7 @@ def test_zero_reset_cannot_create_a_busy_retry_loop() -> None:
     assert clock.elapsed == 1.25
 
 
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_retry_after_is_not_shortened_by_an_earlier_reset() -> None:
     clock: Final = Clock()
     reader, _ = _reader(
@@ -114,6 +120,7 @@ def test_retry_after_is_not_shortened_by_an_earlier_reset() -> None:
     assert clock.elapsed == 8.25
 
 
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_rate_limit_wait_stops_at_deadline_without_issuing_another_request() -> None:
     clock: Final = Clock()
     reader, search = _reader(
@@ -127,6 +134,7 @@ def test_rate_limit_wait_stops_at_deadline_without_issuing_another_request() -> 
     assert search.calls == (("test-marker", 30.0),)
 
 
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_late_retry_cannot_receive_a_fresh_request_timeout() -> None:
     clock: Final = Clock()
     reader, search = _reader(
@@ -139,6 +147,7 @@ def test_late_retry_cannot_receive_a_fresh_request_timeout() -> None:
 
 
 @pytest.mark.parametrize("status", (-1, 401, 403, 500))
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_non_quota_failures_are_not_retried_or_treated_as_empty_results(status: int) -> None:
     clock: Final = Clock()
     reader, search = _reader((StreamingResponse(status_code=status, body=""), _page()), clock)
@@ -150,6 +159,7 @@ def test_non_quota_failures_are_not_retried_or_treated_as_empty_results(status: 
     assert clock.elapsed == 0
 
 
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_polling_quota_retries_share_the_original_deadline() -> None:
     clock: Final = Clock()
     reader, search = _reader(
@@ -164,6 +174,7 @@ def test_polling_quota_retries_share_the_original_deadline() -> None:
     assert len(search.calls) == 2
 
 
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_empty_polling_does_not_start_a_final_search_after_its_deadline() -> None:
     clock: Final = Clock()
     attempts: Final = int(POLL_TIMEOUT / DD_SEARCH_INTERVAL)
@@ -174,6 +185,7 @@ def test_empty_polling_does_not_start_a_final_search_after_its_deadline() -> Non
     assert len(search.calls) == attempts
 
 
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_settlement_quota_retries_keep_the_remaining_readback_budget() -> None:
     clock: Final = Clock()
     empty_reads: Final = int(POLL_TIMEOUT / DD_SEARCH_INTERVAL) - 2
@@ -191,6 +203,7 @@ def test_settlement_quota_retries_keep_the_remaining_readback_budget() -> None:
     assert len(search.calls) == empty_reads + 2
 
 
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_settlement_detects_a_duplicate_on_the_final_search() -> None:
     clock: Final = Clock()
     reader, _ = _reader((_page("first"), _page("first"), _page(), _page("first", "duplicate")), clock)
@@ -201,6 +214,7 @@ def test_settlement_detects_a_duplicate_on_the_final_search() -> None:
     assert clock.elapsed == 30
 
 
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_settlement_keeps_confirmed_events_through_empty_searches() -> None:
     clock: Final = Clock()
     reader, _ = _reader((_page("first"), _page(), _page(), _page()), clock)
@@ -211,6 +225,7 @@ def test_settlement_keeps_confirmed_events_through_empty_searches() -> None:
     assert clock.elapsed == 30
 
 
+@meta(Subject(domain=Domain.OBSERVABILITY))
 def test_late_delivery_cannot_pass_without_a_complete_settle_window() -> None:
     clock: Final = Clock()
     empty_reads: Final = int(POLL_TIMEOUT / DD_SEARCH_INTERVAL) - 2
