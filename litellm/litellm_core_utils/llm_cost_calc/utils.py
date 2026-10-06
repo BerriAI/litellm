@@ -1776,6 +1776,7 @@ def calculate_image_response_cost_from_usage(
     custom_llm_provider: str,
     model_info: ModelInfo | None = None,
     vertex_location: str | None = None,
+    service_tier: str | None = None,
 ) -> float | None:
     """
     Calculate image generation cost from usage metadata when available.
@@ -1859,6 +1860,7 @@ def calculate_image_response_cost_from_usage(
         usage=normalized_usage,
         custom_llm_provider=custom_llm_provider,
         model_info=model_info,
+        service_tier=service_tier,
         vertex_location=vertex_location,
     )
     return prompt_cost + completion_cost
@@ -1922,6 +1924,7 @@ class CostCalculatorUtils:
         call_type: str | None = None,
         model_info: ModelInfo | None = None,
         vertex_location: str | None = None,
+        service_tier: str | None = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
@@ -1964,6 +1967,7 @@ class CostCalculatorUtils:
                     image_response=completion_response,
                     model_info=pricing,
                     vertex_location=vertex_location,
+                    service_tier=service_tier,
                 )
         elif custom_llm_provider == litellm.LlmProviders.BEDROCK.value:
             if isinstance(completion_response, ImageResponse):

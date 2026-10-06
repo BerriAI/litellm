@@ -1,6 +1,8 @@
 import os
+from typing import Final
 
 import litellm
+import pytest
 from litellm.llms.vertex_ai.gemini.cost_calculator import cost_per_web_search_request
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_image_generation_cost_calculator,
@@ -10,6 +12,7 @@ from litellm.types.utils import (
     ImageResponse,
     ImageUsage,
     ImageUsageInputTokensDetails,
+    ModelInfo,
     PromptTokensDetailsWrapper,
     Usage,
 )
@@ -70,3 +73,61 @@ def test_vertex_image_generation_cost_no_web_search_when_absent(monkeypatch):
     )
 
     assert cost_zero == cost_none
+
+
+def test_vertex_image_generation_cost_prices_token_details_by_service_tier() -> None:
+    model: Final = "gemini-scripted-image-tokens"
+    model_info: Final[ModelInfo] = {
+        "key": model,
+        "max_tokens": 1000,
+        "max_input_tokens": 1000,
+        "max_output_tokens": 1000,
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 1e-5,
+        "output_cost_per_image_token": 4e-5,
+        "input_cost_per_token_priority": 4e-6,
+        "output_cost_per_token_priority": 2e-5,
+        "litellm_provider": "vertex_ai",
+        "mode": "image_generation",
+        "supported_openai_params": None,
+    }
+    usage: Final = ImageUsage.model_validate(
+        {
+            "input_tokens": 12,
+            "input_tokens_details": {"text_tokens": 12, "image_tokens": 0},
+            "output_tokens": 1340,
+            "total_tokens": 1352,
+            "completion_tokens_details": {
+                "text_tokens": 10,
+                "image_tokens": 1290,
+                "reasoning_tokens": 40,
+            },
+            "output_tokens_details": {
+                "text_tokens": 10,
+                "image_tokens": 1290,
+                "reasoning_tokens": 40,
+            },
+        }
+    )
+    image_response: Final = ImageResponse(
+        data=[ImageObject(b64_json="synthetic-image")],
+        usage=usage,
+    )
+    standard_cost: Final = vertex_image_generation_cost_calculator(
+        model=model,
+        image_response=image_response,
+        model_info=model_info,
+        vertex_location="global",
+    )
+    priority_cost: Final = vertex_image_generation_cost_calculator(
+        model=model,
+        image_response=image_response,
+        model_info=model_info,
+        vertex_location="global",
+        service_tier="priority",
+    )
+
+    expected_standard_cost: Final = 12 * 2e-6 + (10 + 40) * 1e-5 + 1290 * 4e-5
+    expected_priority_cost: Final = 12 * 4e-6 + (10 + 40) * 2e-5 + 1290 * 4e-5
+    assert standard_cost == pytest.approx(expected_standard_cost)
+    assert priority_cost == pytest.approx(expected_priority_cost)

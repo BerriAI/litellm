@@ -18,6 +18,7 @@ def cost_calculator(
     image_response: ImageResponse,
     model_info: ModelInfo | None = None,
     vertex_location: str | None = None,
+    service_tier: str | None = None,
 ) -> float:
     """
     Vertex AI Image Generation Cost Calculator
@@ -40,6 +41,7 @@ def cost_calculator(
         custom_llm_provider="vertex_ai",
         model_info=_model_info,
         vertex_location=vertex_location,
+        service_tier=service_tier,
     )
     if token_based_cost is not None:
         return token_based_cost + web_search_cost
