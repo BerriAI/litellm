@@ -13122,9 +13122,7 @@ async def realtime_websocket_endpoint(
     )
     query_params: Final = cast(  # cast-ok: cached tuples contain only the declared realtime query keys
         RealtimeQueryParams,
-        dict(  # mutable-ok: downstream realtime routing normalizes this request-scoped query mapping
-            _realtime_query_params_template(query_model, intent)
-        ),
+        dict(_realtime_query_params_template(query_model, intent)),
     )
 
     data: dict[str, object] = {

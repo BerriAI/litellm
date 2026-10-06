@@ -49,7 +49,7 @@ class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
         model: str,
         api_key: str | None = None,
     ) -> dict:
-        validated_headers: Final = {  # mutable-ok: provider authentication headers are extended before dispatch
+        validated_headers: Final = {
             **headers,
             "Content-Type": "application/json",
         }

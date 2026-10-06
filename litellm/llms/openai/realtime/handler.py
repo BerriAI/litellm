@@ -200,7 +200,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             model=sdk_model,
             extra_query=extra_query,
             extra_headers=headers,
-            websocket_connection_options={  # mutable-ok: OpenAI SDK forwards a mutable options mapping
+            websocket_connection_options={
                 "max_size": REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 **(MappingProxyType({"ssl": ssl_config}) if url.startswith("wss://") else MappingProxyType({})),
                 **(MappingProxyType({"open_timeout": timeout}) if timeout is not None else MappingProxyType({})),
@@ -241,7 +241,9 @@ class OpenAIRealtime(OpenAIChatCompletion):
             # Get provider-specific SSL configuration
             ssl_config: Final = self._get_ssl_config(url)
 
-            openai_beta_realtime: Final = client_sent_openai_beta_realtime_header(websocket)
+            openai_beta_realtime: Final = realtime_mode != "translation" and client_sent_openai_beta_realtime_header(
+                websocket
+            )
             if not openai_beta_realtime:
                 verbose_logger.debug(
                     "OpenAI Realtime: connecting with GA protocol (no OpenAI-Beta header). "

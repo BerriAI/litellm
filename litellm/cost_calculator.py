@@ -3056,7 +3056,7 @@ def handle_realtime_stream_cost_calculation(
     )
     total_cost: Final = input_cost_per_token + output_cost_per_token + transcription_cost + translation_cost
 
-    additional_costs: Final = {  # mutable-ok: logging stores a mutable per-request cost breakdown
+    additional_costs: Final = {
         key: value
         for key, value in (
             ("transcription_cost", transcription_cost),

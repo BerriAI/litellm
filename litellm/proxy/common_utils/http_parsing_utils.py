@@ -479,10 +479,8 @@ async def get_form_data(request: Request) -> dict[str, Any]:
     array_keys: Final = frozenset(key[:-2] for key, _ in form_items if key.endswith("[]"))
     normalized_items: Final = tuple((key.removesuffix("[]"), value) for key, value in form_items)
     normalized_keys: Final = frozenset(key for key, _ in normalized_items)
-    return {  # mutable-ok: request parsers expose a mutable form-data mapping to endpoint handlers
-        key: [  # mutable-ok: repeated multipart values follow the established mutable list contract
-            value for item_key, value in normalized_items if item_key == key
-        ]
+    return {
+        key: [value for item_key, value in normalized_items if item_key == key]
         if key in array_keys
         else next(value for item_key, value in reversed(normalized_items) if item_key == key)
         for key in normalized_keys

@@ -282,18 +282,18 @@ def _decode_realtime_token_payload(
 )
 @router.post(
     "/v1/realtime/translations/client_secrets",
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI decorator requires dependency lists
-    tags=["realtime"],  # mutable-ok: FastAPI decorator requires tag lists
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["realtime"],
 )
 @router.post(
     "/realtime/translations/client_secrets",
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI decorator requires dependency lists
-    tags=["realtime"],  # mutable-ok: FastAPI decorator requires tag lists
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["realtime"],
 )
 @router.post(
     "/openai/v1/realtime/translations/client_secrets",
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI decorator requires dependency lists
-    tags=["realtime"],  # mutable-ok: FastAPI decorator requires tag lists
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["realtime"],
 )
 async def create_realtime_client_secret(
     request: Request,
@@ -446,15 +446,15 @@ async def create_realtime_client_secret(
 )
 @router.post(
     "/v1/realtime/translations/calls",
-    tags=["realtime"],  # mutable-ok: FastAPI decorator requires tag lists
+    tags=["realtime"],
 )
 @router.post(
     "/realtime/translations/calls",
-    tags=["realtime"],  # mutable-ok: FastAPI decorator requires tag lists
+    tags=["realtime"],
 )
 @router.post(
     "/openai/v1/realtime/translations/calls",
-    tags=["realtime"],  # mutable-ok: FastAPI decorator requires tag lists
+    tags=["realtime"],
 )
 async def proxy_realtime_calls(
     request: Request,

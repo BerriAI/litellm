@@ -73,24 +73,18 @@ def _model_params_with_stored_credentials(model_params: Mapping[str, object]) ->
 def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
     if session.get("type") == "transcription":
         audio = session.get("audio")
-        audio = audio if isinstance(audio, dict) else {}  # mutable-ok: nested session model is rebuilt locally
+        audio = audio if isinstance(audio, dict) else {}
         audio_input = audio.get("input")
-        audio_input = (
-            audio_input if isinstance(audio_input, dict) else {}  # mutable-ok: nested session model is rebuilt locally
-        )
+        audio_input = audio_input if isinstance(audio_input, dict) else {}
         transcription = audio_input.get("transcription")
-        transcription = (
-            transcription
-            if isinstance(transcription, dict)
-            else {}  # mutable-ok: nested session model is rebuilt locally
-        )
-        return {  # mutable-ok: provider routing requires an independently mutable session payload
+        transcription = transcription if isinstance(transcription, dict) else {}
+        return {
             **session,
-            "audio": {  # mutable-ok: provider routing rebuilds nested audio configuration
+            "audio": {
                 **audio,
-                "input": {  # mutable-ok: provider routing rebuilds nested input configuration
+                "input": {
                     **audio_input,
-                    "transcription": {  # mutable-ok: resolved deployment replaces only the transcription model
+                    "transcription": {
                         **transcription,
                         "model": model_name,
                     },
@@ -228,7 +222,7 @@ async def acreate_realtime_client_secret(
     if isinstance(request_data.get("session"), dict):
         request_data["session"] = _with_resolved_session_model(request_data["session"], model_name)
     elif req.model is not None:
-        request_data["session"] = {  # mutable-ok: OpenAI SDK consumes this request-scoped session payload
+        request_data["session"] = {
             "type": "realtime",
             "model": model_name,
         }
@@ -257,7 +251,7 @@ async def acreate_realtime_translation_client_secret(
 ) -> httpx.Response:
     requested_model_name: Final = model or (session or {}).get("model") or "gpt-realtime-translate"
     session_config: Final = RealtimeSessionConfig.model_validate(
-        {  # mutable-ok: Pydantic validates this request-scoped translation session payload
+        {
             **(session or {}),
             "type": "translation",
             "model": requested_model_name,
@@ -293,18 +287,16 @@ async def acreate_realtime_translation_client_secret(
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model_name,
-        optional_params={  # mutable-ok: logging owns a mutable request metadata payload
+        optional_params={
             "expires_after": expires_after,
             "session": session,
         },
-        litellm_params={  # mutable-ok: logging owns a mutable provider metadata payload
-            "api_base": resolved_api_base
-        },
+        litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
     request_data: Final = req.model_dump(
         exclude_none=True,
-        exclude={"model"},  # mutable-ok: Pydantic requires a mutable field-exclusion set
+        exclude={"model"},
     )
     request_data["session"] = _with_resolved_session_model(request_data["session"], model_name)
     request_data["session"].pop("type", None)
@@ -482,7 +474,7 @@ async def arealtime_translation_calls(
         litellm_params=litellm_params,
     )
     session_config: Final = _with_resolved_session_model(
-        {  # mutable-ok: provider routing requires an independently mutable session payload
+        {
             **(session or {}),
             "type": "translation",
             "model": model_name,
@@ -492,13 +484,11 @@ async def arealtime_translation_calls(
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model_name,
-        optional_params={  # mutable-ok: logging owns a mutable request metadata payload
+        optional_params={
             "realtime_translation_calls": True,
             "session": session_config,
         },
-        litellm_params={  # mutable-ok: logging owns a mutable provider metadata payload
-            "api_base": resolved_api_base
-        },
+        litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
     return await base_llm_http_handler.async_realtime_calls_handler(

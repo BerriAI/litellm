@@ -11,7 +11,16 @@ from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failur
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
 
-_MANAGED_REALTIME_ROUTES: Final = frozenset(("/realtime", "/v1/realtime", "/openai/v1/realtime"))
+_MANAGED_REALTIME_ROUTES: Final = frozenset(
+    (
+        "/realtime",
+        "/v1/realtime",
+        "/openai/v1/realtime",
+        "/realtime/translations",
+        "/v1/realtime/translations",
+        "/openai/v1/realtime/translations",
+    )
+)
 _MANAGED_MODEL_ROUTES: Final = frozenset(
     f"{prefix}/{operation}"
     for prefix, operation in product(

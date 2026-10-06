@@ -364,6 +364,10 @@ async def test_unknown_invocation_target_leaves_billing_unset(monkeypatch: pytes
         ("/v1beta/models/gemini-model:generateContent", "POST", True),
         ("/v1/realtime", "GET", True),
         ("/v1/realtime", "POST", False),
+        ("/v1/realtime/translations", "GET", True),
+        ("/v1/realtime/translations", "POST", False),
+        ("/v1/realtime/translations/client_secrets", "POST", False),
+        ("/v1/realtime/translations/calls", "POST", False),
         ("/v1/realtime/client_secrets", "POST", False),
         ("/mcp/tools/call", "POST", True),
         ("/a2a/target/message/send", "POST", True),
@@ -437,7 +441,17 @@ def test_managed_inference_ignores_unsupported_query_model():
     )
 
 
-@pytest.mark.parametrize("route", ["/realtime", "/v1/realtime", "/openai/v1/realtime"])
+@pytest.mark.parametrize(
+    "route",
+    (
+        "/realtime",
+        "/v1/realtime",
+        "/openai/v1/realtime",
+        "/realtime/translations",
+        "/v1/realtime/translations",
+        "/openai/v1/realtime/translations",
+    ),
+)
 def test_managed_realtime_requires_a_model_and_ignores_completion_defaults(route: str) -> None:
     from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
 
@@ -574,6 +588,7 @@ def test_registered_inference_routes_have_an_explicit_managed_access_decision(ro
         "/vector_stores", "/vector_store/", "/search", "/containers", "/skills", "/claude-code/",
         "/interactions", "/agents", "/responses/{", "/responses/input_tokens",
         "/realtime/client_secrets", "/realtime/calls", "/realtime/transcription_sessions",
+        "/realtime/translations/client_secrets", "/realtime/translations/calls",
     )) or normalized in ("/models", "/cursor/models", "/cursor/v1/models")
     concrete: Final = route.split("?")[0].replace("{model}", "model").replace("{model_name:path}", "model")
     assert managed_agent_route_allowed(concrete, None) is not unsupported, route

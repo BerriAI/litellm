@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 import litellm
@@ -112,6 +113,25 @@ def _decode_json_object(payload: str) -> Mapping[str, object]:
     return json.loads(payload)
 
 
+_TRANSLATION_AUDIO_FORMAT: Final = TypeAdapter(str | Mapping[str, object] | None)
+
+
+def _translation_audio_bytes_per_second(audio_format: str | Mapping[str, object] | None) -> float | None:
+    if isinstance(audio_format, str):
+        return 8000.0 if audio_format in ("g711_ulaw", "g711_alaw") else None
+    if audio_format is None:
+        return None
+    format_type: Final = audio_format.get("type")
+    rate: Final = audio_format.get("rate")
+    if format_type in ("audio/pcmu", "audio/pcma") and rate is None:
+        return 8000.0
+    if not isinstance(rate, (int, float)) or rate <= 0:
+        return None
+    if format_type == "audio/pcm":
+        return float(rate) * 2
+    return float(rate) if format_type in ("audio/pcmu", "audio/pcma") else None
+
+
 class RealtimeEventNormalizer(Protocol):
     def should_drop(self, event: object) -> bool: ...
     def normalize(self, event: dict) -> dict: ...
@@ -155,13 +175,14 @@ class RealTimeStreaming:
         self.tool_calls: list[dict] = []
         self._is_translation_session = translation_session
         self._translation_input_seconds = 0.0
+        self._translation_input_bytes_per_second = 48000.0
         self._translation_output_audio_bytes = 0
         self._translation_output_bytes_per_second = 48000.0
         self._translation_usage_finalized = False
 
         # Detect whether the client is explicitly opting into the beta protocol.
         self._client_wants_beta = self._detect_beta_header(websocket)
-        self._backend_uses_beta_protocol = (
+        self._backend_uses_beta_protocol = not translation_session and (
             self._client_wants_beta if backend_uses_beta_protocol is None else backend_uses_beta_protocol
         )
 
@@ -226,8 +247,8 @@ class RealTimeStreaming:
     _CLIENT_AUDIO_BUFFER_COMMIT_TYPES = frozenset(["input_audio_buffer.commit", "input_audio_buffer.end"])
     _AUDIO_FORMAT_MAP: dict[str, dict[str, str | int]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
-        "g711_ulaw": {"type": "audio/G711-ulaw", "rate": 8000},
-        "g711_alaw": {"type": "audio/G711-alaw", "rate": 8000},
+        "g711_ulaw": {"type": "audio/pcmu"},
+        "g711_alaw": {"type": "audio/pcma"},
     }
     # GA name → beta name (when client WebSocket includes OpenAI-Beta: realtime=v1)
     _GA_TO_BETA_EVENT_TYPES: dict[str, str] = {
@@ -492,7 +513,7 @@ class RealTimeStreaming:
                     )
                 self._translation_usage_finalized = True
             return
-        self._capture_translation_output_format(event_obj)
+        self._capture_translation_audio_formats(event_obj)
         if event_obj.get("type") not in (
             "session.output_audio.delta",
             "response.output_audio.delta",
@@ -515,35 +536,38 @@ class RealTimeStreaming:
             event: Final = _decode_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return
+        self._capture_translation_audio_formats(event)
         if event.get("type") != "session.input_audio_buffer.append" or not isinstance(audio := event.get("audio"), str):
             return
         try:
             decoded: Final = base64.b64decode(audio, validate=True)
         except (ValueError, TypeError):
             return
-        self._translation_input_seconds += len(decoded) / 48000.0
+        self._translation_input_seconds += len(decoded) / self._translation_input_bytes_per_second
 
-    def _capture_translation_output_format(self, event_obj: Mapping[str, object]) -> None:
+    def _capture_translation_audio_formats(self, event_obj: Mapping[str, object]) -> None:
         session: Final = event_obj.get("session")
         if not isinstance(session, dict):
             return
         audio: Final = session.get("audio")
-        output: Final = audio.get("output") if isinstance(audio, dict) else None
-        audio_format: Final = output.get("format") if isinstance(output, dict) else None
-        if isinstance(audio_format, str):
-            if audio_format in ("g711_ulaw", "g711_alaw"):
-                self._translation_output_bytes_per_second = 8000.0
+        if not isinstance(audio, dict):
             return
-        if not isinstance(audio_format, dict):
-            return
-        format_type: Final = audio_format.get("type")
-        rate: Final = audio_format.get("rate")
-        if not isinstance(rate, (int, float)) or rate <= 0:
-            return
-        if format_type == "audio/pcm":
-            self._translation_output_bytes_per_second = float(rate) * 2
-        elif format_type in ("audio/pcmu", "audio/pcma"):
-            self._translation_output_bytes_per_second = float(rate)
+        for direction, configuration in (("input", audio.get("input")), ("output", audio.get("output"))):
+            if not isinstance(configuration, dict):
+                continue
+            try:
+                if (
+                    bytes_per_second := _translation_audio_bytes_per_second(
+                        _TRANSLATION_AUDIO_FORMAT.validate_python(configuration.get("format"))
+                    )
+                ) is None:
+                    continue
+            except ValidationError:
+                continue
+            if direction == "input":
+                self._translation_input_bytes_per_second = bytes_per_second
+            else:
+                self._translation_output_bytes_per_second = bytes_per_second
 
     def _finalize_translation_usage(self) -> None:
         if self._translation_usage_finalized:

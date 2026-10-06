@@ -6421,7 +6421,7 @@ class BaseLLMHTTPHandler:
             logging_obj.pre_call(
                 input=request_data,
                 api_key="",
-                additional_args={  # mutable-ok: logging owns a mutable request metadata payload
+                additional_args={
                     "complete_input_dict": request_data,
                     "api_base": normalized_api_base,
                 },
@@ -6429,10 +6429,7 @@ class BaseLLMHTTPHandler:
             try:
                 configured_client: Final = openai_client.with_options(
                     timeout=timeout,
-                    set_default_headers={  # mutable-ok: OpenAI SDK accepts a mutable custom-header mapping
-                        key: str(value)
-                        for key, value in (extra_headers or {}).items()  # mutable-ok: SDK requires concrete headers
-                    },
+                    set_default_headers={key: str(value) for key, value in (extra_headers or {}).items()},
                 )
                 raw_response: Final = await configured_client.post(
                     "/realtime/client_secrets",
@@ -6504,7 +6501,7 @@ class BaseLLMHTTPHandler:
             logging_obj.pre_call(
                 input=request_data,
                 api_key="",
-                additional_args={  # mutable-ok: logging owns a mutable request metadata payload
+                additional_args={
                     "complete_input_dict": request_data,
                     "api_base": normalized_api_base,
                 },
@@ -6637,7 +6634,7 @@ class BaseLLMHTTPHandler:
         logging_obj.pre_call(
             input="realtime_sdp_offer",
             api_key="",
-            additional_args={  # mutable-ok: logging owns a mutable request metadata payload
+            additional_args={
                 "api_base": normalized_api_base,
                 "session": session_data,
             },
@@ -6646,7 +6643,7 @@ class BaseLLMHTTPHandler:
             if translation:
                 configured_client: Final = openai_client.with_options(
                     timeout=timeout,
-                    set_default_headers={  # mutable-ok: OpenAI SDK accepts a mutable custom-header mapping
+                    set_default_headers={
                         "Content-Type": "application/sdp",
                         **MappingProxyType(
                             {key: str(value) for key, value in (extra_headers or MappingProxyType({})).items()}
@@ -6687,7 +6684,7 @@ class BaseLLMHTTPHandler:
 
     @staticmethod
     def _decoded_realtime_sdk_response(response: httpx.Response) -> httpx.Response:
-        headers: Final = {  # mutable-ok: httpx accepts a concrete response header mapping
+        headers: Final = {
             key: value
             for key, value in response.headers.items()
             if key.lower() not in ("content-encoding", "content-length", "transfer-encoding")
@@ -6732,9 +6729,7 @@ class BaseLLMHTTPHandler:
           - session: JSON string with {"type": "realtime", "model": "...", ...}
         """
         session_data: Final[dict[str, object]] = {  # mutable-ok: model and session type are resolved locally
-            **(
-                session_config or {}  # mutable-ok: absent session configuration starts from an empty provider payload
-            )
+            **(session_config or {})
         }
         if "type" not in session_data:
             session_data["type"] = "translation" if translation else "realtime"

@@ -1,8 +1,12 @@
+import asyncio
 import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from openai import AsyncOpenAI, omit
+from pydantic import TypeAdapter
 
 
 class DummySDKConnectionManager:
@@ -407,24 +411,35 @@ def test_translation_url_uses_dedicated_path():
 
 
 @pytest.mark.asyncio
-async def test_translation_websocket_uses_direct_transport():
+@pytest.mark.parametrize("beta_client", (False, True))
+async def test_translation_websocket_uses_direct_transport(beta_client: bool) -> None:
     from litellm.llms.openai.realtime.handler import OpenAIRealtime
 
-    backend = AsyncMock()
+    backend: Final = AsyncMock()
+    pending: Final = asyncio.Event()
 
-    class TranslationConnectionManager:
-        async def __aenter__(self):
-            return backend
+    async def receive_backend() -> str:
+        await pending.wait()
+        return ""
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-    websocket = MagicMock()
-    websocket.scope = {"headers": []}
+    backend.recv.side_effect = receive_backend
+    websocket: Final = MagicMock()
+    websocket.scope = {"headers": [(b"openai-beta", b"realtime=v1")] if beta_client else []}
+    websocket.receive_text = AsyncMock(
+        side_effect=(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "translation", "audio": {"output": {"language": "fr"}}},
+                }
+            ),
+            RuntimeError("connection closed"),
+        )
+    )
     websocket.close = AsyncMock()
-    logging_obj = MagicMock()
-    handler = OpenAIRealtime()
-    expected_url = "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
+    logging_obj: Final = MagicMock()
+    handler: Final = OpenAIRealtime()
+    expected_url: Final = "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
     assert (
         handler._construct_url(
             api_base="https://api.openai.com/v1",
@@ -434,13 +449,7 @@ async def test_translation_websocket_uses_direct_transport():
         == expected_url
     )
 
-    with (
-        patch("websockets.connect", return_value=TranslationConnectionManager()) as connect,
-        patch(  # test-quality-ok: transport test replaces the unbounded streaming loop
-            "litellm.llms.openai.realtime.handler.RealTimeStreaming"
-        ) as streaming,
-    ):
-        streaming.return_value.bidirectional_forward = AsyncMock()
+    with patch("websockets.connect", return_value=DummySDKConnectionManager(backend)) as connect:
         await handler.async_realtime(
             model="gpt-realtime-translate",
             websocket=websocket,
@@ -453,7 +462,9 @@ async def test_translation_websocket_uses_direct_transport():
 
     connect.assert_called_once()
     assert connect.call_args.args[0] == expected_url
-    assert streaming.call_args.kwargs["translation_session"] is True
+    assert "OpenAI-Beta" not in connect.call_args.kwargs["additional_headers"]
+    sent: Final = TypeAdapter(Mapping[str, object]).validate_json(backend.send.call_args_list[0].args[0])
+    assert sent["session"] == {"audio": {"output": {"language": "fr"}}}
 
 
 @pytest.mark.parametrize("sdk_client", [True, False])

@@ -604,9 +604,10 @@ async def test_client_ack_messages_keeps_beta_session_shape_for_beta_backend():
 
 
 @pytest.mark.asyncio
-async def test_translation_session_update_omits_session_type():
+@pytest.mark.parametrize("beta_client", (False, True))
+async def test_translation_session_update_omits_session_type(beta_client: bool) -> None:
     client_ws = MagicMock()
-    client_ws.scope = {"headers": []}
+    client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")] if beta_client else []}
     client_ws.receive_text = AsyncMock(
         side_effect=[
             json.dumps(
@@ -614,6 +615,8 @@ async def test_translation_session_update_omits_session_type():
                     "type": "session.update",
                     "session": {
                         "type": "translation",
+                        "input_audio_format": "g711_ulaw",
+                        "output_audio_format": "pcm16",
                         "audio": {"output": {"language": "fr"}},
                     },
                 }
@@ -637,6 +640,11 @@ async def test_translation_session_update_omits_session_type():
     sent_to_backend = json.loads(backend_ws.send.call_args_list[0].args[0])
     assert "type" not in sent_to_backend["session"]
     assert sent_to_backend["session"]["audio"]["output"]["language"] == "fr"
+    assert sent_to_backend["session"]["audio"]["input"]["format"]["type"] == "audio/pcmu", (
+        "OpenAI Realtime audio formats, checked 2026-10-06: "
+        "https://github.com/openai/openai-python/blob/v2.33.0/src/openai/types/realtime/realtime_audio_formats.py"
+    )
+    assert sent_to_backend["session"]["audio"]["output"]["format"]["type"] == "audio/pcm"
 
 
 def test_translate_event_to_beta_renames_delta_types():
@@ -2935,8 +2943,22 @@ def test_translation_audio_duration_is_finalized_once(event_type: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("output_bytes", (0, 48000))
+@pytest.mark.parametrize("format_event_type", ("session.created", "session.update"))
+@pytest.mark.parametrize(
+    "audio_format,bytes_per_second",
+    (
+        ("pcm16", 48000),
+        ("g711_ulaw", 8000),
+        ("g711_alaw", 8000),
+        ({"type": "audio/pcm", "rate": 16000}, 32000),
+        ({"type": "audio/pcmu", "rate": 8000}, 8000),
+        ({"type": "audio/pcma", "rate": 8000}, 8000),
+        ({"type": "audio/pcmu"}, 8000),
+        ({"type": "audio/pcma"}, 8000),
+    ),
+)
 async def test_translation_disconnect_bills_sent_input_audio(
-    output_bytes: int,
+    output_bytes: int, format_event_type: str, audio_format: str | Mapping[str, object], bytes_per_second: int
 ) -> None:
     import base64
 
@@ -2949,8 +2971,21 @@ async def test_translation_disconnect_bills_sent_input_audio(
         model="gpt-realtime-translate",
         translation_session=True,
     )
+    format_event: Final = {
+        "type": format_event_type,
+        "session": {"audio": {"input": {"format": audio_format}}},
+    }
+    if format_event_type == "session.update":
+        await streaming._send_to_backend(json.dumps(format_event))
+    else:
+        streaming._capture_translation_output_audio(format_event)
     await streaming._send_to_backend(
-        json.dumps({"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(96000)).decode()})
+        json.dumps(
+            {
+                "type": "session.input_audio_buffer.append",
+                "audio": base64.b64encode(bytes(bytes_per_second * 2)).decode(),
+            }
+        )
     )
     streaming._capture_translation_output_audio(
         {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(output_bytes)).decode()}

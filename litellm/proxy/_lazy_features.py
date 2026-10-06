@@ -43,7 +43,7 @@ def _include_router_prepend(attr_name: str = "router") -> Callable[["FastAPI", o
         route_count: Final = len(router.routes)
         app.include_router(getattr(module, attr_name))
         new_routes: Final = router.routes[route_count:]
-        router.routes[:] = [  # mutable-ok: FastAPI route registration requires in-place list replacement
+        router.routes[:] = [
             *new_routes,
             *router.routes[:route_count],
         ]

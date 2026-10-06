@@ -7922,7 +7922,9 @@ async def atranscription(
             if file is not None:
                 calculated_duration = calculate_request_duration(file)
                 if calculated_duration is not None:
-                    response._litellm_audio_duration = calculated_duration  # pyright: ignore[reportAttributeAccess]  # SDK streams permit runtime metadata but do not type this field
+                    response._litellm_audio_duration = (  # pyright: ignore[reportAttributeAccessIssue]  # SDK omits it
+                        calculated_duration
+                    )
             return response
         if not isinstance(response, TranscriptionResponse):
             raise ValueError(
@@ -8273,7 +8275,9 @@ def transcription(
         calculated_duration: Final = calculate_request_duration(file)
         if isinstance(response, (Stream, AsyncStream)):
             if calculated_duration is not None:
-                response._litellm_audio_duration = calculated_duration  # pyright: ignore[reportAttributeAccess]  # SDK streams permit runtime metadata but do not type this field
+                response._litellm_audio_duration = (  # pyright: ignore[reportAttributeAccessIssue]  # SDK omits it
+                    calculated_duration
+                )
         elif getattr(response, "duration", None) is None and calculated_duration is not None:
             response.set_audio_transcription_duration(calculated_duration)
 
