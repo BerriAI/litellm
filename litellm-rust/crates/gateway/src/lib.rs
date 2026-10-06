@@ -1,8 +1,6 @@
 mod auth;
 mod error;
 mod secrets;
-pub use error::Error;
-
 use std::{sync::Arc, time::Instant};
 
 use axum::{
@@ -12,8 +10,8 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+pub use error::Error;
 use http_body_util::BodyExt;
-
 use litellm_config::Config;
 use litellm_gateway_auth::Auth;
 use litellm_gateway_inference::{Gateway, ModelRouter};

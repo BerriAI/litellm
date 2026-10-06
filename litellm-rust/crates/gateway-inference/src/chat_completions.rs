@@ -1,4 +1,3 @@
-use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{
@@ -6,6 +5,8 @@ use axum::{
     extract::{Path, State},
     response::{IntoResponse, Response},
 };
+use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_host::interceptors::Chain;
 use litellm_inference_chat::types::ChatCompletionsCall;
 use serde_json::{Map, Value};
 
@@ -40,8 +41,7 @@ async fn handle(
     identity: &AuthenticatedRequest,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(gateway, &body)?;
-    request::authorize_model(identity, deployment, &body).await?;
+    let (body, deployment) = request::route(gateway, identity, body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.chat_completions.clone();
     let route = match &gateway.cache {
@@ -72,7 +72,7 @@ async fn handle(
             cache_options.policy,
         ),
         (),
-        headers.clone(),
+        Chain(headers.clone(), gateway.hooks.inference.clone()),
         litellm_host_http::Unary::new(Json),
         None,
     )

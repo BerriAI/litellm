@@ -9,6 +9,9 @@ repository.workspace = true
 litellm-config.workspace = true
 litellm-inference.workspace = true
 litellm-inference-messages.workspace = true
+futures-util.workspace = true
 
 [dev-dependencies]
+futures-util.workspace = true
+tokio.workspace = true
 rstest.workspace = true

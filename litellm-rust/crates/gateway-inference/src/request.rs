@@ -90,7 +90,7 @@ fn object(body: &[u8]) -> Result<Map<String, Value>, Error> {
     }
 }
 
-pub(crate) async fn authorize_model(
+async fn authorize_model(
     identity: &litellm_gateway_auth::AuthenticatedRequest,
     deployment: &Deployment,
     body: &Map<String, Value>,
@@ -110,7 +110,18 @@ pub(crate) async fn authorize_model(
     Ok(())
 }
 
-pub(crate) fn resolve_deployment<'a>(
+pub(crate) async fn route<'a>(
+    gateway: &'a Gateway,
+    identity: &litellm_gateway_auth::AuthenticatedRequest,
+    body: Map<String, Value>,
+) -> Result<(Map<String, Value>, &'a Deployment), Error> {
+    let body = gateway.hooks.gateway.pre_call(identity, body).await?;
+    let deployment = resolve_deployment(gateway, &body).await?;
+    authorize_model(identity, deployment, &body).await?;
+    Ok((body, deployment))
+}
+
+async fn resolve_deployment<'a>(
     gateway: &'a Gateway,
     body: &Map<String, Value>,
 ) -> Result<&'a Deployment, Error> {
@@ -120,7 +131,8 @@ pub(crate) fn resolve_deployment<'a>(
         .ok_or_else(|| Error::InvalidBody("model is required".into()))?;
     gateway
         .models
-        .get(model)
+        .select(model)
+        .await
         .ok_or_else(|| Error::UnknownModel(model.to_owned()))
 }
 

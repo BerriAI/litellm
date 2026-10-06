@@ -1,6 +1,6 @@
-use axum::http::StatusCode;
 use axum::{
     Json,
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use litellm_http::transport::Error as TransportError;
@@ -28,6 +28,8 @@ pub enum Error {
     BodyTooLarge,
     #[error("{0}")]
     Internal(String),
+    #[error("{message}")]
+    Rejected { status: StatusCode, message: String },
 }
 
 impl IntoResponse for Error {
@@ -72,6 +74,7 @@ impl Error {
             }
             Self::Route(error) if error.is_request() => StatusCode::BAD_REQUEST,
             Self::Route(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Rejected { status, .. } => *status,
         }
     }
 

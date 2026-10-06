@@ -31,6 +31,9 @@ uuid.workspace = true
 tower-sessions-moka-store = "0.15.0"
 
 [dev-dependencies]
+futures-util.workspace = true
+litellm-host.workspace = true
+wiremock.workspace = true
 base64.workspace = true
 rstest.workspace = true
 tempfile.workspace = true

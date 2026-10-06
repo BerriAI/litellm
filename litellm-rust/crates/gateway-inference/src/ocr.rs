@@ -1,8 +1,8 @@
-use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use litellm_auth::SecretValue;
+use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_inference_ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
 use litellm_llms::base_llm::ocr::transformation::decode_request_value;
 use litellm_llms_types::formats::ocr::OcrDocument;
@@ -35,8 +35,7 @@ async fn handle(
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let deployment = request::resolve_deployment(gateway, &body)?;
-    request::authorize_model(identity, deployment, &body).await?;
+    let (body, deployment) = request::route(gateway, identity, body).await?;
     let document = match upload {
         Some(upload) => OcrDocumentInput::Bytes {
             bytes: upload.bytes,

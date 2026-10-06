@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+futures-util.workspace = true
 litellm-cache-response.workspace = true
 axum = { workspace = true, features = ["json", "multipart", "original-uri"] }
 base64.workspace = true

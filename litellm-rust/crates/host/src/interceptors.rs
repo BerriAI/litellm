@@ -1,5 +1,6 @@
-use std::future::Future;
+use std::{future::Future, sync::Arc};
 
+use futures_util::future::BoxFuture;
 use serde_json::Value;
 
 /// The provider request as it is about to leave, offered to the host for rewriting.
@@ -100,6 +101,83 @@ impl<E> Interceptors<E> for () {
     }
 }
 
+pub struct Chain<A, B>(pub A, pub B);
+
+impl<E, A: Interceptors<E>, B: Interceptors<E>> Interceptors<E> for Chain<A, B> {
+    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), E> {
+        self.0.result_ready(facts.clone()).await?;
+        self.1.result_ready(facts).await
+    }
+
+    async fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        context: RequestContext,
+    ) -> Result<WireRequest, E> {
+        let wire = self
+            .0
+            .before_provider_request(wire, context.clone())
+            .await?;
+        self.1.before_provider_request(wire, context).await
+    }
+
+    async fn after_provider_response(&self, raw: RawResponse) -> Result<(), E> {
+        self.0.after_provider_response(raw.clone()).await?;
+        self.1.after_provider_response(raw).await
+    }
+}
+
+pub trait DynInterceptors<E>: Send + Sync {
+    fn result_ready(&self, facts: ExecutionFacts) -> BoxFuture<'_, Result<(), E>>;
+
+    fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        context: RequestContext,
+    ) -> BoxFuture<'_, Result<WireRequest, E>>;
+
+    fn after_provider_response(&self, raw: RawResponse) -> BoxFuture<'_, Result<(), E>>;
+}
+
+impl<E: 'static, T: Interceptors<E>> DynInterceptors<E> for T {
+    fn result_ready(&self, facts: ExecutionFacts) -> BoxFuture<'_, Result<(), E>> {
+        Box::pin(Interceptors::result_ready(self, facts))
+    }
+
+    fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        context: RequestContext,
+    ) -> BoxFuture<'_, Result<WireRequest, E>> {
+        Box::pin(Interceptors::before_provider_request(self, wire, context))
+    }
+
+    fn after_provider_response(&self, raw: RawResponse) -> BoxFuture<'_, Result<(), E>> {
+        Box::pin(Interceptors::after_provider_response(self, raw))
+    }
+}
+
+impl<'o, E: 'static> Interceptors<E> for Arc<dyn DynInterceptors<E> + 'o> {
+    fn result_ready(&self, facts: ExecutionFacts) -> impl Future<Output = Result<(), E>> + Send {
+        DynInterceptors::result_ready(self.as_ref(), facts)
+    }
+
+    fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        context: RequestContext,
+    ) -> impl Future<Output = Result<WireRequest, E>> + Send {
+        DynInterceptors::before_provider_request(self.as_ref(), wire, context)
+    }
+
+    fn after_provider_response(
+        &self,
+        raw: RawResponse,
+    ) -> impl Future<Output = Result<(), E>> + Send {
+        DynInterceptors::after_provider_response(self.as_ref(), raw)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
@@ -107,10 +185,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::protocol::InterceptRequest;
     use crate::{
         machine::{CallMachine, Machine, MachineFault, MachineStep},
-        protocol::{HostRequest, Protocol},
+        protocol::{HostRequest, InterceptRequest, Protocol},
     };
 
     struct Unit;

@@ -7,6 +7,7 @@ mod audio_transcription;
 mod caching;
 mod chat_completions;
 mod error;
+mod hooks;
 pub mod messages;
 mod ocr;
 mod request;
@@ -15,6 +16,8 @@ mod responses;
 use std::sync::Arc;
 
 use axum::{Router, routing::post};
+pub use error::Error;
+pub use hooks::{GatewayHooks, Hooks};
 use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
 use litellm_inference::resources::CoreResources;
 use litellm_inference_chat::ChatCompletionsRoute;
@@ -23,10 +26,8 @@ use litellm_inference_ocr::OcrRoute;
 use litellm_inference_responses::ResponsesRoute;
 use litellm_inference_transcription::AudioTranscriptionRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
+pub use litellm_router::{Deployment, Router as ModelRouter, RouterHooks};
 use litellm_secrets::source::SecretSource;
-
-pub use error::Error;
-pub use litellm_router::{Deployment, Router as ModelRouter};
 pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
@@ -40,12 +41,21 @@ pub struct Gateway {
     pub secrets: Arc<dyn SecretSource>,
     pub resources: CoreResources,
     pub http: HttpClientConfig,
+    hooks: Hooks,
 }
 
 impl Gateway {
     pub fn with_cache(self, cache: Arc<dyn litellm_cache_response::ResponseCacheService>) -> Self {
         Self {
             cache: Some(cache),
+            ..self
+        }
+    }
+
+    pub fn with_hooks(self, hooks: Hooks) -> Self {
+        Self {
+            models: self.models.with_hooks(hooks.router.clone()),
+            hooks,
             ..self
         }
     }
@@ -84,6 +94,7 @@ impl Gateway {
             secrets,
             resources,
             http,
+            hooks: Hooks::default(),
         })
     }
 }
@@ -108,6 +119,10 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .route("/v1/embeddings", post(request::unsupported))
         .route("/completions", post(request::unsupported))
         .route("/v1/completions", post(request::unsupported))
+        .route_layer(axum::middleware::from_fn_with_state(
+            gateway.clone(),
+            hooks::post_call,
+        ))
         .layer(axum::extract::DefaultBodyLimit::max(
             request::MAX_BODY_BYTES,
         ))

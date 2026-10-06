@@ -1,13 +1,17 @@
 mod deployment;
+mod hooks;
 
-use std::collections::HashMap;
-
-use litellm_config::Model;
+use std::{collections::HashMap, sync::Arc};
 
 pub use deployment::Deployment;
+pub use hooks::RouterHooks;
+use litellm_config::Model;
 
-#[derive(Clone, Debug, Default)]
-pub struct Router(HashMap<String, Deployment>);
+#[derive(Clone)]
+pub struct Router {
+    deployments: HashMap<String, Deployment>,
+    hooks: Arc<dyn RouterHooks>,
+}
 
 impl Router {
     pub fn from_model_list(model_list: &[Model]) -> Self {
@@ -33,12 +37,34 @@ impl Router {
     }
 
     pub fn get(&self, model_name: &str) -> Option<&Deployment> {
-        self.0.get(model_name)
+        self.deployments.get(model_name)
+    }
+
+    pub fn with_hooks(self, hooks: Arc<dyn RouterHooks>) -> Self {
+        Self { hooks, ..self }
+    }
+
+    pub async fn select(&self, model_name: &str) -> Option<&Deployment> {
+        let candidates = self.deployments.get(model_name).into_iter().collect();
+        self.hooks
+            .filter_deployments(model_name, candidates)
+            .await
+            .into_iter()
+            .next()
+    }
+}
+
+impl Default for Router {
+    fn default() -> Self {
+        Self::from_iter([])
     }
 }
 
 impl FromIterator<(String, Deployment)> for Router {
     fn from_iter<I: IntoIterator<Item = (String, Deployment)>>(entries: I) -> Self {
-        Self(entries.into_iter().collect())
+        Self {
+            deployments: entries.into_iter().collect(),
+            hooks: Arc::new(()),
+        }
     }
 }

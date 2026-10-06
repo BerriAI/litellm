@@ -1,6 +1,5 @@
 //! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
 
-use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{
@@ -10,6 +9,8 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
+use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_host::interceptors::Chain;
 use litellm_host_http::Sse;
 use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
@@ -41,8 +42,7 @@ async fn handle(
     headers: &HeaderMap,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(gateway, &body)?;
-    request::authorize_model(identity, deployment, &body).await?;
+    let (body, deployment) = request::route(gateway, identity, body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.messages.clone();
     let route = match &gateway.cache {
@@ -58,7 +58,14 @@ async fn handle(
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
     let headers = crate::caching::CacheHeaders::default();
-    let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
+    let response = litellm_host_http::serve(
+        machine,
+        (),
+        Chain(headers.clone(), gateway.hooks.inference.clone()),
+        stream,
+        None,
+    )
+    .await?;
     Ok(headers.apply(response))
 }
 
