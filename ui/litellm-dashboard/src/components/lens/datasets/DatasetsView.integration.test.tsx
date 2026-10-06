@@ -86,8 +86,8 @@ describe("DatasetsView", () => {
       within(row)
         .getAllByRole("cell")
         .map((cell) => cell.textContent),
-    ).toEqual([summary.name, "refund-agent", "2", "2", expect.any(String)]);
-    await user.click(within(row).getByRole("button", { name: summary.name }));
+    ).toEqual([`${summary.name}refund-agent`, "2", "2", ""]);
+    await user.click(row);
 
     expect(await screen.findByRole("heading", { name: summary.name })).toBeInTheDocument();
     const first = screen.getByRole("listitem", { name: "Case 1" });
