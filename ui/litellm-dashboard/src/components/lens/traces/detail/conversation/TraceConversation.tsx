@@ -73,7 +73,7 @@ export function TraceConversation({
   }, [needsMore, busy, blocked, hasMore, loadMore, trace.next_cursor, loadTracePage]);
   const fillingPage = needsMore && sourceRemaining && !blocked;
   const loadEntries = (branchId: string | null, shown: number) => {
-    setPages((current) => new Map(current).set(branchId, shown + CONVERSATION_PAGE_SIZE));
+    setPages((current) => new Map([...current, [branchId, shown + CONVERSATION_PAGE_SIZE]]));
     setRequestedBranch(branchId);
   };
   const warnings = conversationWarnings(details, traceComplete);

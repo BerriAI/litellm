@@ -43,14 +43,25 @@ describe("trace conversation", () => {
     const details = new Map(
       spans.filter((span) => span !== child).map((span) => [span.span_id, detail(span.span_id, [], [])]),
     );
-    expect([...pendingConversationBranches(spans, details, false)].sort()).toEqual([
+    expect([...pendingConversationBranches(spans, details, false)].toSorted()).toEqual([
       "agent",
       "child",
       "framework",
       "root",
     ]);
-    details.set(child.span_id, detail(child.span_id, [], []));
-    expect(pendingConversationBranches(spans, details, false).size).toBe(0);
+    const completeDetails = new Map([...details, [child.span_id, detail(child.span_id, [], [])]]);
+    expect(pendingConversationBranches(spans, completeDetails, false).size).toBe(0);
+  });
+
+  it.each(["child", "missing-parent"])("stops pending ancestry at cycles or missing parents (%s)", (parentId) => {
+    const agent = { ...root, span_id: "agent", parent_span_id: parentId };
+    const child = { ...root, span_id: "child", parent_span_id: "agent" };
+    const spans = [root, agent, child];
+    const details = new Map([
+      [root.span_id, detail(root.span_id, [], [])],
+      [agent.span_id, detail(agent.span_id, [], [])],
+    ]);
+    expect([...pendingConversationBranches(spans, details, false)].toSorted()).toEqual(["agent", "child"]);
   });
 
   it.each([

@@ -25,18 +25,17 @@ export function pendingConversationBranches(
   const byId = new Map(spans.map((span) => [span.span_id, span]));
   const steps = new Set(conversationSteps(spans).map((span) => span.span_id));
   const pageBoundary = spans.reduce((latest, span) => Math.max(latest, span.start_offset_ms), -Infinity);
-  const pending = new Set<string>();
-  for (const span of spans) {
+  const pending = spans.filter((span) => {
     const missingDetail = steps.has(span.span_id) && !details.has(span.span_id);
     const mayHaveLaterChildren = hasMoreSpans && span.start_offset_ms + span.duration_ms >= pageBoundary;
-    if (!missingDetail && !mayHaveLaterChildren) continue;
-    let ancestor: Span | undefined = span;
-    while (ancestor && !pending.has(ancestor.span_id)) {
-      pending.add(ancestor.span_id);
-      ancestor = ancestor.parent_span_id ? byId.get(ancestor.parent_span_id) : undefined;
-    }
-  }
-  return pending;
+    return missingDetail || mayHaveLaterChildren;
+  });
+  const ancestorIds = (span: Span | undefined, path: readonly string[] = []): readonly string[] => {
+    if (!span || path.includes(span.span_id)) return path;
+    const parent = span.parent_span_id ? byId.get(span.parent_span_id) : undefined;
+    return ancestorIds(parent, [...path, span.span_id]);
+  };
+  return new Set(pending.flatMap((span) => ancestorIds(span)));
 }
 
 function contentText(value: string, content?: UIContent): string {
