@@ -78,6 +78,9 @@ SpanType: TypeAlias = Literal[
 ]
 
 
+SpendMatch: TypeAlias = Literal["matched"] | Literal["no_call_id"] | Literal["no_spend_log"] | Literal["ambiguous"]
+
+
 class TraceScope(typing_extensions.TypedDict):
     all_teams: ReadOnly[Literal[0, 1]]
     user_id: ReadOnly[str]
@@ -142,6 +145,8 @@ class Span(typing_extensions.TypedDict):
     output_tokens: ReadOnly[Annotated[int, Field(ge=0, le=4294967295)]]
     litellm_request_id: ReadOnly[str | None]
     spend: ReadOnly[float | None]
+    spend_log_request_id: ReadOnly[str | None]
+    spend_match: ReadOnly[SpendMatch | None | None]
 
 
 class Trace(typing_extensions.TypedDict):

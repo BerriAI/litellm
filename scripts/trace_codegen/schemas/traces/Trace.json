@@ -127,6 +127,24 @@
             "null"
           ]
         },
+        "spend_log_request_id": {
+          "description": "`spend_logs.request_id` of the request this model call was priced from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spend_match": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpendMatch"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why a model call is or is not priced; absent on spans that are not model calls."
+        },
         "start_offset_ms": {
           "format": "double",
           "type": "number"
@@ -155,7 +173,9 @@
         "input_tokens",
         "output_tokens",
         "litellm_request_id",
-        "spend"
+        "spend",
+        "spend_log_request_id",
+        "spend_match"
       ],
       "type": "object"
     },
@@ -183,6 +203,31 @@
         "decision"
       ],
       "type": "string"
+    },
+    "SpendMatch": {
+      "oneOf": [
+        {
+          "enum": [
+            "matched"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "no_call_id",
+          "description": "The span records no id LiteLLM assigned to the call.",
+          "type": "string"
+        },
+        {
+          "const": "no_spend_log",
+          "description": "No visible spend log carries the id the span records.",
+          "type": "string"
+        },
+        {
+          "const": "ambiguous",
+          "description": "The span's ids name more than one spend log, or a log without a cost.",
+          "type": "string"
+        }
+      ]
     },
     "TraceSummary": {
       "properties": {

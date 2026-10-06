@@ -45084,6 +45084,10 @@ export interface components {
             span_id: string;
             /** Spend */
             spend: number | null;
+            /** Spend Log Request Id */
+            spend_log_request_id: string | null;
+            /** Spend Match */
+            spend_match: "matched" | "no_call_id" | "no_spend_log" | "ambiguous" | null;
             /** Start Offset Ms */
             start_offset_ms: number;
             /**
