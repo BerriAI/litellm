@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import research from "../../__fixtures__/research_trace.json";
 import type { Span, TraceMessage } from "../../types";
 import type { ConversationGroup, ConversationItem } from "./conversation";
-import { buildThread, threadDurationMs } from "./thread";
+import { buildThread, replyErrorSpanIds, threadDurationMs, withoutErrorsOf } from "./thread";
 
 const base = research.spans[0] as Span;
 const span = (id: string, type: Span["type"], start: number, timing: Partial<Span> = {}): Span => ({
@@ -159,6 +159,33 @@ describe("buildThread", () => {
     expect(turns[0].reply?.content).toBe("Found the answer");
     expect(turns[0].replyItem?.id).toBe("s2");
     expect(turns[0].work[0]).toMatchObject({ kind: "subagent", name: "Explore" });
+  });
+
+  it("picks the subagent answer that finished last when branches run in parallel", () => {
+    const branch = (id: string, start: number, answer: string): ConversationGroup => ({
+      kind: "branch",
+      id,
+      name: id,
+      children: [item(`${id}-a`, "llm", start, [say(answer)])],
+    });
+    const turns = buildThread([
+      item("u", "agent", 0, [ask("compare")]),
+      branch("slow", 500, "Slow finished last"),
+      branch("fast", 100, "Fast finished first"),
+    ]);
+    expect(turns[0].reply?.content).toBe("Slow finished last");
+  });
+
+  it("drops a run-level error from the Worked bar so it shows once at the top", () => {
+    const failed: ConversationGroup = {
+      kind: "item",
+      item: { id: "root-out", span: span("root", "agent", 0, { status: "error" }), messages: [], showError: true },
+    };
+    const [turn] = buildThread([item("u", "agent", 0, [ask("go")]), tool("t", 10), failed]);
+    expect(turn.work.map((w) => (w.kind === "step" ? w.item.id : w.id))).toEqual(["t", "root-out"]);
+    const cleaned = withoutErrorsOf(turn, new Set(["root"]));
+    expect(cleaned.work.map((w) => (w.kind === "step" ? w.item.id : w.id))).toEqual(["t"]);
+    expect(replyErrorSpanIds([turn]).size).toBe(0);
   });
 
   it("returns no turns for an empty conversation", () => {
