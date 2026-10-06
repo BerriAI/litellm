@@ -135,51 +135,23 @@ async def search(
     if search_tool_name is not None:
         data["search_tool_name"] = search_tool_name
 
-    if not (
-        data.get("search_tool_name") or data.get("model") or general_settings.get("completion_model") or user_model
-    ):
+    from litellm.proxy.auth.auth_checks import can_token_call_search_tool
+    from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
+
+    routed_search_tool_name: Final = data.get("search_tool_name") or resolve_inference_model(
+        data.get("model"), general_settings, user_model
+    )
+    if not isinstance(routed_search_tool_name, str) or not routed_search_tool_name:
         raise ProxyMissingRequiredParamError(route="/search", param="search_tool_name")
+    try:
+        await can_token_call_search_tool(search_tool_name=routed_search_tool_name, valid_token=user_api_key_dict)
+    except ProxyException as e:
+        verbose_proxy_logger.debug("Search tool authorization denied: %s", e.type)
+        raise
 
     if "search_tool_name" in data and data["search_tool_name"]:
         data["model"] = data["search_tool_name"]
         search_tool_name_value: Final = data["search_tool_name"]
-
-        # Authorization check: verify key can access this search tool
-        from litellm.proxy.auth.auth_checks import (
-            can_key_call_search_tool,
-            can_team_call_search_tool,
-            get_team_object,
-        )
-
-        try:
-            # Check key-level access
-            await can_key_call_search_tool(
-                search_tool_name=search_tool_name_value,
-                valid_token=user_api_key_dict,
-            )
-
-            # Check team-level access if key is associated with a team
-            if user_api_key_dict.team_id:
-                from litellm.proxy.proxy_server import (
-                    prisma_client,
-                    proxy_logging_obj,
-                    user_api_key_cache,
-                )
-
-                team_object: Final = await get_team_object(
-                    team_id=user_api_key_dict.team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=user_api_key_dict.parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-                await can_team_call_search_tool(
-                    search_tool_name=search_tool_name_value,
-                    team_object=team_object,
-                )
-        except Exception as e:
-            verbose_proxy_logger.error("Search tool authorization failed for %s: %s", search_tool_name_value, e)
-            raise
 
         if llm_router is not None and hasattr(llm_router, "search_tools"):
             verbose_proxy_logger.debug(
