@@ -80,9 +80,7 @@ def test_transform_request_returns_exact_provider_request_and_rejects_unsafe_bod
     }
     anthropic_body: Final = {
         "model": "claude-opus-4-8",
-        "messages": [
-            {"role": "user", "content": [{"type": "text", "text": "integration transform request"}]}
-        ],
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "integration transform request"}]}],
         "max_tokens": 17,
         "tools": [
             {
@@ -111,7 +109,9 @@ def test_transform_request_returns_exact_provider_request_and_rejects_unsafe_bod
         openai_non_stream_response, openai_non_stream = openai_non_stream_result
         assert openai_non_stream.raw_request_api_base == _OPENAI_API_BASE, openai_non_stream_response.text
         assert openai_non_stream.raw_request_body == openai_non_streaming_body, openai_non_stream_response.text
-        assert _FAKE_API_KEY not in openai_non_stream_response.text, "Transform response exposed its synthetic credential"
+        assert _FAKE_API_KEY not in openai_non_stream_response.text, (
+            "Transform response exposed its synthetic credential"
+        )
 
         anthropic_result: Final = _transform_request(gateway, key, "anthropic/claude-opus-4-8", False)
         anthropic_response, anthropic = anthropic_result
@@ -190,7 +190,9 @@ def test_transform_request_reports_masked_authorization_for_non_streaming_openai
 
 
 def test_transform_request_reports_stream_flag_for_streaming_anthropic(gateway: Gateway) -> None:
-    pytest.skip("BUG: /utils/transform_request omits stream: true from the anthropic raw_request_body when stream is true")
+    pytest.skip(
+        "BUG: /utils/transform_request omits stream: true from the anthropic raw_request_body when stream is true"
+    )
     with gateway.scenario() as scenario:
         key: Final = scenario.key()
         response, parsed = _transform_request(gateway, key, "anthropic/claude-opus-4-8", True)
@@ -203,9 +205,7 @@ def test_transform_request_reports_stream_flag_for_streaming_anthropic(gateway: 
         }, response.text
         assert parsed.raw_request_body == {
             "model": "claude-opus-4-8",
-            "messages": [
-                {"role": "user", "content": [{"type": "text", "text": "integration transform request"}]}
-            ],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "integration transform request"}]}],
             "max_tokens": 17,
             "tools": [
                 {
