@@ -14,10 +14,11 @@ def _run_import_check(
 ) -> subprocess.CompletedProcess[str]:
     program: Final = f"""
 import importlib.abc
+import pathlib
 import sys
 import traceback
 
-repo_root = {str(repo_root.resolve())!r}
+repo_root = sys.argv[1]
 
 class ImportTracer(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path, target=None):
@@ -39,11 +40,13 @@ class ImportTracer(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, ImportTracer())
 import litellm
+if not pathlib.Path(litellm.__file__).resolve().is_relative_to(pathlib.Path(repo_root)):
+    raise SystemExit(f"imported litellm from {{litellm.__file__}}, expected under {{repo_root}}")
 print("litellm.__file__:", litellm.__file__)
 print("_types loaded:", "litellm.proxy._types" in sys.modules)
     """
     return subprocess.run(
-        [sys.executable, "-I", "-c", program],
+        [sys.executable, "-I", "-c", program, str(repo_root.resolve())],
         cwd=repo_root,
         capture_output=True,
         text=True,
@@ -53,8 +56,13 @@ print("_types loaded:", "litellm.proxy._types" in sys.modules)
 
 def _run_proxy_types_attribute_access(repo_root: Path) -> subprocess.CompletedProcess[str]:
     program: Final = """
+import pathlib
 import sys
 import litellm
+
+repo_root = sys.argv[1]
+if not pathlib.Path(litellm.__file__).resolve().is_relative_to(pathlib.Path(repo_root)):
+    raise SystemExit(f"imported litellm from {litellm.__file__}, expected under {repo_root}")
 
 assert "litellm.proxy._types" not in sys.modules
 print("_types loaded before attribute access: False")
@@ -66,7 +74,7 @@ print("_types loaded after attribute access: True")
 print("UserAPIKeyAuth identity: True")
     """
     return subprocess.run(
-        [sys.executable, "-I", "-c", program],
+        [sys.executable, "-I", "-c", program, str(repo_root.resolve())],
         cwd=repo_root,
         capture_output=True,
         text=True,
