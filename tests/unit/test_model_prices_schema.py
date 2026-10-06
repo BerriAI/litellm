@@ -232,6 +232,29 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
     )
 
 
+AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM: Final = MappingProxyType({"us": 1.1, "eu": 1.2, "apac": 1.2})
+
+
+@pytest.mark.parametrize("region", sorted(AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM))
+def test_azure_gpt_6_1_sol_data_zone_rows_price_requests_at_the_regional_premium(region: str):
+    premium = AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM[region]
+    usage = {"prompt_tokens": 300_000, "completion_tokens": 1_000, "cache_read_input_tokens": 100_000}
+
+    def total_cost(model: str) -> float:
+        prompt_cost, completion_cost = litellm.cost_per_token(
+            model=model,
+            custom_llm_provider="azure",
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            cache_read_input_tokens=usage["cache_read_input_tokens"],
+        )
+        return prompt_cost + completion_cost
+
+    global_cost = total_cost("azure/gpt-6.1-sol")
+    assert global_cost > 0
+    assert total_cost(f"azure/{region}/gpt-6.1-sol") == pytest.approx(global_cost * premium)
+
+
 OPENAI_REASONING_FAMILY_MARKERS = ("codex", "deep-research", "chat-latest")
 
 
