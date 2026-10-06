@@ -669,6 +669,5 @@ async def test_proxy_restart_mid_burst_bills_each_landed_call_once(gateway: Gate
             "restart-loss.json",
             {"served": len(served), "succeeded": len(succeeded), "landed": len(landed_ids)},
         )
-        assert set(succeeded) <= set(landed_ids), (succeeded, landed_ids)
-        assert len(set(landed_ids)) == len(landed_ids), landed_ids
+        assert sorted(landed_ids) == sorted(succeeded), (succeeded, landed_ids)
         assert all(float(str(row["spend"])) == pytest.approx(_REGIONAL_TOKEN_COST) for row in landed), landed
