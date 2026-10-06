@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType, TracebackType
 from typing import Final
 from urllib.parse import urlparse
@@ -38,6 +38,7 @@ from litellm.types.realtime import (
 DEFAULT_SONIOX_REALTIME_URL: Final = "wss://stt-rt.soniox.com/transcribe-websocket"
 DEFAULT_SAMPLE_RATE: Final = 24_000
 KEEPALIVE_INTERVAL_SECONDS: Final = 5.0
+_MAX_PENDING_FRAMES: Final = 64
 _FINALIZE: Final = '{"type":"finalize"}'
 _KEEPALIVE: Final = '{"type":"keepalive"}'
 _END_STREAM: Final = ""
@@ -45,6 +46,7 @@ _CONTROL_FRAMES: Final = frozenset((_FINALIZE, _KEEPALIVE, _END_STREAM))
 _CLIENT_CONTROL_FRAMES: Final = MappingProxyType(
     {"input_audio_buffer.commit": _FINALIZE, "input_audio_buffer.end": _END_STREAM}
 )
+CONNECTED_FRAME: Final = '{"type":"litellm.soniox.connected"}'
 SESSION_STARTED_FRAME: Final = '{"type":"litellm.soniox.session_started"}'
 _ENDPOINT_TOKEN: Final = "<end>"
 _FINALIZED_TOKEN: Final = "<fin>"
@@ -162,11 +164,12 @@ class SonioxEventTransformer:
         self._bill(response.total_audio_proc_ms)
         return tuple(event for token in response.tokens for event in self._token_events(token))
 
-    def take_unbilled_usage(self) -> RealtimeInputAudioTranscriptionUsage | None:
-        unbilled_ms: Final = self._processed_ms - self._billed_ms
+    def take_unbilled_usage(self, stream_ms: int = 0) -> RealtimeInputAudioTranscriptionUsage | None:
+        billable_ms: Final = max(self._processed_ms, stream_ms)
+        unbilled_ms: Final = billable_ms - self._billed_ms
         if unbilled_ms <= 0:
             return None
-        self._billed_ms = self._processed_ms
+        self._billed_ms = billable_ms
         return duration_usage(unbilled_ms / 1000)
 
     def _bill(self, total_audio_proc_ms: int | None) -> None:
@@ -221,16 +224,16 @@ class SonioxRealtimeBackend:
         self._interval: Final = keepalive_interval
         self._clock: Final = clock
         self._sleep: Final = sleep
-        self._local_frames: Final[asyncio.Queue[str]] = asyncio.Queue(maxsize=1)
+        self._frames: Final[asyncio.Queue[str | bytes | Exception]] = asyncio.Queue(maxsize=_MAX_PENDING_FRAMES)
         self._last_sent: float = clock()
         self._started: bool = False
         self._ended: bool = False
-        self._keepalive_task: asyncio.Task[None] | None = None
-        self._upstream_recv: asyncio.Task[str | bytes] | None = None
+        self._tasks: tuple[asyncio.Task[None], ...] = ()
 
     async def __aenter__(self) -> Self:
         await self._inner.__aenter__()
-        self._keepalive_task = asyncio.create_task(self._keepalive())
+        self._frames.put_nowait(CONNECTED_FRAME)
+        self._tasks = (asyncio.create_task(self._pump()), asyncio.create_task(self._keepalive()))
         return self
 
     async def __aexit__(
@@ -248,27 +251,30 @@ class SonioxRealtimeBackend:
         await self._inner.send(message)
         if not self._started and isinstance(message, str) and message not in _CONTROL_FRAMES:
             self._started = True
-            self._local_frames.put_nowait(SESSION_STARTED_FRAME)
+            await self._frames.put(SESSION_STARTED_FRAME)
 
     async def recv(self, decode: bool | None = None) -> str | bytes:
-        upstream: Final = self._upstream_recv or asyncio.create_task(self._inner.recv(decode))
-        local: Final = asyncio.create_task(self._local_frames.get())
-        done, _ = await asyncio.wait((upstream, local), return_when=asyncio.FIRST_COMPLETED)
-        if local in done:
-            self._upstream_recv = upstream
-            return local.result()
-        local.cancel()
-        self._upstream_recv = None
-        return upstream.result()
+        frame: Final = await self._frames.get()
+        if isinstance(frame, Exception):
+            raise frame
+        return frame
 
     async def close(self) -> None:
         self._stop()
         await self._inner.close()
 
     def _stop(self) -> None:
-        for task in (self._keepalive_task, self._upstream_recv):
-            if task is not None:
-                task.cancel()
+        for task in self._tasks:
+            task.cancel()
+
+    async def _pump(self) -> None:
+        while True:
+            try:
+                frame = await self._inner.recv()
+            except Exception as e:
+                await self._frames.put(e)
+                return
+            await self._frames.put(frame)
 
     async def _keepalive(self) -> None:
         while not self._ended:
@@ -288,12 +294,19 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         *,
         options: SonioxRealtimeOptions | None = None,
         wrap: Callable[[RealtimeBackend], RealtimeBackend] = SonioxRealtimeBackend,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._options: Final = options or SonioxRealtimeOptions()
         self._wrap: Final = wrap
+        self._clock: Final = clock
         self._transformer: Final = SonioxEventTransformer(translated_only=self._options.translation is not None)
         self._start_request: SonioxStartRequest | None = None
-        self._session_id: str = f"sess_{uuid.uuid4().hex}"
+        self._session_id: Final = f"sess_{uuid.uuid4().hex}"
+        self._opened_at: float | None = None
+
+    @classmethod
+    def from_litellm_params(cls, litellm_params: Mapping[str, object]) -> Self:
+        return cls(options=SonioxRealtimeOptions.model_validate(dict(litellm_params)))
 
     def validate_environment(
         self,
@@ -310,16 +323,8 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         return build_soniox_realtime_url(api_base)
 
     def wrap_backend(self, backend: RealtimeBackend) -> RealtimeBackend:
+        self._opened_at = self._clock()
         return self._wrap(backend)
-
-    def transform_session_created_event(
-        self,
-        model: str,
-        logging_session_id: str,
-        session_configuration_request: str | None = None,
-    ) -> OpenAIRealtimeTranscriptionSessionCreated:
-        self._session_id = logging_session_id
-        return _session_created(logging_session_id, build_start_request(model, None, self._options))
 
     def transform_realtime_request(
         self,
@@ -341,7 +346,9 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         return (*self._start(model, None), control_frame)
 
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
-        return self._transformer.take_unbilled_usage()
+        opened_at: Final = self._opened_at
+        stream_ms: Final = 0 if opened_at is None else int((self._clock() - opened_at) * 1000)
+        return self._transformer.take_unbilled_usage(stream_ms)
 
     def transform_realtime_response(
         self,
@@ -352,7 +359,7 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
     ) -> RealtimeResponseTypedDict:
         payload: Final = message.decode("utf-8") if isinstance(message, bytes) else message
         result: Final[RealtimeResponseTypedDict] = {
-            "response": list(self._backend_events(payload)),
+            "response": list(self._backend_events(payload, model)),
             "current_output_item_id": realtime_response_transform_input.get("current_output_item_id"),
             "current_response_id": realtime_response_transform_input.get("current_response_id"),
             "current_delta_chunks": realtime_response_transform_input.get("current_delta_chunks"),
@@ -363,7 +370,9 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         }
         return result
 
-    def _backend_events(self, payload: str) -> tuple[OpenAIRealtimeEvents, ...]:
+    def _backend_events(self, payload: str, model: str) -> tuple[OpenAIRealtimeEvents, ...]:
+        if payload == CONNECTED_FRAME:
+            return (_session_created(self._session_id, build_start_request(model, None, self._options)),)
         if payload != SESSION_STARTED_FRAME:
             return self._transformer.transform(payload)
         assert self._start_request is not None  # the backend signals session start only after the start request

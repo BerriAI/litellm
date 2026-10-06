@@ -9705,9 +9705,9 @@ class ProviderConfigManager:
 
             return MetaRealtimeConfig()
         if LlmProviders.SONIOX == provider:
-            from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig, SonioxRealtimeOptions
+            from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
 
-            return SonioxRealtimeConfig(options=SonioxRealtimeOptions.model_validate(dict(litellm_params)))
+            return SonioxRealtimeConfig.from_litellm_params(litellm_params)
         return None
 
     @staticmethod

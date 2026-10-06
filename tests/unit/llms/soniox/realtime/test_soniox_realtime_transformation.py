@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from litellm.llms.soniox.realtime.transformation import (
+    CONNECTED_FRAME,
     DEFAULT_SONIOX_REALTIME_URL,
     SESSION_STARTED_FRAME,
     SonioxEventTransformer,
@@ -288,18 +289,31 @@ def test_translation_option_switches_the_config_to_translated_transcripts():
     assert [event.get("delta") for event in result["response"] if "delta" in event] == ["Hello"]
 
 
-def test_session_created_event_advertises_the_deployment_model_for_cost_tracking():
+def test_stream_open_time_is_billed_on_close_because_soniox_charges_the_whole_stream():
+    now = [100.0]
+    config = SonioxRealtimeConfig(clock=lambda: now[0])
+    config.wrap_backend(_RecordingBackend())
+    config.transform_realtime_response(
+        _response([_token("Hi"), _token("<end>")], total_audio_proc_ms=5000), MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT
+    )
+    now[0] = 130.5
+
+    assert config.unbilled_usage_on_session_close(MODEL) == {"type": "duration", "seconds": 25.5}
+    assert config.unbilled_usage_on_session_close(MODEL) is None
+
+
+def test_connection_is_announced_with_the_deployment_session_for_cost_tracking():
     config = SonioxRealtimeConfig(options=SonioxRealtimeOptions(language_hints=("de",)))
 
-    event = config.transform_session_created_event(MODEL, "session_1")
+    result = config.transform_realtime_response(CONNECTED_FRAME, MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT)
 
-    assert event["session"]["id"] == "session_1"
-    assert event["session"]["audio"]["input"]["transcription"] == {"model": MODEL, "language": "de"}
+    assert _types(tuple(result["response"])) == ["session.created"]
+    assert result["response"][0]["session"]["audio"]["input"]["transcription"] == {"model": MODEL, "language": "de"}
 
 
 def test_backend_session_start_is_announced_with_the_negotiated_session():
     config = SonioxRealtimeConfig()
-    config.transform_session_created_event(MODEL, "session_1")
+    connected = config.transform_realtime_response(CONNECTED_FRAME, MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT)
     config.transform_realtime_request(
         _session_update(
             {
@@ -314,7 +328,7 @@ def test_backend_session_start_is_announced_with_the_negotiated_session():
     result = config.transform_realtime_response(SESSION_STARTED_FRAME, MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT)
 
     assert _types(tuple(result["response"])) == ["session.created"]
-    assert result["response"][0]["session"]["id"] == "session_1"
+    assert result["response"][0]["session"]["id"] == connected["response"][0]["session"]["id"]
     assert result["response"][0]["session"]["audio"]["input"] == {
         "format": {"type": "audio/pcm", "rate": 16_000},
         "transcription": {"model": MODEL, "language": "it"},
@@ -352,7 +366,7 @@ def test_provider_config_manager_passes_only_soniox_options_from_deployment_para
 class _RecordingBackend:
     def __init__(self) -> None:
         self.sent: Final[list[str | bytes]] = []
-        self.upstream: Final[asyncio.Queue[str]] = asyncio.Queue()
+        self.upstream: Final[asyncio.Queue[str | Exception]] = asyncio.Queue()
         self.entered = False
         self.exited = False
         self.closed = False
@@ -368,7 +382,10 @@ class _RecordingBackend:
         self.sent.append(message)
 
     async def recv(self, decode: bool | None = None) -> str | bytes:
-        return await self.upstream.get()
+        frame = await self.upstream.get()
+        if isinstance(frame, Exception):
+            raise frame
+        return frame
 
     async def close(self) -> None:
         self.closed = True
@@ -415,6 +432,7 @@ async def test_backend_announces_the_session_once_the_start_request_is_sent_whil
     backend = SonioxRealtimeBackend(inner)
 
     async with backend:
+        assert await backend.recv() == CONNECTED_FRAME
         pending = asyncio.create_task(backend.recv())
         await backend.send('{"type":"keepalive"}')
         await asyncio.sleep(0)
@@ -433,7 +451,26 @@ async def test_backend_relays_upstream_frames_that_arrive_before_the_session_sta
     async with SonioxRealtimeBackend(inner) as backend:
         await inner.upstream.put('{"error_code":401,"error_message":"Invalid API key."}')
 
+        assert await backend.recv() == CONNECTED_FRAME
         assert await backend.recv() == '{"error_code":401,"error_message":"Invalid API key."}'
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_read_loses_no_frames_and_upstream_errors_reach_the_reader():
+    inner = _RecordingBackend()
+
+    async with SonioxRealtimeBackend(inner) as backend:
+        assert await backend.recv() == CONNECTED_FRAME
+        cancelled = asyncio.create_task(backend.recv())
+        await asyncio.sleep(0)
+        cancelled.cancel()
+        await asyncio.gather(cancelled, return_exceptions=True)
+        await inner.upstream.put('{"tokens":[]}')
+        await inner.upstream.put(ConnectionError("upstream closed"))
+
+        assert await backend.recv() == '{"tokens":[]}'
+        with pytest.raises(ConnectionError, match="upstream closed"):
+            await backend.recv()
 
 
 @pytest.mark.asyncio
@@ -441,6 +478,7 @@ async def test_closing_the_backend_cancels_pending_reads_and_closes_upstream():
     inner = _RecordingBackend()
     backend = SonioxRealtimeBackend(inner)
     await backend.__aenter__()
+    assert await backend.recv() == CONNECTED_FRAME
     pending = asyncio.create_task(backend.recv())
     await backend.send('{"model":"stt-rt-v5"}')
     assert await pending == SESSION_STARTED_FRAME
