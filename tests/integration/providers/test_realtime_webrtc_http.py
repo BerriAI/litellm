@@ -9,6 +9,7 @@ request the deployment received instead of stopping at the status code.
 from __future__ import annotations
 
 import json
+import itertools
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -390,8 +391,7 @@ def test_transcription_client_secret_sends_deployment_model_not_alias_on_mint_an
         }, calls_request.body
 
 
-@pytest.mark.parametrize("mint_route", ["client_secrets", "transcription_sessions"])
-def test_transcription_client_secret_replays_transcription_session_at_calls(gateway: Gateway, mint_route: str) -> None:
+def _mint_transcription_and_redeem(gateway: Gateway, mint_route: str) -> tuple[str, dict[str, JsonValue]]:
     raw: Final = _raw_secret()
     scenario_path: Final = f"/{uuid.uuid4().hex}"
     reply: Final = (
@@ -429,9 +429,22 @@ def test_transcription_client_secret_replays_transcription_session_at_calls(gate
             f"Bearer {raw}",
         ), calls_request.headers
         replayed: Final = JSON_OBJECT.validate_json(_text_parts(calls_request)["session"])
-        contract: Final = {"type": "transcription", "audio": {"input": {"transcription": {"model": name}}}}
-        # the top-level model is the known bug asserted absent by the BUG-skipped alias tests
-        assert replayed in (contract, {**contract, "model": name}), replayed
+        return name, replayed
+
+
+@pytest.mark.parametrize("mint_route", ["client_secrets", "transcription_sessions"])
+def test_transcription_client_secret_replays_transcription_session_at_calls(gateway: Gateway, mint_route: str) -> None:
+    name, replayed = _mint_transcription_and_redeem(gateway, mint_route)
+    contract: Final = {"type": "transcription", "audio": {"input": {"transcription": {"model": name}}}}
+    # main also adds a top-level model, asserted absent by the BUG-skipped test below
+    assert replayed in (contract, {**contract, "model": name}), replayed
+
+
+@pytest.mark.parametrize("mint_route", ["client_secrets", "transcription_sessions"])
+def test_transcription_session_replayed_at_calls_carries_no_top_level_model(gateway: Gateway, mint_route: str) -> None:
+    pytest.skip("BUG: /realtime/calls adds a top-level model to a replayed transcription session")
+    name, replayed = _mint_transcription_and_redeem(gateway, mint_route)
+    assert replayed == {"type": "transcription", "audio": {"input": {"transcription": {"model": name}}}}, replayed
 
 
 def test_beta_transcription_session_token_replays_deployment_model_not_alias_at_calls(gateway: Gateway) -> None:
@@ -554,9 +567,19 @@ def test_beta_transcription_session_forwards_body_with_deployment_model_and_encr
             f"{scenario_path}/v1/realtime/calls",
             f"Bearer {raw}",
         ), calls_request.headers
-        assert JSON_OBJECT.validate_json(_text_parts(calls_request)["session"])["type"] == "transcription", (
-            calls_request.body
+        replayed: Final = JSON_OBJECT.validate_json(_text_parts(calls_request)["session"])
+        # main replays the alias and a top-level model, owned by the BUG-skipped beta replay test
+        accepted: Final[tuple[dict[str, JsonValue], ...]] = tuple(
+            {
+                "type": "transcription",
+                "audio": {"input": {"transcription": {"model": transcription_model}}},
+                **top_level,
+            }
+            for transcription_model, top_level in itertools.product(
+                (TRANSCRIBE_MODEL, alias), ({}, {"model": TRANSCRIBE_MODEL})
+            )
         )
+        assert replayed in accepted, replayed
 
 
 @pytest.mark.parametrize("prefix", PATH_PREFIXES)

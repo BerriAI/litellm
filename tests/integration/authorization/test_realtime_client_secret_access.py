@@ -148,9 +148,9 @@ def test_client_secret_mint_refuses_blocked_or_exhausted_key(
             else f"Budget has been exceeded! Key=key (sk-...{key[-4:]}) Current cost: 1.0, Max budget: 0.0001"
         )
         refused: Final = _mint(gateway, {"model": model}, key)
+        assert refused.status_code == expected_status, refused.text
         error: Final = _OpenAIErrorEnvelope.model_validate_json(refused.content).error
-        assert (refused.status_code, error.type, error.code, error.message) == (
-            expected_status,
+        assert (error.type, error.code, error.message) == (
             expected_type,
             str(expected_status),
             expected_message,
