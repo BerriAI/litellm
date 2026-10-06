@@ -57,7 +57,7 @@ ALIAS_CASES: Final = (
     ("litellm._lazy_imports", "", "_get_lazy_import_registry", "get_lazy_import_registry", False),
     ("litellm._lazy_imports", "", "_get_messages_reach_token_count", "get_messages_reach_token_count", False),
     ("litellm._lazy_imports", "", "_get_token_counter_new", "get_token_counter_new", False),
-    ("litellm._logging", "SecretRedactionFilter", "_formatter", "formatter", True),
+    ("litellm._logging", "SecretRedactionFilter", "_formatter", "formatter", False),
     ("litellm._logging", "", "_ENABLE_SECRET_REDACTION", "ENABLE_SECRET_REDACTION", False),
     ("litellm._logging", "", "_is_debugging_on", "is_debugging_on", False),
     ("litellm._logging", "", "_redact_string", "redact_string", False),
@@ -461,7 +461,7 @@ ALIAS_CASES: Final = (
         "ModelParamHelper",
         "_relevant_logging_args",
         "relevant_logging_args",
-        True,
+        False,
     ),
     (
         "litellm.litellm_core_utils.prompt_templates.common_utils",
@@ -986,7 +986,6 @@ _LITELLM_MUTABLE_ALIAS_VALUES: Final = MappingProxyType(
 )
 
 PROPERTY_CASES: Final = (
-    ("litellm._logging", "SecretRedactionFilter", "_formatter", "formatter"),
     ("litellm.integrations.focus.export_engine", "FocusExportEngine", "_database", "database"),
     ("litellm.integrations.focus.export_engine", "FocusExportEngine", "_destination", "destination"),
     ("litellm.integrations.focus.export_engine", "FocusExportEngine", "_serializer", "serializer"),
@@ -1007,12 +1006,6 @@ PROPERTY_CASES: Final = (
         "Logging",
         "_on_detached_stream_failure",
         "on_detached_stream_failure",
-    ),
-    (
-        "litellm.litellm_core_utils.model_param_helper",
-        "ModelParamHelper",
-        "_relevant_logging_args",
-        "relevant_logging_args",
     ),
     (
         "litellm.litellm_core_utils.realtime_streaming",
@@ -1078,18 +1071,6 @@ def test_protected_data_properties_round_trip(
     owner: Final = _get_owner(module_path, owner_name)
     if not isinstance(owner, type):
         raise TypeError(f"expected a class owner, got {type(owner).__name__}")
-    if owner_name == "ModelParamHelper":
-        original_value: Final = getattr(owner, new_name)
-        first_value: Final = frozenset({"first"})
-        second_value: Final = frozenset({"second"})
-        try:
-            setattr(owner, old_name, first_value)
-            assert getattr(owner, new_name) is first_value
-            setattr(owner, new_name, second_value)
-            assert getattr(owner, old_name) is second_value
-        finally:
-            setattr(owner, new_name, original_value)
-        return
     instance: Final = object.__new__(owner)
     first_value: Final = object()
     second_value: Final = object()

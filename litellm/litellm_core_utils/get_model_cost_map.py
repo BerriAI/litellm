@@ -601,7 +601,7 @@ def _retry_remote_fetch_in_background(
         _litellm_import_complete.wait()
         if not GetModelCostMap.validate_model_cost_map(
             fetched_map=result.model_cost_map,
-            backup_model_count=GetModelCostMap.get_backup_model_count(),  # pyright: ignore[reportPrivateUsage]  # integrity cache
+            backup_model_count=GetModelCostMap.get_backup_model_count(),
         ):
             verbose_logger.warning(
                 "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",

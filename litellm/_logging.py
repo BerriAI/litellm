@@ -149,30 +149,11 @@ def _substituted_color_message(record: logging.LogRecord) -> str | None:
         return color_message
 
 
-class _SecretRedactionFilterMeta(type):
-    formatter: logging.Formatter
-
-    @property
-    def _formatter(cls: "_SecretRedactionFilterMeta") -> logging.Formatter:
-        return cls.formatter
-
-    @_formatter.setter
-    def _formatter(cls: "_SecretRedactionFilterMeta", value: logging.Formatter) -> None:
-        cls.formatter = value
-
-
-class SecretRedactionFilter(logging.Filter, metaclass=_SecretRedactionFilterMeta):
+class SecretRedactionFilter(logging.Filter):
     """Scrubs known secret/credential patterns from log records."""
 
     formatter = logging.Formatter()
-
-    @property
-    def _formatter(self) -> logging.Formatter:
-        return self.formatter
-
-    @_formatter.setter
-    def _formatter(self, value: logging.Formatter) -> None:
-        self.formatter = value
+    _formatter = formatter
 
     def filter(self, record: logging.LogRecord) -> bool:
         if not ENABLE_SECRET_REDACTION or _is_redacted(record):
@@ -498,7 +479,7 @@ def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit:
         record.stack_info = processed_stack  # rebind-ok: the Filter interface mutates the record
     processed_values: Final = iter(processed_leaves[: len(extra_leaves)])
     for key, original, prepared in extras:
-        replacement: Final = _sort_processed_sets(original, _replace_string_leaves(prepared, processed_values))
+        replacement = _sort_processed_sets(original, _replace_string_leaves(prepared, processed_values))
         if not _scrubbing_changed_nothing(replacement, original):
             setattr(record, key, replacement)
     raw_color_changed: Final = (

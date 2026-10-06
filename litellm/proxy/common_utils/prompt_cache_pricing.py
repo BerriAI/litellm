@@ -8,7 +8,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.cost_calculator import (
     completion_cost,  # pyright: ignore[reportUnknownVariableType]  # legacy optional parameters are untyped
-    select_model_name_for_cost_calc,  # pyright: ignore[reportPrivateUsage]  # shares completion_cost's deployment tariff selection
+    select_model_name_for_cost_calc,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.management_endpoints.prompt_cache_prediction import CacheTokenBuckets

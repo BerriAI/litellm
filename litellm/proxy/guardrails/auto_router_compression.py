@@ -157,7 +157,7 @@ async def arm_pre_call(
         return
 
     from litellm.router_strategy.tag_based_routing import (
-        get_tags_from_request_kwargs,  # pyright: ignore[reportPrivateUsage]  # used in router.py and budget_limiter.py too
+        get_tags_from_request_kwargs,
     )
 
     policy: Final = policy_for_model(

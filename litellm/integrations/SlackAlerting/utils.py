@@ -3,13 +3,20 @@ Utils used for slack alerting
 """
 
 import asyncio
-from collections.abc import Callable, Mapping
-from typing import Final, cast
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.secret_managers.main import get_secret
 from litellm.types.integrations.slack_alerting import AlertType
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _Logging
+
+    Logging = _Logging
+else:
+    Logging = Any
 
 
 def process_slack_alerting_variables(
@@ -51,7 +58,7 @@ def process_slack_alerting_variables(
 
 
 async def add_langfuse_trace_id_to_alert(
-    request_data: Mapping[str, object] | None = None,
+    request_data: dict[str, object] | None = None,
 ) -> str | None:
     """
     Returns langfuse trace url
@@ -62,7 +69,6 @@ async def add_langfuse_trace_id_to_alert(
     -> litellm_call_id
     """
     from litellm.integrations.langfuse.langfuse import LangFuseLogger, resolve_langfuse_host
-    from litellm.litellm_core_utils.litellm_logging import Logging
 
     callbacks: Final[list[CustomLogger | Callable[..., object] | str]] = (
         litellm.logging_callback_manager.get_all_callbacks()
@@ -70,14 +76,12 @@ async def add_langfuse_trace_id_to_alert(
     if not any(callback == "langfuse" or isinstance(callback, LangFuseLogger) for callback in callbacks):
         return None
 
-    if request_data is None:
+    if request_data is None or request_data.get("litellm_logging_obj", None) is None:
         return None
 
-    logging_obj: Final = request_data.get("litellm_logging_obj")
-    if logging_obj is None:
-        return None
-
-    litellm_logging_obj: Final = cast(Logging, logging_obj)
+    litellm_logging_obj: Final = cast(  # cast-ok: logging object crosses the dynamic callback payload boundary
+        Logging, request_data["litellm_logging_obj"]
+    )
     instance_host: Final = next(
         (callback.langfuse_host for callback in callbacks if isinstance(callback, LangFuseLogger)), None
     )

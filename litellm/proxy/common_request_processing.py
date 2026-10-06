@@ -4223,7 +4223,7 @@ class ProxyBaseLLMRequestProcessing:
         debug_missing: Final = object()
         debug_before: Final = call_details.get(debug_key, debug_missing) if isinstance(call_details, dict) else None
         try:
-            cost: Final = litellm_logging_obj.response_cost_calculator(result=model_response)  # pyright: ignore[reportPrivateUsage]  # reuse the call's own cost calc for pricing parity with the logging callback
+            cost: Final = litellm_logging_obj.response_cost_calculator(result=model_response)
         except Exception:  # noqa: BLE001  # a pricing failure falls back to model-name pricing instead of breaking the stream
             return None
         finally:

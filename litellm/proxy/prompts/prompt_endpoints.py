@@ -435,12 +435,10 @@ def _get_prompt_template(prompt_spec: PromptSpec, base_prompt_id: str) -> Prompt
 
             parsed: Final = get_prompt_data_from_dotprompt_content(dotprompt_content)
             if parsed:
-                return PromptTemplateBase.model_validate(
-                    {
-                        "litellm_prompt_id": base_prompt_id,
-                        "content": parsed.get("content", ""),
-                        "metadata": parsed.get("metadata"),
-                    }
+                return PromptTemplateBase(
+                    litellm_prompt_id=base_prompt_id,
+                    content=cast(str, parsed.get("content", "")),
+                    metadata=cast(dict[str, object] | None, parsed.get("metadata")),
                 )
         else:
             prompt_callback: Final = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=prompt_spec)

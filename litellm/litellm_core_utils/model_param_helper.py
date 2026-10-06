@@ -22,29 +22,9 @@ from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.rerank import RerankRequest
 
 
-class _ModelParamHelperMeta(type):
-    relevant_logging_args: frozenset[str]
-
-    @property
-    def _relevant_logging_args(cls: "_ModelParamHelperMeta") -> frozenset[str]:
-        return cls.relevant_logging_args
-
-    @_relevant_logging_args.setter
-    def _relevant_logging_args(cls: "_ModelParamHelperMeta", value: frozenset[str]) -> None:
-        cls.relevant_logging_args = value
-
-
-class ModelParamHelper(metaclass=_ModelParamHelperMeta):
+class ModelParamHelper:
     # Cached at class level — deterministic set built from static OpenAI type annotations
     relevant_logging_args: ClassVar[frozenset[str]] = frozenset()
-
-    @property
-    def _relevant_logging_args(self) -> frozenset[str]:
-        return self.relevant_logging_args
-
-    @_relevant_logging_args.setter
-    def _relevant_logging_args(self, value: frozenset[str]) -> None:
-        type(self).relevant_logging_args = value
 
     @staticmethod
     def get_standard_logging_model_parameters(
@@ -210,3 +190,4 @@ class ModelParamHelper(metaclass=_ModelParamHelperMeta):
 
 
 ModelParamHelper.relevant_logging_args = frozenset(ModelParamHelper.get_relevant_args_to_use_for_logging())
+ModelParamHelper._relevant_logging_args = ModelParamHelper.relevant_logging_args

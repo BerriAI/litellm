@@ -254,7 +254,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointT
 from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionResult
 from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 from litellm.utils import (
-    add_custom_logger_callback_to_specific_event,  # pyright: ignore[reportPrivateUsage]  # only string-to-logger helper
+    add_custom_logger_callback_to_specific_event,
 )
 
 if TYPE_CHECKING:

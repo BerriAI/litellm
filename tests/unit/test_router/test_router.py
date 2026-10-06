@@ -7029,6 +7029,14 @@ def test_deployment_usable_by_team_helpers():
     assert router._get_model_group_deployment_usable_by_team(model_group_name="unknown-model", team_id="team-a") is None
 
 
+def test_deployment_usable_by_team_uses_dynamic_model_info_get():
+    class ModelInfo:
+        def get(self, key: str) -> str | None:
+            return "team-b" if key == "team_id" else None
+
+    assert litellm.Router.deployment_usable_by_team({"model_info": ModelInfo()}, "team-a") is False
+
+
 def test_get_deployment_credentials_with_provider_skips_other_team_wildcard():
     """
     Global wildcard resolution must skip a team-scoped wildcard deployment for

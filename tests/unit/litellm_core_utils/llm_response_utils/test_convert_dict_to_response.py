@@ -6,6 +6,7 @@ from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     handle_invalid_parallel_tool_calls,
     should_convert_tool_call_to_json_mode,
+    safe_convert_created_field,
     convert_to_model_response_object,
 )
 from litellm.types.utils import (
@@ -44,6 +45,20 @@ OPENAI_CUSTOM_TOOL_CALL_RESPONSE = {
     ],
     "usage": {"completion_tokens": 10, "prompt_tokens": 5, "total_tokens": 15},
 }
+
+
+def test_safe_convert_created_field_preserves_large_integer_precision():
+    created_value = 2**53 + 1
+
+    assert safe_convert_created_field(created_value) == created_value
+
+
+def test_safe_convert_created_field_accepts_float_convertible_non_strings():
+    class FloatConvertible:
+        def __float__(self) -> float:
+            return 1.5
+
+    assert safe_convert_created_field(FloatConvertible()) == 1
 
 
 def test_convert_openai_custom_tool_call_response():

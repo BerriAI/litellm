@@ -94,6 +94,10 @@ class TestGetOrderFilteredDeployments:
         assert len(result) == 2
 
 
+def test_get_deployment_order_returns_unvalidated_order():
+    assert get_deployment_order({"litellm_params": {"order": "first"}}) == "first"
+
+
 # ---------------------------------------------------------------------------
 # Integration tests for order-based fallback in Router
 # ---------------------------------------------------------------------------

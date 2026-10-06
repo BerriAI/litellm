@@ -23,7 +23,7 @@ from litellm.router_utils.cooldown_handlers import (
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
     is_caller_timeout_408,
-    set_cooldown_deployments,  # pyright: ignore[reportPrivateUsage] - shared helper, used across router_utils
+    set_cooldown_deployments,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Final
+from typing import Any, Final, SupportsFloat, SupportsIndex, SupportsInt, cast
 
 import polars as pl
 
@@ -174,9 +174,9 @@ class FocusExportEngine:
         if frame.is_empty() or column not in frame.columns:
             return 0.0
         value: Final[object] = frame.select(pl.col(column).sum().alias("sum")).row(0)[0]
-        if not isinstance(value, (int, float)):
+        if value is None:
             return 0.0
-        return float(value)
+        return float(cast(SupportsFloat | SupportsIndex | str | bytes | bytearray, value))
 
     _sum_column: Final[Callable[[pl.DataFrame, str], float]] = sum_column
 
@@ -185,8 +185,8 @@ class FocusExportEngine:
         if frame.is_empty() or column not in frame.columns:
             return 0
         value: Final[object] = frame.select(pl.col(column).n_unique().alias("unique")).row(0)[0]
-        if not isinstance(value, int):
+        if value is None:
             return 0
-        return value
+        return int(cast(SupportsInt | SupportsIndex | str | bytes | bytearray, value))
 
     _count_unique: Final[Callable[[pl.DataFrame, str], int]] = count_unique

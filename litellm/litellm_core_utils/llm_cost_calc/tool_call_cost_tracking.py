@@ -5,7 +5,7 @@ Helper utilities for tracking the cost of built-in tools.
 from collections.abc import Mapping
 from typing import Final, Literal, cast
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 
 import litellm
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
@@ -740,9 +740,9 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def get_web_search_options(kwargs: Mapping[str, object]) -> WebSearchOptions | None:
-        web_search_options: Final = kwargs.get("web_search_options")
-        if isinstance(web_search_options, Mapping):
-            return TypeAdapter(WebSearchOptions).validate_python(web_search_options)
+        if "web_search_options" in kwargs:
+            web_search_options: Final = cast(WebSearchOptions, kwargs.get("web_search_options", {}))
+            return WebSearchOptions(**web_search_options)
 
         tools: Final = StandardBuiltInToolCostTracking._get_tools_from_kwargs(
             kwargs=kwargs, tool_type="web_search_preview"
@@ -750,26 +750,27 @@ class StandardBuiltInToolCostTracking:
         if tools:
             # Look for web search tool in the tools array
             for tool in tools:
-                if isinstance(tool, Mapping):
+                if isinstance(tool, dict):
                     if StandardBuiltInToolCostTracking._is_web_search_tool_call(tool):
-                        return TypeAdapter(WebSearchOptions).validate_python(tool)
+                        return WebSearchOptions(**cast(WebSearchOptions, tool))
         return None
 
     _get_web_search_options = get_web_search_options
 
     @staticmethod
     def _get_tools_from_kwargs(kwargs: Mapping[str, object], tool_type: str) -> list[object] | None:
-        tools: Final = kwargs.get("tools")
-        return list(cast(list[object], tools)) if isinstance(tools, list) else None
+        if "tools" in kwargs:
+            return cast(list[object], kwargs.get("tools", []))
+        return None
 
     @staticmethod
     def get_file_search_tool_call(kwargs: Mapping[str, object]) -> FileSearchTool | None:
         tools: Final = StandardBuiltInToolCostTracking._get_tools_from_kwargs(kwargs, "file_search")
         if tools:
             for tool in tools:
-                if isinstance(tool, Mapping):
+                if isinstance(tool, dict):
                     if StandardBuiltInToolCostTracking._is_file_search_tool_call(tool):
-                        return TypeAdapter(FileSearchTool).validate_python(tool)
+                        return FileSearchTool(**cast(FileSearchTool, tool))
         return None
 
     _get_file_search_tool_call = get_file_search_tool_call

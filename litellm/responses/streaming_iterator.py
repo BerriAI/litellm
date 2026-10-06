@@ -6,11 +6,11 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, overload, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, cast, overload, runtime_checkable
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -1842,7 +1842,7 @@ def _ws_event_error(event: Mapping[str, object]) -> object:
 
 
 def _restore_input_item_ids(items: Sequence[object]) -> Sequence[object]:
-    return ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(list(items)))  # pyright: ignore[reportPrivateUsage]  # same restore the HTTP responses path runs
+    return ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(list(items)))
 
 
 def _restored_container_fields(container: Mapping[str, object]) -> Mapping[str, object]:
@@ -1883,7 +1883,7 @@ def _wrap_output_item_encrypted_content(
     encrypted_content: Final = item.get("encrypted_content")
     if not isinstance(encrypted_content, str) or not encrypted_content:
         return None
-    wrapped_content: Final = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(  # pyright: ignore[reportPrivateUsage]  # same wrap the HTTP streaming path applies
+    wrapped_content: Final = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
         encrypted_content=encrypted_content, model_id=model_id
     )
     return {**event_obj, "item": {**item, "encrypted_content": wrapped_content}}
@@ -2032,7 +2032,7 @@ class ResponsesWebSocketStreaming:
         logging_result: Final = LiteLLMRealtimeStreamLoggingObject(
             usage=usage, results=self.messages, service_tier=service_tier
         )
-        response_cost: Final = self.logging_obj.response_cost_calculator(result=logging_result) or 0.0  # pyright: ignore[reportPrivateUsage]  # as the HTTP streaming iterator does
+        response_cost: Final = self.logging_obj.response_cost_calculator(result=logging_result) or 0.0
         self.logging_obj.record_partial_usage_for_failure(usage, response_cost)
 
     def _wrap_response_event(self, response_str: str) -> str:
@@ -2042,7 +2042,7 @@ class ResponsesWebSocketStreaming:
             return response_str
         response: Final = event_obj.get("response")
         if _is_json_object(response):
-            wrapped_response: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(  # pyright: ignore[reportPrivateUsage]  # same wrap the HTTP streaming path applies
+            wrapped_response: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
                 responses_api_response=response,
                 custom_llm_provider=self.custom_llm_provider,
                 litellm_metadata=self.litellm_metadata,
@@ -2874,7 +2874,7 @@ class ManagedResponsesWebSocketHandler:
         """
         terminal_event: _MutableJsonObject | None = None
         stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
-        async for chunk in stream_response:
+        async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns an async stream
             if chunk is None:
                 continue
             # Read type from the object before serializing to avoid double JSON parse

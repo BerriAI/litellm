@@ -659,15 +659,19 @@ def _get_token_base_cost(
     cache_creation_cost_key: Final = get_service_tier_cost_key("cache_creation_input_token_cost", service_tier)
     cache_read_cost_key: Final = get_service_tier_cost_key("cache_read_input_token_cost", service_tier)
 
-    prompt_base_cost = cast(float, get_cost_per_unit(model_info, input_cost_key))
-    completion_base_cost = cast(float, get_cost_per_unit(model_info, output_cost_key))
+    prompt_base_cost = cast(  # cast-ok: model pricing data is external
+        float, get_cost_per_unit(model_info, input_cost_key)
+    )
+    completion_base_cost = cast(  # cast-ok: model pricing data is external
+        float, get_cost_per_unit(model_info, output_cost_key)
+    )
 
     # For image generation models that don't have output_cost_per_token,
     # use output_cost_per_image_token as the base cost (all output tokens are image tokens)
     if completion_base_cost == 0.0 or completion_base_cost is None:
         output_image_cost: Final = get_cost_per_unit(model_info, "output_cost_per_image_token", None)
         if output_image_cost is not None:
-            completion_base_cost = cast(float, output_image_cost)
+            completion_base_cost = output_image_cost
     cache_creation_cost = get_cost_per_unit(model_info, cache_creation_cost_key, default_value=None)
     cache_creation_cost_above_1hr = get_cost_per_unit(
         model_info, "cache_creation_input_token_cost_above_1hr", default_value=None
@@ -1208,7 +1212,7 @@ def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | 
     if multiplier is None:
         return 1.0
     try:
-        return float(cast(float, multiplier))
+        return float(multiplier)
     except (TypeError, ValueError):
         verbose_logger.exception(
             "Invalid regional_processing_uplift_multiplier_%s for model; defaulting to 1.0",
@@ -1239,7 +1243,7 @@ def get_vertex_regional_endpoint_uplift(model_info: ModelInfo, vertex_location: 
     if multiplier is None:
         return 1.0
     try:
-        return float(cast(float, multiplier))
+        return float(cast(float, multiplier))  # cast-ok: pricing multiplier is external model data
     except (TypeError, ValueError):
         verbose_logger.exception(
             "Invalid regional_endpoint_uplift_multiplier for model; defaulting to 1.0",

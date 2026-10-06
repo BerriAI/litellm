@@ -8,14 +8,19 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 import httpx
-from opentelemetry.trace import Span
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
     from litellm.types.utils import ModelResponseStream
+
+    Span = _Span | Any
+else:
+    Span = Any
 
 
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
@@ -428,15 +433,29 @@ def get_parent_otel_span_from_kwargs(
     try:
         if kwargs is None:
             return None
-        metadata_value: Final = kwargs.get("metadata")
-        if isinstance(metadata_value, Mapping) and "litellm_parent_otel_span" in metadata_value:
-            return cast(Span | None, metadata_value["litellm_parent_otel_span"])
         litellm_params: Final = kwargs.get("litellm_params")
-        if isinstance(litellm_params, Mapping):
-            litellm_metadata_value: Final = litellm_params.get("metadata")
-            if isinstance(litellm_metadata_value, Mapping) and "litellm_parent_otel_span" in litellm_metadata_value:
-                return cast(Span | None, litellm_metadata_value["litellm_parent_otel_span"])
-        return cast(Span | None, kwargs.get("litellm_parent_otel_span"))
+        metadata: Final = cast(  # cast-ok: metadata is caller-provided request data
+            Mapping[str, object], kwargs.get("metadata") or {}
+        )
+        if "litellm_parent_otel_span" in metadata:
+            return cast(  # cast-ok: tracing metadata crosses an external boundary
+                Span | None, metadata["litellm_parent_otel_span"]
+            )
+        elif (
+            litellm_params is not None
+            and cast(Mapping[str, object], litellm_params).get("metadata") is not None
+            and "litellm_parent_otel_span"
+            in cast(
+                Mapping[str, object],
+                cast(Mapping[str, object], litellm_params).get("metadata", {}),
+            )
+        ):
+            typed_litellm_params: Final = cast(Mapping[str, object], litellm_params)
+            litellm_metadata: Final = cast(Mapping[str, object], typed_litellm_params["metadata"])
+            return cast(Span | None, litellm_metadata["litellm_parent_otel_span"])
+        elif "litellm_parent_otel_span" in kwargs:
+            return cast(Span | None, kwargs["litellm_parent_otel_span"])
+        return None
     except Exception as e:
         verbose_logger.exception("Error in _get_parent_otel_span_from_kwargs: " + str(e))
         return None

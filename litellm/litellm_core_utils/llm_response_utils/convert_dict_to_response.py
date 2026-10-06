@@ -90,13 +90,11 @@ def safe_convert_created_field(created_value: object) -> int:
         return created_value
     elif isinstance(created_value, float):
         return int(created_value)
-    elif isinstance(created_value, str):
+    else:
         try:
-            return int(float(created_value))
+            return int(float(cast(float | str, created_value)))
         except (ValueError, TypeError):
             return int(time.time())
-    else:
-        return int(time.time())
 
 
 _safe_convert_created_field = safe_convert_created_field

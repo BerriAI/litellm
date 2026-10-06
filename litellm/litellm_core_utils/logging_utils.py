@@ -5,9 +5,7 @@ import re
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final
-
-from opentelemetry.trace import Span
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import format_base64_size, verbose_logger
 from litellm.constants import (
@@ -22,15 +20,19 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
     from litellm import ModelResponse as _ModelResponse
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObject,
     )
 
     LiteLLMModelResponse = _ModelResponse
+    Span = _Span | Any
 else:
     LiteLLMModelResponse = Any
     LiteLLMLoggingObject = Any
+    Span = Any
 
 
 import litellm
@@ -260,11 +262,10 @@ def assemble_complete_response_from_streaming_chunks(
     if result.choices[0].finish_reason is not None:  # if it's the last chunk
         streaming_chunks.append(result)
         try:
-            messages: Final = request_kwargs.get("messages")
-            stream_messages: Final = messages if isinstance(messages, Sequence) else None
+            messages: Final = cast(list[dict[str, object]] | None, request_kwargs.get("messages", None))
             complete_streaming_response = litellm.stream_chunk_builder(
                 chunks=streaming_chunks,
-                messages=stream_messages,
+                messages=messages,
                 start_time=start_time,
                 end_time=end_time,
             )

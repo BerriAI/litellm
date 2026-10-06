@@ -1950,7 +1950,7 @@ def get_response_cost_from_hidden_params(
     hidden_params: dict | BaseModel,
 ) -> float | None:
     if isinstance(hidden_params, BaseModel):
-        _hidden_params_dict = cast(BaseModel, hidden_params).model_dump()
+        _hidden_params_dict = hidden_params.model_dump()
     else:
         _hidden_params_dict = hidden_params
 
@@ -2871,9 +2871,7 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
         results: Sequence[Mapping[str, object]],
     ) -> tuple[Usage, ...]:
         return tuple(
-            ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform the realtime processor uses
-                response.usage
-            )
+            ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response.usage)
             for _, response in _billable_responses_ws_events(results)
             if response.usage is not None
         )

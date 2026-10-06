@@ -653,7 +653,7 @@ def _get_exact_count_function(
     from litellm.utils import select_tokenizer
 
     if model is not None or custom_tokenizer is not None:
-        tokenizer_json: Final = custom_tokenizer if custom_tokenizer else select_tokenizer(model)
+        tokenizer_json: Final = custom_tokenizer or select_tokenizer(model)
     else:
         default_encoding: Final = get_default_encoding()
 

@@ -83,6 +83,13 @@ from litellm.utils import (
     is_prompt_caching_valid_prompt,
 )
 
+
+def test_get_base_model_from_metadata_returns_unvalidated_root_value():
+    from litellm.utils import get_base_model_from_metadata
+
+    assert get_base_model_from_metadata({"litellm_params": {"base_model": 42}}) == 42
+
+
 # Adds the parent directory to the system path
 
 

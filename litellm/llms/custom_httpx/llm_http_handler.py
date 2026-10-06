@@ -411,7 +411,7 @@ def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> 
         return transformed_request
 
     from litellm.litellm_core_utils.litellm_logging import (
-        get_masked_values,  # pyright: ignore[reportPrivateUsage]  # the shared header-masking helper has no public name
+        get_masked_values,
     )
 
     return {

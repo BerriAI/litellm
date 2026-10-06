@@ -260,7 +260,7 @@ class RealTimeStreaming:
             # TypedDict union members do not narrow to plain dict for mypy.
             message_obj: dict[str, Any] = cast(dict[str, Any], message)
         else:
-            message_obj = cast(dict[str, Any], json.loads(cast(str, message)))
+            message_obj = cast(dict[str, Any], json.loads(message))
         self._collect_tool_calls_from_response_done(cast(dict, message_obj))
         if not self._should_store_message(message_obj):
             return

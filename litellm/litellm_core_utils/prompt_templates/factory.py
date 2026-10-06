@@ -1217,9 +1217,9 @@ def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
                 signature_from_function_fields: Final = typed_func_provider_fields.get("thought_signature")
                 if signature_from_function_fields:
                     return cast(str, signature_from_function_fields)  # cast-ok: untyped provider response field
-        else:
-            function_provider_fields: Final = getattr(function, "provider_specific_fields", None)
-            if function_provider_fields and isinstance(function_provider_fields, dict):
+        elif hasattr(function, "provider_specific_fields") and getattr(function, "provider_specific_fields"):
+            function_provider_fields: Final[object] = getattr(function, "provider_specific_fields")
+            if isinstance(function_provider_fields, dict):
                 typed_function_provider_fields: Final = cast(  # cast-ok: provider fields are dynamic
                     dict[str, object], function_provider_fields
                 )
@@ -1942,7 +1942,7 @@ def anthropic_infer_file_id_content_type(
 def anthropic_process_openai_file_message(
     message: ChatCompletionFileObject,
 ) -> AnthropicMessagesDocumentParam | AnthropicMessagesImageParam | AnthropicMessagesContainerUploadParam:
-    file_message: Final = cast(ChatCompletionFileObject, message)
+    file_message: Final = message
     file_sub: Final = file_message.get("file")
     if file_sub is None:
         raise litellm.BadRequestError(
@@ -3915,7 +3915,7 @@ def _convert_to_bedrock_tool_call_result(
 
     tool_result: Final = BedrockToolResultBlock(content=tool_result_content_blocks, toolUseId=id)
     if used_search_results:
-        tool_result["status"] = cast(Literal["success"], "success")
+        tool_result["status"] = "success"
 
     content_block: Final = BedrockContentBlock(toolResult=tool_result)
 
@@ -4108,7 +4108,7 @@ def _insert_assistant_continue_message(
                 )
             )
     elif litellm.modify_params:
-        text = convert_content_list_to_str(cast(ChatCompletionAssistantMessage, DEFAULT_ASSISTANT_CONTINUE_MESSAGE))
+        text = convert_content_list_to_str(DEFAULT_ASSISTANT_CONTINUE_MESSAGE)
         messages.append(
             BedrockMessageBlock(
                 role="assistant",
@@ -4433,14 +4433,14 @@ class BedrockConverseMessagesProcessor:
                                 _parts.append(_part)
                             elif element["type"] == "file":
                                 _part = await BedrockConverseMessagesProcessor._async_process_file_message(
-                                    message=cast(ChatCompletionFileObject, element)
+                                    message=element
                                 )
                                 _parts.append(_part)
                             elif element["type"] == "document":
                                 _part = BedrockConverseMessagesProcessor._process_document_message(element)
                                 _parts.append(_part)
                             _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                                message_block=cast(OpenAIMessageContentListBlock, element),
+                                message_block=element,
                                 block_type="content_block",
                                 model=model,
                             )
@@ -4554,7 +4554,7 @@ class BedrockConverseMessagesProcessor:
                         if isinstance(element, dict):
                             if element["type"] == "thinking":
                                 thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[cast(ChatCompletionThinkingBlock, element)]
+                                    thinking_blocks=[element]
                                 )
                                 assistants_parts = (
                                     BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -4808,15 +4808,13 @@ def _bedrock_converse_messages_pt(
                             )
                             _parts.append(_part)
                         elif element["type"] == "file":
-                            _part = BedrockConverseMessagesProcessor.process_file_message(
-                                message=cast(ChatCompletionFileObject, element)
-                            )
+                            _part = BedrockConverseMessagesProcessor.process_file_message(message=element)
                             _parts.append(_part)
                         elif element["type"] == "document":
                             _part = BedrockConverseMessagesProcessor._process_document_message(element)
                             _parts.append(_part)
                         _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                            message_block=cast(OpenAIMessageContentListBlock, element),
+                            message_block=element,
                             block_type="content_block",
                             model=model,
                         )
@@ -4933,7 +4931,7 @@ def _bedrock_converse_messages_pt(
                         if element["type"] == "thinking":
                             thinking_block = (
                                 BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[cast(ChatCompletionThinkingBlock, element)]
+                                    thinking_blocks=[element]
                                 )
                             )
                             assistants_parts = (

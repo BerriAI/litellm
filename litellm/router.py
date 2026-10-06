@@ -26,6 +26,7 @@ from collections.abc import (
     AsyncIterator,
     Callable,
     Generator,
+    Iterable,
     Iterator,
     Mapping,
     MutableMapping,
@@ -621,7 +622,7 @@ def _anthropic_stream_fallback_error_for_raised(
     status_code: Final = _anthropic_stream_raised_error_status(error)
     if status_code is None:
         return _anthropic_stream_pre_content_error(error, model)
-    retriable: Final = litellm.should_retry(status_code)  # pyright: ignore[reportPrivateUsage]  # shared retry rule
+    retriable: Final = litellm.should_retry(status_code)
     return _anthropic_stream_pre_content_error(error, model) if retriable else None
 
 
@@ -3494,7 +3495,9 @@ class Router:
         async def stream_with_fallbacks():
             held_lifecycle_events: tuple[object, ...] = ()  # rebind-ok: flushed at first output, dropped on fallback
             try:
-                async for item in source_iterator:
+                async for item in cast(  # cast-ok: response iterators are async streams
+                    AsyncIterator[object], source_iterator
+                ):
                     if _responses_stream_holds_event(item, len(held_lifecycle_events)):
                         held_lifecycle_events = (*held_lifecycle_events, item)
                         continue
@@ -3709,7 +3712,7 @@ class Router:
                             wrapper_ref, fallback_response
                         )
                         fallback_headers_are_settled = False
-                        for fallback_item in fallback_response:
+                        for fallback_item in cast(Iterable[object], fallback_response):  # cast-ok: __iter__ was checked
                             if not fallback_headers_are_settled:
                                 fallback_headers_are_settled = True
                                 # a fallback that failed over again only repoints itself once it yields
@@ -7982,7 +7985,7 @@ class Router:
         status_code: Final = getattr(exception, "status_code", None)
         if not failed_deployment_id or not isinstance(status_code, int):
             return ()
-        if litellm.should_retry(status_code):  # pyright: ignore[reportPrivateUsage]  # as in should_retry_this_error
+        if litellm.should_retry(status_code):
             return ()
         already_skipped_ids: Final = _as_retry_skipped_deployment_ids(already_skipped)
         skipped: Final = tuple(sorted(frozenset((*already_skipped_ids, failed_deployment_id))))
@@ -8217,7 +8220,7 @@ class Router:
         num_retries: int | None = None
 
         if available_models is not None and len(available_models) == 1:
-            num_retries = cast(int | None, available_models[0]["litellm_params"].get("num_retries"))
+            num_retries = available_models[0]["litellm_params"].get("num_retries")
 
         if mock_testing_rate_limit_error is not None and mock_testing_rate_limit_error is True:
             verbose_router_logger.info(
@@ -10636,15 +10639,9 @@ class Router:
         A team-scoped deployment (``model_info.team_id`` set) is only usable by
         callers from that same team; deployments without a team owner are shared.
         """
-        if isinstance(model, Deployment):
-            deployment_model_info: Final = model.model_info
-            deployment_owner_team_id: Final = deployment_model_info.team_id
-            return deployment_owner_team_id is None or deployment_owner_team_id == team_id
-        model_info_value: Final = model.get("model_info")
-        mapping_owner_team_id: Final = (
-            model_info_value.get("team_id") if isinstance(model_info_value, Mapping) else None
-        )
-        return mapping_owner_team_id is None or mapping_owner_team_id == team_id
+        model_info: Final = model.get("model_info") if isinstance(model, dict) else model.model_info
+        owner_team_id: Final = cast(Mapping[str, object], model_info).get("team_id") if model_info is not None else None
+        return owner_team_id is None or owner_team_id == team_id
 
     _deployment_usable_by_team = deployment_usable_by_team
 
@@ -13484,7 +13481,7 @@ class Router:
         )
 
         if self.enable_pre_call_checks and (messages is not None or input is not None):
-            deployments_to_check: Final = cast(list[dict], healthy_deployments)
+            deployments_to_check: Final = healthy_deployments
             healthy_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=deployments_to_check,

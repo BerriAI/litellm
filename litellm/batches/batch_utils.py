@@ -5,8 +5,6 @@ from dataclasses import replace as dataclasses_replace
 from enum import Enum
 from typing import Any, Final, Literal, cast
 
-from pydantic import TypeAdapter
-
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
@@ -643,15 +641,13 @@ def count_entry_tokens(
     model_name: str | None = None,
 ) -> int:
     """Token-count a single batch input entry's body (chat / text / embedding)."""
-    body_value: Final = entry.get("body")
-    if not isinstance(body_value, Mapping):
-        return 0
-    body: Final = cast(Mapping[str, object], body_value)
-    model_value: Final = body.get("model", model_name or "")
-    model: Final = model_value if isinstance(model_value, str) else model_name or ""
+    body: Final = cast(  # cast-ok: batch payload bodies come from provider JSON
+        Mapping[str, object], entry.get("body", {}) or {}
+    )
+    model: Final = cast(str, body.get("model", model_name or ""))  # cast-ok: provider batch model names are strings
 
     messages: Final = body.get("messages")
-    if isinstance(messages, list) and messages:
+    if messages:
         return token_counter(model=model, messages=cast(list[dict[str, object]], messages))
 
     prompt: Final = body.get("prompt")
@@ -764,11 +760,11 @@ def _get_response_from_batch_job_output_file(
         return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("message", None) or {}
     if custom_llm_provider == "bedrock":
         return batch_job_output_file.get("modelOutput", None) or {}
-    _response: Final[dict[str, object]] = cast(  # cast-ok: batch response bodies come from provider JSON
-        dict[str, object], batch_job_output_file.get("response", None) or {}
+    _response: Final = cast(  # cast-ok: batch output response comes from provider JSON
+        Mapping[str, object], batch_job_output_file.get("response", None) or {}
     )
     _response_body: Final = _response.get("body", None) or {}
-    return TypeAdapter(dict[str, object]).validate_python(_response_body)
+    return cast(Mapping[str, object], _response_body)  # cast-ok: batch response body comes from provider JSON
 
 
 def _batch_response_was_successful(

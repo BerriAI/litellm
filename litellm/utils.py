@@ -362,9 +362,6 @@ if TYPE_CHECKING:
         ResponseMetadata,
         update_response_metadata,
     )
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-        parse_content_for_reasoning,
-    )
     from litellm.litellm_core_utils.redact_messages import (
         LiteLLMLoggingObject,
         redact_message_input_output_from_logging,
@@ -724,7 +721,10 @@ def load_credentials_from_list(kwargs: dict):
 def get_dynamic_callbacks(
     dynamic_callbacks: list[str | Callable[..., object] | CustomLogger] | None,
 ) -> list[str | Callable[..., object] | CustomLogger]:
-    return [*litellm.callbacks, *(dynamic_callbacks or [])]
+    returned_callbacks: Final = litellm.callbacks.copy()
+    if dynamic_callbacks:
+        returned_callbacks.extend(dynamic_callbacks)
+    return returned_callbacks
 
 
 def _is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool:
@@ -1475,9 +1475,9 @@ async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str)
 
     modified_kwargs = kwargs.copy()
 
-    CustomLogger: Final = _get_cached_custom_logger()
+    custom_logger_class: Final = _get_cached_custom_logger()
     for callback in litellm.callbacks:
-        if isinstance(callback, CustomLogger):
+        if isinstance(callback, custom_logger_class):
             result = await callback.async_pre_call_deployment_hook(modified_kwargs, typed_call_type)
             if result is not None:
                 modified_kwargs = result
@@ -1498,10 +1498,10 @@ async def async_post_call_success_deployment_hook(
 
     modified_response = response
 
-    CustomLogger: Final = _get_cached_custom_logger()
+    custom_logger_class: Final = _get_cached_custom_logger()
     CustomGuardrail: Final = _get_cached_custom_guardrail()
     for callback in litellm.callbacks:
-        if isinstance(callback, CustomLogger):
+        if isinstance(callback, custom_logger_class):
             try:
                 result = await callback.async_post_call_success_deployment_hook(
                     request_data, cast(LLMResponseTypes, modified_response), typed_call_type
@@ -1554,9 +1554,9 @@ async def async_post_call_failure_deployment_hook(
     safe_request_data: Final = MappingProxyType({k: v for k, v in request_data.items() if k != "attempted_targets"})
     safe_exception: Final = _snapshot_exception_for_hook(exception)
 
-    CustomLogger: Final = _get_cached_custom_logger()
+    custom_logger_class: Final = _get_cached_custom_logger()
     for callback in litellm.callbacks:
-        if isinstance(callback, CustomLogger):
+        if isinstance(callback, custom_logger_class):
             try:
                 if _accepts_fallback_depth_kwarg_for_class(type(callback)):
                     await callback.async_post_call_failure_deployment_hook(
@@ -1676,12 +1676,12 @@ def client(original_function):
 
     Rules: Final = litellm_utils.Rules
     rules_obj: Final = Rules()
-    call_type: Final = _get_call_type_from_public_name(original_function.__name__)
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
+        call_type: Final = _get_call_type_from_public_name(original_function.__name__)
         if _is_async_request(kwargs):
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
             if max_retries_per_request_hit(kwargs, litellm.num_retries_per_request):
@@ -1975,6 +1975,7 @@ def client(original_function):
     async def wrapper_async(*args, **kwargs):
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time: Final = datetime.datetime.now()
+        call_type: Final = _get_call_type_from_public_name(original_function.__name__)
         result = None
         _update_response_metadata: Final[_ResponseMetadataUpdater] = litellm_utils.update_response_metadata
         logging_obj: LiteLLMLoggingObject | None = kwargs.get("litellm_logging_obj", None)
@@ -2221,8 +2222,9 @@ def client(original_function):
                 except Exception as e:
                     raise e
 
+            retry_call_type: Final = _get_call_type_from_public_name(original_function.__name__)
             num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
-            if call_type == CallTypes.acompletion.value:
+            if retry_call_type == CallTypes.acompletion.value:
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
                 _is_litellm_router_call = "model_group" in (
@@ -2257,7 +2259,7 @@ def client(original_function):
                         kwargs["model"] = context_window_fallback_dict[model]
                     result = await original_function(*args, **kwargs)
                     return result
-            elif call_type == CallTypes.aresponses.value:
+            elif retry_call_type == CallTypes.aresponses.value:
                 _is_litellm_router_call = "model_group" in (
                     kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
@@ -3139,23 +3141,17 @@ def supports_embedding_image_input(model: str, custom_llm_provider: str | None =
 
 
 ####### HELPER FUNCTIONS ################
-def _string_keyed_object_dict(value: object) -> dict[str, object] | None:
-    if not isinstance(value, dict):
-        return None
-    dict_value: Final = cast(dict[object, object], value)
-    if not all(isinstance(key, str) for key in dict_value):
-        return None
-    return cast(dict[str, object], dict_value)  # cast-ok: nested model data has string keys
-
-
 def update_dictionary(existing_dict: dict[str, object], new_dict: Mapping[str, object]) -> dict[str, object]:
     for k, v in new_dict.items():
         if v is not None:
             # Convert stringified numbers to appropriate numeric types
             if isinstance(v, str):
                 existing_dict[k] = _convert_stringified_numbers(v)
-            elif (nested_dict := _string_keyed_object_dict(v)) is not None:
-                if (existing_nested_dict := _string_keyed_object_dict(existing_dict.get(k))) is not None:
+            elif isinstance(v, dict):
+                nested_dict = cast(dict[str, object], v)
+                existing_nested_value = existing_dict.get(k)
+                if isinstance(existing_nested_value, dict):
+                    existing_nested_dict = cast(dict[str, object], existing_nested_value)
                     existing_dict[k] = {**existing_nested_dict, **nested_dict}
                 else:
                     existing_dict[k] = dict(nested_dict)
@@ -5225,12 +5221,12 @@ def get_deployment_order(deployment: Mapping[str, object]) -> int | None:
     Checks litellm_params first (static config), then model_info (dynamic/team
     models added via API where order lives in model_info, not litellm_params).
     """
-    litellm_params: Final = deployment.get("litellm_params")
-    order: Final = litellm_params.get("order") if isinstance(litellm_params, Mapping) else None
-    model_info: Final = deployment.get("model_info")
-    fallback_order: Final = model_info.get("order") if isinstance(model_info, Mapping) else None
-    resolved_order: Final = order if order is not None else fallback_order
-    return resolved_order if isinstance(resolved_order, int) else None
+    litellm_params: Final = cast(Mapping[str, object], deployment.get("litellm_params", {}))
+    order: Final = litellm_params.get("order")
+    resolved_order: Final = (
+        order if order is not None else cast(Mapping[str, object], deployment.get("model_info", {})).get("order")
+    )
+    return cast(int | None, resolved_order)
 
 
 _get_deployment_order = get_deployment_order
@@ -7993,29 +7989,25 @@ def get_logging_id(start_time, response_obj):
 def get_base_model_from_metadata(model_call_details: Mapping[str, object] | None = None) -> str | None:
     if model_call_details is None:
         return None
-    litellm_params_value: Final = model_call_details.get("litellm_params")
-    if not isinstance(litellm_params_value, Mapping):
-        return None
-    base_model: Final = litellm_params_value.get("base_model")
-    if isinstance(base_model, str):
-        return base_model
+    litellm_params: Final = cast(Mapping[str, object], model_call_details.get("litellm_params", {}))
+    if litellm_params is not None:
+        base_model: Final = litellm_params.get("base_model", None)
+        if base_model is not None:
+            return cast(str | None, base_model)
+        metadata: Final = cast(Mapping[str, object], litellm_params.get("metadata") or {})
+        base_model_metadata_getter: Final[_BaseModelFromMetadataGetter] = getattr(
+            sys.modules[__name__], "get_base_model_from_litellm_call_metadata"
+        )
+        base_model_from_metadata: Final = base_model_metadata_getter(metadata=metadata)
+        if base_model_from_metadata is not None:
+            return base_model_from_metadata
 
-    empty_metadata: Final[dict[str, object]] = {}
-    metadata_value: Final = litellm_params_value.get("metadata")
-    metadata: Final = metadata_value if isinstance(metadata_value, Mapping) else empty_metadata
-    base_model_metadata_getter: Final[_BaseModelFromMetadataGetter] = getattr(
-        sys.modules[__name__], "get_base_model_from_litellm_call_metadata"
-    )
-    base_model_from_metadata: Final = base_model_metadata_getter(metadata=metadata)
-    if base_model_from_metadata is not None:
-        return base_model_from_metadata
-
-    litellm_metadata_value: Final = litellm_params_value.get("litellm_metadata")
-    litellm_metadata: Final = litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else empty_metadata
-    litellm_metadata_getter: Final[_BaseModelFromMetadataGetter] = getattr(
-        sys.modules[__name__], "get_base_model_from_litellm_call_metadata"
-    )
-    return litellm_metadata_getter(metadata=litellm_metadata)
+        litellm_metadata: Final = cast(Mapping[str, object], litellm_params.get("litellm_metadata", {}))
+        litellm_metadata_getter: Final[_BaseModelFromMetadataGetter] = getattr(
+            sys.modules[__name__], "get_base_model_from_litellm_call_metadata"
+        )
+        return litellm_metadata_getter(metadata=litellm_metadata)
+    return None
 
 
 _get_base_model_from_metadata = get_base_model_from_metadata

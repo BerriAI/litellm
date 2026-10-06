@@ -87,6 +87,35 @@ async def test_async_post_mcp_tool_call_hook_preserves_and_returns_content(loggi
     assert hooked_content.content == [TextContent(type="text", text="[REDACTED]")]
 
 
+def test_response_cost_calculator_preserves_dynamic_call_details(logging_obj, monkeypatch):
+    cache_hit: Final = 1
+
+    class Provider:
+        value: Final = "custom"
+
+        def startswith(self, prefix: str) -> bool:
+            return self.value.startswith(prefix)
+
+    custom_llm_provider: Final = Provider()
+
+    def response_cost_calculator(**kwargs: object) -> float:
+        assert kwargs["cache_hit"] is cache_hit
+        assert kwargs["custom_llm_provider"] is custom_llm_provider
+        return 0.0
+
+    logging_obj.model_call_details["cache_hit"] = cache_hit
+    logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+    logging_obj.optional_params = {}
+    monkeypatch.setattr(litellm, "response_cost_calculator", response_cost_calculator)
+
+    result = ModelResponse(
+        model="gpt-4o-mini",
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    assert logging_obj.response_cost_calculator(result=result) == 0.0
+
+
 @pytest.mark.asyncio
 async def test_async_post_mcp_tool_call_hook_chains_every_callback(logging_obj):
     from litellm.types.mcp import MCPPostCallResponseObject
@@ -2891,6 +2920,17 @@ def test_get_request_tags():
     assert "User-Agent: litellm/0.1.0" in tags
 
 
+def test_get_request_tags_preserves_non_string_metadata_tags():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    tags = StandardLoggingPayloadSetup.get_request_tags(
+        litellm_params={"metadata": {"tags": [7]}},
+        proxy_server_request={},
+    )
+
+    assert 7 in tags
+
+
 def test_get_request_tags_from_metadata_and_litellm_metadata():
     """
     Test that _get_request_tags correctly picks tags from both 'metadata' and 'litellm_metadata'.
@@ -3356,6 +3396,15 @@ def test_get_masked_values():
     masked_values = get_masked_values(sensitive_object, unmasked_length=4, number_of_asterisks=4)
     assert masked_values["presidio_anonymizer_api_base"] is None
     assert masked_values["vertex_credentials"] == "{s****y}"
+
+
+def test_get_masked_values_keeps_original_non_string_key_behavior():
+    from typing import cast
+
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
+
+    with pytest.raises(AttributeError):
+        get_masked_values({"api_key": cast(object, {1: "value"})})
 
 
 @pytest.mark.asyncio

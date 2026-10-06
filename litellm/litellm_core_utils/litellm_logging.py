@@ -1895,10 +1895,16 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt: Final = self._prompt_for_cost_calculation()
 
         model_value: Final = litellm_model_name or self.model
-        cache_hit_value: Final = cache_hit if cache_hit is not None else self.model_call_details.get("cache_hit", False)
-        cost_cache_hit: Final[bool | None] = cache_hit_value if isinstance(cache_hit_value, bool) else None
-        provider_value: Final = self.model_call_details.get("custom_llm_provider")
-        cost_custom_llm_provider: Final[str | None] = provider_value if isinstance(provider_value, str) else None
+        cost_cache_hit_value: Final = (
+            self.model_call_details.get("cache_hit", False) if cache_hit is None else cache_hit
+        )
+        cost_cache_hit: Final[bool | None] = cast(  # cast-ok: callback metadata is caller-provided
+            bool | None, cost_cache_hit_value
+        )
+        provider_value: Final = self.model_call_details.get("custom_llm_provider", None)
+        cost_custom_llm_provider: Final[str | None] = cast(  # cast-ok: callback metadata is caller-provided
+            str | None, provider_value
+        )
         base_model: Final = get_base_model_from_metadata(model_call_details=self.model_call_details)
 
         try:
@@ -4416,12 +4422,10 @@ def get_masked_values(
             typed_value: Final = cast(  # cast-ok: request values can contain arbitrary header keys
                 dict[object, object], v
             )
-            if not all(isinstance(key, str) for key in typed_value):
-                return v
             if _depth >= _max_depth:
                 return v
             return get_masked_values(
-                {key: value for key, value in typed_value.items() if isinstance(key, str)},
+                cast(dict[str, object], typed_value),  # cast-ok: preserve dynamic key behavior
                 ignore_sensitive_values=ignore_sensitive_values,
                 mask_all_values=mask_all_values,
                 unmasked_length=unmasked_length,
@@ -6399,30 +6403,29 @@ class StandardLoggingPayloadSetup:
         return header_tags if header_tags else None
 
     @staticmethod
-    def get_request_tags(litellm_params: dict[str, object], proxy_server_request: dict[str, object]) -> list[str]:
-        def _string_tags(value: object) -> list[str]:
-            if not isinstance(value, list):
-                return []
-            typed_values: Final = cast(list[object], value)
-            return [tag for tag in typed_values if isinstance(tag, str)]
-
-        empty_metadata: Final = MappingProxyType({})
-        metadata_value: Final = litellm_params.get("metadata")
-        metadata: Final = metadata_value if isinstance(metadata_value, Mapping) else empty_metadata
-        metadata_tags: Final = _string_tags(metadata.get("tags"))
-        litellm_metadata_value: Final = litellm_params.get("litellm_metadata")
-        litellm_metadata: Final = (
-            litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else empty_metadata
+    def get_request_tags(
+        litellm_params: dict[str, object],
+        proxy_server_request: dict[str, object],
+    ) -> list[str]:
+        metadata: Final = cast(  # cast-ok: request metadata is caller-provided
+            Mapping[str, object], litellm_params.get("metadata") or {}
         )
-        litellm_metadata_tags: Final = _string_tags(litellm_metadata.get("tags"))
-        request_tags: Final = metadata_tags if metadata_tags else litellm_metadata_tags
+        litellm_metadata: Final = cast(  # cast-ok: request metadata is caller-provided
+            Mapping[str, object], litellm_params.get("litellm_metadata") or {}
+        )
+        if metadata.get("tags", []):
+            request_tags = cast(list[str], metadata.get("tags", [])).copy()  # cast-ok: tags are caller-provided
+        elif litellm_metadata.get("tags", []):
+            request_tags = cast(list[str], litellm_metadata.get("tags", [])).copy()  # cast-ok: tags are caller-provided
+        else:
+            request_tags = []
         user_agent_tags: Final = StandardLoggingPayloadSetup._get_user_agent_tags(proxy_server_request)
         additional_header_tags: Final = StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request)
-        return [
-            *request_tags,
-            *(user_agent_tags or []),
-            *(additional_header_tags or []),
-        ]
+        if user_agent_tags is not None:
+            request_tags.extend(user_agent_tags)
+        if additional_header_tags is not None:
+            request_tags.extend(additional_header_tags)
+        return request_tags
 
     _get_request_tags = get_request_tags
 
@@ -6713,7 +6716,9 @@ def get_standard_logging_object_payload(
         # Reconstruct full model name with provider prefix for logging
         # This ensures Bedrock models like "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
         # are logged as "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
-        custom_llm_provider: Final = cast(str | None, kwargs.get("custom_llm_provider"))
+        custom_llm_provider: Final = cast(  # cast-ok: provider name is caller-provided
+            str | None, kwargs.get("custom_llm_provider")
+        )
         model_name = reconstruct_model_name(kwargs.get("model", "") or "", custom_llm_provider, metadata)
         response_model_name: str | None = None
         if isinstance(final_response_obj, dict):

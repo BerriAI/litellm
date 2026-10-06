@@ -75,6 +75,11 @@ class TestGetBaseModelFromLitellmCallMetadata:
         )
         assert result == "gpt-4"
 
+    def test_returns_non_string_base_model_without_filtering(self):
+        result = get_base_model_from_litellm_call_metadata({"model_info": {"base_model": 123}})
+
+        assert result == 123
+
 
 class TestGetLitellmParamsKwargsExtraction:
     """Verify that optional kwargs are correctly extracted via sparse extraction."""

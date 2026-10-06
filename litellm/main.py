@@ -5750,7 +5750,7 @@ def completion(
                 raise litellm.BadRequestError(
                     message=str(affinity_error), model=model, llm_provider=custom_llm_provider
                 ) from affinity_error
-        cast(LiteLLMLoggingObj, logging).update_environment_variables(
+        logging.update_environment_variables(
             model=model,
             user=user,
             optional_params=processed_non_default_params,  # [IMPORTANT] - using processed_non_default_params ensures consistent params logged to langfuse for finetuning / eval datasets.
@@ -9100,7 +9100,7 @@ def stream_chunk_builder(
 
         if len(tool_call_chunks) > 0:
             tool_calls_list: Final = processor.get_combined_tool_content(tool_call_chunks)
-            _choice = cast(Choices, response.choices[0])
+            _choice = response.choices[0]
             _choice.message.content = None
             _choice.message.tool_calls = tool_calls_list
 
@@ -9113,7 +9113,7 @@ def stream_chunk_builder(
         ]
 
         if len(function_call_chunks) > 0:
-            _choice = cast(Choices, response.choices[0])
+            _choice = response.choices[0]
             _choice.message.content = None
             _choice.message.function_call = processor.get_combined_function_call_content(function_call_chunks)
 
@@ -9180,7 +9180,7 @@ def stream_chunk_builder(
         ]
 
         if len(audio_chunks) > 0:
-            _choice = cast(Choices, response.choices[0])
+            _choice = response.choices[0]
             _choice.message.audio = processor.get_combined_audio_content(audio_chunks)
 
         # Handle image chunks from models like gemini-2.5-flash-image
@@ -9231,7 +9231,7 @@ def stream_chunk_builder(
             }
 
             if combined_provider_fields:
-                _choice = cast(Choices, response.choices[0])
+                _choice = response.choices[0]
                 _choice.message.provider_specific_fields = combined_provider_fields
 
         completion_output = get_content_from_model_response(response)

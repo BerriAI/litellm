@@ -86,6 +86,13 @@ def test_get_response_body_present():
     }
 
 
+def test_get_response_body_is_returned_without_validation():
+    response_body = ["provider-specific response"]
+    row = {"response": {"body": response_body}}
+
+    assert bu._get_response_from_batch_job_output_file(row) is response_body
+
+
 @pytest.mark.parametrize(
     "row",
     [
@@ -345,6 +352,10 @@ def test_count_tokens_unsupported_shape_is_zero(fake_token_counter):
 def test_count_entry_messages_path(fake_token_counter):
     entry = {"body": {"model": "gpt-4o", "messages": [{"role": "user"}, {"role": "x"}]}}
     assert bu._count_entry_tokens(entry) == 2  # len(messages)
+
+
+def test_count_entry_uses_dynamic_length_for_messages(fake_token_counter):
+    assert bu._count_entry_tokens({"body": {"messages": "abc"}}) == 3
 
 
 def test_count_entry_prompt_path(fake_token_counter):
