@@ -9593,4 +9593,4 @@ async def test_background_interaction_completion_logs_while_in_progress_handler_
     await first
     await completion
 
-    assert any(result is completed for result in counting_logger.logged_results), counting_logger.logged_results
+    assert counting_logger.logged_results == [completed, in_progress], counting_logger.logged_results

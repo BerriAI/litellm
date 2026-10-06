@@ -2263,8 +2263,9 @@ class Logging(LiteLLMLoggingBaseClass):
             return True
 
     def claim_async_success_log(self) -> bool:
-        """One async success log per request: the first @client wrapper to exit claims it, and a
-        nested wrapper sharing this object gets False and schedules nothing."""
+        """One async success log per request. The innermost @client wrapper always exits first,
+        since the outer one is awaiting it, so it claims the log here and the outer wrapper gets
+        False and schedules nothing."""
         if self._async_success_scheduled:
             return False
         self._async_success_scheduled = True
