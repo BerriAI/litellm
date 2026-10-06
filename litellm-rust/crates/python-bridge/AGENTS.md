@@ -85,8 +85,8 @@ GIL handling to `litellm-host-python`.
   `messages(...)`, calling the matching `litellm-inference` entrypoint.
 - Do not add one exported PyO3 function per provider helper unless there is a
   measured reason.
-- Provider dispatch belongs in the `litellm-inference` route module (e.g.
-  `litellm_inference::messages`), not in this PyO3 crate.
+- Provider dispatch belongs in the `litellm-inference-*` route crate (e.g.
+  `litellm_inference_messages`), not in this PyO3 crate.
 - Python owns rollout state and fallback. Rust should return errors; Python
   decides whether to raise or fall back. For a rust-only provider/route (no
   Python reference), the Python side is a thin dispatch that calls Rust and

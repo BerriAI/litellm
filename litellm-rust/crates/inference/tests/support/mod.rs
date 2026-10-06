@@ -17,17 +17,6 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
 /// A port nothing listens on, for calls that must fail before any request is sent.
 pub const UNREACHABLE_BASE: &str = "http://127.0.0.1:1";
 
-pub fn messages_route(
-    secrets: Arc<dyn SecretSource>,
-) -> litellm_inference::messages::MessagesRoute {
-    let resources = resources();
-    litellm_inference::messages::MessagesRoute::new(
-        provider_http(&resources, &http_config()),
-        resources.auth,
-        secrets,
-    )
-}
-
 pub fn chat_completions_route() -> litellm_inference::chat_completions::ChatCompletionsRoute {
     let resources = resources();
     litellm_inference::chat_completions::ChatCompletionsRoute::new(

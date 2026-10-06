@@ -17,7 +17,7 @@ use super::{
     common_utils::{MessagesProvider, messages_provider, string_headers},
     types::invalid_request,
 };
-use crate::provider::resolve_llm_provider;
+use litellm_inference::provider::resolve_llm_provider;
 
 struct ResolvedProvider {
     model: String,
@@ -148,7 +148,7 @@ mod tests {
     use serde_json::{Map, Value, json};
 
     use super::*;
-    use crate::messages::MessagesShaping;
+    use crate::MessagesShaping;
 
     #[fixture]
     fn shaping() -> MessagesShaping {

@@ -33,9 +33,9 @@ impl super::MessagesRoute {
     pub fn machine(
         self,
         request: super::MessagesCall,
-        options: impl Into<crate::CallOptions>,
+        options: impl Into<litellm_inference::CallOptions>,
     ) -> MessagesMachine {
-        let crate::CallOptions {
+        let litellm_inference::CallOptions {
             cache: cache_options,
             observers,
         } = options.into();
@@ -43,9 +43,9 @@ impl super::MessagesRoute {
             request,
             observers,
             move |call, _, interceptors, observers| async move {
-                let context = crate::context::CallContext::new(
+                let context = litellm_inference::context::CallContext::new(
                     &interceptors,
-                    crate::CallOptions {
+                    litellm_inference::CallOptions {
                         cache: cache_options,
                         observers,
                     },
@@ -56,11 +56,11 @@ impl super::MessagesRoute {
     }
 }
 
-impl crate::caching::Cachable for Messages {
+impl litellm_inference::caching::Cachable for Messages {
     const SURFACE: &'static str = "messages";
 }
 
-impl crate::caching::StreamCachable for Messages {
+impl litellm_inference::caching::StreamCachable for Messages {
     const TERMINAL_EVENT: &'static str = "message_stop";
 
     fn replay(data: bytes::Bytes) -> Option<litellm_host::call::OutputOf<Self>> {

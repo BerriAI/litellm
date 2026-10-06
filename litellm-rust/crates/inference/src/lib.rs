@@ -5,7 +5,6 @@ pub mod caching;
 pub mod chat_completions;
 pub mod constants;
 pub mod error;
-pub mod messages;
 pub mod ocr;
 pub mod outbound;
 pub mod provider;

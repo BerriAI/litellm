@@ -19,7 +19,8 @@ use super::{
     Error, MessagesCallResponse, MessagesRoute, common_utils::truncate_error_body,
     prepare::ProviderMessagesRequest,
 };
-use crate::{constants::MESSAGES_TIMEOUT_SECS, context::CallContext, outbound::outbound_request};
+use crate::constants::MESSAGES_TIMEOUT_SECS;
+use litellm_inference::{context::CallContext, outbound::outbound_request};
 
 pub(super) struct ProviderCall {
     pub identity: ProviderIdentity,
@@ -166,7 +167,9 @@ async fn send(
         body,
         Some(timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS))),
     )?;
-    crate::outbound::send(request, http).await.map_err(network)
+    litellm_inference::outbound::send(request, http)
+        .await
+        .map_err(network)
 }
 
 async fn provider_error(response: reqwest::Response) -> Error {

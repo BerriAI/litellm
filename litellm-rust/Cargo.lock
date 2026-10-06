@@ -3836,6 +3836,7 @@ dependencies = [
  "litellm-host-http",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-messages",
  "litellm-inference-responses",
  "litellm-inference-transcription",
  "litellm-llms",
@@ -4042,6 +4043,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-inference-messages"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "litellm-auth",
+ "litellm-auth-aws",
+ "litellm-cache-memory",
+ "litellm-cache-response",
+ "litellm-core-utils",
+ "litellm-host",
+ "litellm-host-native",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "litellm-tracing",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-inference-responses"
 version = "0.1.0"
 dependencies = [
@@ -4170,6 +4199,7 @@ dependencies = [
  "litellm-host-python",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-messages",
  "litellm-inference-responses",
  "litellm-inference-transcription",
  "litellm-llms",
@@ -4223,6 +4253,7 @@ version = "0.1.0"
 dependencies = [
  "litellm-config",
  "litellm-inference",
+ "litellm-inference-messages",
  "rstest",
 ]
 
