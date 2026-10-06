@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final, Literal
 
-from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation, unique_marker
+from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, SLOW_PROVIDER_TIMEOUT_SECONDS, settle_propagation, unique_marker
 from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
 from lifecycle import ResourceManager
 from models import (
@@ -20,6 +20,8 @@ from models import (
     ChatMetadata,
     ChatResponse,
     ChatTool,
+    ImageEditForm,
+    ImageGenerationResponse,
     KeyGenerateBody,
     KeyMetadata,
     LiteLLMParamsBody,
@@ -111,6 +113,15 @@ class ToolPermissionParamsBody(GuardrailParamsBase):
     on_disallowed_action: Literal["block", "rewrite"] = "block"
 
 
+class CustomCodeParamsBody(GuardrailParamsBase):
+    """Custom-code guardrail params: `custom_code` is the sandboxed source the
+    proxy compiles, which must define `apply_guardrail(inputs, request_data,
+    input_type)` returning `allow()` or `block(reason)`."""
+
+    guardrail: Literal["custom_code"] = "custom_code"
+    custom_code: str
+
+
 GuardrailParamsBody = (
     ContentFilterParamsBody
     | BedrockGuardrailParamsBody
@@ -118,6 +129,7 @@ GuardrailParamsBody = (
     | BlockCodeExecutionParamsBody
     | PresidioParamsBody
     | ToolPermissionParamsBody
+    | CustomCodeParamsBody
 )
 
 
@@ -174,6 +186,7 @@ class _ResponsesGuardrailBody(BaseModel):
     model: str
     input: str
     guardrails: list[str] | None = None
+    stream: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,6 +366,19 @@ class GuardrailsClient:
             response_type=VideoCreateResponse,
         )
 
+    def edit_image(self, key: str, model: str, prompt: str, image: bytes) -> Result[ImageGenerationResponse]:
+        return self.proxy.transport.upload(
+            "/v1/images/edits",
+            headers=self.proxy.transport.bearer(key),
+            form=ImageEditForm(model=model, prompt=prompt),
+            filename="image.png",
+            content=image,
+            file_content_type="image/png",
+            file_field="image",
+            response_type=ImageGenerationResponse,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
+        )
+
     def chat(
         self,
         key: str,
@@ -507,6 +533,24 @@ class GuardrailsClient:
             "/v1/responses",
             headers=self.proxy.transport.bearer(key),
             json=_ResponsesGuardrailBody(model=model, input=text, guardrails=guardrails),
+        )
+
+    def responses_stream_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+    ) -> StreamingResponse:
+        """Drive /v1/responses with stream=true, returning the raw HTTP outcome:
+        a streamed block is judged on status, content-type, and the SSE event
+        sequence, not a typed JSON body."""
+        return self.proxy.transport.send(
+            "/v1/responses",
+            headers=self.proxy.transport.bearer(key),
+            json=_ResponsesGuardrailBody(model=model, input=text, guardrails=guardrails, stream=True),
+            stream=True,
         )
 
     def apply_guardrail(self, key: str, *, name: str, text: str) -> Result[ApplyGuardrailResponse]:

@@ -8,13 +8,18 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
+from pydantic import ConfigDict, TypeAdapter
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations._types.open_inference import (
     OpenInferenceSpanKindValues,
-    SpanAttributes,
+)
+from litellm.integrations._types.open_inference import (
+    SpanAttributes as OpenInferenceSpanAttributes,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.langtrace import LANGTRACE_TRACE_PATH
 from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
     OTELGenAISemconvMixin,
@@ -25,7 +30,7 @@ from litellm.integrations.otel.mappers.utils import drop_none
 from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
-from litellm.integrations.otel.model.semconv import Metric
+from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -35,6 +40,7 @@ from litellm.litellm_core_utils.service_tier_utils import (
     get_served_service_tier,
 )
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
+from litellm.types.integrations.otel_span_attributes import SpanAttributes
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -93,6 +99,8 @@ class _UsageCompletionTokensView(TypedDict, total=False):
 class _ResponseWithUsageView(TypedDict, total=False):
     usage: "_UsageCompletionTokensView | None"
 
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 # Cap on credential-scoped providers held at once; each one owns an exporter thread.
 _MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
@@ -784,6 +792,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         )
         for key, value in attributes.items():
             self.safe_set_attribute(span=span, key=key, value=value)
+        if payload.caller is not None:
+            self.safe_set_attribute(span=span, key=LiteLLM.SERVICE_CALLER, value=payload.caller)
         return span
 
     async def async_service_success_hook(
@@ -1630,7 +1640,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         attributes = self.config.attributes
         if attributes is None and self.callback_name in (None, "otel"):
             otel_settings: Final = (litellm.callback_settings or {}).get("otel") or {}
-            raw: Final = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
+            raw: Final[object] = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
             if raw is not None:
                 attributes = _build_metric_attribute_filter(raw)
         (
@@ -2048,7 +2058,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             self.safe_set_attribute(
                 span=guardrail_span,
-                key=SpanAttributes.OPENINFERENCE_SPAN_KIND,
+                key=OpenInferenceSpanAttributes.OPENINFERENCE_SPAN_KIND,
                 value=OpenInferenceSpanKindValues.GUARDRAIL.value,
             )
 
@@ -2299,8 +2309,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def set_tools_attributes(self, span: Span, tools):
         import json
 
-        from litellm.proxy._types import SpanAttributes
-
         if not tools:
             return
 
@@ -2350,8 +2358,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def _tool_calls_kv_pair(
         tool_calls: list[ChatCompletionMessageToolCall],
     ) -> dict[str, object]:
-        from litellm.proxy._types import SpanAttributes
-
         kv_pairs: Final[dict[str, object]] = {}
         for idx, tool_call in enumerate(tool_calls):
             _function = tool_call.get("function")
@@ -2387,8 +2393,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
                 set_weave_otel_attributes(span, kwargs, response_obj)
                 return
-            from litellm.proxy._types import SpanAttributes
-
             optional_params: Final = kwargs.get("optional_params", {})
             litellm_params: Final = kwargs.get("litellm_params", {}) or {}
             standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
@@ -2916,7 +2920,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 import json
 
                 try:
-                    _parsed: Final[Mapping[str, object]] = json.loads(_raw_response)
+                    _parsed: Final = _JSON_OBJECT.validate_python(json.loads(_raw_response))
                     for param, val in _parsed.items():
                         self.safe_set_attribute(
                             span=span,
@@ -3330,6 +3334,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         # Splunk Observability Cloud OTLP/HTTP uses /v2/trace/otlp (not /v1/traces). Do not rewrite.
         if signal_type == "traces" and "/v2/trace/otlp" in endpoint:
+            return endpoint
+
+        if signal_type == "traces" and self.callback_name == "langtrace" and endpoint.endswith(LANGTRACE_TRACE_PATH):
             return endpoint
 
         # Check if endpoint already ends with the correct signal path

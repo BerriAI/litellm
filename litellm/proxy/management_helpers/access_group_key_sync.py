@@ -28,8 +28,6 @@ schema.
 from collections.abc import Sequence
 from typing import Final, Protocol
 
-from pydantic import BaseModel
-
 from litellm.proxy._types import (
     LiteLLM_VerificationToken,
     RegenerateKeyRequest,
@@ -40,9 +38,10 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.repositories.table_repositories import AccessGroupRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class _MovedGroupRow(BaseModel):
+class _MovedGroupRow(LiteLLMBaseModel):
     access_group_id: str
 
 

@@ -9,9 +9,10 @@ import asyncio
 import base64
 import json
 import logging
+from types import MappingProxyType
 
 import pytest
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
@@ -297,6 +298,90 @@ async def test_get_user_created_file_ids_remaps_stored_raw_provider_id_to_unifie
     assert [file.id for file in files] == [unified_id]
     assert files[0].filename == raw_provider_object.filename
     assert files[0].purpose == raw_provider_object.purpose
+
+
+@pytest.mark.asyncio
+async def test_provider_file_id_resolver_returns_owned_mappings_with_owner_scoped_filter() -> (
+    None
+):
+    managed_files: Final = _make_managed_files_instance()
+    managed_row: Final = MagicMock(
+        unified_file_id="unified-file-id",
+        flat_model_file_ids=["file-provider-1", "file-provider-2"],
+    )
+    find_many: Final = AsyncMock(return_value=[managed_row])
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many = find_many
+
+    unified_file_ids: Final = (
+        await managed_files.get_unified_file_ids_for_provider_file_ids(
+            provider_file_ids=(
+                "file-provider-1",
+                "file-provider-2",
+                "file-unmanaged-2",
+                "file-provider-1",
+            ),
+            user_api_key_dict=_make_team_member_api_key_dict(),
+        )
+    )
+
+    assert unified_file_ids == {
+        "file-provider-1": "unified-file-id",
+        "file-provider-2": "unified-file-id",
+    }
+    assert isinstance(unified_file_ids, MappingProxyType)
+    find_many.assert_awaited_once_with(
+        where={
+            "OR": [{"created_by": "test-user"}, {"team_id": "test-team"}],
+            "flat_model_file_ids": {
+                "hasSome": ["file-provider-1", "file-provider-2", "file-unmanaged-2"],
+            },
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_file_id_resolver_denies_unowned_callers_without_database_query() -> (
+    None
+):
+    managed_files: Final = _make_managed_files_instance()
+    find_many: Final = AsyncMock()
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many = find_many
+    no_owner: Final = UserAPIKeyAuth(
+        api_key=None,
+        token=None,
+        user_id=None,
+        team_id=None,
+        parent_otel_span=None,
+    )
+
+    unified_file_ids: Final = (
+        await managed_files.get_unified_file_ids_for_provider_file_ids(
+            provider_file_ids=("file-provider-1",),
+            user_api_key_dict=no_owner,
+        )
+    )
+
+    assert unified_file_ids == {}
+    assert isinstance(unified_file_ids, MappingProxyType)
+    find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provider_file_id_resolver_skips_database_query_for_empty_input() -> None:
+    managed_files: Final = _make_managed_files_instance()
+    find_many: Final = AsyncMock()
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many = find_many
+
+    unified_file_ids: Final = (
+        await managed_files.get_unified_file_ids_for_provider_file_ids(
+            provider_file_ids=(),
+            user_api_key_dict=_make_user_api_key_dict(),
+        )
+    )
+
+    assert unified_file_ids == {}
+    assert isinstance(unified_file_ids, MappingProxyType)
+    find_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio

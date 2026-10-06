@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
+    tool_call_is_rebuilt_as_server_tool_use,
 )
 from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
@@ -122,7 +123,30 @@ def targets_openai_api(api_base: object) -> bool:
 
 
 def _carries_cache_breakpoint(block: object) -> bool:
-    return isinstance(block, dict) and any(block.get(key) is not None for key in CACHE_BREAKPOINT_KEYS)
+    return any(_attribute_or_key(block, key) is not None for key in CACHE_BREAKPOINT_KEYS)
+
+
+def _attribute_or_key(value: object, key: str) -> object | None:
+    if hasattr(value, key):
+        return getattr(value, key)
+    if isinstance(value, Mapping):
+        return value.get(key)
+    return None
+
+
+def _as_object_list(value: object | None) -> list[object] | None:
+    if not isinstance(value, list):
+        return None
+    return _validated_object_list(value)
+
+
+def _tool_call_carries_cache_breakpoint(tool_call: object, message: object) -> bool:
+    if _attribute_or_key(tool_call, "cache_control") is None:
+        return False
+
+    return not tool_call_is_rebuilt_as_server_tool_use(
+        _attribute_or_key(tool_call, "id"), _attribute_or_key(message, "provider_specific_fields")
+    )
 
 
 def _tool_carries_cache_breakpoint(tool: object) -> bool:
@@ -471,13 +495,16 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _count_cache_control_blocks(message: object) -> int:
-        if not isinstance(message, dict):
-            return 0
-        count = 1 if _carries_cache_breakpoint(message) else 0
-        content: Final = message.get("content")
-        if isinstance(content, list):
-            count += sum(1 for block in content if _carries_cache_breakpoint(block))
-        return count
+        message_count: Final = 1 if _carries_cache_breakpoint(message) else 0
+        content: Final = _as_object_list(_attribute_or_key(message, "content"))
+        content_count: Final = sum(1 for block in content if _carries_cache_breakpoint(block)) if content else 0
+        tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls"))
+        tool_call_count: Final = (
+            sum(1 for tool_call in tool_calls if _tool_call_carries_cache_breakpoint(tool_call, message))
+            if tool_calls
+            else 0
+        )
+        return message_count + content_count + tool_call_count
 
     @staticmethod
     def _message_has_cache_control(message: AllMessageValues) -> bool:
@@ -695,6 +722,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         tools: list | None = None,
         cache_control: object = None,
         request_kwargs: object = None,
+        on_messages_route: bool = False,
     ) -> bool:
         """Return True if the request already carries any client-supplied cache_control.
 
@@ -704,10 +732,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         envelope. Configured injection points are an explicit instruction and are
         applied alongside the client's marks, bounded by the provider cap.
         """
-        return (
-            AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system)
-            + AnthropicCacheControlHook.count_external_cache_breakpoints(tools, cache_control, request_kwargs)
-        ) > 0
+        external_breakpoints: Final = (
+            AnthropicCacheControlHook.count_external_cache_breakpoints_on_messages_route(
+                tools, cache_control, request_kwargs
+            )
+            if on_messages_route
+            else AnthropicCacheControlHook.count_external_cache_breakpoints(tools, cache_control, request_kwargs)
+        )
+        return AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system) + external_breakpoints > 0
 
     @staticmethod
     def get_default_injection_points(
@@ -719,6 +751,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         enable_prompt_caching: bool | None = None,
         cache_control: object = None,
         request_kwargs: object = None,
+        on_messages_route: bool = False,
     ) -> list[CacheControlInjectionPoint]:
         """Default breakpoints when ``litellm.enable_anthropic_prompt_caching`` is on.
 
@@ -739,7 +772,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not supports_anthropic_cache_control(model, custom_llm_provider):
             return []
 
-        if AnthropicCacheControlHook._request_has_cache_control(messages, system, tools, cache_control, request_kwargs):
+        if AnthropicCacheControlHook._request_has_cache_control(
+            messages, system, tools, cache_control, request_kwargs, on_messages_route
+        ):
             return []
 
         if is_claude_code_one_shot_subagent_request(
@@ -968,6 +1003,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 enable_prompt_caching=enable_prompt_caching,
                 cache_control=cache_control,
                 request_kwargs=kwargs,
+                on_messages_route=True,
             )
             if model is not None
             else ()
