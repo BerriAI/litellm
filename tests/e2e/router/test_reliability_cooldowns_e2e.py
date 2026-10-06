@@ -31,11 +31,15 @@ that emits a plain proxy_pass to the Service with no upstream block and no
 keepalive, so every request opens a fresh upstream connection and the Service
 picks the pod per connection: each call is an independent draw over the two
 routers, with seven other xdist workers sharing them. The cell first sends
-COOLDOWN_WARM_CALLS healthy calls to CHEAP_OPENAI_MODEL, so every pod's router
-has read the failing deployment's cooldown key from Redis and started the read
-interval on it; a pod the warm never reached (odds 2^(1-COOLDOWN_WARM_CALLS)
-at two pods) would read Redis on its first touch of the key and pass even under
-a regressed interval. The warm follows the registrations because their
+COOLDOWN_WARM_CALLS healthy calls to CHEAP_OPENAI_MODEL, all at once, so every
+pod's router has read the failing deployment's cooldown key from Redis and
+started the read interval on it within about one call's latency of the trip
+that follows; a pod the warm never reached (odds 2^(1-COOLDOWN_WARM_CALLS) at
+two pods) would read Redis on its first touch of the key and pass even under a
+regressed interval, and so would a pod whose warm read fell further before the
+trip than the regressed interval, its timer having lapsed before the first
+probe, which is why the warm calls run concurrently rather than one after
+another across ten live latencies. The warm follows the registrations because their
 propagation wait is what puts the group on every pod, and a pod that has not
 loaded the deployment holds no read timer for it. Then one call, retries off,
 trips the deployment, the cell waits the interval plus a margin, and it sends
@@ -47,8 +51,10 @@ seconds catches up on its own at its next Redis read, which other workers'
 traffic schedules anywhere within I of the trip, so under the full suite such a
 regression is caught on the runs whose first probe lands on the stale pod
 before that read, while the per-file run (loadfile keeps this file on one
-worker, so nothing else touches the key meanwhile) catches it every time, as
-did the two-process rig the cell was proven on. The bench for this cell is
+worker, so nothing else touches the key meanwhile) catches every regression
+wider than the few seconds between the warm's reads and the first probe to
+reach the stale pod, as the two-process rig the cell was proven on did at ten
+seconds. The bench for this cell is
 SIBLING_COOLDOWN_SECONDS rather than COOLDOWN_SECONDS because it never waits
 for the recovery and its probes, ten live calls to the backup, have to land
 before the bench can lapse. Pinning the tripping and the sibling gateway by
@@ -67,7 +73,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Final
 
 import pytest
 from complexity_router_client import ComplexityRouterClient
@@ -108,11 +116,16 @@ def _call_without_retries(client: ComplexityRouterClient, key: str, group: str) 
 
 
 def _warm_cooldown_reads(client: ComplexityRouterClient, key: str) -> None:
-    for call in range(1, COOLDOWN_WARM_CALLS + 1):
-        warmed = chat_override(client.proxy, key, CHEAP_OPENAI_MODEL, f"say hi {unique_marker()}")
-        assert warmed.status_code == 200, (
+    with ThreadPoolExecutor(max_workers=COOLDOWN_WARM_CALLS) as pool:
+        futures: Final = tuple(
+            pool.submit(chat_override, client.proxy, key, CHEAP_OPENAI_MODEL, f"say hi {unique_marker()}")
+            for _ in range(COOLDOWN_WARM_CALLS)
+        )
+        warmed: Final = tuple(future.result() for future in futures)
+    for call, resp in enumerate(warmed, start=1):
+        assert resp.status_code == 200, (
             f"warm call {call} of {COOLDOWN_WARM_CALLS} to {CHEAP_OPENAI_MODEL} should have answered 200 before "
-            f"the trip, got {warmed.status_code}: {warmed.body[:300]}"
+            f"the trip, got {resp.status_code}: {resp.body[:300]}"
         )
 
 
