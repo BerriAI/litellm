@@ -30,7 +30,6 @@ import {
 } from "./InvestigationStates";
 import { ReadinessBanner } from "./ReadinessBanner";
 import { useInvestigationActions } from "./useInvestigationActions";
-import { WatchAllBanner } from "./WatchAllBanner";
 
 export interface InvestigationsViewProps {
   readonly readOnly?: boolean;
@@ -138,12 +137,16 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
             onRunNow={(id) => openDialog("run_now", id)}
             actions={
               !readOnly && (
-                <>
-                  <WatchAllBanner lenses={current.lenses} />
-                  <Button size="sm" className="h-8" disabled={!status.ready} onClick={() => openDialog("new")}>
-                    <Plus className="size-4" /> New investigation
-                  </Button>
-                </>
+                <Button
+                  size="sm"
+                  className="my-auto mr-1.5 h-7"
+                  disabled={!status.ready}
+                  onClick={() => openDialog("new")}
+                  aria-label="New investigation"
+                >
+                  <Plus aria-hidden="true" className="size-3.5" />
+                  New
+                </Button>
               )
             }
           >

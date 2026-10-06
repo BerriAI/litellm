@@ -286,8 +286,8 @@ describe("Lens interactive demo", () => {
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, { onUrlUpdate });
     const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
-    const settings = await tabs.findByRole("tab", { name: "Settings" });
-    expect(settings).toHaveAttribute("title", "Worker connected");
+    const settings = tabs.getByRole("tab", { name: "Settings" });
+    await waitFor(() => expect(settings).toHaveAttribute("title", "Worker connected"));
     await user.click(settings);
     await expectUrl(onUrlUpdate, (url) => expect(url.get("tab")).toBe("settings"));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -364,7 +364,7 @@ describe("Lens interactive demo", () => {
       onUrlUpdate,
     });
     const panel = within(await screen.findByRole("region", { name: "Settings" }));
-    await user.click(panel.getByText("Advanced options"));
+    await user.click(await panel.findByText("Advanced options"));
     await user.click(panel.getByRole("switch", { name: "Use an existing virtual key" }));
     await user.click(panel.getByRole("combobox", { name: "Charge analysis to" }));
     await user.click(await screen.findByRole("option", { name: "Analysis" }));
@@ -385,18 +385,56 @@ describe("Lens interactive demo", () => {
     expect(await screen.findByRole("region", { name: "New investigation" })).toBeVisible();
   });
 
-  it("hides the Settings tab for read-only sessions", async () => {
-    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly />);
-    expect(await screen.findByRole("tablist", { name: "Lens" })).toBeVisible();
-    await waitFor(() => expect(network).toHaveBeenCalled());
-    expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
-  });
-
-  it("sends read-only sessions following a Settings link to the default tab", async () => {
+  it("opens Settings for read-only sessions without the worker controls", async () => {
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly />, {
       searchParams: "?tab=settings",
     });
-    expect(await screen.findByRole("tab", { name: "Traces", selected: true })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Settings", selected: true })).toHaveAttribute("title", "Settings");
+    const panel = within(screen.getByRole("region", { name: "Settings" }));
+    expect(await panel.findByRole("status")).toHaveTextContent("Tracing is not enabled");
+    expect(panel.queryByRole("heading", { name: "Analysis worker" })).not.toBeInTheDocument();
+  });
+
+  it("opens Settings before /lens answers", async () => {
+    network.mockImplementation(async (input) =>
+      requestPath(input) === "/lens"
+        ? new Promise<Response>(() => {})
+        : Response.json({ data: [], traces: true, requests: false }),
+    );
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, { onUrlUpdate });
+    const settings = screen.getByRole("tab", { name: "Settings" });
+    expect(settings).toHaveAttribute("title", "Settings");
+    await user.click(settings);
+    await expectUrl(onUrlUpdate, (url) => expect(url.get("tab")).toBe("settings"));
+    expect(screen.getByRole("region", { name: "Settings" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Analysis worker" })).not.toBeInTheDocument();
+  });
+
+  it("keeps Settings available when /lens fails", async () => {
+    network.mockImplementation(async (input) =>
+      requestPath(input) === "/lens"
+        ? Response.json({ detail: "boom" }, { status: 500 })
+        : Response.json({ data: [], traces: true, requests: false }),
+    );
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
+      searchParams: "?tab=settings",
+    });
+    await waitFor(() => expect(testQueryClient.getQueryState(lensKeys.list("live-token"))?.status).toBe("error"));
+    expect(screen.getByRole("tab", { name: "Settings", selected: true })).toHaveAttribute("title", "Settings");
+    expect(screen.getByRole("region", { name: "Settings" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Analysis worker" })).not.toBeInTheDocument();
+  });
+
+  it("opens Settings for non-admin sessions without requesting worker access", async () => {
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Internal User" readOnly={false} />, {
+      searchParams: "?tab=settings",
+    });
+    expect(screen.getByRole("tab", { name: "Settings", selected: true })).toHaveAttribute("title", "Settings");
+    expect(screen.getByRole("region", { name: "Settings" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Analysis worker" })).not.toBeInTheDocument();
+    expect(network.mock.calls.some(([input]) => requestPath(input) === "/lens")).toBe(false);
   });
 
   it("turns the worker health dot off once heartbeats expire even when polling returns unchanged data", async () => {
@@ -419,8 +457,8 @@ describe("Lens interactive demo", () => {
       });
       renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />);
       const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
-      const settings = await tabs.findByRole("tab", { name: "Settings" });
-      expect(settings).toHaveAttribute("title", "Worker connected");
+      const settings = tabs.getByRole("tab", { name: "Settings" });
+      await waitFor(() => expect(settings).toHaveAttribute("title", "Worker connected"));
       await vi.advanceTimersByTimeAsync(130000);
       await waitFor(() => expect(settings).toHaveAttribute("title", "Connect worker"));
     } finally {

@@ -19,15 +19,15 @@ export function LensModeSwitch({
   workers: LensList["workers"] | null;
 }) {
   const connected = useWorkerConnected(workers);
-  const settingsTitle = connected ? "Worker connected" : "Connect worker";
-  const tabs = Object.entries(LENS_TABS).filter(([view]) => view !== "settings" || workers);
+  const workerTitle = connected ? "Worker connected" : "Connect worker";
+  const settingsTitle = workers === null ? LENS_TABS.settings : workerTitle;
   return (
     <TabsPrimitive.List
       aria-label="Lens"
       className="relative inline-flex h-8 max-w-full items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
     >
       <TabsPrimitive.Indicator className="absolute top-0.5 bottom-0.5 left-(--active-tab-left) w-(--active-tab-width) rounded-md bg-card shadow-sm transition-[left,width] duration-200 motion-reduce:transition-none" />
-      {tabs.map(([view, label]) => (
+      {Object.entries(LENS_TABS).map(([view, label]) => (
         <TabsPrimitive.Tab
           key={view}
           value={view}
@@ -41,7 +41,9 @@ export function LensModeSwitch({
           {view === "settings" ? (
             <span className="relative inline-flex">
               <Settings aria-hidden="true" className="size-3.5" />
-              {!connected && <StatusDot state="error" className="absolute -top-0.5 -right-0.5 size-1.5" />}
+              {workers !== null && !connected && (
+                <StatusDot state="error" className="absolute -top-0.5 -right-0.5 size-1.5" />
+              )}
               <span className="sr-only">{label}</span>
             </span>
           ) : (

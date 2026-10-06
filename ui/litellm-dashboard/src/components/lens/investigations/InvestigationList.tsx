@@ -220,19 +220,22 @@ export function InvestigationList({
       storageKey={FINDING_PANEL_WIDTH_KEY}
     >
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
-        <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card p-2">
+        <div className="flex h-10 shrink-0 items-stretch border-b border-border bg-card">
           <SearchBox.Root
-            className="sm:max-w-96"
+            className="h-full min-w-0"
             language={INVESTIGATION_QUERY}
             values={itemValues(INVESTIGATION_INDEX, lenses)}
             value={search}
             onValueChange={setSearch}
             label="Search investigations"
           >
-            <SearchBox.Input className="rounded-md" placeholder="Search investigations" />
+            <SearchBox.Input
+              className="h-full rounded-none border-0 px-3 focus-within:bg-muted/40 focus-within:ring-0 dark:bg-transparent"
+              placeholder="Search investigations"
+            />
             <SearchBox.Suggestions />
           </SearchBox.Root>
-          {actions && <div className="ml-auto flex items-center gap-2">{actions}</div>}
+          {actions && <div className="flex shrink-0 items-stretch">{actions}</div>}
         </div>
         <ListContext.Provider value={{ now, connected, readOnly, demo, onEdit, onRunNow }}>
           <InspectorTable.Root table={table}>

@@ -41,24 +41,28 @@ function TracingSection({ enabled, onOpenTraces }: { enabled: boolean; onOpenTra
 }
 
 export function LensSettings({
-  list,
+  tracingEnabled,
+  workers,
   workerReadyAction,
   onOpenTraces,
 }: {
-  list: LensList;
+  tracingEnabled: boolean | undefined;
+  workers: LensList["workers"] | null;
   /** Replaces the worker install card's Done button once the new worker connects. */
   workerReadyAction?: ReactNode;
   onOpenTraces: () => void;
 }) {
   return (
     <div aria-label="Settings" role="region" className="flex w-full flex-col divide-y divide-border">
-      <TracingSection enabled={list.tracing_enabled} onOpenTraces={onOpenTraces} />
-      <SettingsSection
-        heading="Analysis worker"
-        description="Runs investigations on your server and bills model usage to an analysis key."
-      >
-        <WorkerSettings workers={list.workers} readyAction={workerReadyAction} />
-      </SettingsSection>
+      {tracingEnabled !== undefined && <TracingSection enabled={tracingEnabled} onOpenTraces={onOpenTraces} />}
+      {workers && (
+        <SettingsSection
+          heading="Analysis worker"
+          description="Runs investigations on your server and bills model usage to an analysis key."
+        >
+          <WorkerSettings workers={workers} readyAction={workerReadyAction} />
+        </SettingsSection>
+      )}
     </div>
   );
 }

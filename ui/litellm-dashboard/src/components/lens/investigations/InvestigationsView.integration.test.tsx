@@ -522,6 +522,52 @@ it("shows a centered failure with a retry when investigations cannot load, then 
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
+it.each([true, false])("opens new investigations from the toolbar only when ready (%s)", async (ready) => {
+  testQueryClient.clear();
+  proxy.get.mockImplementation(async (path) => {
+    if (path === "/lens")
+      return {
+        lenses: [lens],
+        tracing_enabled: true,
+        workers: ready
+          ? [
+              {
+                id: "worker",
+                name: "Worker",
+                revoked: false,
+                analysis_key_id: "a".repeat(64),
+                scope: lens.scope,
+                last_seen: new Date().toISOString(),
+              },
+            ]
+          : [],
+      };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/agents") return [];
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  const onUrlUpdate = vi.fn();
+  renderWithProviders(<InvestigationsView />, { searchParams: "?tab=investigations", onUrlUpdate });
+  expect(await screen.findByRole("row", { name: lens.settings.name })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Turn all on" })).not.toBeInTheDocument();
+  const create = screen.getByRole("button", { name: "New investigation" });
+  expect(create).toHaveTextContent(/^New$/);
+  if (!ready) {
+    expect(create).toBeDisabled();
+    return;
+  }
+  await waitFor(() => expect(create).toBeEnabled());
+  const search = screen.getByRole("combobox", { name: "Search investigations" });
+  await user.type(search, "unmatched investigation");
+  expect(await screen.findByText("No investigations match your search.")).toBeVisible();
+  await user.clear(search);
+  expect(await screen.findByRole("row", { name: lens.settings.name })).toBeVisible();
+  await user.click(create);
+  expect(await screen.findByRole("region", { name: "New investigation" })).toBeVisible();
+  await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("dialog")).toBe("new"));
+});
+
 it("keeps saved investigations accessible when tracing is disabled", async () => {
   testQueryClient.clear();
   proxy.get.mockImplementation(async (path) => {

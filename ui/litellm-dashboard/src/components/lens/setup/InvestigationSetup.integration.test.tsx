@@ -151,6 +151,7 @@ describe("Investigation setup", () => {
     });
     mockGateway({ keyModels: ["analysis"] });
     renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={save} />);
+    expect(screen.getByRole("textbox", { name: "Investigation name" })).toHaveAttribute("data-1p-ignore");
     fireEvent.change(screen.getByRole("textbox", { name: "Investigation name" }), {
       target: { value: "Research follow-up" },
     });
