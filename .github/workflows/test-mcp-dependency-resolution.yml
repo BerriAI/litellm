@@ -102,7 +102,7 @@ jobs:
 
       - name: Build the legacy distribution before selecting core metadata
         if: steps.changes.outputs.decision != 'skip'
-        run: uv build --out-dir dist/legacy-check
+        run: uv build --wheel --out-dir dist/legacy-check
 
       - name: Verify legacy installs and ordinary upgrades
         if: steps.changes.outputs.decision != 'skip'
@@ -183,7 +183,7 @@ jobs:
       - name: Build the public wheel
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          uv build --all-packages --out-dir dist/mcp-check
+          uv build --all-packages --wheel --out-dir dist/mcp-check
           cp dist/legacy-check/*.whl dist/mcp-check/
           python tests/base_sdk_tests/check_distribution_pair.py dist/mcp-check
 
