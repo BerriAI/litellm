@@ -13,8 +13,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
-from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped message payloads without a runtime conversion
-
 import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
@@ -328,7 +326,7 @@ def _compact_json(value: object) -> str:
 
 
 def _dumped_dicts(values: object) -> tuple[Mapping[str, object], ...]:
-    return tuple(item for item in map(_dumped, _sequence(values)) if _is_str_mapping(item))
+    return tuple(item for item in map(_dumped, _sequence(values)) if isinstance(item, Mapping))
 
 
 def _sequence(values: object) -> Sequence[object]:
@@ -350,10 +348,6 @@ def _field(item: object, key: str) -> object:
     if isinstance(item, Mapping):
         return item.get(key)
     return getattr(item, key, None)
-
-
-def _is_str_mapping(value: object) -> TypeIs[Mapping[str, object]]:
-    return isinstance(value, Mapping)
 
 
 def is_non_content_values_set(message: AllMessageValues) -> bool:
