@@ -122,6 +122,7 @@ export interface ConversationItem {
   toolCall?: TraceToolCall;
   toolResult?: string;
   toolAttempt?: { isError: boolean };
+  inputWarning?: string;
   contentWarning?: string;
   agentId?: string;
   agentName?: string;
@@ -159,12 +160,16 @@ function toolItem(
       ? detail.output_ui.text
       : prettyPayload(detail.output) || contentText(detail.output, detail.output_ui);
   const status = detail.attributes["lens.content.output_status"];
+  const inputWarning =
+    detail.attributes["lens.content.input_status"] === "conflicting"
+      ? "Conflicting tool arguments were recorded. Inspect the capture source spans."
+      : undefined;
   const contentWarning = (() => {
     if (status === "conflicting") return "Conflicting tool outputs were recorded. Inspect the capture source spans.";
     if (status === "recorded" && !result) return "The recorded result is empty.";
     return undefined;
   })();
-  return { id: span.span_id, span, messages: [], toolCall: call, toolResult: result, contentWarning };
+  return { id: span.span_id, span, messages: [], toolCall: call, toolResult: result, inputWarning, contentWarning };
 }
 
 interface ConversationEvent {

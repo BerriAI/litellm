@@ -5,14 +5,24 @@ import { useTracesApi, type TracesApi } from "../../api";
 import type { Span, SpanDetail, Trace } from "../../types";
 import { CONVERSATION_PAGE_SIZE, conversationSteps } from "./conversation";
 
-async function readBatch(traces: TracesApi, traceId: string, ids: string[], traceRef?: string): Promise<SpanDetail[]> {
+interface BatchResult {
+  details: SpanDetail[];
+  failedIds: string[];
+}
+
+async function readBatch(traces: TracesApi, traceId: string, ids: string[], traceRef?: string): Promise<BatchResult> {
   try {
-    return await traces.spans(traceId, ids, traceRef);
+    const details = await traces.spans(traceId, ids, traceRef);
+    const returned = new Set(details.map((detail) => detail.span_id));
+    return { details, failedIds: ids.filter((id) => !returned.has(id)) };
   } catch (error) {
-    if (!(error instanceof ApiError) || error.status !== 413 || ids.length <= 1) throw error;
+    if (!(error instanceof ApiError) || error.status !== 413 || ids.length <= 1) {
+      return { details: [], failedIds: ids };
+    }
     const middle = Math.ceil(ids.length / 2);
     const first = await readBatch(traces, traceId, ids.slice(0, middle), traceRef);
-    return [...first, ...(await readBatch(traces, traceId, ids.slice(middle), traceRef))];
+    const second = await readBatch(traces, traceId, ids.slice(middle), traceRef);
+    return { details: [...first.details, ...second.details], failedIds: [...first.failedIds, ...second.failedIds] };
   }
 }
 
@@ -26,16 +36,18 @@ export function useConversationDetails(trace: Trace, accessToken: string) {
   const batchQuery = useCallback(
     (batch: Span[]) => {
       const ids = batch.map((span) => span.span_id);
+      const queryKey = ["agentTraceContents", traceId, traceRef, ids, spanCount, accessToken];
       return {
-        queryKey: ["agentTraceContents", traceId, traceRef, ids, spanCount, accessToken],
-        queryFn: async (): Promise<SpanDetail[]> => {
-          const details = await readBatch(traces, traceId, ids, traceRef);
-          const returned = new Set(details.map((detail) => detail.span_id));
-          if (ids.some((id) => !returned.has(id))) throw new Error("Some requested spans are unavailable");
-          for (const detail of details) {
+        queryKey,
+        queryFn: async (): Promise<BatchResult> => {
+          const previous = queryClient.getQueryData<BatchResult>(queryKey);
+          const retained = previous?.failedIds.length ? previous.details : [];
+          const pending = previous?.failedIds.length ? previous.failedIds : ids;
+          const result = await readBatch(traces, traceId, pending, traceRef);
+          for (const detail of result.details) {
             queryClient.setQueryData(["agentTraceSpan", traceId, traceRef, detail.span_id, accessToken], detail);
           }
-          return details;
+          return { details: [...retained, ...result.details], failedIds: result.failedIds };
         },
         staleTime: 30_000,
         retry: false as const,
@@ -48,10 +60,9 @@ export function useConversationDetails(trace: Trace, accessToken: string) {
     visible.slice(index * CONVERSATION_PAGE_SIZE, (index + 1) * CONVERSATION_PAGE_SIZE),
   );
   const queries = useQueries({ queries: batches.map(batchQuery) });
-  const unresolvedIndex = queries.findIndex((query) => !query.isSuccess);
-  const loadedCount = unresolvedIndex < 0 ? queries.length : unresolvedIndex;
+  const complete = queries.every((query) => query.isSuccess && query.data.failedIds.length === 0);
   const details = new Map(
-    queries.slice(0, loadedCount).flatMap((query) => query.data!.map((detail) => [detail.span_id, detail] as const)),
+    queries.flatMap((query) => (query.data?.details ?? []).map((detail) => [detail.span_id, detail] as const)),
   );
   const loadMore = useCallback(
     async (signal: AbortSignal) => {
@@ -64,10 +75,14 @@ export function useConversationDetails(trace: Trace, accessToken: string) {
   );
   return {
     details,
-    entries: batches.map((batch, index) => ({ span: batch[0], query: queries[index] })),
-    complete: loadedCount === batches.length && visible.length === steps.length,
+    entries: batches.map((batch, index) => ({
+      span: batch.find((span) => queries[index].data?.failedIds.includes(span.span_id)) ?? batch[0],
+      failed: queries[index].isError || Boolean(queries[index].data?.failedIds.length),
+      retry: queries[index].refetch,
+    })),
+    complete: complete && visible.length === steps.length,
     loading: queries.some((query) => query.isPending),
-    failed: queries.some((query) => query.isError),
+    failed: queries.some((query) => query.isError || Boolean(query.data?.failedIds.length)),
     hasMore: visible.length < steps.length,
     loadMore,
   };

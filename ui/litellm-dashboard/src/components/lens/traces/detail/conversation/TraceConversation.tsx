@@ -138,11 +138,11 @@ function ConversationFeedback({
   return (
     <>
       {entries.map(
-        ({ query, span }) =>
-          query.isError && (
+        ({ failed, retry, span }) =>
+          failed && (
             <div key={span.span_id} role="alert" className="rounded-md border p-3 text-sm">
               Could not load conversation content starting at {span.name}. Retry this batch to continue.
-              <Button variant="outline" size="sm" className="mt-2" onClick={() => query.refetch()}>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => retry()}>
                 Retry batch
               </Button>
             </div>
@@ -345,6 +345,7 @@ function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpen
       {open && (
         <div className="min-w-0 space-y-3 border-t px-3 py-3">
           {item.toolCall && <ToolArguments args={item.toolCall.args} />}
+          {item.inputWarning && <p className="text-sm text-muted-foreground">{item.inputWarning}</p>}
           {item.span.error && item.span.error !== item.toolResult && (
             <p className="text-sm text-destructive">{item.span.error}</p>
           )}

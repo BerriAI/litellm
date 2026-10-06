@@ -477,6 +477,63 @@ describe("TraceConversation", () => {
     expect(screen.queryByText("End of conversation")).not.toBeInTheDocument();
   });
 
+  it("retains readable split results and retries only the oversized span", async () => {
+    const user = userEvent.setup();
+    const oversized = { ...tool, span_id: "oversized", name: "Large result", start_offset_ms: 2 };
+    const later = { ...tool, span_id: "later", name: "Later result", start_offset_ms: 3 };
+    const readLarge = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError("Content too large", 413, {}))
+      .mockRejectedValueOnce(new ApiError("Content too large", 413, {}))
+      .mockResolvedValue([{ ...toolDetail, span_id: "oversized" }]);
+    vi.mocked(agentTraceSpansCall).mockImplementation(async (_token, _trace, ids) => {
+      if (ids.length > 1) throw new ApiError("Content too large", 413, {});
+      if (ids[0] === "oversized") return readLarge();
+      return [ids[0] === "root" ? rootDetail : { ...toolDetail, span_id: ids[0] }];
+    });
+    renderWithProviders(
+      <TraceConversation
+        trace={{ ...trace, spans: [root, tool, oversized, later] } as Trace}
+        accessToken="test"
+        onOpenStep={vi.fn()}
+      />,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("starting at Large result");
+    expect(screen.getByText("Read the release notes")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Expand read_file tool call" })).toBeVisible();
+    expect(screen.queryByText("The release is ready")).not.toBeInTheDocument();
+    const firstRequests = vi.mocked(agentTraceSpansCall).mock.calls.length;
+
+    await user.click(screen.getByRole("button", { name: "Retry batch" }));
+    await waitFor(() => expect(readLarge).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("alert")).toHaveTextContent("starting at Large result");
+    expect(screen.getByRole("button", { name: "Expand read_file tool call" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Retry batch" }));
+    expect(await screen.findByText("The release is ready")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      vi
+        .mocked(agentTraceSpansCall)
+        .mock.calls.slice(firstRequests)
+        .map((call) => call[2]),
+    ).toEqual([["oversized"], ["oversized"]]);
+  });
+
+  it("shows conflicting argument evidence beside arguments even with a recorded output", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceSpansCall).mockResolvedValue([
+      rootDetail,
+      { ...toolDetail, attributes: { "lens.content.input_status": "conflicting" } },
+    ]);
+    renderWithProviders(<TraceConversation trace={trace} accessToken="test" onOpenStep={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "Expand read_file tool call" }));
+    expect(
+      screen.getByText("Conflicting tool arguments were recorded. Inspect the capture source spans."),
+    ).toBeVisible();
+    expect(screen.getByText("CHANGELOG.md")).toBeVisible();
+    expect(screen.getByText("All checks passed")).toBeVisible();
+  });
+
   it("shows a missing step explicitly and lets the user retry it", async () => {
     const user = userEvent.setup();
     vi.mocked(agentTraceSpanCall).mockRejectedValueOnce(new Error("temporarily unavailable"));
