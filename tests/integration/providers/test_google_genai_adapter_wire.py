@@ -175,9 +175,7 @@ def _openai_stream_frames() -> tuple[bytes, ...]:
                 "choices": [
                     {
                         "index": 0,
-                        "delta": {
-                            "tool_calls": [{"index": 0, "function": {"arguments": 'ty":"SF"}'}}]
-                        },
+                        "delta": {"tool_calls": [{"index": 0, "function": {"arguments": 'ty":"SF"}'}}]},
                         "finish_reason": None,
                     }
                 ],
@@ -249,9 +247,7 @@ def test_generate_content_adapts_openai_backend_request_and_response(gateway: Ga
             model="openai/gpt-4o-mini", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
         key: Final = scenario.key(models=[model])
-        response: Final = gateway.request(
-            "POST", f"/v1beta/models/{model}:generateContent", _request(marker), key=key
-        )
+        response: Final = gateway.request("POST", f"/v1beta/models/{model}:generateContent", _request(marker), key=key)
         assert response.status_code == 200, response.text
         body: Final = JSON_OBJECT.validate_json(response.content)
         assert body["candidates"] == _EXPECTED_CANDIDATES, response.text
@@ -301,9 +297,7 @@ def test_generate_content_adapts_anthropic_backend_request_and_response(gateway:
             model="anthropic/claude-haiku-4-5", api_base=wire.url, api_key="synthetic-anthropic-key"
         )
         key: Final = scenario.key(models=[model])
-        response: Final = gateway.request(
-            "POST", f"/v1beta/models/{model}:generateContent", _request(marker), key=key
-        )
+        response: Final = gateway.request("POST", f"/v1beta/models/{model}:generateContent", _request(marker), key=key)
         assert response.status_code == 200, response.text
         body: Final = JSON_OBJECT.validate_json(response.content)
         assert body["candidates"] == _EXPECTED_CANDIDATES, response.text
@@ -350,7 +344,12 @@ def test_stream_generate_content_adapts_openai_sse_to_gemini_frames(gateway: Gat
         frames_out: Final = [part for part in text.split("\n\n") if part]
         assert all(part.startswith("data: ") for part in frames_out), text
         parsed: Final = [json.loads(part.removeprefix("data: ")) for part in frames_out]
-        parsed[-1].pop("usageMetadata")
+        assert "usageMetadata" in parsed[-1], text
+        assert set(parsed[-1]["usageMetadata"]) == {
+            "promptTokenCount",
+            "candidatesTokenCount",
+            "totalTokenCount",
+        }, text
         assert parsed == [
             {
                 "candidates": [
@@ -383,14 +382,63 @@ def test_stream_generate_content_adapts_openai_sse_to_gemini_frames(gateway: Gat
                         "index": 0,
                         "safetyRatings": [],
                     }
-                ]
+                ],
+                "usageMetadata": parsed[-1]["usageMetadata"],
             },
         ], text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1/chat/completions")]
 
 
+def test_generate_content_adapter_accepts_snake_case_generation_config(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: top-level snake_case generation_config is dropped on the completion-adapter path, no max_tokens, temperature, stop or response_format"
+    )
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/chat/completions"
+        assert request.headers["authorization"] == "Bearer synthetic-openai-key"
+        assert json.loads(request.body) == {
+            "model": "gpt-4o-mini",
+            "messages": _expected_openai_messages(marker),
+            "max_tokens": 50,
+            "temperature": 0.1,
+            "stop": ["END"],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "response", "schema": _RESPONSE_SCHEMA},
+            },
+            "tools": _EXPECTED_TOOLS,
+            "tool_choice": "required",
+        }, request.body.decode()
+        return Reply(body=json.dumps(_OPENAI_REPLY).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        marker: Final = uuid.uuid4().hex
+        model: Final = scenario.model(
+            model="openai/gpt-4o-mini", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        key: Final = scenario.key(models=[model])
+        request_body: Final = {
+            "contents": _contents(marker),
+            "system_instruction": _SYSTEM_INSTRUCTION,
+            "generation_config": _GENERATION_CONFIG,
+            "tools": _TOOLS,
+            "tool_config": {"functionCallingConfig": {"mode": "ANY"}},
+            "cache": {"no-cache": True},
+        }
+        response: Final = gateway.request("POST", f"/v1beta/models/{model}:generateContent", request_body, key=key)
+        assert response.status_code == 200, response.text
+        body: Final = JSON_OBJECT.validate_json(response.content)
+        assert body["candidates"] == _EXPECTED_CANDIDATES, response.text
+        assert body["usageMetadata"] == _EXPECTED_USAGE, response.text
+        assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1/chat/completions")], response.text
+
+
 def test_stream_generate_content_adapter_reports_upstream_usage(gateway: Gateway) -> None:
-    pytest.skip("BUG: native Google stream served by an openai deployment ends with usageMetadata 0/0/0 although the upstream sent usage 20/9/29")
+    pytest.skip(
+        "BUG: native Google stream served by an openai deployment ends with usageMetadata 0/0/0 although the upstream sent usage 20/9/29"
+    )
     frames: Final = _openai_stream_frames()
 
     def respond(request: Request) -> Reply:

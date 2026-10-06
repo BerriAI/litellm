@@ -33,6 +33,7 @@ _INTERACTION_REPLY: Final = {
     "steps": [{"type": "content", "content": {"type": "text", "text": "itinerary"}}],
     "usage": {"total_tokens": 42},
 }
+_KNOWN_DONE_TERMINATOR: Final = b"data: [DONE]\n\n"
 
 
 class _Interaction(BaseModel):
@@ -48,6 +49,17 @@ class _Interaction(BaseModel):
 
 def _sse_event(event_type: str, payload: dict) -> bytes:
     return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
+
+
+def _proxy_stream_event(payload: dict, model: str) -> bytes:
+    event: Final = {
+        "event_type": payload["event_type"],
+        "id": payload["id"],
+        **({"object": payload["object"]} if "object" in payload else {}),
+        "model": model,
+        **{key: value for key, value in payload.items() if key not in {"event_type", "id", "object"}},
+    }
+    return f"data: {json.dumps(event, separators=(',', ':'))}\n\n".encode()
 
 
 _STREAM_EVENTS: Final = (
@@ -121,29 +133,58 @@ def test_interaction_forwards_native_body_to_gemini(gateway: Gateway, prefix: st
         return Reply(body=json.dumps(_INTERACTION_REPLY).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(
-            model=_GEMINI_MODEL, api_base=wire.url, api_key=_GEMINI_DEPLOYMENT_KEY
-        )
+        model: Final = scenario.model(model=_GEMINI_MODEL, api_base=wire.url, api_key=_GEMINI_DEPLOYMENT_KEY)
         key: Final = scenario.key(models=[model])
         response: Final = gateway.request(
             "POST", prefix, {"model": model, **_MODEL_BODY, "input": request_input}, key=key
         )
         assert response.status_code == 200, response.text
         payload: Final = _Interaction.model_validate_json(response.content)
-        assert payload.id == _INTERACTION_REPLY["id"], response.text
-        assert payload.object == _INTERACTION_REPLY["object"], response.text
-        assert payload.status == _INTERACTION_REPLY["status"], response.text
-        assert payload.created == _INTERACTION_REPLY["created"], response.text
-        assert payload.steps == _INTERACTION_REPLY["steps"], response.text
-        assert payload.usage == _INTERACTION_REPLY["usage"], response.text
         assert payload.model == model, response.text
-        assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")]
+        assert response.json() == {
+            **_INTERACTION_REPLY,
+            "model": model,
+            "agent": None,
+            "updated": None,
+            "outputs": None,
+        }, response.text
+        assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")], response.text
 
 
 @pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/interactions"])
-def test_agent_interaction_uses_env_gemini_credentials(
-    gateway: Gateway, tmp_path: Path, prefix: str
-) -> None:
+def test_interaction_authenticates_google_key_header(gateway: Gateway, prefix: str) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1beta/interactions"
+        assert request.headers["x-goog-api-key"] == _GEMINI_DEPLOYMENT_KEY
+        assert all(key not in value for value in request.headers.values()), dict(request.headers)
+        assert json.loads(request.body) == {
+            "model": "gemini-2.5-flash",
+            "input": "plan a trip",
+        }, request.body.decode()
+        return Reply(body=json.dumps(_INTERACTION_REPLY).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_GEMINI_MODEL, api_base=wire.url, api_key=_GEMINI_DEPLOYMENT_KEY)
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.client.post(
+            prefix,
+            json={"model": model, "input": "plan a trip"},
+            headers={"x-goog-api-key": key},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            **_INTERACTION_REPLY,
+            "model": model,
+            "agent": None,
+            "updated": None,
+            "outputs": None,
+        }, response.text
+        assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")], response.text
+
+
+@pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/interactions"])
+def test_agent_interaction_uses_env_gemini_credentials(gateway: Gateway, tmp_path: Path, prefix: str) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1beta/interactions"
@@ -165,16 +206,20 @@ def test_agent_interaction_uses_env_gemini_credentials(
             response: Final = owned.gateway.request(
                 "POST",
                 prefix,
-                {"agent": "deep-research-pro-preview-12-2025", "input": [{"role": "user", "content": "research trails"}]},
+                {
+                    "agent": "deep-research-pro-preview-12-2025",
+                    "input": [{"role": "user", "content": "research trails"}],
+                },
             )
             assert response.status_code == 200, response.text
-            payload: Final = _Interaction.model_validate_json(response.content)
-            assert payload.agent == "deep-research-pro-preview-12-2025", response.text
-            assert payload.id == _INTERACTION_REPLY["id"], response.text
-            assert payload.status == _INTERACTION_REPLY["status"], response.text
-            assert payload.steps == _INTERACTION_REPLY["steps"], response.text
-            assert payload.usage == _INTERACTION_REPLY["usage"], response.text
-            assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")]
+            _Interaction.model_validate_json(response.content)
+            assert response.json() == {
+                **_INTERACTION_REPLY,
+                "agent": "deep-research-pro-preview-12-2025",
+                "updated": None,
+                "outputs": None,
+            }, response.text
+            assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")], response.text
 
 
 @pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/interactions"])
@@ -194,21 +239,16 @@ def test_stream_interaction_relays_gemini_events(gateway: Gateway, prefix: str) 
         return Reply(content_type="text/event-stream", chunks=frames)
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(
-            model=_GEMINI_MODEL, api_base=wire.url, api_key=_GEMINI_DEPLOYMENT_KEY
-        )
+        model: Final = scenario.model(model=_GEMINI_MODEL, api_base=wire.url, api_key=_GEMINI_DEPLOYMENT_KEY)
         key: Final = scenario.key(models=[model])
         response: Final = gateway.request(
             "POST", prefix, {"model": model, "input": "plan a trip", "stream": True}, key=key
         )
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("text/event-stream"), response.headers
-        parts: Final = [part for part in response.text.split("\n\n") if part]
-        assert all(part.startswith("data: ") for part in parts), response.text
-        data_frames: Final = parts[:-1] if parts[-1] == "data: [DONE]" else parts
-        received: Final = [json.loads(part.removeprefix("data: ")) for part in data_frames]
-        assert received == [{**payload, "model": model} for _event_type, payload in _STREAM_EVENTS], response.text
-        assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions?alt=sse")]
+        expected: Final = b"".join(_proxy_stream_event(payload, model) for _event_type, payload in _STREAM_EVENTS)
+        assert response.content.removesuffix(_KNOWN_DONE_TERMINATOR) == expected, response.text
+        assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions?alt=sse")], response.text
 
 
 @pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/interactions"])
@@ -222,19 +262,13 @@ def test_stream_interaction_ends_without_openai_done_terminator(gateway: Gateway
         return Reply(content_type="text/event-stream", chunks=frames)
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(
-            model=_GEMINI_MODEL, api_base=wire.url, api_key=_GEMINI_DEPLOYMENT_KEY
-        )
+        model: Final = scenario.model(model=_GEMINI_MODEL, api_base=wire.url, api_key=_GEMINI_DEPLOYMENT_KEY)
         key: Final = scenario.key(models=[model])
         response: Final = gateway.request(
             "POST", prefix, {"model": model, "input": "plan a trip", "stream": True}, key=key
         )
         assert response.status_code == 200, response.text
         assert "[DONE]" not in response.text, response.text
-        received: Final = [
-            json.loads(part.removeprefix("data: "))
-            for part in response.text.split("\n\n")
-            if part
-        ]
+        received: Final = [json.loads(part.removeprefix("data: ")) for part in response.text.split("\n\n") if part]
         assert received == [{**payload, "model": model} for _event_type, payload in _STREAM_EVENTS], response.text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions?alt=sse")]
