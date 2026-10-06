@@ -3,6 +3,11 @@ name: _Unit Test Base (Reusable)
 on:
   workflow_call:
     inputs:
+      python-version:
+        description: "Python version used to install dependencies and run tests"
+        required: false
+        type: string
+        default: "3.12"
       test-path:
         description: >-
           Space-separated pytest paths to run. A path that no longer exists is
@@ -78,7 +83,7 @@ permissions:
   contents: read
 
 env:
-  UV_PYTHON: "3.12"
+  UV_PYTHON: ${{ inputs.python-version }}
   LITELLM_LOCAL_MODEL_COST_MAP: "True"
 
 jobs:

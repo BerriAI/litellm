@@ -39,6 +39,21 @@ concurrency:
 #     pinning the whole file to one worker (the default --dist=loadscope
 #     behavior for single-file targets).
 jobs:
+  lens-python-310:
+    name: Lens Python 3.10
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      python-version: "3.10"
+      test-path: tests/unit/proxy/lens/test_inference.py
+      workers: 0
+      reruns: 0
+      timeout-minutes: 5
+      artifact-name: lens-python-310
+
   # Fast guard — fails the workflow when a test directory or file inside a sharded
   # tree is claimed by no shard. The semantic-shard design has no catch-all bucket,
   # so an unassigned child runs nowhere; assert_ci_coverage.py holds the tree list
