@@ -103,7 +103,7 @@ python scripts/build_core_distribution.py --out-dir dist/core
 python -m pip install dist/core/litellm_core-*.whl
 ```
 
-The builder requires `uv` and the Rust build toolchain. It reads the release version
+The builder requires Git, `uv` and the Rust build toolchain. It reads the release version
 from the root `pyproject.toml`, leaves source files unchanged, and produces a wheel
 and a self-contained sdist in `dist/core`. Run installation in a fresh environment
 without `litellm`

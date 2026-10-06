@@ -19,6 +19,14 @@ else:
 ROOT: Final = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture
+def source_repository(tmp_path: Path) -> Path:
+    source: Final = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "--quiet", str(source)], check=True)
+    return source
+
+
 def test_core_manifest_preserves_runtime_dependencies_without_extras() -> None:
     manifest: Final = ROOT / "packaging/litellm-core/pyproject.toml"
     assert manifest.is_file(), "The core distribution needs its own build manifest"
@@ -30,11 +38,10 @@ def test_core_manifest_preserves_runtime_dependencies_without_extras() -> None:
     assert not core["project"].get("scripts")
 
 
-def test_staging_stamps_release_version_without_modifying_sources(tmp_path: Path) -> None:
+def test_staging_stamps_release_version_without_modifying_sources(tmp_path: Path, source_repository: Path) -> None:
     from scripts.build_core_distribution import SOURCES, stage_core_distribution
 
-    source: Final = tmp_path / "source"
-    source.mkdir()
+    source: Final = source_repository
     for name in SOURCES:
         path: Final = source / name
         path.write_text(f"shared {name}")
@@ -98,6 +105,18 @@ def test_core_wheel_metadata_and_resources(distributions: tuple[Path, Path]) -> 
         assert not any(n.startswith("litellm/proxy/_experimental/out/") for n in names)
 
 
+def test_core_artifacts_exclude_local_configuration(distributions: tuple[Path, Path]) -> None:
+    configurations: Final = (
+        "litellm/proxy/_new_secret_config.yaml",
+        "litellm/proxy/_new_new_secret_config.yaml",
+        "litellm/proxy/_super_secret_config.yaml",
+    )
+    with zipfile.ZipFile(distributions[0]) as wheel, tarfile.open(distributions[1]) as archive:
+        for name in configurations:
+            assert name not in wheel.namelist(), f"Core wheel contains ignored configuration {name}"
+            assert not any(member.name.endswith(f"/{name}") for member in archive.getmembers())
+
+
 @pytest.mark.parametrize("relative_path", ["rust-toolchain.toml", ".cargo/config.toml"])
 def test_core_sdist_preserves_native_build_configuration(distribution_directory: Path, relative_path: str) -> None:
     sdists: Final = tuple(distribution_directory.glob("litellm_core-*.tar.gz"))
@@ -131,11 +150,10 @@ def test_core_sdist_rebuilds_without_repository(distributions: tuple[Path, Path]
                 assert original.read(name) == wheel.read(name), name
 
 
-def test_staging_copies_sources_without_build_artifacts(tmp_path: Path) -> None:
+def test_staging_copies_sources_without_build_artifacts(tmp_path: Path, source_repository: Path) -> None:
     from scripts.build_core_distribution import SOURCES, stage_core_distribution
 
-    source: Final = tmp_path / "source"
-    source.mkdir()
+    source: Final = source_repository
     for name in SOURCES:
         (source / name).mkdir()
         (source / name / "shared.txt").write_text("source payload")
@@ -152,6 +170,38 @@ def test_staging_copies_sources_without_build_artifacts(tmp_path: Path) -> None:
     assert not tuple(stage.rglob("*.so"))
     assert not tuple(stage.rglob("*.pyc"))
     assert all((source / name / "stale.so").is_file() for name in SOURCES)
+
+
+def test_staging_preserves_gitignore_rules(tmp_path: Path, source_repository: Path) -> None:
+    from scripts.build_core_distribution import SOURCES, stage_core_distribution
+
+    source: Final = source_repository
+    for name in SOURCES:
+        (source / name).mkdir()
+        (source / name / "shared.txt").write_text("shared payload")
+    (source / "pyproject.toml").write_text('[project]\nname = "litellm"\nversion = "1.2.3"\n')
+    manifest: Final = source / "packaging/litellm-core/pyproject.toml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_bytes((ROOT / "packaging/litellm-core/pyproject.toml").read_bytes())
+    (source / ".gitignore").write_text("*.cfg\n!keep.cfg\nbuild-artifacts/\n")
+    (source / "litellm/.gitignore").write_text(".env\n")
+    (source / ".git/info/exclude").write_text("litellm/private-local.json\n")
+    (source / "litellm/private-local.json").write_text("synthetic packaging canary")
+    for name in ("tracked.cfg", "local secret.cfg", "keep.cfg", ".env"):
+        (source / "litellm" / name).write_text("synthetic packaging canary")
+    (source / "litellm/build-artifacts").mkdir()
+    (source / "litellm/build-artifacts/local.txt").write_text("generated artifact")
+    subprocess.run(["git", "add", "--force", "litellm/tracked.cfg"], cwd=source, check=True)
+    stage: Final = tmp_path / "stage"
+    stage_core_distribution(source, stage)
+    assert (stage / "litellm/keep.cfg").read_text() == "synthetic packaging canary"
+    assert (stage / "litellm/shared.txt").read_text() == "shared payload"
+    assert not (stage / "litellm/tracked.cfg").exists()
+    assert not (stage / "litellm/local secret.cfg").exists()
+    assert not (stage / "litellm/.env").exists()
+    assert not (stage / "litellm/private-local.json").exists()
+    assert not (stage / "litellm/build-artifacts").exists()
+    assert (source / "litellm/tracked.cfg").is_file()
 
 
 def test_staging_rejects_missing_release_version(tmp_path: Path) -> None:
