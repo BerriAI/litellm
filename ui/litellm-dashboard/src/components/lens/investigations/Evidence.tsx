@@ -5,8 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 
 import { Inspector } from "@/components/shared/Inspector";
 import { Button } from "@/components/ui/button";
-import { RunView } from "@/components/view_logs/TraceView/TraceDrawer";
-import { useLocalRunSelection } from "@/components/view_logs/TraceView/traceRouting";
+import { RunView } from "@/components/lens/traces/detail/run/RunView";
+import { useLocalRunSelection } from "@/components/lens/traces/routing";
 
 import { lensQueries } from "../data/queries";
 import { useLensAccessToken, useLensApi } from "../data/LensServices";

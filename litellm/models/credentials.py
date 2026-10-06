@@ -7,10 +7,12 @@ layer; ``litellm.types.utils`` re-exports them for backwards compatibility.
 
 from collections.abc import Mapping
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class CredentialBase(BaseModel):
+class CredentialBase(LiteLLMBaseModel):
     credential_name: str
     credential_info: dict
 
@@ -35,7 +37,7 @@ class CreateCredentialItem(CredentialBase):
         return values
 
 
-class UpdateCredentialItem(BaseModel):
+class UpdateCredentialItem(LiteLLMBaseModel):
     credential_name: str
     credential_info: Mapping[str, object]
     credential_values: Mapping[str, object] | None = None

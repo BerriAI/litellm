@@ -7743,7 +7743,7 @@
           "input_cost_per_token": 3e-06,
           "output_cost_per_token": 1.5e-05
         },
-        "prompt_tokens": 47,
+        "prompt_tokens": 48,
         "completion_tokens": 10
       }
     },
@@ -7890,8 +7890,8 @@
           "input_cost_per_token": 3e-06,
           "output_cost_per_token": 1.5e-05
         },
-        "prompt_tokens": 301,
-        "completion_tokens": 9
+        "prompt_tokens": 303,
+        "completion_tokens": 10
       }
     },
     {
@@ -30790,7 +30790,8 @@
             "role": "user",
             "content": "proxy behaviour probe"
           }
-        ]
+        ],
+        "max_tokens": 412
       },
       "response": {
         "content_type": "application/json",

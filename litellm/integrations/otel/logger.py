@@ -1,5 +1,6 @@
 """``CustomLogger`` adapter on the OpenTelemetry span engine."""
 
+import sys
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
@@ -966,10 +967,12 @@ def _v2_configs(in_memory_loggers: Sequence[object], logger: "OpenTelemetryV2") 
 
 
 def _registered_v2_logger() -> "OpenTelemetryV2 | None":
-    try:
-        from litellm.proxy import proxy_server
-    except Exception:
-        return None
+    """The proxy's registered V2 logger, read without importing the proxy.
+
+    Request paths call this (the router's ``route`` phase among them), so importing
+    ``proxy_server`` here would load the whole proxy on an SDK caller's event loop.
+    """
+    proxy_server: Final = sys.modules.get("litellm.proxy.proxy_server")
     logger: Final = getattr(proxy_server, "open_telemetry_logger", None)
     return logger if isinstance(logger, OpenTelemetryV2) else None
 

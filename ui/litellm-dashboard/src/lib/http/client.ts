@@ -32,14 +32,27 @@ export interface RequestOptions {
 export class ApiError extends Error {
   readonly status: number;
   readonly body: unknown;
+  /** The server's `Retry-After` delay, when it sent one. */
+  readonly retryAfterMs: number | null;
 
-  constructor(message: string, status: number, body: unknown) {
+  constructor(message: string, status: number, body: unknown, retryAfterMs: number | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.body = body;
+    this.retryAfterMs = retryAfterMs;
   }
 }
+
+/** `Retry-After` as milliseconds; the header is whole seconds or an HTTP date. */
+export const retryAfterMs = (headers?: Headers): number | null => {
+  const header = headers?.get("retry-after");
+  if (header === null || header === undefined) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
+};
 
 /**
  * Best-effort extraction of a human-readable message from a proxy error body.
@@ -143,7 +156,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
 
     const url = appendQuery(`${getBaseUrl()}${path}`, query);
 
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { Accept: "application/json" };
     if (rawBody === undefined) {
       headers["Content-Type"] = "application/json";
     }
@@ -175,7 +188,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
         message = raw || `HTTP ${response.status}`;
       }
       onError?.(message);
-      throw new ApiError(message, response.status, errorBody);
+      throw new ApiError(message, response.status, errorBody, retryAfterMs(response.headers));
     }
 
     return response;

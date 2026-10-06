@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn
 
 import httpx
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -54,6 +54,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     TokenExchangeConfig,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     AGENT_365_PROD_API_BASE,
@@ -113,7 +114,7 @@ class _AdmissionProbe(TypedDict):
     metadata: ReadOnly[_AdmissionMetadata]
 
 
-class _ToolReference(BaseModel):
+class _ToolReference(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str
