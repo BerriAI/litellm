@@ -157,10 +157,13 @@ def test_organization_delete_revokes_org_and_team_keys_on_gateway_and_peer(gatew
         organization_id: Final = string_value(created_org["organization_id"])
         other_organization_id: Final = scenario.organization()
         member: Final = scenario.user()
-        gateway.post(
+        membership: Final = gateway.request(
+            "POST",
             "/organization/member_add",
             {"organization_id": organization_id, "member": {"role": "internal_user", "user_id": member}},
         )
+        assert membership.status_code == 200, membership.text
+        assert _membership_rows(organization_id) == [{"user_id": member, "user_role": "internal_user"}]
         team_id: Final = string_value(
             gateway.post(
                 "/team/new",
@@ -170,6 +173,8 @@ def test_organization_delete_revokes_org_and_team_keys_on_gateway_and_peer(gatew
         organization_key: Final = _new_key(gateway, organization_id=organization_id)
         team_key: Final = _new_key(gateway, team_id=team_id)
         other_key: Final = _new_key(gateway, organization_id=other_organization_id)
+        warmed_info: Final = peer.request("GET", "/organization/info", params={"organization_id": organization_id})
+        assert warmed_info.status_code == 200, warmed_info.text
 
         _observed(upstream)
         for proxy in (gateway, peer):
@@ -220,5 +225,11 @@ def test_organization_delete_revokes_org_and_team_keys_on_gateway_and_peer(gatew
         info: Final = gateway.request("GET", "/organization/info", params={"organization_id": organization_id})
         assert info.status_code == 404, info.text
         assert info.json() == {"detail": {"error": "Organization not found"}}, info.text
+        peer_info: Final = eventually(
+            lambda: peer.request("GET", "/organization/info", params={"organization_id": organization_id}),
+            lambda response: response.status_code == 404,
+            seconds=10,
+        )
+        assert peer_info.json() == {"detail": {"error": "Organization not found"}}, peer_info.text
         alive: Final = gateway.request("GET", "/organization/info", params={"organization_id": other_organization_id})
         assert alive.status_code == 200, alive.text

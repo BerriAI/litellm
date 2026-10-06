@@ -1,11 +1,16 @@
+import os
 import uuid
 from hashlib import sha256
 from typing import Final
 
 import httpx
+import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
 from pydantic import JsonValue
+
+from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
 
 def _observed(upstream: httpx.Client) -> list[dict[str, JsonValue]]:
@@ -222,40 +227,96 @@ def test_org_admin_can_only_delete_users_inside_their_orgs(
         assert _user_rows(victim_a)["user"] == []
 
 
-def test_scim_user_delete_revokes_keys(gateway: Gateway, peer: Gateway) -> None:
+def test_scim_user_delete_revokes_keys(gateway: Gateway, peer: Gateway, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"))
     with (
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
         model: Final = scenario.model()
         user_id: Final = _new_user(gateway)
+        ui_token: Final = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+            LiteLLM_UserTable(user_id=user_id, user_role="internal_user", models=[])
+        )
+        team_id: Final = scenario.team(members_with_roles=[{"role": "user", "user_id": user_id}])
+        organization_id: Final = scenario.organization()
+        membership: Final = gateway.request(
+            "POST",
+            "/organization/member_add",
+            {"organization_id": organization_id, "member": {"role": "internal_user", "user_id": user_id}},
+        )
+        assert membership.status_code == 200, membership.text
+        invitation: Final = gateway.post("/invitation/new", {"user_id": user_id})
+        assert string_value(object_value(invitation)["user_id"]) == user_id
         key: Final = _new_key(gateway, user_id=user_id, models=[model])
         scenario.cleanups.callback(gateway.request, "POST", "/key/delete", {"keys": [key]})
         hashed: Final = sha256(key.encode()).hexdigest()
 
-        assert _chat(gateway, model, key, f"warm {uuid.uuid4().hex}").status_code == 200
-        assert _chat(peer, model, key, f"warm {uuid.uuid4().hex}").status_code == 200
+        gateway_info: Final = gateway.request("GET", "/user/info", params={"user_id": user_id})
+        assert gateway_info.status_code == 200, gateway_info.text
+        peer_info: Final = peer.request("GET", "/user/info", params={"user_id": user_id})
+        assert peer_info.status_code == 200, peer_info.text
+        for proxy in (gateway, peer):
+            session_info: Final = proxy.request("GET", "/user/info", params={"user_id": user_id}, key=ui_token)
+            assert session_info.status_code == 200, session_info.text
+            assert object_value(object_value(session_info.json())["user_info"])["user_id"] == user_id, session_info.text
         _observed(upstream)
 
         deleted: Final = gateway.request("DELETE", f"/scim/v2/Users/{user_id}")
         assert deleted.status_code == 204, deleted.text
 
-        denied: Final = _chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
-        assert denied.status_code == 401, denied.text
-        assert denied.json() == _blocked_key_error(), denied.text
-        denied_peer: Final = eventually(
-            lambda: _chat(peer, model, key, f"denied {uuid.uuid4().hex}"),
-            lambda response: response.status_code == 401,
+        expected_info: Final = {
+            "error": {
+                "message": f"User {user_id} not found",
+                "type": "internal_server_error",
+                "param": None,
+                "code": "404",
+            }
+        }
+        denied_info: Final = gateway.request("GET", "/user/info", params={"user_id": user_id})
+        assert denied_info.status_code == 404, denied_info.text
+        assert denied_info.json() == expected_info, denied_info.text
+        denied_peer_info: Final = eventually(
+            lambda: peer.request("GET", "/user/info", params={"user_id": user_id}),
+            lambda response: response.status_code == 404,
             seconds=10,
         )
-        assert denied_peer.json() == _blocked_key_error(), denied_peer.text
+        assert denied_peer_info.json() == expected_info, denied_peer_info.text
+        for proxy in (gateway, peer):
+            expired_session: Final = proxy.request("GET", "/user/info", params={"user_id": user_id}, key=ui_token)
+            assert expired_session.status_code == 404, expired_session.text
+            assert expired_session.json() == expected_info, expired_session.text
 
-        assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id=%s', (user_id,)) == []
+        rows: Final = _user_rows(user_id)
+        assert rows["user"] == []
+        assert rows["team_memberships"] == []
+        assert rows["org_memberships"] == []
+        assert rows["invitations"] == []
+        assert rows["keys"] == [{"token": hashed}]
+        team_rows: Final = read_rows(
+            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id=%s',
+            (team_id,),
+        )
+        assert len(team_rows) == 1, team_rows
+        members: Final = team_rows[0]["members_with_roles"]
+        assert isinstance(members, list), team_rows
+        assert all(object_value(member)["user_id"] != user_id for member in members), team_rows
+        assert (
+            read_rows(
+                'SELECT user_id FROM "LiteLLM_OrganizationMembership" WHERE organization_id=%s',
+                (organization_id,),
+            )
+            == []
+        )
         assert read_rows('SELECT blocked FROM "LiteLLM_VerificationToken" WHERE token=%s', (hashed,)) == [
             {"blocked": True}
         ]
-        _observed(upstream)
-        for proxy in (gateway, peer):
-            denied_again: Final = _chat(proxy, model, key, f"denied {uuid.uuid4().hex}")
-            assert denied_again.status_code == 401, denied_again.text
+
+        denied: Final = _chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
+        assert denied.status_code == 401, denied.text
+        assert denied.json() == _blocked_key_error(), denied.text
+        denied_peer: Final = _chat(peer, model, key, f"denied {uuid.uuid4().hex}")
+        assert denied_peer.status_code == 401, denied_peer.text
+        assert denied_peer.json() == _blocked_key_error(), denied_peer.text
+        assert _observed(upstream) == []
         assert _observed(upstream) == []

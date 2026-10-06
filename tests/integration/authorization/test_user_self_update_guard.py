@@ -1,3 +1,4 @@
+import os
 import uuid
 from typing import Final
 
@@ -5,6 +6,9 @@ import pytest
 from integration._support.client import Gateway, object_value
 from integration._support.database import read_rows
 from pydantic import BaseModel, JsonValue
+
+from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
 _SELF_SERVICE_ROUTES: Final = ("/user/update", "/user/bulk_update", "/user/new", "/user/info")
 
@@ -40,6 +44,22 @@ def _escalation_error(field: str) -> dict[str, JsonValue]:
     }
 
 
+def _ui_session_route_error(user_id: str) -> dict[str, JsonValue]:
+    masked_user_id: Final = f"{user_id[:6]}{'*' * (len(user_id) - 8)}{user_id[-2:]}"
+    return {
+        "error": {
+            "message": (
+                "Authentication Error, Only proxy admin can be used to generate, delete, update info for new "
+                "keys/users/teams. Route=/user/update. Your role=internal_user. "
+                f"Your user_id={masked_user_id}"
+            ),
+            "type": "auth_error",
+            "param": "None",
+            "code": "401",
+        }
+    }
+
+
 def test_internal_user_can_update_allowed_fields_on_own_record(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         user_id: Final = scenario.user(user_role="internal_user", max_budget=10.0)
@@ -54,14 +74,52 @@ def test_internal_user_can_update_allowed_fields_on_own_record(gateway: Gateway)
 
 @pytest.mark.parametrize(
     ("field", "value"),
+    (("max_budget", 1000), ("object_permission", {})),
+    ids=("max_budget", "object_permission"),
+)
+def test_ui_session_token_cannot_update_own_protected_fields(
+    gateway: Gateway,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: JsonValue,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"))
+    with gateway.scenario() as scenario:
+        user_id: Final = scenario.user(user_role="internal_user", max_budget=10.0)
+        token: Final = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+            LiteLLM_UserTable(user_id=user_id, user_role="internal_user", models=[])
+        )
+        self_info: Final = gateway.request("GET", "/user/info", params={"user_id": user_id}, key=token)
+        assert self_info.status_code == 200, self_info.text
+        assert object_value(object_value(self_info.json())["user_info"])["user_id"] == user_id, self_info.text
+        before_row: Final = _user_row(user_id)
+        before_info: Final = _user_info(gateway, user_id)
+
+        refused: Final = gateway.request("POST", "/user/update", {"user_id": user_id, field: value}, key=token)
+        assert refused.status_code == 401, refused.text
+        assert refused.json() == _ui_session_route_error(user_id), refused.text
+        assert _user_row(user_id) == before_row
+        assert _user_info(gateway, user_id) == before_info
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
     (
         ("max_budget", 1000),
         ("max_budget", "1000"),
         ("model_max_budget", {"gpt-4o": 5.0}),
         ("spend", 0),
         ("object_permission", {"vector_stores": ["vs-1"]}),
+        ("object_permission", {}),
     ),
-    ids=("max_budget_number", "max_budget_string", "model_max_budget", "spend", "object_permission"),
+    ids=(
+        "max_budget_number",
+        "max_budget_string",
+        "model_max_budget",
+        "spend",
+        "object_permission",
+        "object_permission_empty",
+    ),
 )
 def test_internal_user_cannot_escalate_protected_fields(gateway: Gateway, field: str, value: JsonValue) -> None:
     with gateway.scenario() as scenario:

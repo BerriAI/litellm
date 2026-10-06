@@ -43,6 +43,20 @@ def _chat(gateway: Gateway, model: str, key: str, end_user: str) -> httpx.Respon
     )
 
 
+def _observation(text: str, end_user: str) -> dict[str, JsonValue]:
+    return {
+        "path": "/v1/chat/completions",
+        "authorization": "Bearer integration-provider-key",
+        "body": {
+            "messages": [{"role": "user", "content": text}],
+            "model": "gpt-4o-mini",
+            "user": end_user,
+        },
+        "method": "POST",
+        "api_key": "",
+    }
+
+
 def _assert_blocked_refusal(response: httpx.Response, end_user: str) -> None:
     assert response.status_code == 400, response.text
     assert response.json() == {
@@ -62,12 +76,15 @@ class _CallbackRig:
     second: Gateway
 
 
-def _callback_config(directory: Path) -> Path:
+def _callback_config(directory: Path, blocked_user_list: list[str] | None = None) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["litellm_settings"] = {
+    settings: Final = {
         **object_value(config["litellm_settings"]),
         "callbacks": ["blocked_user_check"],
     }
+    if blocked_user_list is not None:
+        settings["blocked_user_list"] = blocked_user_list
+    config["litellm_settings"] = settings
     path: Final = directory / "config.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
@@ -109,6 +126,64 @@ def test_block_route_marks_the_customer_blocked_and_update_unblocks(gateway: Gat
             _BlockedCustomerInfo.model_validate(gateway.get("/customer/info", {"end_user_id": end_user})).blocked
             is False
         )
+
+
+@pytest.mark.parametrize("block_route", ("/customer/block", "/end_user/block"))
+def test_block_route_creates_and_blocks_an_unseen_customer(gateway: Gateway, block_route: str) -> None:
+    with gateway.scenario() as scenario:
+        end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
+        scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
+
+        blocked: Final = gateway.request("POST", block_route, {"user_ids": [end_user]})
+        assert blocked.status_code in (200, 500), blocked.text
+        assert eventually(lambda: _blocked_row(end_user), lambda value: value == [{"blocked": True}], seconds=15) == [
+            {"blocked": True}
+        ]
+        info: Final = gateway.request("GET", "/customer/info", params={"end_user_id": end_user})
+        assert info.status_code == 200, info.text
+        assert _BlockedCustomerInfo.model_validate(info.json()).blocked is True
+
+        updated: Final = gateway.request("POST", "/customer/update", {"user_id": end_user, "blocked": False})
+        assert updated.status_code == 200, updated.text
+        assert eventually(lambda: _blocked_row(end_user), lambda value: value == [{"blocked": False}], seconds=15) == [
+            {"blocked": False}
+        ]
+        info_after_update: Final = gateway.request("GET", "/customer/info", params={"end_user_id": end_user})
+        assert info_after_update.status_code == 200, info_after_update.text
+        assert _BlockedCustomerInfo.model_validate(info_after_update.json()).blocked is False
+
+
+def test_listed_end_user_is_refused_and_unblock_restores_serving(gateway: Gateway, tmp_path: Path) -> None:
+    with (
+        ExitStack() as stack,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
+        config: Final = _callback_config(tmp_path, blocked_user_list=[end_user])
+        proxy: Final = stack.enter_context(owned_proxy(gateway, tmp_path / "listed", {}, config=config))
+        with proxy.scenario() as scenario:
+            model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+            key: Final = scenario.key(models=[model])
+            _observed(upstream)
+
+            refused: Final = _chat(proxy, model, key, end_user)
+            _assert_blocked_refusal(refused, end_user)
+            assert _observed(upstream) == []
+
+            unblocked: Final = proxy.request("POST", "/customer/unblock", {"user_ids": [end_user]})
+            assert unblocked.status_code == 200, unblocked.text
+            assert unblocked.json() == {"blocked_users": []}, unblocked.text
+            assert _blocked_row(end_user) == []
+
+            text: Final = f"end user unblocked {uuid.uuid4().hex}"
+            served: Final = proxy.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": text}], "user": end_user},
+                key=key,
+            )
+            assert served.status_code == 200, served.text
+            assert _observed(upstream) == [_observation(text, end_user)]
 
 
 @pytest.mark.parametrize("block_route", ("/customer/block", "/end_user/block"))

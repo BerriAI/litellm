@@ -419,6 +419,14 @@ def _user_row(user_id: str) -> list[dict[str, JsonValue]]:
     return read_rows('SELECT models, max_budget, metadata FROM "LiteLLM_UserTable" WHERE user_id=%s', (user_id,))
 
 
+def _partial_user_row(user_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        "SELECT models, max_budget, metadata, user_alias, rpm_limit, budget_duration "
+        'FROM "LiteLLM_UserTable" WHERE user_id=%s',
+        (user_id,),
+    )
+
+
 def _assert_user_budget_refusal(response: httpx.Response, user_id: str) -> None:
     assert response.status_code == 422, response.text
     assert response.json()["error"]["type"] == "budget_exceeded", response.text
@@ -439,14 +447,14 @@ def _user_model_denied_error(model: str) -> dict[str, JsonValue]:
     }
 
 
-def _model_user(gateway: Gateway, model: str) -> str:
+def _model_user(gateway: Gateway, model: str, max_budget: float = 10.0) -> str:
     created: Final = gateway.post(
         "/user/new",
         {
             "user_id": f"integration-{uuid.uuid4().hex}",
             "user_role": "internal_user",
             "auto_create_key": False,
-            "max_budget": 10.0,
+            "max_budget": max_budget,
             "models": [model],
             "metadata": {"dept": "qa"},
         },
@@ -595,16 +603,62 @@ def test_partial_user_update_preserves_sibling_fields(gateway: Gateway) -> None:
         user_id: Final = _model_user(gateway, model)
         scenario.cleanups.callback(lambda: gateway.request("POST", "/user/delete", {"user_ids": [user_id]}))
 
-        before: Final = _user_row(user_id)
+        initial: Final = gateway.request(
+            "POST",
+            "/user/update",
+            {
+                "user_id": user_id,
+                "user_alias": "sibling-alias",
+                "rpm_limit": 123,
+                "budget_duration": "1d",
+            },
+        )
+        assert initial.status_code == 200, initial.text
+        before: Final = _partial_user_row(user_id)
         updated: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "tpm_limit": 1234})
         assert updated.status_code == 200, updated.text
-        after: Final = _user_row(user_id)
-        assert after == [{**before[0], "models": [model], "max_budget": 10.0, "metadata": {"dept": "qa"}}]
+        after: Final = _partial_user_row(user_id)
+        assert after == before
         info: Final = object_value(gateway.get("/user/info", {"user_id": user_id})["user_info"])
         assert info["models"] == [model], info
         assert info["max_budget"] == 10.0, info
         assert info["metadata"] == {"dept": "qa"}, info
+        assert info["user_alias"] == "sibling-alias", info
+        assert info["rpm_limit"] == 123, info
+        assert info["budget_duration"] == "1d", info
         assert info["tpm_limit"] == 1234, info
+
+
+def test_user_models_only_update_is_enforced_on_the_gateway(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        user_id: Final = _model_user(gateway, model, max_budget=100.0)
+        scenario.cleanups.callback(lambda: gateway.request("POST", "/user/delete", {"user_ids": [user_id]}))
+        key: Final = string_value(gateway.post("/key/generate", {"user_id": user_id})["key"])
+
+        _observed(upstream)
+        warm: Final = f"warm {uuid.uuid4().hex}"
+        warmed: Final = _user_chat(gateway, model, key, warm)
+        assert warmed.status_code == 200, warmed.text
+        assert _observed(upstream) == [_chat_observation(warm)]
+
+        narrowed: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "models": ["no-default-models"]})
+        assert narrowed.status_code == 200, narrowed.text
+        _observed(upstream)
+        denied: Final = _user_chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
+        assert denied.status_code == 403, denied.text
+        assert denied.json() == _user_model_denied_error(model), denied.text
+        assert _observed(upstream) == []
+
+        restored: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "models": [model]})
+        assert restored.status_code == 200, restored.text
+        text: Final = f"restored {uuid.uuid4().hex}"
+        served: Final = _user_chat(gateway, model, key, text)
+        assert served.status_code == 200, served.text
+        assert _observed(upstream) == [_chat_observation(text)]
 
 
 def test_user_models_update_without_metadata_propagates_to_gateway_and_peer(gateway: Gateway, peer: Gateway) -> None:
@@ -617,14 +671,15 @@ def test_user_models_update_without_metadata_propagates_to_gateway_and_peer(gate
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
-        user_id: Final = _model_user(gateway, model)
+        user_id: Final = _model_user(gateway, model, max_budget=100.0)
         scenario.cleanups.callback(lambda: gateway.request("POST", "/user/delete", {"user_ids": [user_id]}))
         key: Final = string_value(gateway.post("/key/generate", {"user_id": user_id})["key"])
 
         _observed(upstream)
         for proxy in (gateway, peer):
             warm: Final = f"warm {uuid.uuid4().hex}"
-            assert _user_chat(proxy, model, key, warm).status_code == 200
+            warmed: Final = _user_chat(proxy, model, key, warm)
+            assert warmed.status_code == 200, warmed.text
             assert _observed(upstream) == [_chat_observation(warm)]
 
         narrowed: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "models": ["no-default-models"]})
