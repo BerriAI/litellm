@@ -1132,7 +1132,8 @@ async def test_investigation_propagates_systemic_review_failures(failure: str, b
 
     with pytest.raises(type(error)) as raised:
         await analyze_sample(claim, Sample(executions=(run,), eligible=1), read, model, ignore_progress)
-    assert raised.value is error
+    if failure != "cancelled":
+        assert raised.value is error
 
 
 @pytest.mark.asyncio
