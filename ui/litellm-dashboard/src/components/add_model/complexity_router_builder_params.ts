@@ -30,6 +30,7 @@ export const builderParamsFromValue = (
   classificationMode: value.classification_mode,
   tierLabels: value.tier_labels,
   classifierType: value.classifier_type,
+  localHeuristic: value.local_heuristic,
   jevClassifierConfig: value.jev_classifier_config,
   heuristicV2SuccessThreshold: value.heuristic_v2_success_threshold,
   capabilityClassifierConfig: value.capability_classifier_config,

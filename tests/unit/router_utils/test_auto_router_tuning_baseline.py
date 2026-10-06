@@ -183,6 +183,28 @@ class TestRouterIdentity:
 
 
 class TestHeuristicV1Scope:
+    @pytest.mark.parametrize("classifier", ("heuristic_first", "hybrid"))
+    def test_v2_chains_ignore_retained_v1_tuning_until_v1_is_selected(self, classifier: str) -> None:
+        config: Final = {
+            "classifier_type": classifier,
+            "classifier_llm_config": {"model": "judge"},
+            **(
+                {"heuristic_first_max_tier": "MEDIUM"}
+                if classifier == "heuristic_first" else {"hybrid_boundary_margin": 0.1}
+            ),
+            "tiers": _TIERS,
+            "code_keywords": ["internal-api"],
+        }
+        v1: Final = _router("chain", config)
+        v2: Final = _router("chain", {**config, "local_heuristic": "heuristic_v2"})
+        other: Final = _router("other", {"code_keywords": ["internal-api"]})
+        baselines: Final = snapshot_tuning_baselines((_router("chain", {}),))
+        assert heuristic_v1_router_fingerprint(v2) is None
+        assert not snapshot_tuning_baselines((v2,))
+        assert not mutable_tuned_identities((v2,), baselines)
+        assert tuning_quota_violation(candidate=v2, others=(other,), baselines=baselines, limit=1) is None
+        assert tuning_quota_violation(candidate=v1, others=(other,), baselines=baselines, limit=1) is not None
+
     @pytest.mark.parametrize(
         "config,in_scope",
         [

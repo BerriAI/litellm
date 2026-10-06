@@ -164,7 +164,7 @@ from litellm.router_utils.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
     GatedAutoRouterCapability,
     capability_limit_violation,
-    claimed_capability,
+    claimed_capabilities,
     classify_strategy_router_model,
     count_capability_routers,
 )
@@ -9491,10 +9491,8 @@ class Router:
         )
 
         complexity_router_config: Final[dict | None] = deployment.litellm_params.complexity_router_config
-        capability: Final = claimed_capability(complexity_router_config)
-        if capability is not None:
-            limit_violation: Final = self.auto_router_capability_violation(capability)
-            if limit_violation is not None:
+        for capability in claimed_capabilities(complexity_router_config):
+            if (limit_violation := self.auto_router_capability_violation(capability)) is not None:
                 raise ValueError(limit_violation)
 
         default_model: Final = (

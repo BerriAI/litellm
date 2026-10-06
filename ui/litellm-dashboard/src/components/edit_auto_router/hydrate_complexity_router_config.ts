@@ -72,6 +72,10 @@ export const hydrateComplexityRouterConfig = (
     plan_mode_min_tier: hydratePlanModeMinTier(parsedConfig.plan_mode_min_tier, custom_tier_set),
     tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
     ...classifier,
+    local_heuristic:
+      parsedConfig.local_heuristic === "heuristic" || parsedConfig.local_heuristic === "heuristic_v2"
+        ? parsedConfig.local_heuristic
+        : undefined,
     heuristic_v2_success_threshold:
       typeof parsedConfig.heuristic_v2_success_threshold === "number"
         ? parsedConfig.heuristic_v2_success_threshold

@@ -112,6 +112,7 @@ from .config import (
     CustomDimension,
     OpenSourceClassifierConfig,
     TierDefinition,
+    configured_local_heuristic,
 )
 from .jev_classifier import (
     DEFAULT_JEV_INSTRUCTIONS,
@@ -1488,7 +1489,10 @@ class ComplexityRouter(CustomLogger):
                 resolve_tier_artifact(self.config.heuristic_v2_artifact),
                 routing_threshold=self.config.heuristic_v2_success_threshold,
             )
-            if self.config.classifier_type == "heuristic_v2"
+            if configured_local_heuristic(
+                {"classifier_type": self.config.classifier_type, "local_heuristic": self.config.local_heuristic}
+            )
+            == "heuristic_v2"
             else None
         )
 
@@ -1940,9 +1944,30 @@ class ComplexityRouter(CustomLogger):
         if self.config.classifier_type == "capability" and self.config.classifier_llm_config is not None:
             return await self._capability_classifier_outcome(prompt, request_kwargs, messages)
         if self.config.classifier_type not in ("llm", "llm_v2") or self.config.classifier_llm_config is None:
-            tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+            return self._classify_locally(prompt, system_prompt)
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
+
+    def _classify_locally(self, prompt: str, system_prompt: str | None) -> ClassificationOutcome:
+        if self._tier_success_predictor is not None:
+            return self._classify_with_heuristic_v2(prompt)
+        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
+        return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+
+    def _local_outcome_is_decided(self, outcome: ClassificationOutcome, margin: float | None = None) -> bool:
+        forecast: Final = outcome.heuristic_v2_forecast
+        if forecast is None:
+            return bool(outcome.signals) and (
+                margin is None or (outcome.score is not None and not self._is_near_tier_boundary(outcome.score, margin))
+            )
+        threshold: Final = forecast["threshold"]
+        if forecast["probabilities"][forecast["predicted_tier"]] < threshold:
+            return False
+        if margin is None:
+            return True
+        deciding_tiers: Final = TIER_SEVERITY_ORDER[
+            : TIER_SEVERITY_ORDER.index(ComplexityTier(forecast["predicted_tier"])) + 1
+        ]
+        return all(abs(forecast["probabilities"][tier.value] - threshold) > margin for tier in deciding_tiers)
 
     def _classify_with_heuristic_v2(self, prompt: str) -> ClassificationOutcome:
         predictor: Final = self._tier_success_predictor
@@ -1981,27 +2006,27 @@ class ComplexityRouter(CustomLogger):
         """Score locally, and only pay for the classifier call when the scorer did not confidently
         place the request at or below heuristic_first_max_tier.
 
-        Confidence is `signals`, not `score`. A prompt where no dimension fired scores exactly 0.0,
+        For v1, confidence is `signals`, not `score`. A prompt where no dimension fired scores exactly 0.0,
         which is below simple_medium and so lands SIMPLE by default rather than by evidence, and a
         threshold check alone would hand that traffic to the cheapest model without ever consulting
         the classifier. Scores also go negative when simple indicators fire, so a score threshold
-        would reject exactly the trivial prompts this path exists to serve.
+        would reject exactly the trivial prompts this path exists to serve. V2 requires its predicted
+        tier to meet the configured success threshold.
 
         A turn carrying images the classifier would see is never decided cheaply: the scorer reads
         text alone, so its confidence describes a request it has only partly seen, and a trivial
         caption beside a screenshot is exactly the misrouting vision classification exists to stop.
         """
-        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-        scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        scored: Final = self._classify_locally(prompt, system_prompt)
         threshold: Final = self.config.heuristic_first_max_tier
         decided_cheaply: Final = (
             threshold is not None
-            and bool(signals)
+            and self._local_outcome_is_decided(scored)
             and not self._classifier_image_parts(messages)
-            and self._active_tier_severity(tier) <= self._active_tier_severity(threshold)
+            and self._active_tier_severity(scored.tier) <= self._active_tier_severity(threshold)
         )
         if decided_cheaply:
-            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="heuristic_first_short_circuit")
+            return scored._replace(cause="heuristic_first_short_circuit")
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
 
     async def _classify_hybrid(
@@ -2015,21 +2040,20 @@ class ComplexityRouter(CustomLogger):
 
         Where heuristic_first asks how CHEAP the scorer's tier is, this asks how DECIDED it is, so a
         confident score keeps its tier at every tier including the most expensive one. Two things make
-        a score undecided: landing within hybrid_boundary_margin of an active boundary, where a
+        a v1 score undecided: landing within hybrid_boundary_margin of an active boundary, where a
         hair's difference in score would have named the adjacent tier and its model pool, and firing
         no dimension at all, which scores 0.0 and lands SIMPLE by default rather than by evidence.
+        V2 compares its selected and lower-tier probabilities against the success threshold.
         """
-        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-        scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        scored: Final = self._classify_locally(prompt, system_prompt)
         margin: Final = self.config.hybrid_boundary_margin
         decided: Final = (
             margin is not None
-            and bool(signals)
+            and self._local_outcome_is_decided(scored, margin)
             and not self._classifier_image_parts(messages)
-            and not self._is_near_tier_boundary(score, margin)
         )
         if decided:
-            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="hybrid_short_circuit")
+            return scored._replace(cause="hybrid_short_circuit")
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
 
     def _classifier_image_parts(
@@ -2311,8 +2335,7 @@ class ComplexityRouter(CustomLogger):
             return _with_signal(self._default_model_fallback_outcome(), signal)
         if scored is not None:
             return _with_signal(scored, signal)
-        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-        return _with_signal(ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause), signal)
+        return _with_signal(self._classify_locally(prompt, system_prompt), signal)
 
     async def _classify_with_plugin(
         self,

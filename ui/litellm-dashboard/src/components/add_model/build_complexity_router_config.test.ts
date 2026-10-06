@@ -57,6 +57,46 @@ const baseParams: BuildComplexityRouterConfigParams = {
 };
 
 describe("buildComplexityRouterConfig", () => {
+  it.each(["heuristic_first", "hybrid"] as const)(
+    "persists the selected local heuristic for %s and preserves inactive v1 settings",
+    (classifierType) => {
+      const params = {
+        ...baseParams,
+        classifierType,
+        heuristicFirstMaxTier: "SIMPLE",
+        hybridBoundaryMargin: 0.1,
+        localHeuristic: "heuristic_v2" as const,
+        heuristicV2SuccessThreshold: 0,
+        tokenThresholds: { simple: 12, complex: 800 },
+        customDimensions: [{ id: "domain", name: "domain", weight: 0.2, keywords: ["billing"] }],
+      };
+      const expected = {
+        classifier_type: classifierType,
+        local_heuristic: "heuristic_v2",
+        heuristic_v2_success_threshold: 0,
+        token_thresholds: params.tokenThresholds,
+      };
+      expect(buildComplexityRouterConfig(params)).toMatchObject(expected);
+      expect(buildComplexityRouterConfig(params)).not.toHaveProperty("custom_dimensions");
+      expect(buildComplexityRouterConfig({ ...params, localHeuristic: "heuristic" })).toMatchObject({
+        local_heuristic: "heuristic",
+        custom_dimensions: [{ name: "domain", weight: 0.2, keywords: ["billing"] }],
+      });
+      expect(buildComplexityRouterConfig({ ...params, localHeuristic: undefined })).not.toHaveProperty(
+        "local_heuristic",
+      );
+    },
+  );
+
+  it.each(["heuristic", "heuristic_v2", "llm", "jev", "custom", "capability", "llm_v2"] as const)(
+    "omits the inactive chain selector under %s",
+    (classifierType) => {
+      expect(
+        buildComplexityRouterConfig({ ...baseParams, classifierType, localHeuristic: "heuristic_v2" }),
+      ).not.toHaveProperty("local_heuristic");
+    },
+  );
+
   it.each([undefined, false, true])(
     "keeps cache routing opt-in and uses eligible single-model tiers only when enabled: %s",
     (enabled) => {
@@ -1362,13 +1402,16 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       reasoningOverrideMinScore: 0.5,
       heuristicFirstMaxTier: "SIMPLE",
       hybridBoundaryMargin: 0.03,
+      localHeuristic: "heuristic",
       customTechnicalKeywords: ["kubernetes"],
       stallEscalationEnabled: true,
       stallEscalationWindow: 6,
       stallEscalationRepeatThreshold: 3,
     };
     // custom_dimensions only ever ship when the scorer decides, so "llm" cannot prove it emits.
-    const emittingType = key === "heuristic_first_max_tier" || key === "custom_dimensions" ? "heuristic_first" : "llm";
+    const emittingType = ["heuristic_first_max_tier", "custom_dimensions", "local_heuristic"].includes(key)
+      ? "heuristic_first"
+      : "llm";
     const typeForKey = key === "hybrid_boundary_margin" ? "hybrid" : emittingType;
     expect(buildComplexityRouterConfig({ ...baseParams, ...loaded, classifierType: typeForKey })).toHaveProperty(key);
     expect(build(loaded)).not.toHaveProperty(key);

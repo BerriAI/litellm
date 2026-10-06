@@ -2120,6 +2120,37 @@ class TestRouterComplexityDeploymentMethods:
             "model_info": {"id": model_id},
         }
 
+    @pytest.mark.parametrize("classifier", ("heuristic_first", "hybrid"))
+    @pytest.mark.parametrize("held_capability", ("heuristic_v2", "custom_prompt"))
+    def test_v2_chain_registration_enforces_each_claimed_allowance(
+        self, classifier: str, held_capability: str
+    ) -> None:
+        held: Final = (
+            self._router_row("existing", "existing-id", "heuristic_v2")
+            if held_capability == "heuristic_v2"
+            else self._custom_prompt_row("existing", "existing-id")
+        )
+        chain: Final = {
+            "model_name": "chain",
+            "model_info": {"id": "chain-id"},
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "classifier_type": classifier,
+                    "local_heuristic": "heuristic_v2",
+                    **(
+                        {"heuristic_first_max_tier": "MEDIUM"}
+                        if classifier == "heuristic_first" else {"hybrid_boundary_margin": 0.1}
+                    ),
+                    "classifier_llm_config": {"model": "gpt-4o-mini", "system_prompt": "Grade by difficulty"},
+                    "tiers": {"SIMPLE": "gpt-4o-mini"},
+                },
+            },
+        }
+        subject: Final = "heuristic_v2" if held_capability == "heuristic_v2" else "operator-written classifier prompt"
+        with pytest.raises(ValueError, match=subject):
+            Router(model_list=[self._POOL, held, chain], auto_router_capability_limit=lambda: 1)
+
     @pytest.mark.parametrize("field", ["classification_prompt", "classification_examples"])
     def test_operator_written_prompt_sections_claim_the_customization_slot(self, field: str) -> None:
         """The dashboard prompt editor writes opening instructions and calibration examples as their own
@@ -13998,6 +14029,129 @@ class TestHybrid:
         assert outcome.cause == "heuristic_scorer"
 
 
+@pytest.mark.parametrize("classifier_type", ("heuristic", "heuristic_v2", "llm"))
+def test_local_heuristic_is_rejected_outside_chaining(classifier_type: str) -> None:
+    with pytest.raises(ValidationError, match="local_heuristic requires"):
+        ComplexityRouterConfig.model_validate(
+            {
+                "classifier_type": classifier_type,
+                "local_heuristic": "heuristic_v2",
+                "classifier_llm_config": {"model": "judge"},
+            }
+        )
+
+
+@pytest.mark.parametrize("classifier_type", ("heuristic_first", "hybrid"))
+def test_v2_chain_rejects_v1_custom_dimensions(classifier_type: str) -> None:
+    with pytest.raises(ValidationError, match="custom_dimensions requires"):
+        ComplexityRouterConfig.model_validate(
+            {
+                "classifier_type": classifier_type,
+                "local_heuristic": "heuristic_v2",
+                "classifier_llm_config": {"model": "judge"},
+                "heuristic_first_max_tier": "SIMPLE" if classifier_type == "heuristic_first" else None,
+                "hybrid_boundary_margin": 0.03 if classifier_type == "hybrid" else None,
+                "tiers": dict(HEURISTIC_FIRST_TIERS),
+                "custom_dimensions": [{"name": "custom", "weight": 0.5, "patterns": ["custom"]}],
+            }
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "classifier_type, threshold, margin, expected_tier, judge_called",
+    [
+        ("heuristic_first", 0.1, 0.03, "SIMPLE", False),
+        ("heuristic_first", 0.8, 0.03, "REASONING", True),
+        ("hybrid", 0.8, 0.03, "COMPLEX", False),
+        ("hybrid", 0.89, 0.03, "REASONING", True),
+        ("hybrid", 0.22, 0.02, "REASONING", True),
+        ("hybrid", 21 / 102, 0.0, "REASONING", True),
+        ("hybrid", 1.0, 0.0, "REASONING", True),
+    ],
+)
+async def test_selected_v2_chain_routes_using_success_probabilities(
+    mock_router_instance: MagicMock,
+    classifier_type: str,
+    threshold: float,
+    margin: float,
+    expected_tier: str,
+    judge_called: bool,
+) -> None:
+    mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+    router: Final = ComplexityRouter(
+        model_name="v2-chain",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config={
+            "classifier_type": classifier_type,
+            "local_heuristic": "heuristic_v2",
+            "heuristic_v2_artifact": _heuristic_v2_artifact(),
+            "heuristic_v2_success_threshold": threshold,
+            "classifier_llm_config": {"model": "judge"},
+            "heuristic_first_max_tier": "SIMPLE" if classifier_type == "heuristic_first" else None,
+            "hybrid_boundary_margin": margin if classifier_type == "hybrid" else None,
+            "tiers": dict(HEURISTIC_FIRST_TIERS),
+        },
+    )
+    response: Final = await router.async_pre_routing_hook(
+        model="v2-chain",
+        request_kwargs={},
+        messages=[{"role": "user", "content": "write a python function to reverse a string"}],
+    )
+    assert response is not None and response.routing_decision is not None
+    assert response.routing_decision["tier"] == expected_tier
+    assert mock_router_instance.acompletion.await_count == int(judge_called)
+    assert response.routing_decision["cause"] == (
+        "llm_classifier" if judge_called else f"{classifier_type}_short_circuit"
+    )
+    assert response.routing_decision.get("heuristic_v2_forecast") == (
+        None
+        if judge_called
+        else {
+            "probabilities": dict(
+                zip((tier.value for tier in TIER_SEVERITY_ORDER), (11 / 102, 21 / 102, 91 / 102, 100 / 102))
+            ),
+            "threshold": threshold,
+            "predicted_tier": expected_tier,
+            "request_type": "code_generation",
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("classifier_type", ("heuristic_first", "hybrid"))
+@pytest.mark.parametrize("encrypted", (False, True))
+@pytest.mark.parametrize("fallback", ("heuristic", "default_model"))
+async def test_v2_chain_judge_failure_uses_selected_fallback(
+    classifier_type: str, encrypted: bool, fallback: str
+) -> None:
+    _, dependency = _native_classifier_router(failure=RuntimeError("judge failed"))
+    dependency.acompletion = AsyncMock(side_effect=RuntimeError("judge failed"))
+    router: Final = ComplexityRouter(
+        model_name="v2-chain",
+        litellm_router_instance=dependency,
+        complexity_router_config={
+            "classifier_type": classifier_type,
+            "local_heuristic": "heuristic_v2",
+            "heuristic_v2_artifact": _heuristic_v2_artifact(),
+            "classifier_llm_config": {"model": "classifier"},
+            "heuristic_first_max_tier": "SIMPLE" if classifier_type == "heuristic_first" else None,
+            "hybrid_boundary_margin": 1.0 if classifier_type == "hybrid" else None,
+            "classifier_fallback": fallback,
+            "default_model": "gpt-4o",
+            "tiers": dict(HEURISTIC_FIRST_TIERS),
+        },
+    )
+    outcome: Final = await router.aclassify(
+        "hello", request_kwargs={"input": [_encrypted_agent_task()]} if encrypted else None
+    )
+    assert outcome.cause == ("heuristic_v2" if fallback == "heuristic" else "default_model_fallback")
+    assert outcome.tier == (ComplexityTier.COMPLEX if fallback == "heuristic" else ComplexityTier.MEDIUM)
+    assert (outcome.heuristic_v2_forecast is not None) == (fallback == "heuristic")
+    assert dependency.aresponses.await_count == int(encrypted)
+    assert dependency.acompletion.await_count == int(not encrypted)
+
+
 def _windowed_router(*deployments: tuple) -> Router:
     """Real Router; each deployment is (group, provider_model, declared window or None).
     None means no declared override on a model the cost map does not know: unresolvable."""
@@ -16407,17 +16561,31 @@ class TestClassifierVision:
     @pytest.mark.parametrize(
         "classifier_type, extra, short_circuit_cause", SHORT_CIRCUIT_ARMS, ids=["heuristic_first", "hybrid"]
     )
+    @pytest.mark.parametrize("local_heuristic", ("heuristic", "heuristic_v2"))
     async def test_local_scorer_cannot_short_circuit_a_turn_it_cannot_see(
-        self, mock_router_instance, classifier_type, extra, short_circuit_cause
-    ):
+        self,
+        mock_router_instance: MagicMock,
+        classifier_type: str,
+        extra: dict[str, str | float],
+        short_circuit_cause: str,
+        local_heuristic: str,
+    ) -> None:
         """The scorer reads text alone, so its confidence is not a verdict on an image turn.
 
         Both arms are tuned so the scorer WOULD short-circuit on this exact text, which is what
         makes the image the only variable; a margin loose enough to leave the score undecided
         would pass whether or not the guard exists.
         """
-        router = self._router(mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra)
-        response = await router.async_pre_routing_hook(
+        router: Final = self._router(
+            mock_router_instance,
+            vision={"enabled": True},
+            classifier_type=classifier_type,
+            local_heuristic=local_heuristic,
+            heuristic_v2_artifact=_heuristic_v2_artifact(),
+            heuristic_v2_success_threshold=0.0,
+            **extra,
+        )
+        response: Final = await router.async_pre_routing_hook(
             model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, IMG_PART)
         )
         assert response.routing_decision["cause"] == "llm_classifier"
@@ -16426,12 +16594,26 @@ class TestClassifierVision:
     @pytest.mark.parametrize(
         "classifier_type, extra, short_circuit_cause", SHORT_CIRCUIT_ARMS, ids=["heuristic_first", "hybrid"]
     )
+    @pytest.mark.parametrize("local_heuristic", ("heuristic", "heuristic_v2"))
     async def test_local_scorer_still_short_circuits_without_images(
-        self, mock_router_instance, classifier_type, extra, short_circuit_cause
-    ):
+        self,
+        mock_router_instance: MagicMock,
+        classifier_type: str,
+        extra: dict[str, str | float],
+        short_circuit_cause: str,
+        local_heuristic: str,
+    ) -> None:
         """The negative class: same router, same text, no image, and the scorer still decides."""
-        router = self._router(mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra)
-        response = await router.async_pre_routing_hook(
+        router: Final = self._router(
+            mock_router_instance,
+            vision={"enabled": True},
+            classifier_type=classifier_type,
+            local_heuristic=local_heuristic,
+            heuristic_v2_artifact=_heuristic_v2_artifact(),
+            heuristic_v2_success_threshold=0.0,
+            **extra,
+        )
+        response: Final = await router.async_pre_routing_hook(
             model="m", request_kwargs={}, messages=[{"role": "user", "content": "what is this"}]
         )
         assert response.routing_decision["cause"] == short_circuit_cause
