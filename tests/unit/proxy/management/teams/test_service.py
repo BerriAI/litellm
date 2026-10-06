@@ -1,59 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final
 
 import pytest
 
-from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, TeamMemberBudgetSource, UserAPIKeyAuth
-from litellm.proxy.management.teams.authz import TeamAccess
+from litellm.proxy._types import TeamMemberBudgetSource
 from litellm.proxy.management.teams.repository import TeamMemberRow
-from litellm.proxy.management.teams.service import (
-    TEAM_MEMBERS_LIST_SPEC,
-    ReadableRoster,
-    RosterHidden,
-    RosterLookup,
-    TeamNotFound,
-    find_readable_roster,
-    member_budget_source,
-)
-
-ROSTER: Final = LiteLLM_TeamTable(
-    team_id="team-1", organization_id=None, members_with_roles=[Member(user_id="member", role="user")]
-)
-
-
-@dataclass(frozen=True, slots=True)
-class OneTeam:
-    team: LiteLLM_TeamTable
-
-    async def find_by_id(self, team_id: str) -> LiteLLM_TeamTable | None:
-        return self.team if team_id == self.team.team_id else None
-
-
-class NoOrgAdmins:
-    async def is_org_admin(self, user_id: str, organization_id: str) -> bool:
-        return False
-
-
-def caller(user_id: str) -> UserAPIKeyAuth:
-    return UserAPIKeyAuth(user_id=user_id, api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER)
-
-
-@pytest.mark.parametrize(
-    ("team_id", "who", "expected"),
-    [
-        pytest.param("team-1", caller("member"), ReadableRoster(team_id="team-1"), id="member-reads"),
-        pytest.param("team-1", caller("stranger"), RosterHidden(team_id="team-1"), id="stranger-is-refused"),
-        pytest.param("team-2", caller("member"), TeamNotFound(team_id="team-2"), id="unknown-team"),
-    ],
-)
-async def test_find_readable_roster_reports_why_a_roster_is_unreadable(
-    team_id: str, who: UserAPIKeyAuth, expected: RosterLookup
-) -> None:
-    lookup: Final = await find_readable_roster(team_id, who, OneTeam(ROSTER), TeamAccess(org_roles=NoOrgAdmins()))
-    assert lookup == expected
+from litellm.proxy.management.teams.service import TEAM_MEMBERS_LIST_SPEC, member_budget_source
 
 
 @pytest.mark.parametrize(

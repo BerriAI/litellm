@@ -1,26 +1,15 @@
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Request
-from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
-from litellm.proxy.list_api.list_framework import handle_list
-from litellm.proxy.management.teams.authz import TeamAccess
-from litellm.proxy.management.teams.dependencies import get_roster_db, get_team_access, get_teams
-from litellm.proxy.management.teams.exceptions import roster_problem
-from litellm.proxy.management.teams.repository import RawQuery, TeamMemberRows
+from litellm.proxy.management.teams.dependencies import get_readable_team, get_roster_db
+from litellm.proxy.management.teams.repository import RawQuery
 from litellm.proxy.management.teams.schemas import TeamMemberListItem
-from litellm.proxy.management.teams.service import (
-    TEAM_MEMBERS_LIST_SPEC,
-    ReadableRoster,
-    RosterHidden,
-    TeamNotFound,
-    Teams,
-    find_readable_roster,
-)
+from litellm.proxy.management.teams.service import get_team_members_list
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.types.proxy.management_endpoints.management_v1 import ListResponse, ProblemDetail
 
@@ -34,12 +23,10 @@ router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
     response_model=ListResponse[TeamMemberListItem],
 )
 async def list_team_members(
-    team_id: str,
     request: Request,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    teams: Annotated[Teams, Depends(get_teams)],
+    team: Annotated[LiteLLM_TeamTable, Depends(get_readable_team)],
     roster_db: Annotated[RawQuery, Depends(get_roster_db)],
-    team_access: Annotated[TeamAccess, Depends(get_team_access)],
 ) -> ListResponse[TeamMemberListItem]:
     """
     List a team's members one page at a time, with each member's spend and budget limits in the team.
@@ -65,19 +52,7 @@ async def list_team_members(
     ```
     """
     try:
-        lookup: Final = await find_readable_roster(team_id, user_api_key_dict, teams, team_access)
-        match lookup:
-            case ReadableRoster(team_id=readable_team_id):
-                return await handle_list(
-                    spec=TEAM_MEMBERS_LIST_SPEC,
-                    executor=TeamMemberRows(db=roster_db, team_id=readable_team_id),
-                    request=request,
-                    caller=user_api_key_dict,
-                )
-            case TeamNotFound() | RosterHidden():
-                raise roster_problem(lookup)
-            case _:
-                assert_never(lookup)
+        return await get_team_members_list(team.team_id, request, user_api_key_dict, roster_db)
     except ManagementProblem:
         raise
     except Exception as e:  # noqa: BLE001  # a driver error answers as a problem document, not the OpenAI error shape

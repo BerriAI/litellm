@@ -1,47 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Final
 
-from litellm.proxy._types import LiteLLM_TeamTable, TeamMemberBudgetSource, UserAPIKeyAuth
-from litellm.proxy.list_api.list_framework import FilterSpec, ListSpec, Scope, ScopeAll
-from litellm.proxy.management.teams.authz import TeamAccess
-from litellm.proxy.management.teams.repository import TeamMemberRow
+from litellm.proxy._types import TeamMemberBudgetSource, UserAPIKeyAuth
+from litellm.proxy.list_api.list_framework import FilterSpec, ListSpec, Scope, ScopeAll, handle_list
+from litellm.proxy.management.teams.repository import RawQuery, TeamMemberRow, TeamMemberRows
 from litellm.proxy.management.teams.schemas import TeamMemberListItem
 
+if TYPE_CHECKING:
+    from fastapi import Request
 
-class Teams(Protocol):
-    async def find_by_id(self, team_id: str) -> LiteLLM_TeamTable | None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class TeamNotFound:
-    team_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class RosterHidden:
-    team_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class ReadableRoster:
-    team_id: str
-
-
-RosterLookup: TypeAlias = TeamNotFound | RosterHidden | ReadableRoster
-
-
-async def find_readable_roster(
-    team_id: str, caller: UserAPIKeyAuth, teams: Teams, team_access: TeamAccess
-) -> RosterLookup:
-    team: Final = await teams.find_by_id(team_id)
-    if team is None:
-        return TeamNotFound(team_id=team_id)
-    if not await team_access.reads_roster(caller, team):
-        return RosterHidden(team_id=team_id)
-    return ReadableRoster(team_id=team_id)
+    from litellm.types.proxy.management_endpoints.management_v1 import ListResponse
 
 
 def member_budget_source(budget_id: str | None, team_default_budget_id: str | None) -> TeamMemberBudgetSource:
@@ -70,7 +40,7 @@ def _team_member_item(row: TeamMemberRow) -> TeamMemberListItem:
 
 
 def _roster_reader_scope(_caller: UserAPIKeyAuth) -> Scope:
-    """`find_readable_roster` has already admitted the caller to this one team's roster."""
+    """`get_readable_team` has already admitted the caller to this one team's roster."""
     return ScopeAll()
 
 
@@ -88,3 +58,14 @@ TEAM_MEMBERS_LIST_SPEC: Final[ListSpec[TeamMemberRow, TeamMemberListItem]] = Lis
     serialize=_team_member_item,
     tiebreaker="position",
 )
+
+
+async def get_team_members_list(
+    team_id: str, request: Request, caller: UserAPIKeyAuth, roster_db: RawQuery
+) -> ListResponse[TeamMemberListItem]:
+    return await handle_list(
+        spec=TEAM_MEMBERS_LIST_SPEC,
+        executor=TeamMemberRows(db=roster_db, team_id=team_id),
+        request=request,
+        caller=caller,
+    )

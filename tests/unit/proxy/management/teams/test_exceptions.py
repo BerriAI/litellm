@@ -1,23 +1,24 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
-from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE
-from litellm.proxy.management.teams.exceptions import roster_problem
-from litellm.proxy.management.teams.service import RosterHidden, TeamNotFound
+from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
+from litellm.proxy.management.teams.exceptions import members_not_readable, team_not_found
 
 
 @pytest.mark.parametrize(
-    ("refusal", "status", "problem_type"),
+    ("refuse", "status", "problem_type"),
     [
-        pytest.param(TeamNotFound(team_id="team-404"), 404, f"{PROBLEM_TYPE_BASE}team-not-found", id="unknown-team"),
-        pytest.param(RosterHidden(team_id="team-403"), 403, f"{PROBLEM_TYPE_BASE}forbidden", id="hidden-roster"),
+        pytest.param(team_not_found, 404, f"{PROBLEM_TYPE_BASE}team-not-found", id="unknown-team"),
+        pytest.param(members_not_readable, 403, f"{PROBLEM_TYPE_BASE}forbidden", id="hidden-members"),
     ],
 )
-def test_roster_problem_answers_each_refusal_with_its_own_status_and_names_the_team(
-    refusal: TeamNotFound | RosterHidden, status: int, problem_type: str
+def test_each_refusal_answers_with_its_own_status_and_names_the_team(
+    refuse: Callable[[str], ManagementProblem], status: int, problem_type: str
 ) -> None:
-    problem = roster_problem(refusal).problem
+    problem = refuse("team-x").problem
 
     assert (problem.status, problem.type) == (status, problem_type)
-    assert refusal.team_id in problem.detail
+    assert "team-x" in problem.detail
