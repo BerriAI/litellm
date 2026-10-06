@@ -26,7 +26,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
-from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.proxy_server import (
     ProxyConfig,
@@ -2330,6 +2330,40 @@ async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["vector_store_deny_by_default", "search_tool_deny_by_default"])
+@pytest.mark.parametrize(("yaml_value", "expected"), [("true", True), ("false", False)])
+async def test_load_config_yaml_deny_by_default_is_boolean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str, yaml_value: str, expected: bool
+):
+    config_file: Final = tmp_path / "deny_by_default.yaml"
+    config_file.write_text(f"model_list: []\nlitellm_settings: {{}}\ngeneral_settings:\n  {setting}: {yaml_value}\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    _, _, general_settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert general_settings[setting] is expected
+    assert getattr(ConfigGeneralSettings.model_validate(dict(general_settings)), setting) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["vector_store_deny_by_default", "search_tool_deny_by_default"])
+@pytest.mark.parametrize("yaml_value", ["", "enabled"], ids=["null", "string"])
+async def test_load_config_rejects_non_boolean_deny_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str, yaml_value: str
+):
+    config_file: Final = tmp_path / "deny_by_default.yaml"
+    config_file.write_text(f"model_list: []\nlitellm_settings: {{}}\ngeneral_settings:\n  {setting}: {yaml_value}\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    with pytest.raises(ValidationError, match=setting):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path, monkeypatch):
     """Regression: router_settings.plugins dotted-path strings must be resolved to
     live RoutingPlugin instances on the created Router. Previously they were passed
@@ -3616,9 +3650,7 @@ def test_ProxyConfig__decrypt_and_set_db_env_variables_cannot_enable_mcp_stdio(m
     assert os.environ.get("LITELLM_ENABLE_MCP_STDIO") is None
 
 
-def test_ProxyConfig__decrypt_and_set_db_env_variables_warns_once_about_the_ignored_mcp_stdio_flag(
-    monkeypatch, caplog
-):
+def test_ProxyConfig__decrypt_and_set_db_env_variables_warns_once_about_the_ignored_mcp_stdio_flag(monkeypatch, caplog):
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
         lambda value, key, return_original_value=False: value,

@@ -6751,6 +6751,17 @@ class ProxyConfig:
         if general_settings is None:
             general_settings = {}
 
+        typed_general_settings: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
+        ConfigGeneralSettings.model_validate(
+            MappingProxyType(
+                {
+                    name: typed_general_settings[name]
+                    for name in ("vector_store_deny_by_default", "search_tool_deny_by_default")
+                    if name in typed_general_settings
+                }
+            )
+        )
+
         if general_settings.get("mcp_advertised_versions") is not None:
             from litellm.types.mcp import MCPAdvertisedVersions
 

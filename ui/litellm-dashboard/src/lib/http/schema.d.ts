@@ -25838,6 +25838,8 @@ export interface components {
             name: string;
             /** Parent Agent */
             parent_agent: string | null;
+            /** Priced Calls */
+            priced_calls: number;
             /** Spend */
             spend: number | null;
             /** Tool Calls */
@@ -30035,6 +30037,12 @@ export interface components {
             reject_clientside_metadata_tags?: boolean | null;
             /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
+            /**
+             * Search Tool Deny By Default
+             * @description When True, a search tool must be explicitly listed in object_permission.search_tools: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing, and the unregistered search fallback is denied. The master key and dashboard sessions are exempt
+             * @default false
+             */
+            search_tool_deny_by_default: boolean;
             /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
             spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
             /**
@@ -30110,6 +30118,12 @@ export interface components {
              * @description Master switch for the SSRF guard applied to user-supplied URLs (image_url, file_url, MCP/OpenAPI spec URLs, etc). Defaults to True. Set to False to disable DNS/IP validation entirely (not recommended).
              */
             user_url_validation?: boolean | null;
+            /**
+             * Vector Store Deny By Default
+             * @description When True, a vector store must be explicitly listed in object_permission.vector_stores: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing. Dashboard session keys are not yet covered
+             * @default false
+             */
+            vector_store_deny_by_default: boolean;
         };
         /** ConfigList */
         ConfigList: {
@@ -45281,6 +45295,10 @@ export interface components {
             span_id: string;
             /** Spend */
             spend: number | null;
+            /** Spend Log Request Id */
+            spend_log_request_id: string | null;
+            /** Spend Match */
+            spend_match: ("matched" | "no_call_id" | "no_spend_log" | "ambiguous" | "incomplete_evidence") | null;
             /** Start Offset Ms */
             start_offset_ms: number;
             /**
@@ -47430,6 +47448,8 @@ export interface components {
             name: string;
             /** Output Tokens */
             output_tokens: number;
+            /** Priced Calls */
+            priced_calls: number;
             /** Resolution Limited */
             resolution_limited?: boolean;
             /** Service */
