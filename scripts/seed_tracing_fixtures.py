@@ -78,7 +78,8 @@ def spend_fixtures(directory: Path = SPEND_FIXTURES) -> tuple[tuple[str, tuple[S
             path.stem.removesuffix("_spend_logs"),
             SPEND_ROWS.validate_python(
                 tuple(
-                    {"litellm_call_id": "", **JSON_OBJECT.validate_json(line)} for line in path.read_text().splitlines()
+                    {"litellm_call_id": "", "provider_request_id": "", **JSON_OBJECT.validate_json(line)}
+                    for line in path.read_text().splitlines()
                 )
             ),
         )
@@ -194,9 +195,7 @@ def rebase(
     if isinstance(value, dict):
         attribute_key: Final = value.get("key")
         attribute_value: Final = value.get("value")
-        session_id: Final = (
-            attribute_value.get("stringValue") if isinstance(attribute_value, dict) else None
-        )
+        session_id: Final = attribute_value.get("stringValue") if isinstance(attribute_value, dict) else None
         if (
             isinstance(attribute_key, str)
             and attribute_key in TRACE_ID_ATTRIBUTES

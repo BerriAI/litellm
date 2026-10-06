@@ -2,7 +2,7 @@
 CRUD ENDPOINTS FOR SEARCH TOOLS
 """
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import Any, Final, TypeAlias
 
@@ -117,34 +117,39 @@ async def _filter_visible_search_tools(
     search_tools: list[SearchToolInfoResponse],
     user_api_key_dict: UserAPIKeyAuth,
     lookup_team_object: TeamObjectLookup = _team_object_from_db,
+    general_settings: Mapping[str, object] | None = None,
 ) -> list[SearchToolInfoResponse]:
     """
     Drop search tools the caller is not authorized to invoke, applying the same
-    key/team object_permission allowlists enforced on /search. Admins see all tools.
+    key/team/user grants enforced on /search. Admins see all tools unless
+    search_tool_deny_by_default applies to their credential.
     """
+    from litellm.proxy.auth.auth_checks import (
+        can_grants_view_search_tool,
+        is_search_tool_deny_by_default_applied,
+        resolve_search_tool_grants,
+        typed_general_settings,
+    )
+    from litellm.proxy.proxy_server import general_settings as proxy_general_settings
+
+    settings: Final = typed_general_settings(proxy_general_settings) if general_settings is None else general_settings
     if user_api_key_dict.user_role in (
         LitellmUserRoles.PROXY_ADMIN,
         LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-    ):
+    ) and not is_search_tool_deny_by_default_applied(user_api_key_dict, settings):
         return search_tools
 
-    from litellm.proxy.auth.auth_checks import can_user_view_search_tool
-
     allowlist_team_id: Final = _allowlist_team_id(user_api_key_dict)
-    team_object: Final[LiteLLM_TeamTable | None] = (
-        await lookup_team_object(allowlist_team_id, user_api_key_dict) if allowlist_team_id else None
-    )
 
-    visible: Final[list[SearchToolInfoResponse]] = []
-    for tool in search_tools:
-        tool_name = tool.get("search_tool_name")
-        if tool_name and await can_user_view_search_tool(
-            search_tool_name=tool_name,
-            valid_token=user_api_key_dict,
-            team_object=team_object,
-        ):
-            visible.append(tool)
-    return visible
+    async def _load_team_object() -> LiteLLM_TeamTable | None:
+        return await lookup_team_object(allowlist_team_id, user_api_key_dict) if allowlist_team_id else None
+
+    grants: Final = await resolve_search_tool_grants(user_api_key_dict, settings, _load_team_object)
+    return [
+        tool
+        for tool in search_tools
+        if (tool_name := tool.get("search_tool_name")) and can_grants_view_search_tool(tool_name, grants)
+    ]
 
 
 @router.get(

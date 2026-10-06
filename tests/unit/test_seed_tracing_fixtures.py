@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from itertools import chain
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock
 
 import httpx
@@ -77,9 +77,12 @@ def test_all_fixture_replays_are_recent_and_preserve_spans(path: Path) -> None:
             assert after_span_attributes["lens.original_trace_id"] == seed_id(
                 before_original_trace_id, replay.namespace, 32
             )
-            assert after["TraceId"] == hashlib.sha256(
-                f"litellm.claude.session.v1\0{seed_id(before_session, replay.namespace, 32)}".encode()
-            ).hexdigest()[:32]
+            assert (
+                after["TraceId"]
+                == hashlib.sha256(
+                    f"litellm.claude.session.v1\0{seed_id(before_session, replay.namespace, 32)}".encode()
+                ).hexdigest()[:32]
+            )
             assert after["TraceId"] != before["TraceId"]
         else:
             assert after["TraceId"] == seed_id(trace_id, replay.namespace, 32)
@@ -186,15 +189,16 @@ def test_captured_spend_replay_preserves_real_cost_and_call_identity(
 
 
 @pytest.mark.parametrize("call_id", (None, "gateway"))
-def test_spend_fixture_loading_preserves_gateway_ids_and_defaults_legacy_rows(
-    tmp_path: Path, call_id: str | None
+@pytest.mark.parametrize("field", ("litellm_call_id", "provider_request_id"))
+def test_spend_fixture_loading_preserves_call_ids_and_defaults_legacy_rows(
+    tmp_path: Path, call_id: str | None, field: Literal["litellm_call_id", "provider_request_id"]
 ) -> None:
     original: Final = dict(spend_fixtures())["deepagents_swarm"][0]
-    fields: Final = {key: value for key, value in original.items() if key != "litellm_call_id"}
-    supplied: Final = fields if call_id is None else {**fields, "litellm_call_id": call_id}
+    fields: Final = {key: value for key, value in original.items() if key != field}
+    supplied: Final = fields if call_id is None else {**fields, field: call_id}
     (tmp_path / "example_spend_logs.jsonl").write_text(json.dumps(supplied) + "\n")
     loaded: Final = spend_fixtures(tmp_path)
-    assert loaded == (("example", ({**original, "litellm_call_id": call_id or ""},)),)
+    assert loaded == (("example", ({**original, field: call_id or ""},)),)
 
 
 @pytest.mark.requires_rust_extension
