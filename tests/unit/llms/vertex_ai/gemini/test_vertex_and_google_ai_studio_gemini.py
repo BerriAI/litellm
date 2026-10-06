@@ -9684,3 +9684,42 @@ def test_streaming_usage_reads_cache_creation_tokens_recorded_on_logging_obj():
 
     assert chunk.usage.prompt_tokens == 1536 + 1280
     assert chunk.usage.cache_creation_input_tokens == 1280
+def test_gemma4_reasoning_effort_never_sends_thinking_budget():
+    non_default_params = {"reasoning_effort": "high"}
+    optional_params = {}
+
+    VertexGeminiConfig().map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="gemini/gemma-4-31b-it",
+        drop_params=False,
+    )
+
+    thinking_config = optional_params["thinkingConfig"]
+    assert "thinkingBudget" not in thinking_config
+    assert thinking_config["thinkingLevel"] == "high"
+    assert thinking_config["includeThoughts"] is True
+
+
+@pytest.mark.parametrize(
+    ("reasoning_effort", "expected_level", "include_thoughts"),
+    [
+        ("minimal", "minimal", True),
+        ("low", "minimal", True),
+        ("none", "minimal", False),
+        ("disable", "minimal", False),
+        ("medium", "high", True),
+        ("high", "high", True),
+    ],
+)
+def test_gemma4_reasoning_effort_clamps_to_supported_levels(reasoning_effort, expected_level, include_thoughts):
+    result = VertexGeminiConfig._map_reasoning_effort_to_gemma_thinking_level(reasoning_effort)
+
+    assert result["thinkingLevel"] == expected_level
+    assert result["includeThoughts"] is include_thoughts
+
+
+def test_gemini3_still_uses_level_mapping_and_gemma4_not_treated_as_gemini3():
+    assert VertexGeminiConfig._is_gemma_4("gemini/gemma-4-31b-it") is True
+    assert VertexGeminiConfig._is_gemma_4("gemini/gemini-3-flash") is False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini/gemma-4-31b-it") is False
