@@ -34,7 +34,13 @@ const RULES: readonly (readonly [RunSituation, (input: SituationInput) => boolea
   ["never", ({ job }) => !job],
   ["queued", ({ job }) => job?.status === "queued"],
   ["running", ({ job }) => job?.status === "running"],
-  ["budget", ({ job }) => failed(job) && /budget reached/i.test(job?.error ?? "")],
+  [
+    "budget",
+    ({ job }) =>
+      job !== undefined &&
+      (failed(job) || isPartial(job)) &&
+      /monthly lens budget reached|remains in the investigation budget/i.test(job.error),
+  ],
   ["offline", ({ job, connected }) => failed(job) && !connected],
   ["failed", ({ job }) => failed(job)],
   ["cancelled", ({ job }) => job?.status === "cancelled"],

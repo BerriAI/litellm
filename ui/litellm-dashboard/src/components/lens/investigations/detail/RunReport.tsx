@@ -81,9 +81,9 @@ const SITUATIONS: Record<RunSituation, SituationView> = {
   },
   running: { status: "Running", tone: "info", headline: () => "Investigating now", body: "progress" },
   budget: {
-    status: "Failed",
+    status: "Stopped",
     tone: "destructive",
-    headline: () => "Stopped: the monthly budget is used up",
+    headline: () => "Stopped: more investigation budget is needed",
     body: "error",
   },
   offline: {

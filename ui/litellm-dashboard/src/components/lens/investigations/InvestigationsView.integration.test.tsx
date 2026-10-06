@@ -240,6 +240,30 @@ describe("Lens findings and runs", () => {
     expect(await screen.findByText(issue.title)).toBeVisible();
   });
 
+  it.each(["failed", "completed"] as const)(
+    "opens budget settings for a %s run that needs a larger allowance",
+    async (status) => {
+      testQueryClient.clear();
+      const error =
+        "This model request needs up to $9.600, but $5.000 remains in the investigation budget. Use a smaller deployment output allowance or increase the limit.";
+      const jobs = lens.jobs.map((job) => ({ ...job, status, error, findings: [] }));
+      proxy.get.mockImplementation(async (path) => {
+        if (path === "/lens") return { lenses: [{ ...lens, jobs }], workers: [], tracing_enabled: true };
+        if (path === "/lens/lens/runs") return jobs;
+        if (path === "/lens/agents") return [];
+        return { data: [] };
+      });
+      const user = userEvent.setup();
+      renderWithProviders(<InvestigationsView />);
+      const report = within(await screen.findByRole("region", { name: "Run report" }));
+      expect(report.getByRole("heading", { name: "Stopped: more investigation budget is needed" })).toBeVisible();
+      expect(report.getByRole("alert")).toHaveTextContent(error);
+      expect(report.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+      await user.click(report.getByRole("button", { name: "Raise budget" }));
+      expect(await screen.findByRole("region", { name: "Edit investigation" })).toBeVisible();
+    },
+  );
+
   const brief = {
     problem: "The workspace was not a Git repository, so the agent could not commit.",
     user_goal: "Open a pull request fixing a typo",
