@@ -812,27 +812,22 @@ def key_generation_check(
 
 def _caller_may_generate_key(
     team_table: LiteLLM_TeamTableCachedObj | None,
-    is_team_key: bool,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> bool:
     """Non-raising mirror of the role and member-permission gates in `key_generation_check`."""
     settings: Final = litellm.key_generation_settings or StandardKeyGenerationConfig()
-    if not is_team_key:
+    if team_table is None:
         personal: Final = settings.get("personal_key_generation")
         return (
             personal is None
             or "allowed_user_roles" not in personal
             or user_api_key_dict.user_role in personal["allowed_user_roles"]
         )
-    if team_table is None:
-        return False
     team_settings: Final = settings.get(
         "team_key_generation", TeamUIKeyGenerationConfig(allowed_team_member_roles=["admin", "user"])
     )
     caller_team_role: Final = _get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
-    if caller_team_role is None:
-        return False
-    if (
+    if caller_team_role is None or (
         "allowed_team_member_roles" in team_settings
         and caller_team_role not in team_settings["allowed_team_member_roles"]
     ):
@@ -3155,9 +3150,7 @@ async def _owner_may_change_key_budget(
                     check_db_only=True,
                 )
             )
-            if not _caller_may_generate_key(
-                team_table=team_table, is_team_key=team_id is not None, user_api_key_dict=user_api_key_dict
-            ):
+            if not _caller_may_generate_key(team_table=team_table, user_api_key_dict=user_api_key_dict):
                 return False
             _enforce_budget_delegation_ceiling(
                 requested_max_budget=data.max_budget,

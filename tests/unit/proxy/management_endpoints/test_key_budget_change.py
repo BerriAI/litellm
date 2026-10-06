@@ -265,3 +265,20 @@ async def test_lower_only_lets_owner_lower_personal_key_budget_without_generate_
         data=UpdateKeyRequest(key="sk-1", max_budget=5.0),
         existing=_key(max_budget=10.0),
     )
+
+
+@pytest.mark.asyncio
+async def test_ceiling_respects_team_key_generation_role_restriction(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.key_generation_settings",
+        {"team_key_generation": {"allowed_team_member_roles": ["admin"]}},
+    )
+    with pytest.raises(HTTPException) as exc:
+        await _update(
+            monkeypatch,
+            policy="ceiling",
+            data=_RAISE_WEEKLY_WINDOW,
+            existing=_key(**_TEAM_KEY_WITH_WEEKLY),
+            team=_team(["/key/update", "/key/generate"]),
+        )
+    assert exc.value.status_code == 403
