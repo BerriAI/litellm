@@ -2,10 +2,13 @@ import asyncio
 import json
 import os
 import uuid
+from collections.abc import Iterator
+from datetime import datetime
 from typing import Any, Dict, Final, List
 
 import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -15,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import litellm
 from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
@@ -1685,3 +1689,89 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
     assert "anthropic_beta" not in captured["body"]
     assert captured["anthropic-beta"].split(",").count("dangerous-tool-use-2026-09-03") == 1
     assert response["safeguard_results"] == safeguard_results
+
+
+_IMAGE_MODEL = "gemini-image-cost-probe"
+_IMAGE_INPUT_RATE = 1e-06
+_IMAGE_TEXT_OUTPUT_RATE = 2e-06
+_IMAGE_OUTPUT_RATE = 5e-05
+_IMAGE_PROMPT_TOKENS = 7
+_IMAGE_OUTPUT_TOKENS = 1120
+
+
+class _LoggingBeforeSuccessHandlersRan(Logging):
+    """The proxy's logging object as the response headers see it when the success handlers have not run yet"""
+
+    def success_handler(self, *args, **kwargs):
+        return None
+
+    async def async_success_handler(self, *args, **kwargs):
+        return None
+
+
+@pytest.fixture
+def gemini_image_response(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"gemini/{_IMAGE_MODEL}",
+        {
+            "input_cost_per_token": _IMAGE_INPUT_RATE,
+            "output_cost_per_token": _IMAGE_TEXT_OUTPUT_RATE,
+            "output_cost_per_image_token": _IMAGE_OUTPUT_RATE,
+            "litellm_provider": "gemini",
+            "mode": "chat",
+        },
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.get_model_info.cache_clear()
+    body = {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "a red square"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {
+            "promptTokenCount": _IMAGE_PROMPT_TOKENS,
+            "candidatesTokenCount": _IMAGE_OUTPUT_TOKENS,
+            "candidatesTokensDetails": [{"modality": "IMAGE", "tokenCount": _IMAGE_OUTPUT_TOKENS}],
+            "totalTokenCount": _IMAGE_PROMPT_TOKENS + _IMAGE_OUTPUT_TOKENS,
+        },
+        "modelVersion": _IMAGE_MODEL,
+    }
+    with respx.mock(assert_all_called=True) as router:
+        router.route(host="generativelanguage.googleapis.com").mock(return_value=httpx.Response(200, json=body))
+        yield
+    litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+async def test_bridged_messages_response_leaves_its_image_priced_cost_on_the_logging_object(
+    gemini_image_response, is_async
+):
+    from litellm.llms.anthropic.pass_through.adapters.handler import (
+        LiteLLMMessagesToCompletionTransformationHandler,
+    )
+
+    logging_obj: Final = _LoggingBeforeSuccessHandlersRan(
+        model=_IMAGE_MODEL,
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    request: Final = {
+        "max_tokens": 2048,
+        "messages": [{"role": "user", "content": "a red square on a white background"}],
+        "model": f"gemini/{_IMAGE_MODEL}",
+        "api_key": "test-key",
+        "litellm_logging_obj": logging_obj,
+    }
+
+    if is_async:
+        response = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(**request)
+    else:
+        response = LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(**request)
+
+    assert response["usage"]["output_tokens"] == _IMAGE_OUTPUT_TOKENS, response
+    assert logging_obj.model_call_details.get("response_cost") == pytest.approx(
+        _IMAGE_PROMPT_TOKENS * _IMAGE_INPUT_RATE + _IMAGE_OUTPUT_TOKENS * _IMAGE_OUTPUT_RATE
+    ), "x-litellm-response-cost reads this before the success handlers run, so it must already hold the image rate"
