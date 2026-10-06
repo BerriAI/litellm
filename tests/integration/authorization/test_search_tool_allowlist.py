@@ -169,6 +169,11 @@ def _non_admin_attempts(
     )
 
 
+def _delete_tools_named(gateway: Gateway, name: str) -> None:
+    for row in read_rows('SELECT search_tool_id FROM "LiteLLM_SearchToolsTable" WHERE search_tool_name = %s', (name,)):
+        gateway.request("DELETE", f"/search_tools/{string_value(row['search_tool_id'])}")
+
+
 def _refuse_all(request: Request) -> Reply:
     raise AssertionError(f"non-admin search tool management reached the provider: {request.target}")
 
@@ -181,6 +186,7 @@ def test_non_admin_keys_cannot_create_update_delete_or_probe_search_tools(gatewa
         before: Final = _search_tool_row(existing)
         key: Final = scenario.key(user_id=scenario.user(user_role=role))
         attempted_name: Final = f"non-admin-{uuid.uuid4().hex}"
+        scenario.cleanups.callback(_delete_tools_named, gateway, attempted_name)
         for method, path, body in _non_admin_attempts(existing, existing_name, attempted_name, f"{wire.url}/attacker"):
             response = gateway.request(method, path, body, key=key)
             error = response.json().get("error", {}) if response.status_code in (401, 403) else {}
@@ -213,6 +219,7 @@ def test_non_admin_search_tool_writes_are_forbidden_with_403(gateway: Gateway, r
         existing: Final = _create_tool(gateway, scenario, existing_name, f"{wire.url}/admin")
         key: Final = scenario.key(user_id=scenario.user(user_role=role))
         attempted_name: Final = f"non-admin-{uuid.uuid4().hex}"
+        scenario.cleanups.callback(_delete_tools_named, gateway, attempted_name)
         for method, path, body in _non_admin_attempts(existing, existing_name, attempted_name, f"{wire.url}/attacker"):
             response = gateway.request(method, path, body, key=key)
             assert (response.status_code, response.json()["error"]["code"]) == (403, "403"), (

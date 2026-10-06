@@ -85,13 +85,13 @@ def test_multipart_uploads_reach_mistral_as_data_urls_typed_by_the_client_conten
             ("blob", _PDF_BYTES, "application/pdf"),
             ("upload.bin", _PDF_BYTES, "application/pdf"),
         )
-        for upload in uploads:
-            response = gateway.request_multipart("/v1/ocr", fields, {"file": upload})
-            assert response.status_code == 200, response.text
+        for path, upload in ((path, upload) for path in ("/v1/ocr", "/ocr") for upload in uploads):
+            response = gateway.request_multipart(path, fields, {"file": upload})
+            assert response.status_code == 200, f"{path}: {response.text}"
             payload = _OCRResponse.model_validate_json(response.content)
             assert payload == _OCRResponse(object="ocr", pages=tuple(_Page(**page) for page in _MISTRAL_PAGES)), (
                 response.text
             )
         received: Final = wire.drain()
-    assert [(request.method, request.target) for request in received] == [("POST", "/v1/ocr")] * len(uploads)
-    assert tuple(json.loads(request.body) for request in received) == _expected_bodies("mistral-ocr-latest")
+    assert [(request.method, request.target) for request in received] == [("POST", "/v1/ocr")] * (2 * len(uploads))
+    assert tuple(json.loads(request.body) for request in received) == _expected_bodies("mistral-ocr-latest") * 2

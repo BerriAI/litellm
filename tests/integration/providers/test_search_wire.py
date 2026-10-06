@@ -86,11 +86,13 @@ def test_perplexity_spec_search_reaches_exa_with_only_mapped_fields_on_every_rou
             (f"/search/{tool}", _PERPLEXITY_BODY),
             ("/v1/search", {"search_tool_name": tool, **_PERPLEXITY_BODY}),
             ("/search", {"search_tool_name": tool, **_PERPLEXITY_BODY}),
+            ("/v1/search", {"model": tool, **_PERPLEXITY_BODY}),
+            ("/search", {"model": tool, **_PERPLEXITY_BODY}),
             (f"/v1/search/{tool}", {"search_tool_name": f"unknown-{uuid.uuid4().hex}", **_PERPLEXITY_BODY}),
         )
         for path, body in spellings:
             response = gateway.request("POST", path, body)
-            assert response.status_code == 200, f"{path}: {response.text}"
+            assert response.status_code == 200, f"{path} {sorted(body)}: {response.text}"
             assert _SearchResponse.model_validate_json(response.content) == _EXPECTED_RESPONSE, response.text
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/exa/search")] * len(
             spellings

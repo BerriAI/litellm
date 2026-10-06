@@ -55,6 +55,7 @@ def test_rerank_response_carries_call_id_latency_and_cost_headers_like_chat_comp
 COHERE_KEY: Final = "synthetic-cohere-key"
 COHERE_V2_BODY: Final = {"model": "rerank-v3.5", "query": QUERY, "top_n": 1, "documents": list(DOCUMENTS)}
 COHERE_V1_BODY: Final = {**COHERE_V2_BODY, "return_documents": False, "max_chunks_per_doc": 3}
+COHERE_V2_SDK_BODY: Final = {**COHERE_V2_BODY, "max_tokens_per_doc": 512}
 
 
 class _RerankResult(BaseModel):
@@ -85,6 +86,7 @@ def _cohere_peer(expected: dict[str, object], route: str) -> Callable[[Request],
             {"max_chunks_per_doc": 3, "return_documents": False}, "", COHERE_V1_BODY, "/v1/rerank", id="v1-sdk-fields"
         ),
         pytest.param({}, "/v1/rerank", COHERE_V2_BODY, "/v1/rerank", id="v1-api-base"),
+        pytest.param({"max_tokens_per_doc": 512}, "", COHERE_V2_SDK_BODY, "/v2/rerank", id="v2-sdk-fields"),
     ],
 )
 def test_cohere_rerank_selects_v1_or_v2_from_client_fields_and_sends_exact_body(
