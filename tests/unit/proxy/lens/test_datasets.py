@@ -17,6 +17,7 @@ from litellm.proxy.lens.models import (
     Evidence,
     Finding,
     FindingSource,
+    SkippedCase,
     TextSource,
     TraceSource,
 )
@@ -28,6 +29,8 @@ from litellm.rust_bridge.trace.generated.types import (
     Trace,
     TraceSummary,
     UIContent,
+    UIField,
+    UIFields,
     UIMessage,
     UIMessages,
     UIText,
@@ -303,6 +306,83 @@ async def test_each_skip_reason_is_reported_against_its_source() -> None:
         ("missing", "no_content"),
         ("big", "too_large"),
         ("s3", "over_limit"),
+    )
+
+
+def raw_span(span_id: str, input_ui: UIContent, output_ui: UIContent, raw_input: str, raw_output: str) -> SpanDetail:
+    return SpanDetail(
+        span_id=span_id, input_ui=input_ui, output_ui=output_ui, input=raw_input, output=raw_output, attributes={}
+    )
+
+
+@pytest.mark.asyncio
+async def test_spans_without_chat_messages_fall_back_to_their_text_or_raw_input_and_output() -> None:
+    fields: Final = UIFields(kind="fields", fields=(UIField(key="q", value="v"),))
+    reader: Final = FakeReader(
+        {
+            ("t1", "text"): raw_span(
+                "text", UIText(kind="text", text="shown"), UIText(kind="text", text="answer"), "asked", "raw answer"
+            ),
+            ("t1", "fields"): raw_span("fields", fields, fields, '{"q":"v"}', '{"ok":true}'),
+        }
+    )
+    result: Final = await build(
+        reader, TraceSource(trace_id="t1", span_id="text"), TraceSource(trace_id="t1", span_id="fields")
+    )
+
+    assert tuple((c.messages, c.reply) for c in result.cases) == (
+        ((DatasetMessage(role="user", content="asked"),), "answer"),
+        ((DatasetMessage(role="user", content='{"q":"v"}'),), '{"ok":true}'),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_span_with_blank_input_and_output_is_skipped_as_no_content() -> None:
+    blank: Final = UIText(kind="text", text="  ")
+    reader: Final = FakeReader({("t1", "s1"): raw_span("s1", blank, blank, "  ", "")})
+    result: Final = await build(reader, TraceSource(trace_id="t1", span_id="s1"))
+
+    assert result.cases == ()
+    assert result.skipped == (SkippedCase(source=CaseSource(trace_id="t1", span_id="s1"), reason="no_content"),)
+
+
+@pytest.mark.asyncio
+async def test_a_whole_trace_without_a_conversation_or_that_is_missing_is_skipped_as_no_content() -> None:
+    reader: Final = FakeReader(
+        {("t1", "text"): detail("text", "raw", input_ui=UIText(kind="text", text="raw"))},
+        traces={"t1": trace(span("text", "llm", 1), span("gone", "llm", 2))},
+    )
+    result: Final = await build(reader, TraceSource(trace_id="t1"), TraceSource(trace_id="missing"))
+
+    assert result.cases == ()
+    assert result.skipped == (
+        SkippedCase(source=CaseSource(trace_id="t1"), reason="no_content"),
+        SkippedCase(source=CaseSource(trace_id="missing"), reason="no_content"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_finding_evidence_with_an_undecodable_execution_or_a_missing_span_is_skipped() -> None:
+    located: Final = execution_id("traces", "alpha", "t1", "ref1")
+    reader: Final = FakeReader(
+        {},
+        findings=(
+            stored_finding(
+                "f1",
+                Evidence(execution_id="not-an-execution", span_id="s1", quote="a"),
+                Evidence(execution_id=located, span_id="gone", quote="b"),
+            ),
+        ),
+    )
+    result: Final = await build(reader, FindingSource(lens_id="lens", finding_ids=("f1",)))
+
+    assert result.cases == ()
+    assert result.skipped == (
+        SkippedCase(source=CaseSource(span_id="s1", finding_id="f1", lens_id="lens"), reason="no_content"),
+        SkippedCase(
+            source=CaseSource(trace_id="t1", trace_ref="ref1", span_id="gone", finding_id="f1", lens_id="lens"),
+            reason="no_content",
+        ),
     )
 
 
