@@ -604,7 +604,7 @@ def _gated_download(gateway: Gateway, request: httpx.Request, gate: threading.Ev
     with ThreadPoolExecutor(max_workers=1) as reader:
         head_read: Final = reader.submit(_open_and_read_head, gateway.client, request)
         try:
-            head_arrived: Final = eventually(head_read.done, bool, seconds=3, return_last_on_timeout=True)
+            head_arrived: Final = eventually(head_read.done, bool, seconds=4.5, return_last_on_timeout=True)
         finally:
             gate.set()
         response, chunks, head = head_read.result()
