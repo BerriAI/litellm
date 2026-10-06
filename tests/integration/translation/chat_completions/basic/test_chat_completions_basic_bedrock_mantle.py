@@ -12,7 +12,7 @@ from integration.translation.chat_completions.bases.bedrock_mantle import (
     GPT_6_1_SOL_TEST_CASE,
     GPT_6_LUNA_TEST_CASE,
 )
-from integration.translation.runner import run
+from integration.translation.runner import assert_translation
 
 
 @pytest.mark.parametrize(
@@ -32,6 +32,4 @@ from integration.translation.runner import run
 def test_chat_completions_basic_bedrock_mantle(
     case: TranslationTestCase, gateway: Gateway, provider: SharedProvider
 ) -> None:
-    if case.litellm_request["model"].startswith("bedrock_mantle/openai."):
-        pytest.skip("BUG: LIT-9196 no-cache ignored on chat completions bridged to responses")
-    run(case, gateway, provider)
+    assert_translation(case, gateway, provider)
