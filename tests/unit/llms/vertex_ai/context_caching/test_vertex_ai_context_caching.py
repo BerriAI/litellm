@@ -2237,6 +2237,12 @@ class TestVertexAIGlobalLocation:
                 "https://gateway.example.com/vertex-proxy",
                 "https://gateway.example.com/vertex-proxy/cachedContents",
             ),
+            (
+                "https://gateway.example.com/publishers/relay/v1/projects/my-project/locations/us-central1"
+                "/publishers/google/models/gemini-2.5-pro",
+                "https://gateway.example.com/publishers/relay/v1/projects/my-project/locations/us-central1"
+                "/cachedContents",
+            ),
         ],
     )
     def test_vertex_context_caching_with_custom_api_base_uses_collection_endpoint(

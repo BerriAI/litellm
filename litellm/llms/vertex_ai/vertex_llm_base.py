@@ -37,7 +37,8 @@ def _graft_default_vertex_path(api_base: str, default_url: str) -> str:
 
 
 def _collection_url_under(api_base: str, endpoint: str) -> str:
-    resource_parent: Final = api_base.partition("/publishers/")[0]
+    prefix, model_path_marker, _ = api_base.rpartition("/publishers/")
+    resource_parent: Final = prefix if model_path_marker else api_base
     return f"{resource_parent.rstrip('/')}/{endpoint}"
 
 
