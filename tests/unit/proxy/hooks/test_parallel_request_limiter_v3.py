@@ -4343,6 +4343,107 @@ async def test_success_event_releases_parallel_slot_v3(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upstream_delay_seconds",
+    [0.0, 0.2],
+    ids=["answers_before_first_ping", "answers_after_keepalive_pings"],
+)
+async def test_sse_keepalive_does_not_leak_parallel_slot_v3(monkeypatch, upstream_delay_seconds):
+    """
+    Regression for #42819. `open_sse_before_first_byte` runs the request,
+    pre-call hooks included, in its own Task, which works on a copy of the
+    request's context. The limiter records the acquired slot in a ContextVar
+    stash created lazily in that copy, so the success callback, which runs in
+    the request's own context, found no stash and never released the slot: a
+    `max_parallel_requests: N` key 429'd after N sequential streamed requests.
+    """
+    import contextvars
+
+    from fastapi.responses import Response, StreamingResponse
+
+    from litellm.proxy.common_request_processing import open_sse_before_first_byte
+
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    monkeypatch.setattr(handler, "get_rate_limit_type", lambda: "total")
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    async def streamed_request() -> None:
+        async def produce_response() -> Response:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={"model": "gpt-3.5-turbo"},
+                call_type="",
+            )
+            await asyncio.sleep(upstream_delay_seconds)
+            return Response(content=b"{}")
+
+        response = await open_sse_before_first_byte(produce_response(), ping_interval_seconds=0.05)
+        if isinstance(response, StreamingResponse):
+            async for _ in response.body_iterator:
+                pass
+
+        await handler.async_log_success_event(
+            kwargs={
+                "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+            },
+            response_obj=ModelResponse(usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    # Each request gets a fresh context, as each ASGI request does in the proxy.
+    for _ in range(3):
+        await asyncio.create_task(streamed_request(), context=contextvars.Context())
+        assert handler._gauge_in_flight_from_cache_value(await local_cache.async_get_cache(key=counter_key)) == 0
+
+
+@pytest.mark.asyncio
+async def test_sse_keepalive_still_enforces_max_parallel_requests_v3(monkeypatch):
+    """
+    The #42819 fix shares the request stash with the keepalive Task; it must not
+    weaken the limit itself. Two concurrent wrapped requests on a
+    `max_parallel_requests: 1` key: one is admitted, the other gets a 429.
+    """
+    import contextvars
+
+    from fastapi.responses import Response
+
+    from litellm.proxy.common_request_processing import open_sse_before_first_byte
+
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    monkeypatch.setattr(handler, "get_rate_limit_type", lambda: "total")
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+
+    async def streamed_request() -> object:
+        async def produce_response() -> Response:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={"model": "gpt-3.5-turbo"},
+                call_type="",
+            )
+            await asyncio.sleep(0.2)
+            return Response(content=b"{}")
+
+        return await open_sse_before_first_byte(produce_response(), ping_interval_seconds=5.0)
+
+    results = await asyncio.gather(
+        *(asyncio.create_task(streamed_request(), context=contextvars.Context()) for _ in range(2)),
+        return_exceptions=True,
+    )
+
+    rejected = [result for result in results if isinstance(result, HTTPException)]
+    assert len(rejected) == 1
+    assert rejected[0].status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_read_only_gauge_check_counts_without_acquiring_v3():
     """
     read_only callers (e.g. the context-compaction pre-check) must observe
