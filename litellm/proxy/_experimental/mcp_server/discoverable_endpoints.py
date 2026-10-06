@@ -2029,6 +2029,7 @@ async def authorize_mcp_session(
     code_challenge_method: str | None = None,
     response_type: str | None = None,
     resource: str | None = None,
+    scope: str | None = None,
 ) -> Response:
     return aggregate_authorize(
         request=request,
@@ -2040,6 +2041,7 @@ async def authorize_mcp_session(
         response_type=response_type,
         session_user_id=_session_cookie_user_id(request),
         resource=resource,
+        scope=scope,
     )
 
 
@@ -2081,6 +2083,7 @@ async def authorize(
             response_type=response_type,
             session_user_id=_session_cookie_user_id(request),
             resource=resource,
+            scope=scope,
         )
 
     lookup_name: Final[str | None] = mcp_server_name or client_id

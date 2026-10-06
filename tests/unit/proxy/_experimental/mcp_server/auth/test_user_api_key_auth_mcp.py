@@ -2,7 +2,7 @@ import contextlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -7741,6 +7741,50 @@ class TestAggregateGatewayDcrChallenge:
         assert exc_info.value.status_code == 401
         www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
         assert www_authenticate == f"Bearer {self._EXPECTED_RESOURCE_METADATA}"
+
+    @pytest.mark.parametrize(
+        ("header", "auth_type", "expected_scope"),
+        [
+            ("alpha", "oauth2", 'scope="litellm:mcp_server:alpha"'),
+            ("alpha,beta", "oauth2", None),
+            ("alpha", "oauth2_token_exchange", None),
+        ],
+    )
+    async def test_aggregate_header_challenge_scopes_only_one_gateway_server(
+        self,
+        header: str,
+        auth_type: Literal["oauth2", "oauth2_token_exchange"],
+        expected_scope: str | None,
+    ) -> None:
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        server: Final = MCPServer(
+            server_id="alpha-id",
+            name="alpha",
+            server_name="alpha",
+            alias="alpha",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=MCPAuth(auth_type),
+        )
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager,
+        ):
+            manager.get_mcp_server_by_name.return_value = server
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(
+                    self._scope(extra_headers=((b"x-mcp-servers", header.encode()),))
+                )
+
+        expected: Final = (
+            f"Bearer {self._EXPECTED_RESOURCE_METADATA}"
+            if expected_scope is None
+            else f"Bearer {self._EXPECTED_RESOURCE_METADATA}, {expected_scope}"
+        )
+        assert (exc_info.value.headers or {})["WWW-Authenticate"] == expected
+        assert exc_info.value.status_code == 401
 
     @pytest.mark.parametrize(
         "auth_type",

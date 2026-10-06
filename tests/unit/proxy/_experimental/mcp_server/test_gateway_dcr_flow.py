@@ -6,11 +6,12 @@ import re
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
-from typing import Final
+from typing import Final, Literal
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 from starlette.requests import Request
+from starlette.responses import Response
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
@@ -935,7 +936,12 @@ SCOPED_RESOURCE = "https://llm.example.com/mcp/github"
 _MANAGER_PATCH = "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
 
 
-def _scoped_authorize(client_id, resource, session_user_id="u1"):
+def _scoped_authorize(
+    client_id: str,
+    resource: str | None,
+    session_user_id: str = "u1",
+    scope: str | None = None,
+) -> Response:
     return aggregate_authorize(
         request=_request(query=f"client_id={client_id}"),
         client_id=client_id,
@@ -946,6 +952,7 @@ def _scoped_authorize(client_id, resource, session_user_id="u1"):
         response_type="code",
         session_user_id=session_user_id,
         resource=resource,
+        scope=scope,
     )
 
 
@@ -1085,6 +1092,109 @@ async def test_scoped_authorize_runs_connect_page_with_sealed_scope():
     principal = _opened_principal(json.loads(token_response.body))
     assert principal.resource_server_id == "github-id"
     assert principal.user_id == "u1"
+
+
+@pytest.mark.asyncio
+async def test_aggregate_scope_seals_server_through_redemption_and_refresh() -> None:
+    from unittest.mock import patch
+
+    client_id: Final = (await _register([REDIRECT_URI]))["client_id"]
+    github: Final = _scoped_mcp_server()
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = github
+        response: Final = _scoped_authorize(
+            client_id,
+            "https://llm.example.com/mcp",
+            scope="litellm:mcp_server:github",
+        )
+    assert response.status_code == 303
+    _, cookies = _flow_cookie_from(response)
+    sealed_flow: Final = _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")
+    assert sealed_flow["resource_server_id"] == "github-id"
+
+    code: Final = await _finish_connect_page(response, scoped_server=github)
+    cache: Final = DualCache()
+    token_response: Final = await _redeem(
+        code,
+        client_id,
+        cache=cache,
+        resource="https://llm.example.com/mcp",
+    )
+    assert token_response.status_code == 200
+    payload: Final = json.loads(token_response.body)
+    assert _opened_principal(payload).resource_server_id == "github-id"
+
+    rotated: Final = await _redeem(
+        None,
+        client_id,
+        cache=cache,
+        grant_type="refresh_token",
+        refresh_token=payload["refresh_token"],
+        resource="https://llm.example.com/mcp",
+    )
+    assert rotated.status_code == 200
+    assert _opened_principal(json.loads(rotated.body)).resource_server_id == "github-id"
+
+
+@pytest.mark.asyncio
+async def test_per_server_resource_takes_precedence_over_conflicting_scope() -> None:
+    from unittest.mock import patch
+
+    client_id: Final = (await _register([REDIRECT_URI]))["client_id"]
+    github: Final = _scoped_mcp_server()
+    linear: Final = _scoped_mcp_server(name="linear")
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.side_effect = (github, linear)
+        response: Final = _scoped_authorize(
+            client_id,
+            SCOPED_RESOURCE,
+            scope="litellm:mcp_server:linear",
+        )
+    _, cookies = _flow_cookie_from(response)
+    sealed_flow: Final = _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")
+    assert sealed_flow["resource_server_id"] == "github-id"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "server_available"),
+    [
+        ("openid litellm:mcp_server:github litellm:mcp_server:linear", True),
+        ("openid litellm:mcp_server:missing", False),
+    ],
+)
+async def test_ambiguous_or_unknown_server_scope_does_not_seal_a_grant(
+    scope: str, server_available: bool
+) -> None:
+    from unittest.mock import patch
+
+    client_id: Final = (await _register([REDIRECT_URI]))["client_id"]
+    resolved_server: Final = _scoped_mcp_server() if server_available else None
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = resolved_server
+        response: Final = _scoped_authorize(client_id, "https://llm.example.com/mcp", scope=scope)
+    _, cookies = _flow_cookie_from(response)
+    sealed_flow: Final = _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")
+    assert "resource_server_id" not in sealed_flow
+
+
+@pytest.mark.parametrize(
+    ("server_name", "expected"),
+    [
+        ("alpha", "litellm:mcp_server:alpha"),
+        ("server~name", "litellm:mcp_server:server~name"),
+        ("", None),
+        ("bad name", None),
+        ('bad"name', None),
+        ("naïve", None),
+    ],
+)
+def test_gateway_server_scope_accepts_only_rfc6749_scope_tokens(
+    server_name: str, expected: str | None
+) -> None:
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import gateway_server_scope
+
+    assert gateway_server_scope(server_name) == expected
 
 
 @pytest.mark.asyncio

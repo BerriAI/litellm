@@ -497,6 +497,31 @@ def _server_answers_to(server: MCPServer, name: str) -> bool:
     return any(requested == known.lower() for known in iter_known_server_prefixes(server) if known)
 
 
+def raise_if_unscoped_aggregate_request(
+    mcp_servers: list[str] | None,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    toolset_id: str | None,
+) -> None:
+    from litellm.proxy.proxy_server import general_settings  # noqa: PLC0415  # proxy import cycle
+
+    if not general_settings or not general_settings.get("mcp_require_explicit_server_scope", False):
+        return
+    if mcp_servers is not None or toolset_id is not None:
+        return
+    if user_api_key_auth is not None and user_api_key_auth.mcp_session_resource_server_id is not None:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": "mcp_server_scope_required",
+            "message": (
+                "This gateway requires an explicit MCP server scope: connect to /mcp/<server_name> "
+                "or send the x-mcp-servers header."
+            ),
+        },
+    )
+
+
 async def raise_denied_scoped_mcp_access(
     requested_names: Sequence[str],
     user_api_key_auth: UserAPIKeyAuth | None,

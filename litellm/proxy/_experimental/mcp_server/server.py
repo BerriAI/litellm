@@ -2030,6 +2030,12 @@ if MCP_AVAILABLE:
                 user_api_key_auth = await _apply_toolset_scope(user_api_key_auth, active_toolset_id)
                 toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
 
+            operations.raise_if_unscoped_aggregate_request(
+                mcp_servers=mcp_servers,
+                user_api_key_auth=user_api_key_auth,
+                toolset_id=active_toolset_id,
+            )
+
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived
             # from the fully-authorized server set: a passthrough server that
@@ -2376,6 +2382,12 @@ if MCP_AVAILABLE:
             if active_toolset_id and user_api_key_auth is not None:
                 user_api_key_auth = await _apply_toolset_scope(user_api_key_auth, active_toolset_id)
                 toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
+
+            operations.raise_if_unscoped_aggregate_request(
+                mcp_servers=mcp_servers,
+                user_api_key_auth=user_api_key_auth,
+                toolset_id=active_toolset_id,
+            )
 
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived

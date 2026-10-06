@@ -102,6 +102,8 @@ GATEWAY_DCR_CLIENT_ID_PREFIX: Final = "llm_dcrc_"
 endpoints can route an aggregate-flow request without decrypting, and existing per-server
 flows (whose client_ids are upstream-issued) are never captured by the aggregate arm."""
 
+GATEWAY_SERVER_SCOPE_PREFIX: Final = "litellm:mcp_server:"
+
 GATEWAY_AUTH_CODE_PREFIX: Final = "llm_gcode_"
 """Marker prefix on the gateway-sealed authorization code, distinct from the bridge
 ``llm_bcode_`` so neither flow can consume the other's codes."""
@@ -468,6 +470,34 @@ def relative_request_url(request: Request) -> str:
     return f"{path}?{request.url.query}" if request.url.query else path
 
 
+def gateway_server_scope(server_name: str) -> str | None:
+    if not server_name or not all(
+        ord(character) == 0x21 or 0x23 <= ord(character) <= 0x5B or 0x5D <= ord(character) <= 0x7E
+        for character in server_name
+    ):
+        return None
+    return f"{GATEWAY_SERVER_SCOPE_PREFIX}{server_name}"
+
+
+def _is_aggregate_resource(request: Request, resource: str) -> bool:
+    canonical: Final = canonical_resource_uri(resource)
+    if canonical is None:
+        return False
+    base: Final = canonicalize_url_identity(get_request_base_url(request))
+    return canonical == f"{base}/mcp"
+
+
+def _gateway_flow_server(name: str) -> MCPServer | None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # proxy import cycle
+        global_mcp_server_manager,
+    )
+
+    server: Final = global_mcp_server_manager.get_mcp_server_by_name(name)
+    if server is None or not (server.is_gateway_managed_oauth2 or server.advertises_gateway_authorization_server):
+        return None
+    return server
+
+
 def resolve_scoped_resource_server(request: Request, resource: str | None) -> MCPServer | None:
     """Resolve an RFC 8707 ``resource`` value to the single gateway-owned server it
     names, or ``None`` for every other shape: absent, the aggregate resource, a foreign
@@ -488,22 +518,25 @@ def resolve_scoped_resource_server(request: Request, resource: str | None) -> MC
     if canonical is None:
         return None
     base: Final = canonicalize_url_identity(get_request_base_url(request))
-    if canonical == f"{base}/mcp" or not canonical.startswith(f"{base}/"):
+    if _is_aggregate_resource(request, resource) or not canonical.startswith(f"{base}/"):
         return None
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: PLC0415  # proxy import cycle
         MCPRequestHandler,
-    )
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # proxy import cycle
-        global_mcp_server_manager,
     )
 
     names: Final = MCPRequestHandler.extract_target_server_names_from_path(canonical[len(base) :])
     if len(names) != 1:
         return None
-    server: Final = global_mcp_server_manager.get_mcp_server_by_name(names[0])
-    if server is None or not (server.is_gateway_managed_oauth2 or server.advertises_gateway_authorization_server):
+    return _gateway_flow_server(names[0])
+
+
+def resolve_scoped_server_from_scope(scope: str | None) -> MCPServer | None:
+    if scope is None:
         return None
-    return server
+    prefixed_tokens: Final = tuple(token for token in scope.split() if token.startswith(GATEWAY_SERVER_SCOPE_PREFIX))
+    if len(prefixed_tokens) != 1:
+        return None
+    return _gateway_flow_server(prefixed_tokens[0][len(GATEWAY_SERVER_SCOPE_PREFIX) :])
 
 
 def aggregate_authorize(
@@ -516,17 +549,15 @@ def aggregate_authorize(
     response_type: str | None,
     session_user_id: str | None,
     resource: str | None = None,
+    scope: str | None = None,
 ) -> Response:
     """The aggregate authorize verb: validate the client, require S256 PKCE, interpose
     LiteLLM sign-in, and hand the browser to the connect page with the flow sealed into a
     per-flow cookie.
 
-    A per-server RFC 8707 ``resource`` naming a gateway-managed oauth2 server scopes the
-    flow to that one server: the scope is sealed into the flow, carried into the code, and
-    bound into the session token. The connect URL carries only the flow handle; the page
-    learns the client origin, the scoped server, and whether its vendor OAuth is done from
-    :func:`describe_connect_flow`, which reads the sealed flow, so nothing a link can carry
-    steers which server the page authorizes or names on the confirmation.
+    A per-server RFC 8707 ``resource`` or a single gateway-server scope token on an
+    aggregate request scopes the flow to that one server. The scope is sealed into the
+    flow, carried into the code, and bound into the session token.
 
     Validation failures respond directly with 400 and never redirect: per RFC 6749
     section 4.1.2.1 an unvalidated redirect URI must not receive an error redirect, and
@@ -540,7 +571,13 @@ def aggregate_authorize(
     base_url: Final = get_request_base_url(request)
     if session_user_id is None:
         return _login_redirect(base_url, request)
-    scoped_server: Final = resolve_scoped_resource_server(request, resource)
+    resource_scoped_server: Final = resolve_scoped_resource_server(request, resource)
+    scope_fallback_allowed: Final = resource is None or _is_aggregate_resource(request, resource)
+    scoped_server: Final = (
+        resource_scoped_server
+        if resource_scoped_server is not None or not scope_fallback_allowed
+        else resolve_scoped_server_from_scope(scope)
+    )
     handle: Final = secrets.token_urlsafe(24)
     flow: Final = _new_connect_flow(
         session_user_id=session_user_id,
@@ -1173,10 +1210,12 @@ def _resource_conflicts_with_scope(
 ) -> bool:
     """True when a scoped grant is being redeemed for a DIFFERENT resource than the one
     sealed into it (RFC 8707 section 2.2: reject with ``invalid_target``). An absent
-    ``resource`` never conflicts (the sealed scope still binds the minted session), and an
-    unscoped grant ignores the parameter entirely, exactly as the endpoint always has, so
-    no pre-existing client breaks."""
+    ``resource`` never conflicts (the sealed scope still binds the minted session), the
+    aggregate resource does not conflict with a single-server grant, and an unscoped grant
+    ignores the parameter entirely."""
     if sealed_resource_server_id is None or resource is None:
+        return False
+    if _is_aggregate_resource(request, resource):
         return False
     resolved: Final = resolve_scoped_resource_server(request, resource)
     return resolved is None or resolved.server_id != sealed_resource_server_id
