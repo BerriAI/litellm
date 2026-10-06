@@ -1673,7 +1673,7 @@ fn session_capture_joins_native_logs_and_traces_across_turns_without_changing_sp
 
 #[rstest]
 #[case::short_trace(vec![1;15], vec![2;8], 1)]
-#[case::zero_parent(vec![1;16], vec![0;8], 1)]
+#[case::short_parent(vec![1;16], vec![2;7], 1)]
 #[case::timestamp(vec![1;16], vec![2;8], i64::MAX as u64 + 1)]
 fn native_logs_reject_invalid_context(
     #[case] trace: Vec<u8>,
@@ -1690,6 +1690,106 @@ fn native_logs_reject_invalid_context(
         litellm_traces::decode_otlp_logs(&request.encode_to_vec(), None),
         Err(litellm_traces::Error::InvalidPayload)
     ));
+}
+
+#[rstest]
+#[case::json_empty(true, false, true, true)]
+#[case::protobuf_empty(false, false, true, true)]
+#[case::json_zero(true, true, true, true)]
+#[case::protobuf_zero(false, true, true, true)]
+#[case::trace_only(true, false, true, false)]
+#[case::parent_only(false, false, false, true)]
+fn contextless_native_logs_preserve_the_entire_batch(
+    #[case] json: bool,
+    #[case] zero: bool,
+    #[case] missing_trace: bool,
+    #[case] missing_parent: bool,
+) {
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value::Value};
+    use prost::Message;
+    let mut request = log_request("repl_main_thread");
+    let valid = request.resource_logs[0].scope_logs[0].log_records[0].clone();
+    let mut uncorrelated = valid.clone();
+    if missing_trace {
+        uncorrelated.trace_id = if zero { vec![0; 16] } else { Vec::new() };
+    }
+    if missing_parent {
+        uncorrelated.span_id = if zero { vec![0; 8] } else { Vec::new() };
+    }
+    let mut standalone = uncorrelated.clone();
+    standalone
+        .attributes
+        .retain(|attribute| attribute.key != "session.id");
+    request.resource_logs[0].scope_logs[0].log_records = vec![valid, uncorrelated, standalone];
+    request.resource_logs[0].resource = Some(opentelemetry_proto::tonic::resource::v1::Resource {
+        attributes: vec![KeyValue {
+            key: "lens.session.capture".into(),
+            value: Some(AnyValue {
+                value: Some(Value::StringValue("true".into())),
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let bytes = if json {
+        serde_json::to_vec(&request).unwrap()
+    } else {
+        request.encode_to_vec()
+    };
+    let media = json.then_some("application/json");
+    let limits = litellm_traces::DecodeLimits {
+        attributes: 6,
+        ..Default::default()
+    };
+    let spans = litellm_traces::decode_otlp_logs_with_limits(&bytes, media, limits).unwrap();
+    let replayed = litellm_traces::decode_otlp_logs_with_limits(&bytes, media, limits).unwrap();
+    assert_eq!(spans.len(), 3);
+    assert_eq!(
+        serde_json::to_value(&spans).unwrap(),
+        serde_json::to_value(&replayed).unwrap()
+    );
+    assert_eq!(spans[0].trace_id, spans[1].trace_id);
+    assert_ne!(spans[1].trace_id, spans[2].trace_id);
+    assert_ne!(spans[0].span_id, spans[1].span_id);
+    if missing_trace {
+        assert_ne!(spans[1].span_id, spans[2].span_id);
+        assert!(!spans[1].attributes.contains_key("lens.original_trace_id"));
+    }
+    assert_eq!(spans[0].parent_span_id, "02".repeat(8));
+    assert!(spans[1].parent_span_id.is_empty());
+    assert!(spans[2].parent_span_id.is_empty());
+    assert!(!spans[0].attributes.contains_key("lens.capture.warning"));
+    assert!(spans[1].attributes["lens.capture.warning"].contains("unconfirmed"));
+    assert!(spans[2].attributes["lens.capture.warning"].contains("unconfirmed"));
+    assert_eq!(spans[0].normalized.output, spans[1].normalized.output);
+    assert_eq!(spans[0].normalized.output, spans[2].normalized.output);
+    assert_eq!(spans[1].normalized.observation_type, ObservationType::Chain);
+}
+
+#[rstest]
+#[case::session(true)]
+#[case::standalone(false)]
+fn absent_native_log_context_has_encoding_independent_identity(#[case] session: bool) {
+    use prost::Message;
+    let mut request = log_request("repl_main_thread");
+    let record = &mut request.resource_logs[0].scope_logs[0].log_records[0];
+    record.trace_id.clear();
+    record.span_id.clear();
+    if !session {
+        record.attributes.retain(|entry| entry.key != "session.id");
+    }
+    let omitted = litellm_traces::decode_otlp_logs(
+        &serde_json::to_vec(&request).unwrap(),
+        Some("application/json"),
+    )
+    .unwrap();
+    let record = &mut request.resource_logs[0].scope_logs[0].log_records[0];
+    record.trace_id = vec![0; 16];
+    record.span_id = vec![0; 8];
+    let zeroed = litellm_traces::decode_otlp_logs(&request.encode_to_vec(), None).unwrap();
+    assert_eq!(omitted[0].trace_id, zeroed[0].trace_id);
+    assert_eq!(omitted[0].span_id, zeroed[0].span_id);
+    assert_eq!(omitted[0].normalized.output, zeroed[0].normalized.output);
 }
 
 #[rstest]
@@ -1778,6 +1878,18 @@ fn interactive_claude_exports_join_replies_with_native_child_execution_context()
 #[rstest]
 #[case::tool_result("tool_result", "", false)]
 #[case::complete_body("api_request_body", r#"{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","is_error":true,"content":[{"type":"text","text":"exit 3 output"},{"type":"image","source":{"data":"PRIVATE_IMAGE"}}]}]}],"system":"PRIVATE_SYSTEM"}"#, false)]
+#[case::headless_body("api_request_body", r#"{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","is_error":true,"content":"exit 3 output"}]},{"role":"system","content":"PRIVATE_SYSTEM"}]}"#, false)]
+#[case::missing_messages("api_request_body", r#"{}"#, true)]
+#[case::wrong_content(
+    "api_request_body",
+    r#"{"messages":[{"role":"user","content":{}}]}"#,
+    true
+)]
+#[case::unexpected_last_message(
+    "api_request_body",
+    r#"{"messages":[{"role":"assistant","content":"unexpected"}]}"#,
+    true
+)]
 #[case::truncated_body("api_request_body", "{truncated", true)]
 fn native_tool_logs_supply_arguments_and_results_without_fake_calls(
     #[case] event: &str,
@@ -1848,4 +1960,40 @@ fn interactive_claude_body_export_retains_failed_command_stdout() {
         .find(|result| result["is_error"] == true)
         .unwrap();
     assert_eq!(failed["content"], "Exit code 3\nRAW-EXPECTED");
+}
+
+#[rstest]
+#[case::new_prompt(serde_json::json!({"role":"user", "content":"Continue"}))]
+#[case::new_blocks(serde_json::json!({"role":"user", "content":[{"type":"text", "text":"Continue"}]}))]
+fn native_body_exports_do_not_replay_old_tool_results(#[case] final_message: serde_json::Value) {
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value::Value};
+    let mut request = log_request("repl_main_thread");
+    let body = serde_json::json!({"messages": [
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "old-call", "content": "OLD_RESULT"}]},
+        {"role": "assistant", "content": "Done"}, final_message,
+        {"role": "system", "content": "PRIVATE_SYSTEM"}
+    ]}).to_string();
+    request.resource_logs[0].scope_logs[0].log_records[0].attributes = [
+        ("event.name", "api_request_body"),
+        ("query_source", "repl_main_thread"),
+        ("body", body.as_str()),
+    ]
+    .into_iter()
+    .map(|(key, value)| KeyValue {
+        key: key.into(),
+        value: Some(AnyValue {
+            value: Some(Value::StringValue(value.into())),
+        }),
+        ..Default::default()
+    })
+    .collect();
+    let spans = litellm_traces::decode_otlp_logs(
+        &serde_json::to_vec(&request).unwrap(),
+        Some("application/json"),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&spans[0].normalized.output).unwrap(),
+        serde_json::json!({"tool_results":[]})
+    );
 }
