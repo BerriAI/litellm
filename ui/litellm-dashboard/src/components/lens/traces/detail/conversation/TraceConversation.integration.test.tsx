@@ -717,12 +717,13 @@ describe("TraceConversation", () => {
   );
 
   it.each(["input", "output"])("distinguishes conflicting %s content from absent evidence", async (field) => {
-    vi.mocked(agentTraceSpanCall).mockResolvedValue({
+    const conflictingDetail: SpanDetail = {
       ...toolDetail,
       input: "",
       output: "",
       attributes: { [`lens.content.${field}_status`]: "conflicting" },
-    });
+    };
+    vi.mocked(agentTraceSpanCall).mockResolvedValue(conflictingDetail);
     renderWithProviders(<ContentTab accessToken="test" traceId={trace.summary.trace_id} span={trace.spans[1]} />);
     expect(
       await screen.findByText(`Conflicting ${field} content was recorded. Inspect the capture source spans.`),

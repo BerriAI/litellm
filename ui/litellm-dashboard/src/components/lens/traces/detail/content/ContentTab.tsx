@@ -76,11 +76,13 @@ interface ContentTabProps {
 export function ContentTab({ accessToken, traceId, traceRef, span }: ContentTabProps) {
   const detailQuery = useSpanDetail(accessToken, traceId, span.span_id, traceRef);
   const detail = detailQuery.data;
-  const empty =
-    detail &&
-    !detail.input &&
-    !detail.output &&
-    !["input", "output"].some((field) => detail.attributes[`lens.content.${field}_status`] === "conflicting");
+  const hasContent = detail?.input || detail?.output;
+  const conflicting = ["input", "output"].some(
+    (field) => detail?.attributes[`lens.content.${field}_status`] === "conflicting",
+  );
+  const outputRecorded = detail?.attributes["lens.content.output_status"] === "recorded";
+  const empty = Boolean(detail) && !hasContent && !conflicting;
+  const noRecordedContent = empty && span.status !== "error" && !outputRecorded;
   return (
     <div className="flex flex-col pb-4">
       {(span.status === "error" || span.error) && (
@@ -113,10 +115,8 @@ export function ContentTab({ accessToken, traceId, traceRef, span }: ContentTabP
       {detail?.output ? (
         <PayloadSection title="Output" raw={detail.output} content={detail.output_ui} span={span} role="output" />
       ) : null}
-      {detail?.attributes["lens.content.output_status"] === "recorded" && !detail.output && (
-        <p className={STATUS_TEXT}>The recorded output is empty.</p>
-      )}
-      {empty && span.status !== "error" && detail.attributes["lens.content.output_status"] !== "recorded" && (
+      {outputRecorded && !detail?.output && <p className={STATUS_TEXT}>The recorded output is empty.</p>}
+      {noRecordedContent && (
         <div className="py-12 text-center text-sm text-muted-foreground">No content recorded for this span.</div>
       )}
     </div>

@@ -860,14 +860,6 @@ class RouteChecks:
                global_spend_tracking_routes (legacy explicit-allow set).
              - Else 403.
         """
-        method: Final = request.method.upper() if request is not None else "GET"
-        trace_reads: Final = (
-            LiteLLMRoutes.trace_query_routes.value if method == "POST" else LiteLLMRoutes.trace_read_routes.value
-        )
-        if (method in RouteChecks._SAFE_HTTP_METHODS or method == "POST") and RouteChecks.check_route_access(
-            route=route, allowed_routes=trace_reads
-        ):
-            return
         if RouteChecks.is_llm_api_route(route=route):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -896,6 +888,7 @@ class RouteChecks:
                     detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
                 )
             # Allow read operations on management routes (like /user/info, /team/info, /model/info)
+        method: Final = request.method.upper() if request is not None else "GET"
         is_safe_method: Final = method in RouteChecks._SAFE_HTTP_METHODS
 
         # ── Safe HTTP method: default-allow ──────────────────────────────
