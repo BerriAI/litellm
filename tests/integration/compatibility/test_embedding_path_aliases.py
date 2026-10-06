@@ -58,24 +58,51 @@ def _reply(encoding_format: str | None) -> Reply:
     )
 
 
+_AZURE_SDK_BODY: Final = {
+    "model": "text-embedding-3-small",
+    "input": _TEXT,
+    "encoding_format": "base64",
+}
+
+
+def _azure_sdk_embedding(
+    gateway: Gateway,
+    deployment: str | None,
+    api_key: str,
+    model: str,
+) -> openai.types.CreateEmbeddingResponse:
+    with (
+        httpx.Client(trust_env=False) as http_client,
+        openai.AzureOpenAI(
+            azure_endpoint=str(gateway.client.base_url).rstrip("/"),
+            azure_deployment=deployment,
+            api_key=api_key,
+            api_version="2024-10-21",
+            max_retries=0,
+            http_client=http_client,
+        ) as client,
+    ):
+        return client.embeddings.create(model=model, input=_TEXT)
+
+
 @pytest.mark.parametrize(
     "surface",
-    ("azure_sdk", "deployments_raw", "engines_raw", "bare"),
-    ids=("azure-sdk", "deployments-path", "engines-path", "bare-model"),
+    ("azure_sdk", "azure_sdk_path_over_body", "deployments_raw", "engines_raw", "bare"),
+    ids=("azure-sdk", "azure-sdk-path-over-body", "deployments-path", "engines-path", "bare-model"),
 )
 def test_embedding_model_is_resolved_from_each_endpoint_surface(
     gateway: Gateway,
-    surface: Literal["azure_sdk", "deployments_raw", "engines_raw", "bare"],
+    surface: Literal["azure_sdk", "azure_sdk_path_over_body", "deployments_raw", "engines_raw", "bare"],
 ) -> None:
-    expected_key: Final = "synthetic-key-a" if surface in ("azure_sdk", "deployments_raw") else "synthetic-key-b"
+    expected_key: Final = (
+        "synthetic-key-a"
+        if surface in ("azure_sdk", "azure_sdk_path_over_body", "deployments_raw")
+        else "synthetic-key-b"
+    )
     # openai-python 2.33.0 defaults omitted encoding_format to base64: https://github.com/openai/openai-python/blob/v2.33.0/src/openai/resources/embeddings.py
     expected_body: Final = (
-        {
-            "model": "text-embedding-3-small",
-            "input": _TEXT,
-            "encoding_format": "base64",
-        }
-        if surface == "azure_sdk"
+        _AZURE_SDK_BODY
+        if surface in ("azure_sdk", "azure_sdk_path_over_body")
         else {"model": "text-embedding-3-small", "input": _TEXT}
     )
 
@@ -85,7 +112,7 @@ def test_embedding_model_is_resolved_from_each_endpoint_surface(
         assert request.headers["authorization"] == f"Bearer {expected_key}"
         body: Final = _JSON_OBJECT.validate_json(request.body)
         assert body == expected_body, body
-        return _reply("base64" if surface == "azure_sdk" else None)
+        return _reply("base64" if surface in ("azure_sdk", "azure_sdk_path_over_body") else None)
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         group_a: Final = scenario.model(
@@ -100,18 +127,12 @@ def test_embedding_model_is_resolved_from_each_endpoint_surface(
         )
         virtual_key: Final = scenario.key()
 
-        if surface == "azure_sdk":
-            with (
-                httpx.Client(trust_env=False) as http_client,
-                openai.AzureOpenAI(
-                    azure_endpoint=str(gateway.client.base_url).rstrip("/"),
-                    api_key=virtual_key,
-                    api_version="2024-10-21",
-                    max_retries=0,
-                    http_client=http_client,
-                ) as client,
-            ):
-                response = client.embeddings.create(model=group_a, input=_TEXT)
+        if surface in ("azure_sdk", "azure_sdk_path_over_body"):
+            deployment: Final = group_a if surface == "azure_sdk_path_over_body" else None
+            request_model: Final = group_b if surface == "azure_sdk_path_over_body" else group_a
+            response: Final = _azure_sdk_embedding(gateway, deployment, virtual_key, request_model)
+            if surface == "azure_sdk":
+                assert response.model == group_a, response.model_dump_json()
             assert [item.embedding for item in response.data] == [list(_VECTOR)], response.model_dump_json()
             assert [item.index for item in response.data] == [0], response.model_dump_json()
             assert (response.usage.prompt_tokens, response.usage.total_tokens) == (1, 1), response.model_dump_json()
@@ -138,6 +159,36 @@ def test_embedding_model_is_resolved_from_each_endpoint_surface(
                 key=virtual_key,
             )
             _assert_raw_embedding_response(raw_response)
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/embeddings")]
+
+
+def test_azure_sdk_response_reports_the_path_group_that_served_it(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: AzureOpenAI with azure_deployment=<group_a> and model=<group_b> is served by group_a but the response model reports group_b"
+    )
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/embeddings"
+        assert request.headers["authorization"] == "Bearer synthetic-key-a"
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        assert body == _AZURE_SDK_BODY, body
+        return _reply("base64")
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        group_a: Final = scenario.model(
+            model="openai/text-embedding-3-small",
+            api_base=f"{wire.url}/v1",
+            api_key="synthetic-key-a",
+        )
+        group_b: Final = scenario.model(
+            model="openai/text-embedding-3-small",
+            api_base=f"{wire.url}/v1",
+            api_key="synthetic-key-b",
+        )
+        virtual_key: Final = scenario.key()
+        response: Final = _azure_sdk_embedding(gateway, group_a, virtual_key, group_b)
+        assert response.model == group_a, response.model_dump_json()
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/embeddings")]
 
 
