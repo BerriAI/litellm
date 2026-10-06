@@ -23,7 +23,7 @@ def check_cli(profile: str) -> str:
     for command, extra in (("litellm", "proxy"), ("lite", "cli"), ("litellm-proxy", "cli")):
         executable: Final = Path(sys.executable).parent / command
         result: Final = subprocess.run((str(executable), "--help"), capture_output=True, text=True, timeout=30)
-        if profile == "proxy" or (profile == "cli" and command != "litellm"):
+        if profile in ("cli", "proxy") or (command == "litellm" and get_distribution_name() == "litellm"):
             _require(result.returncode == 0, f"{command} failed: {result.stderr}")
             _require("Usage:" in result.stdout, f"{command} did not display help")
         else:

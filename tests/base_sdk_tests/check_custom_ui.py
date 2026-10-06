@@ -2,6 +2,7 @@
 
 import os
 import sys
+from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Final
@@ -44,7 +45,12 @@ def check_custom_ui(case: str) -> None:
                 assert asset.status_code == 200
                 assert asset.text == "custom-javascript"
         else:
-            assert response.status_code == 404
+            bundled_index: Final = files("litellm").joinpath("proxy/_experimental/out/index.html")
+            if bundled_index.is_file():
+                assert response.status_code == 200
+                assert response.text == bundled_index.read_text()
+            else:
+                assert response.status_code == 404
         favicon: Final = client.get("/get_favicon", follow_redirects=False)
         assert favicon.status_code == 307
         assert favicon.headers["location"] == "https://example.com/custom.ico"

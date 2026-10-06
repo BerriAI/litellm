@@ -11,7 +11,7 @@ def _require_cli(extra: str, modules: tuple[str, ...]) -> None:
 
 
 def run_server() -> None:
-    _require_cli("proxy", ("click", "filelock", "fastapi", "uvicorn", "litellm_proxy_extras"))
+    _require_cli("proxy", ("click", "dotenv", "pydantic_settings"))
     from litellm.proxy.proxy_cli import run_server as command
 
     command()
