@@ -20,6 +20,40 @@ const detail = (span_id: string, input: unknown, output: unknown): SpanDetail =>
 });
 
 describe("trace conversation", () => {
+  it.each(["reviewer", "__proto__", "constructor"])("keeps repeated agent name %s stable as steps load", (name) => {
+    const first = { ...root, span_id: "first", name, start_offset_ms: 1 };
+    const second = { ...first, span_id: "second", start_offset_ms: 2 };
+    const spans = [second, first];
+    const firstDetails = new Map([["first", detail("first", "Review code", "")]]);
+    const partial = buildConversation(spans, firstDetails, false);
+    const complete = buildConversation(
+      spans,
+      new Map([...firstDetails, ["second", detail("second", "Review tests", "")]]),
+      true,
+    );
+    expect(partial.map(({ agentId, agentName }) => ({ agentId, agentName }))).toEqual([
+      { agentId: "first", agentName: `${name} (1)` },
+    ]);
+    expect(complete.map(({ agentId, agentName }) => ({ agentId, agentName }))).toEqual([
+      { agentId: "first", agentName: `${name} (1)` },
+      { agentId: "second", agentName: `${name} (2)` },
+    ]);
+  });
+
+  it("breaks equal-time agent label ties by span ID without changing event order", () => {
+    const first = { ...root, span_id: "first", name: "reviewer", start_offset_ms: 1 };
+    const second = { ...first, span_id: "second" };
+    const details = new Map([
+      ["first", detail("first", "Review code", "")],
+      ["second", detail("second", "Review tests", "")],
+    ]);
+    const items = buildConversation([second, first], details, true);
+    expect(items.map(({ agentId, agentName }) => ({ agentId, agentName }))).toEqual([
+      { agentId: "second", agentName: "reviewer (2)" },
+      { agentId: "first", agentName: "reviewer (1)" },
+    ]);
+  });
+
   it("removes repeated prefixes and trimmed context, but preserves a genuinely repeated question", () => {
     expect(newConversationMessages([user, call, result], [user, call, result, answer])).toEqual([answer]);
     expect(newConversationMessages([user, call, result], [call, result, answer])).toEqual([answer]);
@@ -250,5 +284,58 @@ describe("trace conversation", () => {
     const items = buildConversation(spans, details, true);
     expect(items.map((item) => item.id)).toEqual(["nested-output", "other-output"]);
     expect(items.flatMap((item) => item.messages)).toEqual([answer, answer]);
+  });
+});
+
+describe("recorded tool summaries", () => {
+  it("pairs repeated named calls within their own branch and preserves unmatched calls and custom text", () => {
+    const model = { ...root, span_id: "model", parent_span_id: "root", type: "llm", start_offset_ms: 1 } as Span;
+    const first = { ...model, span_id: "first", name: "terminal", type: "tool", start_offset_ms: 2 } as Span;
+    const second = { ...first, span_id: "second", start_offset_ms: 3 };
+    const child = { ...root, span_id: "child", parent_span_id: "root", start_offset_ms: 4 };
+    const childTool = { ...first, span_id: "child-tool", parent_span_id: "child", start_offset_ms: 5 };
+    const saved = "SAVED TASK RESUMED: Continue the unfinished task exactly as recorded";
+    const summary = JSON.stringify([{ content: "Checking", tool_names: ["terminal", "terminal", "read_file"] }]);
+    const details = new Map([
+      ["root", detail("root", [{ role: "user", content: saved }], [])],
+      [
+        "model",
+        { ...detail("model", [], []), output: summary, output_ui: { kind: "text", text: summary } } as SpanDetail,
+      ],
+      ["first", detail("first", { command: "pwd" }, { output: "/workspace", exit_code: 0 })],
+      ["second", detail("second", { command: "pwd" }, { output: "/workspace", exit_code: 0 })],
+      ["child", detail("child", [{ role: "user", content: saved }], [])],
+      ["child-tool", detail("child-tool", { path: "README.md" }, "content")],
+    ]);
+    const items = buildConversation([root, model, first, second, child, childTool], details, true);
+    expect(items.flatMap((item) => item.messages).filter((message) => message.content === saved)).toHaveLength(2);
+    expect(items.flatMap((item) => item.messages.flatMap((message) => message.tool_calls ?? []))).toEqual([
+      { name: "read_file", args: undefined },
+    ]);
+    expect(items.filter((item) => item.toolCall).map((item) => item.id)).toEqual(["first", "second", "child-tool"]);
+    expect(JSON.parse(items.find((item) => item.id === "first")!.toolResult!)).toEqual({
+      output: "/workspace",
+      exit_code: 0,
+    });
+  });
+
+  it("deduplicates native OpenAI function calls without requiring message text", () => {
+    const model = { ...root, span_id: "model", parent_span_id: "root", type: "llm", start_offset_ms: 1 } as Span;
+    const tool = { ...model, span_id: "tool", name: "read_file", type: "tool", start_offset_ms: 2 } as Span;
+    const output = [
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ type: "function", function: { name: "read_file", arguments: '{"path":"README.md"}' } }],
+      },
+    ];
+    const details = new Map([
+      ["root", detail("root", [], [])],
+      ["model", detail("model", [], output)],
+      ["tool", detail("tool", { path: "README.md" }, "file content")],
+    ]);
+    expect(
+      buildConversation([root, model, tool], details, true).filter((item) => item.toolCall || item.messages.length),
+    ).toHaveLength(1);
   });
 });

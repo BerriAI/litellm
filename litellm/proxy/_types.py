@@ -1053,6 +1053,7 @@ class LiteLLMRoutes(enum.Enum):
     # updating this list — the default-allow behavior covers it automatically.
     admin_viewer_routes = (
         [
+            "/lens/traces/findings",
             "/user/list",
             "/user/available_users",
             "/user/available_roles",
@@ -2130,6 +2131,7 @@ class NewCustomerRequest(BudgetNewRequest):
         None  # require all user requests to use models in this specific region
     )
     default_model: str | None = None  # if no equivalent model in allowed region - default all requests to this model
+    models: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
     @model_validator(mode="before")
@@ -2156,6 +2158,7 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
         None  # require all user requests to use models in this specific region
     )
     default_model: str | None = None  # if no equivalent model in allowed region - default all requests to this model
+    models: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
 
@@ -4464,6 +4467,11 @@ class ProxyErrorTypes(str, enum.Enum):
     User does not have access to the model
     """
 
+    customer_model_access_denied = "customer_model_access_denied"
+    """
+    Customer does not have access to the model
+    """
+
     org_model_access_denied = "org_model_access_denied"
     """
     Organization does not have access to the model
@@ -4553,7 +4561,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
     @classmethod
     def get_model_access_error_type_for_object(
-        cls, object_type: Literal["key", "user", "team", "org", "project", "agent"]
+        cls, object_type: Literal["key", "user", "customer", "team", "org", "project", "agent"]
     ) -> "ProxyErrorTypes":
         """
         Get the model access error type for object_type
@@ -4564,6 +4572,8 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.team_model_access_denied
         elif object_type == "user":
             return cls.user_model_access_denied
+        elif object_type == "customer":
+            return cls.customer_model_access_denied
         elif object_type == "org":
             return cls.org_model_access_denied
         elif object_type == "project":
