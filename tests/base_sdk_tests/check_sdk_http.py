@@ -245,12 +245,33 @@ def check_http(base: str) -> None:
     print("Anthropic request translation and usage passed")
 
 
+def check_search_http(base: str) -> None:
+    result: Final = {"title": "Search result", "url": "https://example.com", "snippet": "Retained search", "date": "2026-01-02"}
+    reply({"results": [result]})
+    response: Final = litellm.search(query="hello", search_provider="perplexity", api_key="test-search-key", api_base=base)
+    assert response.results[0].url == result["url"] and response.results[0].date == result["date"]
+    path, headers, body = REQUESTS.get(timeout=5)
+    assert json.loads(body)["query"] == "hello"
+    assert {k.lower(): v for k, v in headers.items()}["authorization"] == "Bearer test-search-key"
+
+    async def search_async() -> None:
+        reply({"results": [result]})
+        response: Final = await litellm.asearch(query="hello", search_provider="perplexity", api_key="test-search-key", api_base=base)
+        assert response.results[0].snippet == result["snippet"]
+        path, headers, body = REQUESTS.get(timeout=5)
+        assert json.loads(body)["query"] == "hello"
+
+    asyncio.run(search_async())
+    print("sync/async Perplexity search works independently of Brave date parsing")
+
+
 if __name__ == "__main__":
     with ThreadingHTTPServer(("127.0.0.1", 0), Upstream) as server:
         thread: Final = Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
             check_http(f"http://127.0.0.1:{server.server_port}")
+            check_search_http(f"http://127.0.0.1:{server.server_port}")
             assert REPLIES.empty() and REQUESTS.empty(), "unconsumed HTTP exchanges"
         finally:
             RELEASE.set()

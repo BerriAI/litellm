@@ -41,7 +41,7 @@ concurrency:
 jobs:
   resolve:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -159,10 +159,12 @@ jobs:
       - name: Check locked runtime installations
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          for extra in core cli validation aws tokenizers aws,tokenizers sdk-extras mcp proxy; do
+          for extra in core cli validation aws tokenizers aws,tokenizers integrations prompts search dotenv prompts,search sdk-extras mcp proxy; do
             args=()
             if [ "$extra" = aws,tokenizers ]; then
               args=(--extra aws --extra tokenizers)
+            elif [ "$extra" = prompts,search ]; then
+              args=(--extra prompts --extra search)
             elif [ "$extra" != core ]; then
               args=(--extra "$extra")
             fi
@@ -199,10 +201,12 @@ jobs:
         if: steps.changes.outputs.decision != 'skip'
         run: |
           wheel=$(realpath dist/mcp-check/litellm_core-[0-9]*.whl)
-          for extra in core cli validation aws tokenizers aws,tokenizers sdk-extras mcp proxy; do
+          for extra in core cli validation aws tokenizers aws,tokenizers integrations prompts search dotenv prompts,search sdk-extras mcp proxy; do
             args=()
             if [ "$extra" = aws,tokenizers ]; then
               args=(--extra aws --extra tokenizers)
+            elif [ "$extra" = prompts,search ]; then
+              args=(--extra prompts --extra search)
             elif [ "$extra" != core ]; then
               args=(--extra "$extra")
             fi

@@ -11,7 +11,6 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
-from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel
 
 import litellm
@@ -20,6 +19,7 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
+from litellm.litellm_core_utils.optional_dependencies import MissingOptionalDependencyError, require_optional_dependency
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import anthropic_system_messages
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
@@ -566,16 +566,19 @@ async def ahf_chat_template(model: str, messages: list, chat_template: str | Non
         strftime_now,
     )
 
-    env: Final = ImmutableSandboxedEnvironment()
-    env.globals["raise_exception"] = lambda msg: Exception(f"Error message - {msg}")
-    env.globals["strftime_now"] = strftime_now
-
     template, bos_token, eos_token = await _afetch_and_extract_template(
         model=model,
         chat_template=chat_template,
         get_config_fn=_aget_tokenizer_config,
         get_template_fn=_aget_chat_template_file,
     )
+    require_optional_dependency("jinja2", "prompts", "Hugging Face chat template rendering")
+    from jinja2.sandbox import ImmutableSandboxedEnvironment
+
+    env: Final = ImmutableSandboxedEnvironment()
+    env.globals["raise_exception"] = lambda msg: Exception(f"Error message - {msg}")
+    env.globals["strftime_now"] = strftime_now
+
     return _render_chat_template(
         env=env,
         chat_template=template,
@@ -593,16 +596,19 @@ def hf_chat_template(model: str, messages: list, chat_template: str | None = Non
         strftime_now,
     )
 
-    env: Final = ImmutableSandboxedEnvironment()
-    env.globals["raise_exception"] = lambda msg: Exception(f"Error message - {msg}")
-    env.globals["strftime_now"] = strftime_now
-
     template, bos_token, eos_token = _fetch_and_extract_template(
         model=model,
         chat_template=chat_template,
         get_config_fn=_get_tokenizer_config,
         get_template_fn=_get_chat_template_file,
     )
+    require_optional_dependency("jinja2", "prompts", "Hugging Face chat template rendering")
+    from jinja2.sandbox import ImmutableSandboxedEnvironment
+
+    env: Final = ImmutableSandboxedEnvironment()
+    env.globals["raise_exception"] = lambda msg: Exception(f"Error message - {msg}")
+    env.globals["strftime_now"] = strftime_now
+
     return _render_chat_template(
         env=env,
         chat_template=template,
@@ -5368,6 +5374,8 @@ def prompt_factory(
             return hf_chat_template(model=model, messages=messages, chat_template=chat_template)
         else:
             return hf_chat_template(original_model_name, messages)
+    except MissingOptionalDependencyError:
+        raise
     except Exception:
         return default_pt(
             messages=messages

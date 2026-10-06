@@ -7,9 +7,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
 
-import yaml
-from jinja2 import DictLoader, select_autoescape
-from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 
@@ -73,6 +70,13 @@ class PromptManager:
         prompt_data: dict[str, dict[str, Any]] | None = None,
         prompt_file: str | None = None,
     ):
+        from litellm.litellm_core_utils.optional_dependencies import require_optional_dependency
+
+        require_optional_dependency("jinja2", "prompts", "Prompt rendering")
+        require_optional_dependency("yaml", "prompts", "Prompt frontmatter")
+        from jinja2 import DictLoader, select_autoescape
+        from jinja2.sandbox import ImmutableSandboxedEnvironment
+
         self.prompt_directory = Path(prompt_directory) if prompt_directory else None
         self.prompts: dict[str, PromptTemplate] = {}
         self.prompt_file = prompt_file
@@ -179,6 +183,11 @@ class PromptManager:
     def _parse_frontmatter(self, content: str) -> tuple[dict[str, object], str]:
         """Parse YAML frontmatter from prompt content."""
         # Match YAML frontmatter between --- delimiters
+        from litellm.litellm_core_utils.optional_dependencies import require_optional_dependency
+
+        require_optional_dependency("yaml", "prompts", "Prompt frontmatter")
+        import yaml
+
         frontmatter_pattern: Final = r"^---\s*\n(.*?)\n---\s*\n(.*)$"
         match: Final = re.match(frontmatter_pattern, content, re.DOTALL)
 
@@ -350,6 +359,10 @@ class PromptManager:
             return content
 
         # Convert metadata to YAML frontmatter
+
+        from litellm.litellm_core_utils.optional_dependencies import require_optional_dependency
+
+        require_optional_dependency("yaml", "prompts", "Prompt frontmatter")
         import yaml
 
         frontmatter_yaml: Final = yaml.dump(metadata, default_flow_style=False)

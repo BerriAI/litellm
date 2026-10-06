@@ -5,8 +5,6 @@ GitLab prompt manager with configurable prompts folder.
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, TypeVar
 
-from jinja2 import DictLoader, select_autoescape
-from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -89,6 +87,13 @@ class GitLabTemplateManager:
         ref: str | None = None,
         gitlab_client: GitLabClient | None = None,
     ):
+        from litellm.litellm_core_utils.optional_dependencies import require_optional_dependency
+
+        require_optional_dependency("jinja2", "prompts", "Prompt rendering")
+        require_optional_dependency("yaml", "prompts", "Prompt frontmatter")
+        from jinja2 import DictLoader, select_autoescape
+        from jinja2.sandbox import ImmutableSandboxedEnvironment
+
         self.gitlab_config = dict(gitlab_config)
         self.prompt_id = prompt_id
         self.prompts: dict[str, GitLabPromptTemplate] = {}

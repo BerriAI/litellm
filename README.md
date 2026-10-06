@@ -90,7 +90,7 @@ Managing LLM calls across providers gets complicated fast — different SDKs, au
 uv add litellm
 ```
 
-Core has optional installation extras. Use `litellm-core[aws]` for AWS SDK authentication and signing, `litellm-core[tokenizers]` for Hugging Face tokenizers, or `litellm-core[validation]` for local JSON Schema response validation. `litellm-core[sdk-extras]` includes all three
+Core has optional installation extras. Use `litellm-core[aws]` for AWS SDK authentication and signing, `litellm-core[tokenizers]` for Hugging Face tokenizers, or `litellm-core[validation]` for local JSON Schema response validation. `litellm-core[sdk-extras]` includes these and the optional capabilities below
 
 Install `litellm[cli]` for the `lite` and `litellm-proxy` client commands, or `litellm[proxy]` for the gateway, its `litellm` command, and dashboard. The proxy extra includes SDK extras and client CLI dependencies
 
@@ -105,6 +105,20 @@ Legacy wheels retain bundled dashboard assets so upgrading an existing proxy wit
 Install exactly one of `litellm` or `litellm-core` in an environment. They own the same import package and commands, and neither depends on the other. Pip does not prevent co-installation; uninstalling either can break the other. Check downstream requirements before adopting core: a dependency on `litellm` can reinstall the legacy distribution. The `semantic-router` extra remains available only on `litellm` because that integration depends on the legacy distribution
 
 To build core from source, use an isolated checkout, run `python3 scripts/prepare_core_distribution.py pyproject.toml` with Python 3.11 or newer, copy `uv.core.lock` to `uv.lock`, and run `uv build`. The normal checkout produces `litellm`; build its dashboard first with `ui/litellm-dashboard/build_ui.sh` from that script's directory, then run `uv build`. Metadata staging never changes Python source
+
+| Capability | Install | What it provides |
+| --- | --- | --- |
+| Integration configuration | `pip install 'litellm-core[integrations]'` | OpenTelemetry settings, Langfuse/Lunary version checks, and CyberArk YAML policies. Vendor SDKs keep their existing separate installation requirements |
+| Prompt rendering | `pip install 'litellm-core[prompts]'` | Sandboxed Jinja templates and YAML prompt frontmatter for Dotprompt, GitLab, Bitbucket, and Arize Phoenix |
+| Brave search | `pip install 'litellm-core[search]'` | Existing flexible date normalization for Brave search results |
+| Environment files | `pip install 'litellm-core[dotenv]'` | Existing automatic `.env` loading in DEV mode |
+
+Template-backed inference also needs `[prompts]`: Hugging Face chat templates, Watsonx GPT-OSS, and provider/model routes that use the shared prompt factory's Jinja path (including applicable vLLM, Triton, Replicate, Predibase, Hugging Face embedding, Codestral, and Petals modes). Built-in non-Jinja templates remain core. `[aws]` includes `[prompts]` for Bedrock and SageMaker template-backed modes. Missing rendering support raises an installation error instead of silently sending a different prompt
+
+`[sdk-extras]` and `[proxy]` include all four capabilities. `[cli]` explicitly retains YAML, version checks, and environment-file loading. Existing installations with those dependencies continue to work; selecting an optional operation without its dependency reports the capability and installation command
+
+Without python-dotenv, core reads supplied arguments and process environment variables and skips `.env` files. With it installed, `LITELLM_MODE=DEV` (the default) retains automatic discovery and lets existing environment values win. `LITELLM_MODE=PRODUCTION` does not auto-load files. Proxy `--reload` retains `LITELLM_DEV_ENV_HOT_RELOAD=True`, which lets file values override inherited values; requesting that reload behavior without dotenv raises installation guidance. For explicit SDK loading, install `[dotenv]` and call `from dotenv import load_dotenv; load_dotenv()` before importing LiteLLM. python-dotenv's supported loading opt-outs remain unchanged
+
 
 
 ```python

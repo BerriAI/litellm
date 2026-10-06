@@ -9315,11 +9315,18 @@ def test_signoz_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
         is_otel_v2_enabled.cache_clear()
 
 
-def test_signoz_dispatch_keeps_legacy_otel_when_flag_off(monkeypatch):
+@pytest.mark.parametrize("settings_available", (True, False))
+def test_signoz_dispatch_keeps_legacy_otel_when_flag_off(settings_available: bool, monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.integrations.opentelemetry import OpenTelemetry
-    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.model.flags import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
+    if not settings_available:
+        monkeypatch.setitem(sys.modules, "pydantic_settings", None)
+        monkeypatch.setitem(sys.modules, "litellm.integrations.otel.model.config", None)
+        for name in tuple(sys.modules):
+            if name.startswith("litellm.integrations.otel.presets"):
+                monkeypatch.delitem(sys.modules, name)
     logging_module._in_memory_loggers.clear()
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
     monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "http://signoz-collector.internal:4318")
@@ -9552,3 +9559,64 @@ def test_aws_callback_setup_does_not_swallow_missing_extra(callback: str, missin
         get_custom_logger_compatible_class(callback)
     with pytest.raises(ImportError, match=r"litellm\[aws\]"):
         SQSLogger()
+
+
+@pytest.mark.parametrize("callback", ("otel", "signoz"))
+def test_optional_callback_dependency_is_not_silently_ignored(callback, monkeypatch):
+    import sys
+    from litellm.integrations.otel.model.flags import is_otel_v2_enabled
+    from litellm.litellm_core_utils.litellm_logging import _init_custom_logger_compatible_class
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "http://localhost:4318")
+    monkeypatch.setitem(sys.modules, "pydantic_settings", None)
+    monkeypatch.delitem(sys.modules, "litellm.integrations.otel.model.config", raising=False)
+    for name in tuple(sys.modules):
+        if name.startswith("litellm.integrations.otel.presets"):
+            monkeypatch.delitem(sys.modules, name)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        with pytest.raises(ImportError, match=r"litellm\[integrations\]") as caught:
+            _init_custom_logger_compatible_class(callback, None, None)
+        assert isinstance(caught.value.__cause__, ModuleNotFoundError)
+        assert caught.value.__cause__.name == "pydantic_settings"
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_optional_logger_lookup_dependency_is_not_silently_ignored(monkeypatch):
+    import sys
+    from litellm.integrations.otel.model.flags import is_otel_v2_enabled
+    from litellm.litellm_core_utils.litellm_logging import get_custom_logger_compatible_class
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setitem(sys.modules, "pydantic_settings", None)
+    monkeypatch.delitem(sys.modules, "litellm.integrations.otel.model.config", raising=False)
+    monkeypatch.delitem(sys.modules, "litellm.integrations.otel.logger", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        with pytest.raises(ImportError, match=r"litellm\[integrations\]") as caught:
+            get_custom_logger_compatible_class("newrelic")
+        assert isinstance(caught.value.__cause__, ModuleNotFoundError)
+        assert caught.value.__cause__.name == "pydantic_settings"
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.parametrize("missing", ("pydantic_settings", "opentelemetry"))
+def test_legacy_newrelic_lookup_does_not_load_v2_dependencies(missing, monkeypatch):
+    import sys
+    from litellm.integrations.otel.model.flags import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "false")
+    monkeypatch.setitem(sys.modules, missing, None)
+    monkeypatch.delitem(sys.modules, "litellm.integrations.otel.model.config", raising=False)
+    monkeypatch.delitem(sys.modules, "litellm.integrations.otel.logger", raising=False)
+    legacy = logging_module.NewRelicLogger()
+    monkeypatch.setattr(logging_module, "_in_memory_loggers", [legacy])
+    is_otel_v2_enabled.cache_clear()
+    try:
+        assert logging_module.get_custom_logger_compatible_class("newrelic") is legacy
+    finally:
+        is_otel_v2_enabled.cache_clear()

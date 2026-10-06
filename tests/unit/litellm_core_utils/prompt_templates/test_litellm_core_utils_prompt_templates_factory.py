@@ -4261,3 +4261,41 @@ def test_bedrock_converse_messages_pt_lone_content_less_user_turn_adds_no_block_
         )
         == []
     )
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_chat_template_missing_renderer_is_actionable(monkeypatch, asynchronous):
+    import asyncio
+    import sys
+    from litellm.litellm_core_utils.prompt_templates.factory import ahf_chat_template, hf_chat_template
+
+    monkeypatch.setitem(sys.modules, "jinja2", None)
+    from functools import partial
+
+    action = (
+        lambda: asyncio.run(ahf_chat_template("test", [{"role": "user", "content": "hello"}], "{{ messages[0].content }}"))
+    ) if asynchronous else partial(hf_chat_template, "test", [{"role": "user", "content": "hello"}], "{{ messages[0].content }}")
+    with pytest.raises(ImportError, match=r"litellm\[prompts\]") as caught:
+        action()
+    assert isinstance(caught.value.__cause__, ModuleNotFoundError)
+
+
+def test_prompt_factory_does_not_replace_a_required_template(monkeypatch):
+    import sys
+    import litellm
+    from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
+
+    monkeypatch.setitem(sys.modules, "jinja2", None)
+    monkeypatch.setitem(litellm.known_tokenizer_config, "required-template", {"status": "success", "tokenizer": {"chat_template": "{{ messages[0].content }}"}})
+    with pytest.raises(ImportError, match=r"litellm\[prompts\]"):
+        prompt_factory("required-template", [{"role": "user", "content": "hello"}])
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_explicit_chat_template_keeps_rendering_behavior(asynchronous):
+    from litellm.litellm_core_utils.prompt_templates.factory import ahf_chat_template, hf_chat_template
+
+    messages = [{"role": "user", "content": "<hello>"}]
+    template = "{% for message in messages %}[{{ message.role }}]{{ message.content }}{% endfor %}"
+    rendered = await ahf_chat_template("test", messages, template) if asynchronous else hf_chat_template("test", messages, template)
+    assert rendered == "[user]<hello>"

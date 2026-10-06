@@ -1,3 +1,5 @@
+from litellm.litellm_core_utils.optional_dependencies import MissingOptionalDependencyError
+
 """
 Dotprompt manager that integrates with LiteLLM's prompt management system.
 Builds on top of PromptManagementBase to provide .prompt file support.
@@ -98,6 +100,8 @@ class DotpromptManager(CustomPromptManagement):
             return False
         try:
             return self.prompt_manager.get_prompt(prompt_id) is not None
+        except MissingOptionalDependencyError:
+            raise
         except Exception:
             # If there's any error accessing prompts, don't run prompt management
             return False
@@ -155,6 +159,8 @@ class DotpromptManager(CustomPromptManagement):
                 completed_messages=None,
             )
 
+        except MissingOptionalDependencyError:
+            raise
         except Exception as e:
             raise ValueError(f"Error compiling prompt '{prompt_id}': {e}")
 

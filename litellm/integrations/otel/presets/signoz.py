@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import SIGNOZ_INGESTION_ENDPOINT_ENV
 from litellm.integrations.otel.model.config import (
     ExporterOwner,
     ExporterSpec,
@@ -15,8 +16,6 @@ from litellm.integrations.otel.model.config import (
 from litellm.integrations.otel.presets.utils import ensure_mappers
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.types.utils import StandardCallbackDynamicParams
-
-SIGNOZ_INGESTION_ENDPOINT_ENV: Final = "SIGNOZ_INGESTION_ENDPOINT"
 
 
 class _SigNozSettings(BaseSettings):

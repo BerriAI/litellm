@@ -6,9 +6,6 @@ Fetches .prompt files from BitBucket repositories and provides team-based access
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-from jinja2 import DictLoader, select_autoescape
-from jinja2.sandbox import ImmutableSandboxedEnvironment
-
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 
 if TYPE_CHECKING:
@@ -69,6 +66,13 @@ class BitBucketTemplateManager:
         bitbucket_config: Mapping[str, object],
         prompt_id: str | None = None,
     ):
+        from litellm.litellm_core_utils.optional_dependencies import require_optional_dependency
+
+        require_optional_dependency("jinja2", "prompts", "Prompt rendering")
+        require_optional_dependency("yaml", "prompts", "Prompt frontmatter")
+        from jinja2 import DictLoader, select_autoescape
+        from jinja2.sandbox import ImmutableSandboxedEnvironment
+
         self.bitbucket_config = bitbucket_config
         self.prompt_id = prompt_id
         self.prompts: dict[str, BitBucketPromptTemplate] = {}

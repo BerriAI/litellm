@@ -1,11 +1,9 @@
 #### What this does ####
 #    On success + failure, log events to lunary.ai
-import importlib
+import importlib.metadata
 import traceback
 from datetime import datetime, timezone
 from typing import Final
-
-import packaging
 
 
 # convert to {completion: xx, tokens: xx}
@@ -77,12 +75,17 @@ def parse_messages(input):
 class LunaryLogger:
     # Class variables or attributes
     def __init__(self):
+        from litellm.litellm_core_utils.optional_dependencies import require_optional_dependency
+
+        require_optional_dependency("packaging", "integrations", "Lunary version checks")
+        from packaging.version import Version
+
         try:
             import lunary
 
             version: Final = importlib.metadata.version("lunary")
             # if version < 0.1.43 then raise ImportError
-            if packaging.version.Version(version) < packaging.version.Version("0.1.43"):
+            if Version(version) < Version("0.1.43"):
                 print(  # noqa: T201
                     "Lunary version outdated. Required: >= 0.1.43. Upgrade via 'pip install lunary --upgrade'"
                 )
