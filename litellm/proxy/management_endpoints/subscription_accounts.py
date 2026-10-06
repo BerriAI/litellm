@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, SUBSCRIPTION_BACKED_PROVIDERS
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
-from litellm.llms.chatgpt.authenticator import Authenticator
+from litellm.llms.subscription_accounts import resolve_subscription_account_id
 from litellm.models.subscription_account import LiteLLM_SubscriptionAccountTable
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -50,10 +50,6 @@ class SubscriptionDeployment:
 
 
 AccountIdResolver = Callable[[str], str | None]
-
-
-def resolve_subscription_account_id(custom_llm_provider: str) -> str | None:
-    return Authenticator().get_account_id() if custom_llm_provider == "chatgpt" else None
 
 
 def _declared_provider(litellm_params: Mapping[str, object]) -> str | None:

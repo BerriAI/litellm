@@ -57,11 +57,8 @@ class SubscriptionAccountFeeChanges:
             "billing_period_start": self.billing_period_start,
         }
         present: Final = {column: value for column, value in named.items() if value is not None}
-        match self.label:
-            case SetLabel(value):
-                return MappingProxyType({**present, "label": value})
-            case KeepLabel():
-                return MappingProxyType(present)
+        label_column: Final = {"label": self.label.value} if isinstance(self.label, SetLabel) else {}
+        return MappingProxyType({**present, **label_column})
 
 
 class SubscriptionAccountStore(Protocol):
