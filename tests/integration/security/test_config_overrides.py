@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 import httpx
 import pytest
-from integration._support.client import Gateway, eventually, object_value, string_value
+from integration._support.client import Gateway, object_value, string_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
 from integration._support.tls import write_self_signed_cert
@@ -939,6 +939,7 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
                     "message": "Hashicorp Vault configuration updated successfully",
                     "status": "success",
                 }, partial.text
+                vault_wire.drain()
                 readback: Final = _override_values(candidate, "/config_overrides/hashicorp_vault", "hashicorp_vault")
                 assert readback == {
                     "vault_addr": vault_tls_wire.url,
@@ -963,11 +964,7 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
                 )
                 assert response_b.status_code == 200, response_b.text
                 assert response_b.json()["choices"][0]["message"]["content"] == marker_b, response_b.text
-                plain_phase_b: Final = eventually(
-                    lambda: vault_wire.drain(),
-                    lambda requests: requests == (),
-                    seconds=20,
-                )
+                plain_phase_b: Final = vault_wire.drain()
                 assert plain_phase_b == (), plain_phase_b
                 cert_phase: Final = tuple(
                     request for request in vault_tls_wire.drain() if request.target in approle_targets
