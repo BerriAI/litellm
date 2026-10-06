@@ -90,11 +90,23 @@ describe("DatasetsView", () => {
     await user.click(row);
 
     expect(await screen.findByRole("heading", { name: summary.name })).toBeInTheDocument();
-    const first = screen.getByRole("listitem", { name: "Case 1" });
-    expect(first).toHaveTextContent("Can I get a refund for order 42?");
-    expect(first).toHaveTextContent('tool call · lookup_order{"id": 42}');
-    expect(first).toHaveTextContent('tool call · issue_refund{"order": 42}');
-    expect(screen.getByRole("listitem", { name: "Case 2" })).toHaveTextContent("Where is my package?");
+    const first = screen.getByRole("row", { name: "Case 1" });
+    expect(
+      within(first)
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent),
+    ).toEqual(["", "user: Can I get a refund for order 42?I issued the refund.", "2"]);
+
+    await user.click(first);
+    const panel = await screen.findByRole("complementary", { name: "Case details" });
+    expect(within(panel).getByRole("heading", { name: `Case #case-ref @ ${summary.name}` })).toBeInTheDocument();
+    const input = within(panel).getByRole("region", { name: "Input" });
+    expect(input).toHaveTextContent("Can I get a refund for order 42?");
+    expect(within(input).getByText("lookup_order")).toBeInTheDocument();
+    const output = within(panel).getByRole("region", { name: "Output" });
+    expect(output).toHaveTextContent("I issued the refund.");
+    expect(within(output).getByText("issue_refund")).toBeInTheDocument();
+    expect(within(panel).getByRole("textbox", { name: "Expected" })).toHaveValue("Refunds above $40 need approval");
   });
 
   it("shows an empty state when there are no datasets", async () => {
@@ -109,13 +121,15 @@ describe("DatasetsView", () => {
     proxy.post.mockResolvedValue({ ...revisionTwo, revision: 3 });
     renderWithLens(<DatasetsView />, { searchParams: `?tab=datasets&dataset=${revisionTwo.id}` });
 
-    const first = await screen.findByRole("listitem", { name: "Case 1" });
+    await user.click(await screen.findByRole("row", { name: "Case 1" }));
     const save = screen.getByRole("button", { name: "Save as revision 3" });
     expect(save).toBeDisabled();
-    fireEvent.change(within(first).getByLabelText("Expected"), { target: { value: "Refunds need approval" } });
-    await user.click(
-      within(screen.getByRole("listitem", { name: "Case 2" })).getByRole("checkbox", { name: "Include Case 2" }),
-    );
+    const panel = await screen.findByRole("complementary", { name: "Case details" });
+    fireEvent.change(within(panel).getByRole("textbox", { name: "Expected" }), {
+      target: { value: "Refunds need approval" },
+    });
+    await user.click(screen.getByRole("checkbox", { name: "Include case 2" }));
+    expect(screen.getByRole("contentinfo")).toHaveTextContent("2 cases · 1 included");
     await user.click(save);
 
     await vi.waitFor(() => expect(savedBodies()).toHaveLength(1));
@@ -138,8 +152,7 @@ describe("DatasetsView", () => {
     );
     renderWithLens(<DatasetsView />, { searchParams: `?tab=datasets&dataset=${revisionTwo.id}` });
 
-    const first = await screen.findByRole("listitem", { name: "Case 1" });
-    fireEvent.change(within(first).getByLabelText("Expected"), { target: { value: "Refunds need approval" } });
+    await user.click(await screen.findByRole("checkbox", { name: "Include case 1" }));
     await user.click(screen.getByRole("button", { name: "Save as revision 3" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Someone saved a newer revision");
@@ -150,15 +163,21 @@ describe("DatasetsView", () => {
     const user = userEvent.setup();
     renderWithLens(<DatasetsView />, { searchParams: `?tab=datasets&dataset=${revisionTwo.id}` });
 
-    await screen.findByRole("listitem", { name: "Case 2" });
+    await screen.findByRole("row", { name: "Case 2" });
     await user.selectOptions(screen.getByRole("combobox", { name: "Revision" }), "1");
 
     expect(
       await screen.findByText("Revision 1 is read-only. Switch to the latest revision to make changes."),
     ).toBeInTheDocument();
-    expect(screen.getAllByRole("listitem")).toHaveLength(1);
-    expect(screen.getByRole("listitem", { name: "Case 1" })).toHaveTextContent("Not set");
+    expect(screen.queryByRole("row", { name: "Case 2" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Include case 1" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.queryByRole("button", { name: /Save as revision/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("row", { name: "Case 1" }));
+    const panel = await screen.findByRole("complementary", { name: "Case details" });
+    expect(within(panel).getByRole("region", { name: "Expected" })).toHaveTextContent("Not set");
+    expect(within(panel).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(panel).getByRole("switch", { name: "Included" })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("exports the viewed revision as JSONL with the auth header", async () => {
