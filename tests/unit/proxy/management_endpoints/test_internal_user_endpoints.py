@@ -4067,6 +4067,34 @@ async def test_user_update_invalidates_the_cached_entitlement(mocker):
 
 
 @pytest.mark.asyncio
+async def test_user_update_broadcasts_the_entitlement_invalidation_to_other_workers(mocker: MockerFixture):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    _object_permission_mocks(mocker)
+    cache: Final = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)  # test-quality-ok: substitute the cache dependency
+    broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new_callable=mocker.AsyncMock,
+    )
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(user_id="target-user", object_permission={"vector_stores": []}),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    broadcast_keys: Final = {call.kwargs["cache_key"] for call in broadcast.await_args_list}
+    assert broadcast_keys == {
+        "object_permission_id:perm-new",
+        "user_object_permission_id:target-user",
+        "target-user",
+    }
+
+
+@pytest.mark.asyncio
 async def test_admin_can_clear_a_users_mcp_entitlement(mocker):
     """An explicit empty object_permission means "no object permission", so it must unlink.
 

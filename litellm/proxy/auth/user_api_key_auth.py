@@ -3063,6 +3063,9 @@ async def _run_centralized_common_checks(
             user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
             user_role=LitellmUserRoles.PROXY_ADMIN,
             spend=user_object.spend if user_object is not None else 0.0,
+            object_permission_id=(
+                user_object.object_permission_id if isinstance(user_object, LiteLLM_UserTable) else None
+            ),
         )
 
     if project_object is not None:

@@ -8417,6 +8417,7 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit(
         # Mock team update
         mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
         mock_updated_team.team_id = "org-team-update-bypass-123"
+        mock_updated_team.object_permission_id = None
         mock_updated_team.tpm_limit = 10000
         mock_updated_team.rpm_limit = 1000
         mock_updated_team.access_group_ids = None
@@ -8570,6 +8571,7 @@ async def test_update_team_guardrails_with_org_id(
         # Mock team update
         mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
         mock_updated_team.team_id = "team-guardrails-123"
+        mock_updated_team.object_permission_id = None
         mock_updated_team.organization_id = "test-org-guardrails"
         mock_updated_team.metadata = {
             "guardrails": ["aporia-pre-call", "aporia-post-call"]

@@ -26,7 +26,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
-from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.proxy_server import (
     ProxyConfig,
@@ -2327,6 +2327,42 @@ async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monke
 
     records = [record for record in caplog.records if "disable_budget_reservation is enabled" in record.message]
     assert [record.levelno for record in records] == ([logging.INFO] if setting == "true" else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("yaml_value", "expected"), [("true", True), ("false", False)])
+async def test_load_config_yaml_vector_store_deny_by_default_is_boolean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, yaml_value: str, expected: bool
+):
+    config_file: Final = tmp_path / "vector_store.yaml"
+    config_file.write_text(
+        f"model_list: []\nlitellm_settings: {{}}\ngeneral_settings:\n  vector_store_deny_by_default: {yaml_value}\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    _, _, general_settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert general_settings["vector_store_deny_by_default"] is expected
+    assert ConfigGeneralSettings.model_validate(dict(general_settings)).vector_store_deny_by_default is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("yaml_value", ["", "enabled"], ids=["null", "string"])
+async def test_load_config_rejects_non_boolean_vector_store_deny_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, yaml_value: str
+):
+    config_file: Final = tmp_path / "vector_store.yaml"
+    config_file.write_text(
+        f"model_list: []\nlitellm_settings: {{}}\ngeneral_settings:\n  vector_store_deny_by_default: {yaml_value}\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    with pytest.raises(ValidationError, match="vector_store_deny_by_default"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
 
 @pytest.mark.asyncio
