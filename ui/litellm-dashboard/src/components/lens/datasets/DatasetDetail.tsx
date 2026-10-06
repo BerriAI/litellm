@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ChevronRight, Database, Download, Loader2, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { StateMessage } from "../ui/StateMessage";
+import { StateMessage } from "@/components/shared/StateMessage";
 import { useDatasetRoute } from "../route";
 import { IdChip } from "../traces/ui/IdChip";
 import { isRevisionConflict, useDataset, useExportDataset, useSaveRevision } from "./api";
