@@ -120,7 +120,7 @@ class NadirComplexityClassifier:
     def _headers(self, url: str) -> dict[str, str]:
         env_key: Final = get_secret_str("NADIR_API_KEY") if url == _configured_bucket_url() else None
         api_key: Final = self._api_key or env_key
-        return {"X-API-Key": api_key} if api_key else {}  # mutable-ok: request headers, handed straight to httpx
+        return {"X-API-Key": api_key} if api_key else {}
 
     async def classify(self, context: RoutingContext) -> str | None:
         """Return the tier Nadir places this request in, or None to decline.
@@ -135,7 +135,7 @@ class NadirComplexityClassifier:
             return None
         url: Final = _bucket_url(self._api_base) if self._api_base else _configured_bucket_url()
         client: Final = self._client or get_async_httpx_client(llm_provider=httpxSpecialProvider.ComplexityClassifier)
-        body: Final = {"messages": list(messages), "source": "litellm"}  # mutable-ok: one request body
+        body: Final = {"messages": list(messages), "source": "litellm"}
         response: Final = await client.post(url=url, json=body, headers=self._headers(url))
         try:
             bucket: Final = _VERDICT.validate_python(response.json()).get("bucket")
