@@ -29,8 +29,16 @@ JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 MANAGED_FILE_ROW: Final = (
     'SELECT model_mappings, flat_model_file_ids FROM "LiteLLM_ManagedFileTable" WHERE unified_file_id = %s'
 )
-_BatchUploadSpelling = Literal["sdk_list", "repeated_bracket", "indexed", "comma_joined"]
-_ModelRoutedSpelling = Literal["sdk_extra_body", "multipart_field", "query_param", "model_header"]
+_BatchUploadSpelling = Literal["sdk_list", "repeated_bracket", "indexed", "comma_joined", "repeated_plain"]
+_ModelRoutedSpelling = Literal[
+    "sdk_extra_body",
+    "multipart_field",
+    "query_param",
+    "model_header",
+    "multipart_proxy_fields",
+    "sdk_expires_after",
+    "multipart_expires_after",
+]
 _ContentRoute = Literal["v1_encoded", "files_encoded", "files_raw_query", "v1_raw_header"]
 _BatchCreateSpelling = Literal["encoded_input", "body_model", "query_model", "header_model", "sanitized_metadata"]
 
@@ -245,7 +253,7 @@ def _managed_upload(
                 )
             assert response.status_code == 200, response.text
             return _FileObject.model_validate_json(response.content)
-        case "repeated_bracket" | "indexed":
+        case "repeated_bracket" | "indexed" | "repeated_plain":
             posted: Final = gateway.client.post(
                 "/v1/files",
                 data={"purpose": "batch", **fields},
@@ -266,14 +274,7 @@ def _managed_upload(
             assert_never(spelling)
 
 
-@pytest.mark.parametrize(
-    "spelling",
-    ["sdk_list", "repeated_bracket", "indexed", "comma_joined"],
-    ids=["sdk-list-extra-body", "multipart-repeated-bracket", "multipart-indexed", "multipart-comma-joined"],
-)
-def test_batch_upload_to_two_target_models_reaches_each_deployment(
-    gateway: Gateway, spelling: _BatchUploadSpelling
-) -> None:
+def _assert_upload_reaches_both_target_models(gateway: Gateway, spelling: _BatchUploadSpelling) -> None:
     key_a: Final = "provider-key-a-" + uuid.uuid4().hex[:8]
     key_b: Final = "provider-key-b-" + uuid.uuid4().hex[:8]
     with wire_server(_multiplexed_openai_backends()) as wire, gateway.scenario() as scenario:
@@ -285,6 +286,7 @@ def test_batch_upload_to_two_target_models_reaches_each_deployment(
             "repeated_bracket": {"target_model_names[]": [model_a, model_b]},
             "indexed": {"target_model_names[0]": model_a, "target_model_names[1]": model_b},
             "comma_joined": {"target_model_names": f"{model_a},{model_b}"},
+            "repeated_plain": {"target_model_names": [model_a, model_b]},
         }[spelling]
         managed_file: Final = _managed_upload(gateway, spelling, fields)
         assert managed_file.created_at > 0, managed_file.model_dump()
@@ -329,6 +331,22 @@ def test_batch_upload_to_two_target_models_reaches_each_deployment(
         readback_file: Final = _FileObject.model_validate_json(readback.content)
         assert readback_file == expected_file, readback.text
         assert _drained_other_than_model_list_probes(wire) == ()
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["sdk_list", "repeated_bracket", "indexed", "comma_joined"],
+    ids=["sdk-list-extra-body", "multipart-repeated-bracket", "multipart-indexed", "multipart-comma-joined"],
+)
+def test_batch_upload_to_two_target_models_reaches_each_deployment(
+    gateway: Gateway, spelling: _BatchUploadSpelling
+) -> None:
+    _assert_upload_reaches_both_target_models(gateway, spelling)
+
+
+def test_batch_upload_with_repeated_plain_target_model_names_reaches_each_deployment(gateway: Gateway) -> None:
+    pytest.skip("BUG: repeated plain target_model_names keeps only the last value")
+    _assert_upload_reaches_both_target_models(gateway, "repeated_plain")
 
 
 def test_batch_upload_to_two_target_models_keeps_the_jsonl_content_type(gateway: Gateway) -> None:
@@ -400,14 +418,67 @@ def _model_routed_upload(
             )
             assert headed.status_code == 200, headed.text
             return _FileObject.model_validate_json(headed.content)
+        case "multipart_proxy_fields":
+            posted: Final = gateway.client.post(
+                "/v1/files",
+                data={
+                    "purpose": "batch",
+                    "model": alias,
+                    "target_model_names": alias,
+                    "litellm_metadata[tag]": "x",
+                },
+                files={"file": (INPUT_FILENAME, uploaded, "application/jsonl")},
+                headers={"Authorization": f"Bearer {gateway.key}"},
+            )
+            assert posted.status_code == 200, posted.text
+            return _FileObject.model_validate_json(posted.content)
+        case "sdk_expires_after":
+            with OpenAI(base_url=_sdk_base_url(gateway), api_key=gateway.key, max_retries=0) as client:
+                response: Final = client.files.with_raw_response.create(
+                    file=(INPUT_FILENAME, uploaded, "application/jsonl"),
+                    purpose="batch",
+                    expires_after={"anchor": "created_at", "seconds": 2592000},
+                    extra_body={"model": alias},
+                )
+            assert response.status_code == 200, response.text
+            return _FileObject.model_validate_json(response.content)
+        case "multipart_expires_after":
+            created: Final = gateway.request_multipart(
+                "/v1/files",
+                {
+                    "purpose": "batch",
+                    "model": alias,
+                    "expires_after[anchor]": "created_at",
+                    "expires_after[seconds]": "2592000",
+                },
+                {"file": (INPUT_FILENAME, uploaded, "application/jsonl")},
+            )
+            assert created.status_code == 200, created.text
+            return _FileObject.model_validate_json(created.content)
         case _:
             assert_never(spelling)
 
 
 @pytest.mark.parametrize(
     "spelling",
-    ["sdk_extra_body", "multipart_field", "query_param", "model_header"],
-    ids=["sdk-extra-body-model", "multipart-model-field", "query-model", "x-litellm-model-header"],
+    [
+        "sdk_extra_body",
+        "multipart_field",
+        "query_param",
+        "model_header",
+        "multipart_proxy_fields",
+        "sdk_expires_after",
+        "multipart_expires_after",
+    ],
+    ids=[
+        "sdk-extra-body-model",
+        "multipart-model-field",
+        "query-model",
+        "x-litellm-model-header",
+        "multipart-model-with-proxy-fields",
+        "sdk-expires-after",
+        "multipart-bracketed-expires-after",
+    ],
 )
 def test_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_back(
     gateway: Gateway, spelling: _ModelRoutedSpelling
@@ -426,8 +497,27 @@ def test_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_bac
         assert (upload.method, upload.target) == ("POST", "/v1/files"), upload.target
         assert upload.headers["authorization"] == f"Bearer {key}", upload.headers
         parts: Final = _multipart_parts(upload)
-        assert len(parts) == 2, [part.get_param("name", header="content-disposition") for part in parts]
-        assert _text_fields(parts) == {"purpose": "batch"}
+        expected_text: Final = {
+            "sdk_extra_body": {"purpose": "batch"},
+            "multipart_field": {"purpose": "batch"},
+            "query_param": {"purpose": "batch"},
+            "model_header": {"purpose": "batch"},
+            "multipart_proxy_fields": {"purpose": "batch"},
+            "sdk_expires_after": {
+                "purpose": "batch",
+                "expires_after[anchor]": "created_at",
+                "expires_after[seconds]": "2592000",
+            },
+            "multipart_expires_after": {
+                "purpose": "batch",
+                "expires_after[anchor]": "created_at",
+                "expires_after[seconds]": "2592000",
+            },
+        }[spelling]
+        assert len(parts) == len(expected_text) + 1, [
+            part.get_param("name", header="content-disposition") for part in parts
+        ]
+        assert _text_fields(parts) == expected_text
         assert _file_fields(parts) == {"file": (INPUT_FILENAME, "application/jsonl", uploaded)}
 
         readback: Final = gateway.request("GET", f"/v1/files/{encoded}")
@@ -561,7 +651,12 @@ def _encoded_batch_input(
 
 
 def _created_batch(
-    gateway: Gateway, spelling: _BatchCreateSpelling, encoded_input: str, raw_input: str, alias: str
+    gateway: Gateway,
+    spelling: _BatchCreateSpelling,
+    encoded_input: str,
+    raw_input: str,
+    alias: str,
+    sdk_base_url: str,
 ) -> _Batch:
     if spelling in {"query_model", "header_model"}:
         created: Final = gateway.request(
@@ -592,25 +687,21 @@ def _created_batch(
         )
         assert created.status_code == 200, created.text
         return _Batch.model_validate_json(created.content)
-    with OpenAI(base_url=_sdk_base_url(gateway), api_key=gateway.key, max_retries=0) as client:
+    with OpenAI(base_url=sdk_base_url, api_key=gateway.key, max_retries=0) as client:
         extra: Final = {} if spelling == "encoded_input" else {"extra_body": {"model": alias}}
-        sdk_batch: Final = client.batches.create(
+        response: Final = client.batches.with_raw_response.create(
             input_file_id=encoded_input if spelling == "encoded_input" else raw_input,
             endpoint="/v1/chat/completions",
             completion_window="24h",
             metadata={"job": "x"},
             **extra,
         )
-    return _Batch.model_validate(sdk_batch.model_dump())
+    assert response.status_code == 200, response.text
+    return _Batch.model_validate_json(response.content)
 
 
-@pytest.mark.parametrize(
-    "spelling",
-    ["encoded_input", "body_model", "query_model", "header_model", "sanitized_metadata"],
-    ids=["encoded-input-id", "body-model", "query-model", "x-litellm-model-header", "non-string-metadata-dropped"],
-)
-def test_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(
-    gateway: Gateway, spelling: _BatchCreateSpelling
+def _assert_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(
+    gateway: Gateway, spelling: _BatchCreateSpelling, sdk_base_url: str
 ) -> None:
     key: Final = "provider-key-" + uuid.uuid4().hex[:8]
     raw_input: Final = f"file-in-{key}"
@@ -622,7 +713,9 @@ def test_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(
         alias: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key)
         _wait_until_every_worker_serves(gateway, alias)
         encoded_input: Final = _encoded_batch_input(gateway, spelling, alias, wire, raw_input, key)
-        created_batch_payload: Final = _created_batch(gateway, spelling, encoded_input, raw_input, alias)
+        created_batch_payload: Final = _created_batch(
+            gateway, spelling, encoded_input, raw_input, alias, sdk_base_url
+        )
 
         expected_raw_input: Final = f"file-{key}" if spelling == "encoded_input" else raw_input
         expected_input: Final = (
@@ -650,3 +743,22 @@ def test_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(
             "metadata": {"job": "x"},
         }
         assert JSON_OBJECT.validate_json(create_request.body) == expected_body, create_request.body
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["encoded_input", "body_model", "query_model", "header_model", "sanitized_metadata"],
+    ids=["encoded-input-id", "body-model", "query-model", "x-litellm-model-header", "non-string-metadata-dropped"],
+)
+def test_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(
+    gateway: Gateway, spelling: _BatchCreateSpelling
+) -> None:
+    _assert_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(
+        gateway, spelling, _sdk_base_url(gateway)
+    )
+
+
+@pytest.mark.parametrize("route", ["/batches", "/openai/v1/batches"], ids=["batches-alias", "openai-v1-batches-alias"])
+def test_create_batch_through_a_route_alias_reaches_one_deployment(gateway: Gateway, route: str) -> None:
+    sdk_base_url: Final = str(gateway.client.base_url).rstrip("/") + route.removesuffix("/batches")
+    _assert_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(gateway, "encoded_input", sdk_base_url)
