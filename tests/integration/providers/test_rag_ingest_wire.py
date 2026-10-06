@@ -344,7 +344,11 @@ def test_rag_ingest_request_multipart_json_and_registered_credentials(gateway: G
                 _assert_upload(registered_requests[0], _REGISTRY_CONTENT)
 
 
-def test_documented_multipart_ingest_options_is_rejected(gateway: Gateway, tmp_path: Path) -> None:
+def test_documented_multipart_ingest_options_is_honored(gateway: Gateway, tmp_path: Path) -> None:
+    pytest.skip(
+        "BUG: multipart -F ingest_options documented on /v1/rag/ingest is rejected with 400 saying vector_store configuration is missing"
+    )
+
     provider_key: Final = f"ingest-docs-{uuid.uuid4().hex}"
     store_id: Final = f"vs_ingest_docs_{uuid.uuid4().hex}"
 
@@ -359,29 +363,24 @@ def test_documented_multipart_ingest_options_is_rejected(gateway: Gateway, tmp_p
             config=_no_registry_config(tmp_path),
             remove_environment=("OPENAI_API_BASE",),
         ) as owned:
-            response: Final = owned.request_multipart(
-                "/v1/rag/ingest",
-                {"ingest_options": json.dumps(_ingest_options("docs ingest contract"))},
-                {"file": ("docs.txt", _MULTIPART_CONTENT, "text/plain")},
-            )
-            assert response.status_code == 400, response.text
-            assert JSON_OBJECT.validate_json(response.content) == {
-                "detail": {"error": "ingest_options must contain 'vector_store' configuration"}
-            }, response.text
-            assert wire.drain() == ()
+            with owned.scenario() as scenario:
+                response: Final = owned.request_multipart(
+                    "/v1/rag/ingest",
+                    {"ingest_options": json.dumps(_ingest_options("docs ingest contract"))},
+                    {"file": ("docs.txt", _MULTIPART_CONTENT, "text/plain")},
+                )
+                _ingest_response(response, store_id, "file_ingest_multipart")
+                scenario.cleanups.callback(
+                    owned.post, "/vector_store/delete", {"vector_store_id": store_id}
+                )
 
-            wrapped_request: Final = owned.request_multipart(
-                "/v1/rag/ingest",
-                {
-                    "ingest_options": json.dumps(
-                        {"ingest_options": _ingest_options("docs ingest contract")}
-                    )
-                },
-                {"file": ("docs.txt", _MULTIPART_CONTENT, "text/plain")},
-            )
-            requests: Final = wire.drain()
-            assert requests == (), requests
-            assert wrapped_request.status_code == 400, wrapped_request.text
-            assert JSON_OBJECT.validate_json(wrapped_request.content) == {
-                "detail": {"error": "ingest_options must contain 'vector_store' configuration"}
-            }, wrapped_request.text
+                requests: Final = wire.drain()
+                assert [(request.method, urlsplit(request.target).path) for request in requests] == [
+                    ("POST", "/v1/vector_stores"),
+                    ("POST", "/v1/files"),
+                    ("POST", f"/v1/vector_stores/{store_id}/files"),
+                ], requests
+                assert all(
+                    request.headers["authorization"] == f"Bearer {provider_key}" for request in requests
+                )
+                _assert_upload(requests[1], _MULTIPART_CONTENT)

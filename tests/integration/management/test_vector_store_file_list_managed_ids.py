@@ -660,13 +660,6 @@ def test_managed_file_lifecycle_routes_and_restores_managed_ids(gateway: Gateway
         assert alias_updated.status_code == 200, alias_updated.text
         expected_updated_alias: Final = _store_file_response(store, managed_file_id, {"tenant": "b"})
         assert _json(alias_updated) == expected_updated_alias, alias_updated.text
-        alias_deleted: Final = gateway.request("DELETE", alias_file_path, key=owner.key)
-        assert alias_deleted.status_code == 200, alias_deleted.text
-        assert _json(alias_deleted) == {
-            "id": managed_file_id,
-            "object": "vector_store.file.deleted",
-            "deleted": True,
-        }, alias_deleted.text
         raw_content: Final = gateway.request("GET", f"{alias_file_path}/content", key=owner.key)
         assert raw_content.status_code == 200, raw_content.text
         expected_content_page: Final = _file_content_page(content)
@@ -677,6 +670,13 @@ def test_managed_file_lifecycle_routes_and_restores_managed_ids(gateway: Gateway
             raw_content.text
         )
         assert raw_content.headers["x-content-type-options"] == "nosniff", raw_content.text
+        alias_deleted: Final = gateway.request("DELETE", alias_file_path, key=owner.key)
+        assert alias_deleted.status_code == 200, alias_deleted.text
+        assert _json(alias_deleted) == {
+            "id": managed_file_id,
+            "object": "vector_store.file.deleted",
+            "deleted": True,
+        }, alias_deleted.text
 
         expected_provider_path: Final = f"/v1/vector_stores/{store}/files/{provider_file_id_a}"
         expected_content_path: Final = f"{expected_provider_path}/content"
@@ -688,12 +688,14 @@ def test_managed_file_lifecycle_routes_and_restores_managed_ids(gateway: Gateway
             ("DELETE", expected_provider_path),
             ("GET", expected_provider_path),
             ("POST", expected_provider_path),
-            ("DELETE", expected_provider_path),
             ("GET", expected_content_path),
+            ("DELETE", expected_provider_path),
         ], lifecycle_requests
         assert JSON_OBJECT.validate_json(lifecycle_requests[1].body) == update_body, lifecycle_requests[1]
         assert JSON_OBJECT.validate_json(lifecycle_requests[5].body) == update_body, lifecycle_requests[5]
-        assert tuple(request.body for request in lifecycle_requests[::2]) == (
+        assert tuple(lifecycle_requests[index].body for index in (0, 2, 3, 4, 6, 7)) == (
+            b"",
+            b"",
             b"",
             b"",
             b"",
