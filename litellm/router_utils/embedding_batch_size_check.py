@@ -15,6 +15,18 @@ def count_embedding_inputs(input: str | Sequence[object]) -> int:
     return len(input)
 
 
+def effective_embedding_input(
+    input: str | Sequence[object],
+    extra_body: object,
+) -> str | Sequence[object]:
+    """Return the input the provider receives once extra_body is merged over the request body."""
+    if isinstance(extra_body, Mapping):
+        override: Final = extra_body.get("input")
+        if isinstance(override, (str, list, tuple)):
+            return override
+    return input
+
+
 def raise_if_embedding_batch_too_large(
     input: str | Sequence[object],
     model_info: Mapping[str, object],

@@ -229,6 +229,7 @@ from litellm.router_utils.cooldown_handlers import (
     set_cooldown_deployments,
 )
 from litellm.router_utils.embedding_batch_size_check import (
+    effective_embedding_input,
     raise_if_embedding_batch_too_large,
 )
 from litellm.router_utils.fallback_event_handlers import (
@@ -6742,7 +6743,10 @@ class Router:
             model_name = data["model"]
             custom_llm_provider: Final = cast(Mapping[str, object], data).get("custom_llm_provider")
             raise_if_embedding_batch_too_large(
-                input=cast(str | Sequence[object], input),
+                input=effective_embedding_input(
+                    cast(str | Sequence[object], input),
+                    kwargs.get("extra_body", cast(Mapping[str, object], data).get("extra_body")),
+                ),
                 model_info=cast(Mapping[str, object], kwargs["model_info"]),
                 model=model,
                 llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else "",
@@ -6825,7 +6829,10 @@ class Router:
             model_name = data["model"]
             custom_llm_provider: Final = cast(Mapping[str, object], data).get("custom_llm_provider")
             raise_if_embedding_batch_too_large(
-                input=cast(str | Sequence[object], input),
+                input=effective_embedding_input(
+                    cast(str | Sequence[object], input),
+                    kwargs.get("extra_body", cast(Mapping[str, object], data).get("extra_body")),
+                ),
                 model_info=cast(Mapping[str, object], kwargs["model_info"]),
                 model=model,
                 llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else "",
