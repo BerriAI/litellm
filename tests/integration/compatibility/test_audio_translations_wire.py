@@ -1,4 +1,5 @@
 import json
+import mimetypes
 from email.message import Message
 from email.parser import BytesParser
 from email.policy import HTTP
@@ -15,6 +16,7 @@ _WAV_BYTES: Final = (
     b"\x40\x1f\x00\x00\x40\x1f\x00\x00\x01\x00\x08\x00data\x08\x00\x00\x00"
     b"\x00\x01\x02\x03\x04\x05\x06\x07"
 )
+_WAV_CONTENT_TYPE: Final = mimetypes.guess_type("a.wav")[0] or "application/octet-stream"
 
 
 def _multipart_parts(request: Request) -> tuple[Message, ...]:
@@ -82,7 +84,7 @@ def test_audio_translation_reaches_upstream_on_prefixed_and_unprefixed_routes(ga
             ("response_format", "json"),
             ("temperature", "0.2"),
         )
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", _WAV_BYTES),)
+        assert _file_parts(parts) == (("file", "a.wav", _WAV_CONTENT_TYPE, _WAV_BYTES),)
         return Reply(body=json.dumps({"text": "hello world"}).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -93,7 +95,7 @@ def test_audio_translation_reaches_upstream_on_prefixed_and_unprefixed_routes(ga
         with _sdk(gateway, base_path, key) as sdk:
             response: Final = sdk.audio.translations.with_raw_response.create(
                 model=model,
-                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                file=("a.wav", _WAV_BYTES, _WAV_CONTENT_TYPE),
                 prompt="hi",
                 response_format="json",
                 temperature=0.2,

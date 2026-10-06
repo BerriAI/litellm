@@ -1,5 +1,6 @@
 import json
 import math
+import mimetypes
 import uuid
 from email.message import Message
 from email.parser import BytesParser
@@ -19,6 +20,7 @@ _WAV_BYTES: Final = (
     b"\x40\x1f\x00\x00\x40\x1f\x00\x00\x01\x00\x08\x00data\x08\x00\x00\x00"
     b"\x00\x01\x02\x03\x04\x05\x06\x07"
 )
+_WAV_CONTENT_TYPE: Final = mimetypes.guess_type("a.wav")[0] or "application/octet-stream"
 _VERBOSE_TEXT_PARTS: Final = (
     ("include[]", "logprobs"),
     ("language", "en"),
@@ -174,7 +176,7 @@ def test_audio_transcription_verbose_json_forwards_every_form_field_and_returns_
         assert request.headers["authorization"] == "Bearer synthetic-openai-key"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == _VERBOSE_TEXT_PARTS
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
+        assert _file_parts(parts) == (("file", "a.wav", _WAV_CONTENT_TYPE, wav),)
         return Reply(body=json.dumps(_VERBOSE_TRANSCRIPT).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -189,7 +191,7 @@ def test_audio_transcription_verbose_json_forwards_every_form_field_and_returns_
         with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
-                file=("a.wav", wav, "audio/wav"),
+                file=("a.wav", wav, _WAV_CONTENT_TYPE),
                 temperature=0.2,
                 language="en",
                 prompt="hi",
@@ -225,7 +227,7 @@ def test_audio_transcription_reaches_upstream_identically_on_prefixed_and_unpref
         assert request.headers["authorization"] == "Bearer synthetic-openai-key"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == _VERBOSE_TEXT_PARTS
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
+        assert _file_parts(parts) == (("file", "a.wav", _WAV_CONTENT_TYPE, wav),)
         return Reply(body=json.dumps(_VERBOSE_TRANSCRIPT).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -242,7 +244,7 @@ def test_audio_transcription_reaches_upstream_identically_on_prefixed_and_unpref
                 return json.loads(
                     sdk.audio.transcriptions.with_raw_response.create(
                         model=model,
-                        file=("a.wav", wav, "audio/wav"),
+                        file=("a.wav", wav, _WAV_CONTENT_TYPE),
                         temperature=0.2,
                         language="en",
                         prompt="hi",
@@ -270,7 +272,7 @@ def test_audio_transcription_json_format_returns_text_and_usage(gateway: Gateway
         assert request.target == "/v1/audio/transcriptions"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == (("model", "whisper-1"), ("response_format", "json"))
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
+        assert _file_parts(parts) == (("file", "a.wav", _WAV_CONTENT_TYPE, wav),)
         return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -280,7 +282,7 @@ def test_audio_transcription_json_format_returns_text_and_usage(gateway: Gateway
         with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
-                file=("a.wav", wav, "audio/wav"),
+                file=("a.wav", wav, _WAV_CONTENT_TYPE),
                 response_format="json",
             )
         assert response.status_code == 200, response.text
@@ -308,7 +310,7 @@ def test_audio_transcription_forwards_nested_and_repeated_bracket_fields_verbati
             ("model", "gpt-4o-transcribe"),
             ("response_format", "json"),
         )
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
+        assert _file_parts(parts) == (("file", "a.wav", _WAV_CONTENT_TYPE, wav),)
         return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -323,7 +325,7 @@ def test_audio_transcription_forwards_nested_and_repeated_bracket_fields_verbati
         with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
-                file=("a.wav", wav, "audio/wav"),
+                file=("a.wav", wav, _WAV_CONTENT_TYPE),
                 response_format="json",
                 chunking_strategy={
                     "type": "server_vad",
@@ -351,7 +353,7 @@ def test_audio_transcription_stream_returns_server_sent_events(gateway: Gateway)
         assert request.target == "/v1/audio/transcriptions"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == (("model", "gpt-4o-transcribe"), ("stream", "true"))
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
+        assert _file_parts(parts) == (("file", "a.wav", _WAV_CONTENT_TYPE, wav),)
         return Reply(
             chunks=(
                 b'data: {"type":"transcript.text.delta","delta":"hello"}\n\n',
@@ -369,7 +371,7 @@ def test_audio_transcription_stream_returns_server_sent_events(gateway: Gateway)
         with _sdk(gateway, "/v1", gateway.key) as sdk:
             with sdk.audio.transcriptions.with_streaming_response.create(
                 model=model,
-                file=("a.wav", wav, "audio/wav"),
+                file=("a.wav", wav, _WAV_CONTENT_TYPE),
                 stream=True,
             ) as raw:
                 assert raw.headers["content-type"].startswith("text/event-stream")
@@ -377,7 +379,7 @@ def test_audio_transcription_stream_returns_server_sent_events(gateway: Gateway)
                 event.to_dict()
                 for event in sdk.audio.transcriptions.create(
                     model=model,
-                    file=("a.wav", wav, "audio/wav"),
+                    file=("a.wav", wav, _WAV_CONTENT_TYPE),
                     stream=True,
                 )
             )
@@ -411,7 +413,7 @@ def test_audio_transcription_applies_json_string_metadata_without_forwarding_it(
         assert request.headers["authorization"] == "Bearer synthetic-openai-key"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == (("model", "whisper-1"), ("response_format", "json"))
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
+        assert _file_parts(parts) == (("file", "a.wav", _WAV_CONTENT_TYPE, wav),)
         return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -425,7 +427,7 @@ def test_audio_transcription_applies_json_string_metadata_without_forwarding_it(
                 "response_format": "json",
                 "metadata": json.dumps({"tags": [tag]}),
             },
-            {"file": ("a.wav", wav, "audio/wav")},
+            {"file": ("a.wav", wav, _WAV_CONTENT_TYPE)},
         )
         assert response.status_code == 200, response.text
         assert response.json() == _JSON_TRANSCRIPT, response.text
@@ -454,7 +456,7 @@ def test_audio_transcription_forwards_plain_response_format_to_upstream(gateway:
         assert request.target == "/v1/audio/transcriptions"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == (("model", "whisper-1"), ("response_format", response_format))
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
+        assert _file_parts(parts) == (("file", "a.wav", _WAV_CONTENT_TYPE, wav),)
         return Reply(body=_PLAIN_TRANSCRIPTS[response_format].encode(), content_type="text/plain")
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -464,7 +466,7 @@ def test_audio_transcription_forwards_plain_response_format_to_upstream(gateway:
         with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
-                file=("a.wav", wav, "audio/wav"),
+                file=("a.wav", wav, _WAV_CONTENT_TYPE),
                 response_format=response_format,
             )
         assert response.status_code == 200, response.text
@@ -493,13 +495,13 @@ def test_audio_transcription_plain_response_format_returns_the_raw_transcript(
         with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
-                file=("a.wav", wav, "audio/wav"),
+                file=("a.wav", wav, _WAV_CONTENT_TYPE),
                 response_format=response_format,
             )
             assert response.headers["content-type"].startswith("text/plain"), response.text
             transcript: Final = sdk.audio.transcriptions.create(
                 model=model,
-                file=("a.wav", wav, "audio/wav"),
+                file=("a.wav", wav, _WAV_CONTENT_TYPE),
                 response_format=response_format,
             )
         assert transcript == _PLAIN_TRANSCRIPTS[response_format]
@@ -517,7 +519,7 @@ def test_audio_transcription_applies_json_string_litellm_metadata_without_forwar
         assert request.headers["authorization"] == "Bearer synthetic-openai-key"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == (("model", "whisper-1"), ("response_format", "json"))
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
+        assert _file_parts(parts) == (("file", "a.wav", _WAV_CONTENT_TYPE, wav),)
         return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -531,7 +533,7 @@ def test_audio_transcription_applies_json_string_litellm_metadata_without_forwar
                 "response_format": "json",
                 "litellm_metadata": json.dumps({"tags": [tag]}),
             },
-            {"file": ("a.wav", wav, "audio/wav")},
+            {"file": ("a.wav", wav, _WAV_CONTENT_TYPE)},
         )
         assert response.status_code == 200, response.text
         assert response.json() == _JSON_TRANSCRIPT, response.text
@@ -565,7 +567,7 @@ def test_audio_transcription_consumes_bracketed_form_metadata_tags(gateway: Gate
         assert request.target == "/v1/audio/transcriptions"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == (("model", "whisper-1"), ("response_format", "json"))
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
+        assert _file_parts(parts) == (("file", "a.wav", _WAV_CONTENT_TYPE, wav),)
         return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -579,7 +581,7 @@ def test_audio_transcription_consumes_bracketed_form_metadata_tags(gateway: Gate
                 "response_format": "json",
                 f"{metadata_field}[tags]": tag,
             },
-            {"file": ("a.wav", wav, "audio/wav")},
+            {"file": ("a.wav", wav, _WAV_CONTENT_TYPE)},
         )
         assert response.status_code == 200, response.text
         assert response.json() == _JSON_TRANSCRIPT, response.text
@@ -641,7 +643,7 @@ def test_audio_transcription_bills_audio_tokens_at_the_input_rate_when_no_audio_
         assert request.target == "/v1/audio/transcriptions"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == (("model", "whisper-1"), ("response_format", "json"))
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
+        assert _file_parts(parts) == (("file", "a.wav", _WAV_CONTENT_TYPE, wav),)
         return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -655,7 +657,7 @@ def test_audio_transcription_bills_audio_tokens_at_the_input_rate_when_no_audio_
         response: Final = gateway.request_multipart(
             "/v1/audio/transcriptions",
             {"model": model, "response_format": "json"},
-            {"file": ("a.wav", wav, "audio/wav")},
+            {"file": ("a.wav", wav, _WAV_CONTENT_TYPE)},
         )
         assert response.status_code == 200, response.text
         assert response.json() == _JSON_TRANSCRIPT, response.text
