@@ -249,6 +249,39 @@ describe("buildTreeRows", () => {
     expect(groups(buildTreeRows([parent, ...kids], STATE))).toHaveLength(0);
   });
 
+  it("pages a later repeated group independently while an earlier group stays collapsed", () => {
+    const calls = Array.from({ length: 61 }, (_, index) =>
+      span({
+        span_id: `step-${index}`,
+        parent_span_id: "root",
+        start_offset_ms: index,
+        name: index === 30 ? "model" : "Bash",
+        type: index === 30 ? "llm" : "tool",
+      }),
+    );
+    const spans = [span({ span_id: "root", type: "agent" }), ...calls];
+    const laterId = groupRowId("root", calls[31]);
+    const state = { ...STATE, expandedGroupIds: new Set([laterId]) };
+    const firstPage = buildTreeRows(spans, state);
+    expect(groups(firstPage).map((group) => group.expanded)).toEqual([false, true]);
+    expect(firstPage.filter((row) => row.kind === "load-more")).toEqual([
+      expect.objectContaining({ groupId: laterId, remaining: 10 }),
+    ]);
+    expect(spanRows(firstPage).map((row) => row.span.span_id)).toEqual([
+      "root",
+      "step-30",
+      ...calls.slice(31, 51).map((call) => call.span_id),
+    ]);
+    const nextPage = buildTreeRows(spans, { ...state, groupRevealCounts: { [laterId]: 40 } });
+    expect(groups(nextPage).map((group) => group.expanded)).toEqual([false, true]);
+    expect(nextPage.filter((row) => row.kind === "load-more")).toHaveLength(0);
+    expect(spanRows(nextPage).map((row) => row.span.span_id)).toEqual([
+      "root",
+      "step-30",
+      ...calls.slice(31).map((call) => call.span_id),
+    ]);
+  });
+
   it("pages expanded groups 20 at a time with a load-more row", () => {
     const parent = span({ span_id: "p", type: "agent" });
     const kids = Array.from({ length: 45 }, (_, i) => {
