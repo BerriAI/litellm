@@ -1221,10 +1221,8 @@ def test_convert_to_model_response_object_no_provider_specific_fields_still_work
     )
 
     assert isinstance(result, ModelResponse)
-    psf = result.choices[0].message.provider_specific_fields
-    # refusal is not a Message model field, so it should be in provider_specific_fields
-    assert psf is not None
-    assert "refusal" in psf
+    assert result.choices[0].message.refusal is None
+    assert result.choices[0].message.provider_specific_fields is None
 
 
 def test_convert_to_model_response_object_with_error_code_only():

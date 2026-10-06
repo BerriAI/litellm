@@ -2,12 +2,20 @@
 Regression tests for model_dump_with_preserved_fields.
 
 This function serializes ModelResponse / ModelResponseStream objects to dicts
-while preserving 3 specific None fields for OpenAI API compatibility:
+while preserving specific fields for OpenAI API compatibility:
   - choices[*].message.content  (null when tool_calls present)
   - choices[*].message.role     (always present)
   - choices[*].delta.content    (null in streaming chunks)
+  - choices[*].message.refusal  (explicit null from provider)
+  - choices[*].logprobs         (explicit null from provider)
+  - system_fingerprint          (explicit null from provider)
 """
 
+from typing import Final
+
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    convert_to_model_response_object,
+)
 from litellm.proxy.utils import model_dump_with_preserved_fields
 from litellm.types.utils import (
     Choices,
@@ -404,3 +412,121 @@ def test_preserve_fields_param_backward_compat():
     assert result_default == result_explicit
     assert result_default["choices"][0]["message"]["content"] is None
     assert result_default["choices"][0]["message"]["role"] == "assistant"
+
+
+def test_provider_explicit_null_fields_are_preserved() -> None:
+    response_object: Final = {
+        "id": "chatcmpl-provider-null-fields",
+        "created": 1,
+        "model": "gpt-5.4",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello", "refusal": None},
+                "logprobs": None,
+            }
+        ],
+        "system_fingerprint": None,
+    }
+    model_response: Final = convert_to_model_response_object(
+        response_object=response_object,
+        model_response_object=ModelResponse(),
+    )
+
+    assert model_dump_with_preserved_fields(model_response, exclude_unset=True) == {
+        "id": "chatcmpl-provider-null-fields",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "Hello", "role": "assistant", "refusal": None},
+                "provider_specific_fields": {},
+                "logprobs": None,
+            }
+        ],
+        "created": 1,
+        "model": "gpt-5.4",
+        "object": "chat.completion",
+        "system_fingerprint": None,
+    }
+
+
+def test_provider_omitted_null_fields_stay_absent() -> None:
+    response_object: Final = {
+        "id": "chatcmpl-provider-omitted-fields",
+        "created": 2,
+        "model": "gpt-5.4",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+            }
+        ],
+    }
+    model_response: Final = convert_to_model_response_object(
+        response_object=response_object,
+        model_response_object=ModelResponse(),
+    )
+
+    assert model_dump_with_preserved_fields(model_response, exclude_unset=True) == {
+        "id": "chatcmpl-provider-omitted-fields",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "Hello", "role": "assistant"},
+                "provider_specific_fields": {},
+            }
+        ],
+        "created": 2,
+        "model": "gpt-5.4",
+        "object": "chat.completion",
+    }
+
+
+def test_provider_refusal_string_is_preserved_on_message() -> None:
+    response_object: Final = {
+        "id": "chatcmpl-provider-refusal",
+        "created": 3,
+        "model": "gpt-5.4",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "I can't help with that.",
+                    "refusal": "I can't help with that.",
+                },
+            }
+        ],
+    }
+    model_response: Final = convert_to_model_response_object(
+        response_object=response_object,
+        model_response_object=ModelResponse(),
+    )
+
+    assert model_dump_with_preserved_fields(model_response, exclude_unset=True) == {
+        "id": "chatcmpl-provider-refusal",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "I can't help with that.",
+                    "role": "assistant",
+                    "refusal": "I can't help with that.",
+                },
+                "provider_specific_fields": {},
+            }
+        ],
+        "created": 3,
+        "model": "gpt-5.4",
+        "object": "chat.completion",
+    }
+    assert model_response.choices[0].message.refusal == "I can't help with that."

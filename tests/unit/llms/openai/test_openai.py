@@ -5,10 +5,12 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
+import respx
 from openai import AsyncOpenAI, OpenAI
 
 import litellm
 from litellm.llms.openai.openai import OpenAIChatCompletion
+from litellm.proxy.utils import model_dump_with_preserved_fields
 from litellm.types.utils import ImageResponse
 
 
@@ -106,6 +108,49 @@ async def test_acompletion_returns_json_reply_over_injected_transport():
         assert response.choices[0].message.content == "smoke-json-reply"
         assert response.choices[0].finish_reason == "stop"
         assert response.usage.total_tokens == 15
+
+
+@respx.mock
+def test_completion_defaults_missing_message_role_and_preserves_omitted_fields() -> None:
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-missing-role",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-5.4",
+                "choices": [{"index": 0, "message": {"content": "hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="openai/gpt-5.4",
+        api_base="https://api.openai.com/v1",
+        api_key="sk-test",
+        messages=[{"role": "user", "content": "Hi"}],
+        num_retries=0,
+    )
+
+    assert route.called
+    assert response.choices[0].message.role == "assistant"
+    assert model_dump_with_preserved_fields(response, exclude_unset=True) == {
+        "id": "chatcmpl-missing-role",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "hi", "role": "assistant"},
+                "provider_specific_fields": {},
+            }
+        ],
+        "created": 1,
+        "model": "gpt-5.4",
+        "object": "chat.completion",
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
 
 
 @pytest.mark.asyncio

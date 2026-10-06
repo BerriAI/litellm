@@ -681,7 +681,7 @@ def convert_to_model_response_object(
 
                     message = Message(
                         content=content,
-                        role=choice["message"]["role"] or "assistant",
+                        role=choice["message"].get("role") or "assistant",
                         function_call=choice["message"].get("function_call", None),
                         tool_calls=tool_calls,
                         audio=choice["message"].get("audio", None),
@@ -692,6 +692,8 @@ def convert_to_model_response_object(
                         images=_normalize_images_for_message(choice["message"].get("images", None)),
                     )
                     finish_reason = choice.get("finish_reason", None)
+                if "refusal" in choice["message"]:
+                    message.refusal = choice["message"]["refusal"]
                 if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details") or "stop"
@@ -700,9 +702,10 @@ def convert_to_model_response_object(
 
                 ## PROVIDER SPECIFIC FIELDS ##
                 provider_specific_fields = {f: choice[f] for f in choice.keys() - _CHOICES_FIELDS}
-
                 logprobs = choice.get("logprobs", None)
+                provider_sent_logprobs = "logprobs" in choice
                 enhancements = choice.get("enhancements", None)
+
                 choice = Choices(
                     finish_reason=finish_reason,
                     index=idx,
@@ -711,6 +714,9 @@ def convert_to_model_response_object(
                     enhancements=enhancements,
                     provider_specific_fields=provider_specific_fields,
                 )
+                if provider_sent_logprobs and logprobs is None:
+                    choice.logprobs = None
+
                 choice_list.append(choice)
             model_response_object.choices = choice_list
 

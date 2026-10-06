@@ -61,7 +61,6 @@ def test_openai_chat_tool_choice_without_tools_is_not_forwarded(gateway: Gateway
                 "message": {
                     "role": "assistant",
                     "content": "One sentence.",
-                    "provider_specific_fields": {"refusal": None},
                 },
                 "provider_specific_fields": {},
             }
