@@ -8027,6 +8027,7 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
     fake_tool.name = "list_pets"
     fake_tool.description = "test tool"
     fake_tool.input_schema = {"type": "object"}
+    fake_tool.server_id = fake_server.server_id
 
     start_time = datetime.now(timezone.utc)
     litellm_logging_obj, _ = function_setup(

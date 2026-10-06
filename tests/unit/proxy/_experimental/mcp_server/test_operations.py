@@ -622,6 +622,7 @@ async def test_local_tool_json_array_is_converted_once_for_the_caller_revision(c
 
     body = '["a","b"]'
     tool = MagicMock()
+    tool.server_id = None
     tool.handler = AsyncMock(return_value=parse_http_body(body))
     with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
         result = await operations._handle_local_mcp_tool("reports-list_tags", {}, WireCompat(compat))
@@ -853,3 +854,97 @@ async def test_local_handler_freshness_tracks_registered_owner_with_overlapping_
             result = await operations._handle_local_mcp_tool("billing-admin-export", {})
             assert result.is_error is False
             handler.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner_present", [False, True])
+@pytest.mark.parametrize("requested_server", [False, True])
+async def test_local_call_cannot_borrow_another_servers_authority(
+    monkeypatch: pytest.MonkeyPatch, owner_present: bool, requested_server: bool
+) -> None:
+    from datetime import datetime
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager: Final = MCPServerManager()
+    allowed: Final = MCPServer(server_id="allowed", name="allowed", transport=MCPTransport.http)
+    owner: Final = MCPServer(server_id="private", name="private", transport=MCPTransport.http)
+    manager.config_mcp_servers = {
+        server.server_id: server for server in ((allowed, owner) if owner_present else (allowed,))
+    }
+    handler: Final = AsyncMock(return_value="private result")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    tool_name: Final = "export" if requested_server else "private-export"
+    global_mcp_tool_registry.register_tool(tool_name, "export", {}, handler, server_id=owner.server_id)
+
+    async with manager.catalog.operation():
+        with pytest.raises(HTTPException) as denied:
+            await operations._execute_mcp_tool(
+                name=tool_name if requested_server else "allowed-private-export",
+                arguments={},
+                allowed_mcp_servers=[allowed],
+                start_time=datetime.now(),
+                requested_server_id=allowed.server_id if requested_server else None,
+            )
+    assert denied.value.status_code == 403
+    handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server_owned", [False, True])
+@pytest.mark.parametrize("requested_server", [False, True])
+async def test_local_call_preserves_matching_and_legacy_handlers(
+    monkeypatch: pytest.MonkeyPatch, server_owned: bool, requested_server: bool
+) -> None:
+    from datetime import datetime
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="allowed", name="allowed", transport=MCPTransport.http)
+    manager.config_mcp_servers = {server.server_id: server}
+    handler: Final = AsyncMock(return_value="allowed result")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    global_mcp_tool_registry.register_tool(
+        "export", "export", {}, handler, server_id=server.server_id if server_owned else None
+    )
+
+    async with manager.catalog.operation():
+        result: Final = await operations._execute_mcp_tool(
+            name="export" if requested_server else "allowed-export",
+            arguments={},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            requested_server_id=server.server_id if requested_server else None,
+        )
+    assert result.is_error is False
+    handler.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_local_handler_rejects_an_owner_absent_from_the_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager: Final = MCPServerManager()
+    handler: Final = AsyncMock(return_value="private result")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    global_mcp_tool_registry.register_tool("private-export", "export", {}, handler, server_id="private")
+
+    async with manager.catalog.operation():
+        with pytest.raises(HTTPException) as denied:
+            await operations._handle_local_mcp_tool("private-export", {})
+    assert denied.value.status_code == 503
+    handler.assert_not_awaited()

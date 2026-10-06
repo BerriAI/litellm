@@ -15771,6 +15771,7 @@ class TestProtectedCredentialPreparation:
         credential: str | None,
         dispatch: str,
     ) -> None:
+        from litellm.proxy._experimental.mcp_server import operations
         from litellm.proxy._experimental.mcp_server.server import _handle_local_mcp_tool
         from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_name, get_server_prefix
 
@@ -15793,6 +15794,8 @@ class TestProtectedCredentialPreparation:
             authentication_token=credential,
         )
         manager: Final = MCPServerManager()
+        manager.config_mcp_servers = {server.server_id: server}
+        monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
         await manager._register_openapi_tools(str(spec_path), server, server.url)
         monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
         destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="unexpected success")

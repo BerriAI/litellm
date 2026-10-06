@@ -2094,6 +2094,9 @@ async def _execute_mcp_tool(
                 ),
             )
 
+        if local_tool.server_id is not None and local_tool.server_id != mcp_server.server_id:
+            raise HTTPException(status_code=403, detail="User not allowed to call this tool.")
+
         # `pre_call_tool_check` calls into `proxy_logging_obj` for the
         # pre-call guardrail hooks, so source it from the canonical
         # `proxy_server` module the same way `_handle_managed_mcp_tool`
@@ -2223,6 +2226,12 @@ async def _execute_mcp_tool(
                         "Retry once the server is registered."
                     ),
                 )
+
+            if (
+                registered_local_tool.server_id is not None
+                and registered_local_tool.server_id != prefix_server.server_id
+            ):
+                raise HTTPException(status_code=403, detail="User not allowed to call this tool.")
 
             from litellm.proxy.proxy_server import proxy_logging_obj
 
@@ -2707,6 +2716,8 @@ async def _handle_local_mcp_tool(
         if tool.server_id is not None
         else global_mcp_server_manager.server_owning_tool_name_prefix(name)
     )
+    if tool.server_id is not None and server is None:
+        raise HTTPException(status_code=503, detail="MCP server configuration changed; retry the operation")
     if server is not None:
         global_mcp_server_manager.catalog.assert_current(server)
 
