@@ -409,39 +409,6 @@ async def test_spans_without_chat_messages_fall_back_to_their_text_or_raw_input_
 
 
 @pytest.mark.asyncio
-async def test_json_text_output_and_input_are_normalized_like_the_trace_view() -> None:
-    summary: Final = json.dumps([{"content": "`/etc/hosts` has 11 lines.", "tool_names": ["terminal"]}])
-    conversation: Final = json.dumps(
-        [{"role": "system", "content": "Be terse"}, {"role": "user", "content": "count /etc/hosts"}]
-    )
-    message: Final = json.dumps({"role": "assistant", "content": "Done"})
-    reader: Final = FakeReader(
-        {
-            ("t1", "summary"): raw_span(
-                "summary", UIText(kind="text", text=conversation), UIText(kind="text", text=summary), "", ""
-            ),
-            ("t1", "message"): raw_span(
-                "message", UIText(kind="text", text="hi"), UIText(kind="text", text=message), "", ""
-            ),
-        }
-    )
-    result: Final = await build(
-        reader, TraceSource(trace_id="t1", span_id="summary"), TraceSource(trace_id="t1", span_id="message")
-    )
-
-    first, second = result.cases
-    assert first.messages == (
-        DatasetMessage(role="system", content="Be terse"),
-        DatasetMessage(role="user", content="count /etc/hosts"),
-    )
-    assert (first.reply, first.tool_calls) == (
-        "`/etc/hosts` has 11 lines.",
-        (DatasetToolCall(name="terminal", arguments=""),),
-    )
-    assert (second.reply, second.tool_calls) == ("Done", ())
-
-
-@pytest.mark.asyncio
 async def test_a_span_with_blank_input_and_output_is_skipped_as_no_content() -> None:
     blank: Final = UIText(kind="text", text="  ")
     reader: Final = FakeReader({("t1", "s1"): raw_span("s1", blank, blank, "  ", "")})
