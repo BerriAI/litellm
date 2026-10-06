@@ -334,19 +334,11 @@ def _stream_chat(
             api_key=key,
             http_client=http_client,
         ) as client:
-            raw_response: Final = (
-                client.chat.completions.with_raw_response.create(
-                    model=model,
-                    messages=[{"role": "user", "content": text}],
-                    stream=True,
-                )
-                if policy_name is None
-                else client.chat.completions.with_raw_response.create(
-                    model=model,
-                    messages=[{"role": "user", "content": text}],
-                    stream=True,
-                    extra_body={"policies": [policy_name]},
-                )
+            raw_response: Final = client.chat.completions.with_raw_response.create(
+                model=model,
+                messages=[{"role": "user", "content": text}],
+                stream=True,
+                extra_body=None if policy_name is None else {"policies": [policy_name]},
             )
             assert raw_response.status_code == 200, raw_response.text
             with raw_response.parse() as stream:
@@ -1085,7 +1077,7 @@ def test_streaming_chat_on_an_attached_model_runs_the_policy_guardrail(gateway: 
         assert provider.drain() == ()
 
         attached_headers, attached_text = _stream_chat(gateway, model, key, _PROMPT)
-        assert attached_headers.get("x-litellm-applied-policies") == policy_name, attached_text
+        assert attached_headers.get("x-litellm-applied-policies") == policy_name, dict(attached_headers)
         assert attached_text == "provider response"
         guardrail_requests: Final = guardrail.drain()
         assert len(guardrail_requests) == 1
@@ -1096,7 +1088,7 @@ def test_streaming_chat_on_an_attached_model_runs_the_policy_guardrail(gateway: 
 
         assert guardrail.drain() == ()
         unattached_headers, unattached_text = _stream_chat(gateway, second_model, key, _PROMPT)
-        assert unattached_headers.get("x-litellm-applied-policies") is None, unattached_text
+        assert unattached_headers.get("x-litellm-applied-policies") is None, dict(unattached_headers)
         assert unattached_text == "provider response"
         assert guardrail.drain() == ()
         unattached_provider_requests: Final = provider.drain()
@@ -1128,7 +1120,7 @@ def test_streaming_request_body_policies_run_the_guardrail_and_are_removed_from_
         assert provider.drain() == ()
 
         response_headers, response_text = _stream_chat(gateway, model, key, _PROMPT, policy_name=policy_name)
-        assert response_headers.get("x-litellm-applied-policies") == policy_name, response_text
+        assert response_headers.get("x-litellm-applied-policies") == policy_name, dict(response_headers)
         assert response_text == "provider response"
         guardrail_requests: Final = guardrail.drain()
         assert len(guardrail_requests) == 1

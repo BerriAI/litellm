@@ -120,7 +120,7 @@ def _assert_apply_guardrail_successes(
     assert tuple(response.status_code for response in responses) == (200,) * len(responses), tuple(
         response.text for response in responses
     )
-    expected_response: Final = {"response_text": f"alias contract <CREDIT_CARD> and <EMAIL_ADDRESS>"}
+    expected_response: Final = {"response_text": "alias contract <CREDIT_CARD> and <EMAIL_ADDRESS>"}
     assert tuple(
         _ApplyGuardrailResponse.model_validate_json(response.content).model_dump() for response in responses
     ) == (expected_response,) * len(responses), tuple(response.text for response in responses)

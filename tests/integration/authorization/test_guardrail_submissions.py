@@ -253,10 +253,6 @@ def _assert_guardrail_request(
     assert request.headers["x-api-key"] == "synthetic-submission-guardrail-key"
 
 
-def _masked_user_id(user_id: str) -> str:
-    return f"{user_id[:6]}{'*' * (len(user_id) - 8)}{user_id[-2:]}"
-
-
 def test_non_admin_keys_scoped_to_the_submission_routes_get_403_from_the_admin_check(gateway: Gateway) -> None:
     with (
         wire_server(lambda _request: Reply(body=json.dumps(_PROVIDER_RESPONSE).encode())) as provider,
