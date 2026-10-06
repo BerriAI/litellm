@@ -120,7 +120,7 @@ describe("TraceConversation", () => {
     expect(within(result).getByText(/"exit_code": 1/, { selector: "pre" })).toHaveTextContent('"error": null');
   });
 
-  it("loads only twenty full steps at a time and fetches the remainder on demand", async () => {
+  it("loads twenty span details initially and pages conversation entries on demand", async () => {
     const user = userEvent.setup();
     const spans = [
       root,
@@ -128,7 +128,7 @@ describe("TraceConversation", () => {
     ];
     const long = { ...trace, spans } as Trace;
     renderWithProviders(<TraceConversation trace={long} accessToken="test" onOpenStep={vi.fn()} />);
-    const more = await screen.findByRole("button", { name: "Load next 11 steps" });
+    const more = await screen.findByRole("button", { name: "Load next 20 entries" });
     await waitFor(() => expect(more).toBeEnabled());
     expect(agentTraceSpanCall).toHaveBeenCalledTimes(20);
     expect(screen.queryByText("The release is ready")).not.toBeInTheDocument();
@@ -148,6 +148,200 @@ describe("TraceConversation", () => {
     expect(await screen.findByText("The release is ready")).toBeVisible();
     expect(screen.getByRole("button", { name: "Load more steps" })).toBeVisible();
     expect(screen.queryByText("End of conversation")).not.toBeInTheDocument();
+  });
+
+  it("adds twenty visible entries across hidden subagents, supplemental spans, and server pages", async () => {
+    const user = userEvent.setup();
+    const child = { ...root, span_id: "child", parent_span_id: "root", name: "Reviewer", start_offset_ms: 1 };
+    const childSpans = Array.from({ length: 50 }, (_, index) => [
+      {
+        ...tool,
+        span_id: `child-${index}`,
+        parent_span_id: "child",
+        name: `child tool ${index}`,
+        start_offset_ms: 2 + index * 2,
+      },
+      {
+        ...tool,
+        span_id: `supplement-${index}`,
+        parent_span_id: "child",
+        name: "claude_code.tool_result",
+        framework: "claude-code",
+        type: "event",
+        start_offset_ms: 3 + index * 2,
+      },
+    ]).flat();
+    const parentSpans = Array.from({ length: 45 }, (_, index) => [
+      { ...tool, span_id: `parent-${index}`, name: `parent tool ${index}`, start_offset_ms: 102 + index * 2 },
+      { ...tool, span_id: `empty-${index}`, type: "llm", start_offset_ms: 103 + index * 2 },
+    ]).flat();
+    const spans = [root, child, ...childSpans, ...parentSpans] as Trace["spans"];
+    const first: Trace = { ...trace, spans: spans.slice(0, 120), next_cursor: "next-page" };
+    const last: Trace = { ...trace, spans: spans.slice(120), next_cursor: null };
+    vi.mocked(agentTraceCall).mockImplementation(async (_token, _trace, _ref, cursor) => (cursor ? last : first));
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) => {
+      if (id === "root" || id === "child")
+        return { ...rootDetail, span_id: id, input: id === "root" ? "Main task" : "Child task", output: "" };
+      if (id.startsWith("empty-") || id.startsWith("supplement-"))
+        return { span_id: id, input: "", output: "", attributes: {} };
+      return { ...toolDetail, span_id: id };
+    });
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Conversation" }));
+    expect(await screen.findByText("2 entries shown")).toBeVisible();
+    expect(agentTraceSpanCall).toHaveBeenCalledTimes(20);
+    await user.click(screen.getByRole("button", { name: "Load next 20 entries", exact: true }));
+    expect(await screen.findByText("22 entries shown")).toBeVisible();
+    expect(screen.getAllByRole("region", { name: /Conversation step parent tool/ })).toHaveLength(20);
+    expect(
+      screen.queryByRole("button", { name: "Expand parent tool 20 tool call", exact: true }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Conversation step child tool 0", exact: true })).not.toBeVisible();
+    expect(agentTraceCall).toHaveBeenCalledWith("test", trace.summary.trace_id, undefined, "next-page");
+
+    await user.click(screen.getByText("Subagent: Reviewer", { exact: true }));
+    expect(screen.getAllByRole("region", { name: /Conversation step child tool/ })).toHaveLength(19);
+    await user.click(screen.getByRole("button", { name: "Load next 20 entries in Reviewer", exact: true }));
+    expect(screen.getAllByRole("region", { name: /Conversation step child tool/ })).toHaveLength(39);
+    expect(screen.getAllByRole("region", { name: /Conversation step parent tool/ })).toHaveLength(20);
+    expect(screen.queryByText("End of conversation")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { duration: 10, nextCursor: null },
+    { duration: 1000, nextCursor: null },
+    { duration: 10, nextCursor: "unrelated-page" },
+  ])("hides an exhausted subagent control with unrelated work remaining (%j)", async ({ duration, nextCursor }) => {
+    const user = userEvent.setup();
+    const child = {
+      ...root,
+      span_id: "child",
+      parent_span_id: "root",
+      name: "Reviewer",
+      start_offset_ms: 1,
+      duration_ms: duration,
+    };
+    const spans = [
+      root,
+      child,
+      { ...tool, span_id: "child-tool", parent_span_id: "child", start_offset_ms: 2, duration_ms: 1 },
+      ...Array.from({ length: 40 }, (_, index) => ({
+        ...tool,
+        span_id: `parent-${index}`,
+        start_offset_ms: 100 + index,
+        duration_ms: 1,
+      })),
+    ] as Trace["spans"];
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) => {
+      if (id === "child") return { ...rootDetail, span_id: id, input: "Review task", output: "Review finished" };
+      return id === "root" ? rootDetail : { ...toolDetail, span_id: id };
+    });
+    const loadMore = vi.fn();
+    renderWithProviders(
+      <TraceConversation
+        trace={{ ...trace, spans, next_cursor: nextCursor }}
+        accessToken="test"
+        onOpenStep={vi.fn()}
+        paging={{ loading: false, failed: false, loadMore }}
+      />,
+    );
+    const more = await screen.findByRole("button", { name: "Load next 20 entries", exact: true });
+    await waitFor(() => expect(more).toBeEnabled());
+    await user.click(screen.getByText("Subagent: Reviewer", { exact: true }));
+    expect(screen.getByText("Review finished")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /entries in Reviewer/ })).not.toBeInTheDocument();
+    expect(agentTraceSpanCall).toHaveBeenCalledTimes(20);
+    expect(loadMore).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("stops loading at the selected subagent's end (server paging: %s)", async (paged) => {
+    const user = userEvent.setup();
+    const child = {
+      ...root,
+      span_id: "child",
+      parent_span_id: "root",
+      name: "Reviewer",
+      start_offset_ms: 1,
+      duration_ms: 60,
+    };
+    const spans = [
+      root,
+      child,
+      ...Array.from({ length: 25 }, (_, index) => ({
+        ...tool,
+        span_id: `child-${index}`,
+        parent_span_id: "child",
+        name: `child tool ${index}`,
+        start_offset_ms: 2 + index,
+        duration_ms: 1,
+      })),
+      ...Array.from({ length: 40 }, (_, index) => ({
+        ...tool,
+        span_id: `parent-${index}`,
+        name: `parent tool ${index}`,
+        start_offset_ms: 100 + index,
+        duration_ms: 1,
+      })),
+    ] as Trace["spans"];
+    const first: Trace = {
+      ...trace,
+      spans: paged ? spans.slice(0, 20) : spans,
+      next_cursor: paged ? "child-page" : null,
+    };
+    const next: Trace = { ...trace, spans: spans.slice(20, 40), next_cursor: "unrelated-page" };
+    vi.mocked(agentTraceCall).mockImplementation(async (_token, _trace, _ref, cursor) => (cursor ? next : first));
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) => {
+      if (id === "child") return { ...rootDetail, span_id: id, input: "Review task", output: "Review finished" };
+      return id === "root" ? rootDetail : { ...toolDetail, span_id: id };
+    });
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Conversation" }));
+    await user.click(await screen.findByText("Subagent: Reviewer", { exact: true }));
+    const more = await screen.findByRole("button", { name: "Load next 20 entries in Reviewer" });
+    await waitFor(() => expect(more).toBeEnabled());
+    await user.click(more);
+    expect(await screen.findByRole("button", { name: "Expand child tool 24 tool call" })).toBeVisible();
+    await waitFor(() => expect(screen.queryByRole("button", { name: /entries in Reviewer/ })).not.toBeInTheDocument());
+    expect(screen.getByText("Review finished")).toBeVisible();
+    expect(screen.getAllByRole("region", { name: /Conversation step child tool/ })).toHaveLength(25);
+    expect(screen.getByRole("button", { name: "Load next 20 entries", exact: true })).toBeEnabled();
+    expect(screen.queryByText("Loading conversation…")).not.toBeInTheDocument();
+    expect(agentTraceSpanCall).toHaveBeenCalledTimes(40);
+    expect(agentTraceCall).toHaveBeenCalledTimes(paged ? 2 : 1);
+    expect(agentTraceCall).not.toHaveBeenCalledWith("test", trace.summary.trace_id, undefined, "unrelated-page");
+  });
+
+  it("stops at a failed server page and resumes the requested entries after retry", async () => {
+    const user = userEvent.setup();
+    const first: Trace = { ...trace, next_cursor: "next-page" };
+    const last: Trace = {
+      ...trace,
+      spans: [{ ...tool, span_id: "later", name: "later tool", start_offset_ms: 2 }],
+      next_cursor: null,
+    };
+    vi.mocked(agentTraceCall)
+      .mockResolvedValueOnce(first)
+      .mockRejectedValueOnce(new Error("temporarily unavailable"))
+      .mockResolvedValue(last);
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Conversation" }));
+    const more = await screen.findByRole("button", { name: "Load next 20 entries", exact: true });
+    await waitFor(() => expect(more).toBeEnabled());
+    await user.click(more);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load more conversation entries");
+    expect(more).toBeDisabled();
+    expect(agentTraceCall).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Read the release notes")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Retry", exact: true }));
+    expect(await screen.findByRole("button", { name: "Expand later tool tool call" })).toBeVisible();
+    expect(await screen.findByText("End of conversation")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it.each([false, true])(
@@ -240,7 +434,7 @@ describe("TraceConversation", () => {
       );
       expect(screen.getAllByText("Agent exceeded its execution limit")).toHaveLength(1);
       await act(async () => rootFetch.resolve({ ...rootDetail, output }));
-      const more = screen.getByRole("button", { name: "Load next 5 steps" });
+      const more = screen.getByRole("button", { name: "Load next 20 entries" });
       await waitFor(() => expect(more).toBeEnabled());
       expect(screen.getAllByText("Agent exceeded its execution limit")).toHaveLength(1);
       expect(screen.queryByText("The release is ready")).not.toBeInTheDocument();
@@ -259,6 +453,35 @@ describe("TraceConversation", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Retry this step to continue the conversation");
     await user.click(screen.getByRole("button", { name: "Retry step" }));
     expect(await screen.findByText("Read the release notes")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("pauses a requested page at a failed prefetched detail until it is retried", async () => {
+    const user = userEvent.setup();
+    const spans = [
+      root,
+      ...Array.from({ length: 45 }, (_, index) => ({
+        ...tool,
+        span_id: `tool-${index}`,
+        name: `check ${index}`,
+        start_offset_ms: index + 1,
+      })),
+    ] as Trace["spans"];
+    const retry = vi.fn().mockRejectedValueOnce(new Error("unavailable")).mockResolvedValue(toolDetail);
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) => {
+      if (id === "tool-21") return retry();
+      return id === "root" ? rootDetail : { ...toolDetail, span_id: id };
+    });
+    renderWithProviders(<TraceConversation trace={{ ...trace, spans }} accessToken="test" onOpenStep={vi.fn()} />);
+    const more = screen.getByRole("button", { name: "Load next 20 entries", exact: true });
+    await waitFor(() => expect(more).toBeEnabled());
+    await user.click(more);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load check 21");
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Expand check 22 tool call" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry step" }));
+    expect(await screen.findByText("40 entries shown")).toBeVisible();
+    expect(screen.getAllByRole("region", { name: /Conversation step check/ })).toHaveLength(39);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -293,7 +516,7 @@ describe("TraceConversation", () => {
     expect(await screen.findByText("Checking the release")).toBeVisible();
     expect(screen.queryByText("The release is ready")).not.toBeInTheDocument();
     expect(screen.queryByText("End of conversation")).not.toBeInTheDocument();
-    expect(screen.getByText("2 of 4 steps loaded")).toBeVisible();
+    expect(screen.getByText("2 entries shown")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Retry step" }));
     expect(await screen.findByText("The release is ready")).toBeVisible();
