@@ -7,7 +7,8 @@ from typing import Final
 
 import httpx
 import pytest
-from integration._support.client import Gateway
+from integration._support.client import Gateway, eventually
+from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict
@@ -151,10 +152,10 @@ def _file_parts(parts: tuple[Message, ...]) -> tuple[tuple[str, str, str, bytes]
     )
 
 
-def _sdk(gateway: Gateway, path: str) -> OpenAI:
+def _sdk(gateway: Gateway, path: str, api_key: str) -> OpenAI:
     return OpenAI(
         base_url=str(gateway.client.base_url).rstrip("/") + path,
-        api_key=gateway.key,
+        api_key=api_key,
         max_retries=0,
         http_client=httpx.Client(trust_env=False),
     )
@@ -182,7 +183,7 @@ def test_audio_transcription_verbose_json_forwards_every_form_field_and_returns_
             input_cost_per_token=0.000001,
             output_cost_per_token=0.000002,
         )
-        with _sdk(gateway, "/v1") as sdk:
+        with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
                 file=("a.wav", _WAV_BYTES, "audio/wav"),
@@ -199,9 +200,7 @@ def test_audio_transcription_verbose_json_forwards_every_form_field_and_returns_
         _VerboseTranscript.model_validate_json(response.content)
         assert response.headers["x-litellm-call-id"] == call_id, response.text
         assert float(response.headers["x-litellm-response-cost"]) >= 0, response.text
-        assert [(request.method, request.target) for request in wire.drain()] == [
-            ("POST", "/v1/audio/transcriptions")
-        ]
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/transcriptions")]
 
 
 def test_audio_transcription_reaches_upstream_identically_on_prefixed_and_unprefixed_routes(
@@ -223,8 +222,10 @@ def test_audio_transcription_reaches_upstream_identically_on_prefixed_and_unpref
         unprefixed: Final = scenario.model(
             model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
+        key: Final = scenario.key(models=[prefixed, unprefixed])
+
         def transcribe(base_path: str, model: str) -> dict[str, object]:
-            with _sdk(gateway, base_path) as sdk:
+            with _sdk(gateway, base_path, key) as sdk:
                 return json.loads(
                     sdk.audio.transcriptions.with_raw_response.create(
                         model=model,
@@ -261,7 +262,7 @@ def test_audio_transcription_json_format_returns_text_and_usage(gateway: Gateway
         model: Final = scenario.model(
             model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        with _sdk(gateway, "/v1") as sdk:
+        with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
                 file=("a.wav", _WAV_BYTES, "audio/wav"),
@@ -269,15 +270,164 @@ def test_audio_transcription_json_format_returns_text_and_usage(gateway: Gateway
             )
         assert response.status_code == 200, response.text
         assert json.loads(response.content) == _JSON_TRANSCRIPT, response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/transcriptions")]
+
+
+def test_audio_transcription_forwards_nested_and_repeated_bracket_fields_verbatim(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/audio/transcriptions"
+        assert request.headers["authorization"] == "Bearer synthetic-openai-key"
+        parts: Final = _multipart_parts(request)
+        assert _text_parts(parts) == (
+            ("chunking_strategy[prefix_padding_ms]", "300"),
+            ("chunking_strategy[silence_duration_ms]", "500"),
+            ("chunking_strategy[threshold]", "0.5"),
+            ("chunking_strategy[type]", "server_vad"),
+            ("known_speaker_names[]", "alice"),
+            ("known_speaker_names[]", "bob"),
+            ("known_speaker_references[]", "data:audio/wav;base64,AAAA"),
+            ("known_speaker_references[]", "data:audio/wav;base64,BBBB"),
+            ("model", "gpt-4o-transcribe"),
+            ("response_format", "json"),
+        )
+        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", _WAV_BYTES),)
+        return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/gpt-4o-transcribe", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        known_speaker_names: Final = ("alice", "bob")
+        known_speaker_references: Final = (
+            "data:audio/wav;base64,AAAA",
+            "data:audio/wav;base64,BBBB",
+        )
+        with _sdk(gateway, "/v1", gateway.key) as sdk:
+            response: Final = sdk.audio.transcriptions.with_raw_response.create(
+                model=model,
+                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                response_format="json",
+                chunking_strategy={
+                    "type": "server_vad",
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 500,
+                    "threshold": 0.5,
+                },
+                known_speaker_names=known_speaker_names,
+                known_speaker_references=known_speaker_references,
+            )
+        assert response.status_code == 200, response.text
+        assert json.loads(response.content) == _JSON_TRANSCRIPT, response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/transcriptions")]
+
+
+def test_audio_transcription_stream_returns_server_sent_events(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: stream=true transcriptions reach the upstream but its SSE body comes back as application/json "
+        '{"text": "data: ..."}, so OpenAI SDK stream=True callers get no transcript events'
+    )
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/audio/transcriptions"
+        parts: Final = _multipart_parts(request)
+        assert _text_parts(parts) == (("model", "gpt-4o-transcribe"), ("stream", "true"))
+        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", _WAV_BYTES),)
+        return Reply(
+            chunks=(
+                b'data: {"type":"transcript.text.delta","delta":"hello"}\n\n',
+                b'data: {"type":"transcript.text.delta","delta":" world"}\n\n',
+                b'data: {"type":"transcript.text.done","text":"hello world",'
+                b'"usage":{"type":"tokens","input_tokens":12,"output_tokens":4,"total_tokens":16}}\n\n',
+            ),
+            content_type="text/event-stream",
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/gpt-4o-transcribe", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        with _sdk(gateway, "/v1", gateway.key) as sdk:
+            with sdk.audio.transcriptions.with_streaming_response.create(
+                model=model,
+                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                stream=True,
+            ) as raw:
+                assert raw.headers["content-type"].startswith("text/event-stream")
+            events: Final = tuple(
+                event.to_dict()
+                for event in sdk.audio.transcriptions.create(
+                    model=model,
+                    file=("a.wav", _WAV_BYTES, "audio/wav"),
+                    stream=True,
+                )
+            )
+        assert events == (
+            {"type": "transcript.text.delta", "delta": "hello"},
+            {"type": "transcript.text.delta", "delta": " world"},
+            {
+                "type": "transcript.text.done",
+                "text": "hello world",
+                "usage": {
+                    "type": "tokens",
+                    "input_tokens": 12,
+                    "output_tokens": 4,
+                    "total_tokens": 16,
+                },
+            },
+        )
         assert [(request.method, request.target) for request in wire.drain()] == [
-            ("POST", "/v1/audio/transcriptions")
+            ("POST", "/v1/audio/transcriptions"),
+            ("POST", "/v1/audio/transcriptions"),
         ]
 
 
+def test_audio_transcription_applies_json_string_metadata_without_forwarding_it(gateway: Gateway) -> None:
+    tag: Final = f"audio-metadata-{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/audio/transcriptions"
+        assert request.headers["authorization"] == "Bearer synthetic-openai-key"
+        parts: Final = _multipart_parts(request)
+        assert _text_parts(parts) == (("model", "whisper-1"), ("response_format", "json"))
+        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", _WAV_BYTES),)
+        return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request_multipart(
+            "/v1/audio/transcriptions",
+            {
+                "model": model,
+                "response_format": "json",
+                "metadata": json.dumps({"tags": [tag]}),
+            },
+            {"file": ("a.wav", _WAV_BYTES, "audio/wav")},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == _JSON_TRANSCRIPT, response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/transcriptions")]
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_tags FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
+                (response.headers["x-litellm-call-id"],),
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        request_tags: Final = rows[0]["request_tags"]
+        assert isinstance(request_tags, list), rows
+        assert tuple(
+            value for value in request_tags if isinstance(value, str) and not value.startswith("User-Agent: ")
+        ) == (tag,), rows
+
+
 @pytest.mark.parametrize("response_format", ("text", "srt", "vtt"))
-def test_audio_transcription_forwards_plain_response_format_to_upstream(
-    gateway: Gateway, response_format: str
-) -> None:
+def test_audio_transcription_forwards_plain_response_format_to_upstream(gateway: Gateway, response_format: str) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/audio/transcriptions"
@@ -290,16 +440,14 @@ def test_audio_transcription_forwards_plain_response_format_to_upstream(
         model: Final = scenario.model(
             model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        with _sdk(gateway, "/v1") as sdk:
+        with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
                 file=("a.wav", _WAV_BYTES, "audio/wav"),
                 response_format=response_format,
             )
         assert response.status_code == 200, response.text
-        assert [(request.method, request.target) for request in wire.drain()] == [
-            ("POST", "/v1/audio/transcriptions")
-        ]
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/transcriptions")]
 
 
 @pytest.mark.parametrize("response_format", ("text", "srt", "vtt"))
@@ -320,7 +468,7 @@ def test_audio_transcription_plain_response_format_returns_the_raw_transcript(
         model: Final = scenario.model(
             model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        with _sdk(gateway, "/v1") as sdk:
+        with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
                 file=("a.wav", _WAV_BYTES, "audio/wav"),

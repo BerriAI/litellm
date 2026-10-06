@@ -24,10 +24,10 @@ _FORMAT_MEDIA_TYPES: Final = {
 }
 
 
-def _sdk(gateway: Gateway, path: str) -> OpenAI:
+def _sdk(gateway: Gateway, path: str, api_key: str) -> OpenAI:
     return OpenAI(
         base_url=str(gateway.client.base_url).rstrip("/") + path,
-        api_key=gateway.key,
+        api_key=api_key,
         max_retries=0,
         http_client=httpx.Client(trust_env=False),
     )
@@ -48,7 +48,8 @@ def test_audio_speech_forwards_the_full_json_body_and_streams_the_audio(gateway:
         model: Final = scenario.model(
             model="openai/gpt-4o-mini-tts", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        with _sdk(gateway, base_path) as sdk:
+        key: Final = scenario.key(models=[model])
+        with _sdk(gateway, base_path, key) as sdk:
             response: Final = sdk.audio.speech.with_raw_response.create(
                 model=model,
                 input="hello",
@@ -64,7 +65,7 @@ def test_audio_speech_forwards_the_full_json_body_and_streams_the_audio(gateway:
 
 
 def test_audio_speech_streams_chunked_audio_through_intact(gateway: Gateway) -> None:
-    audio: Final = bytes((index % 256 for index in range(64 * 1024)))
+    audio: Final = bytes(index % 256 for index in range(64 * 1024))
     chunks: Final = tuple(audio[start : start + 4096] for start in range(0, len(audio), 4096))
     assert len(chunks) == 16
 
@@ -77,7 +78,7 @@ def test_audio_speech_streams_chunked_audio_through_intact(gateway: Gateway) -> 
         model: Final = scenario.model(
             model="openai/gpt-4o-mini-tts", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        with _sdk(gateway, "/v1") as sdk:
+        with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.speech.with_raw_response.create(
                 model=model,
                 input="hello",
@@ -103,7 +104,7 @@ def test_audio_speech_derives_the_media_type_from_the_requested_format(
         model: Final = scenario.model(
             model="openai/gpt-4o-mini-tts", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        with _sdk(gateway, "/v1") as sdk:
+        with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.speech.with_raw_response.create(
                 model=model,
                 input="hello",
