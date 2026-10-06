@@ -14,7 +14,7 @@ from integration.translation.messages.bases.vertex_ai import (
     GEMINI_3_8_FLASH_TEST_CASE,
     GEMINI_3_1_PRO_PREVIEW_TEST_CASE,
 )
-from integration.translation.runner import run
+from integration.translation.runner import assert_translation
 
 
 @pytest.mark.parametrize(
@@ -37,4 +37,4 @@ def test_messages_basic_vertex_ai(
     gateway: Gateway,
     provider: SharedProvider,
 ) -> None:
-    run(case, gateway, provider)
+    assert_translation(case, gateway, provider)
