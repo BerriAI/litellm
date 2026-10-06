@@ -14,6 +14,7 @@ litellm-auth.workspace = true
 litellm-gateway-auth.workspace = true
 litellm-inference.workspace = true
 litellm-inference-transcription.workspace = true
+litellm-inference-responses.workspace = true
 litellm-host-http.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true

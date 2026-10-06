@@ -12,8 +12,7 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheOptions, CachePolicy, CacheScope, ResponseCache, ResponseCacheConfig,
-    ResponseCacheService, ResponseEnvelope,
+    CacheOptions, CachePolicy, CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService,
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
@@ -404,50 +403,6 @@ async fn an_invalid_cached_envelope_is_replaced_by_a_provider_result(#[case] poi
 }
 
 #[rstest]
-#[case::chat_completion(json!({"kind":"Response","value":{"id":"chat-1","model":"test","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2}}}))]
-#[case::wrong_envelope(json!({"kind":"Stream","value":"data: [DONE]\n\n"}))]
-#[tokio::test]
-async fn responses_refetches_instead_of_deserializing_another_api_response(
-    #[case] poisoned: Value,
-) {
-    use litellm_inference::responses::route::Responses;
-    use litellm_llms_types::formats::responses::ResponsesApiResponse;
-
-    let cache: Arc<dyn ResponseCacheService> = Arc::new(InvalidEntryCache(
-        ResponseCache::new(Arc::new(InMemoryCache::default())),
-        serde_json::to_value(ResponseEnvelope::new("responses", poisoned)).unwrap(),
-    ));
-    let calls = AtomicUsize::new(0);
-    for _ in 0..2 {
-        let response = execute_unary::<Responses, _, _>(
-            cache_request(json!({"input":"hello"})),
-            Some(cache.clone()),
-            Some(CacheOptions::new(CacheScope::Shared)),
-            &(),
-            None,
-            || async {
-                calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ResponsesApiResponse {
-                    id: "fresh-response".into(),
-                    model: "test".into(),
-                    output: vec![
-                        json!({"type":"message","content":[{"type":"output_text","text":"fresh"}]}),
-                    ],
-                    extra: [("status".into(), json!("completed"))]
-                        .into_iter()
-                        .collect(),
-                })
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(response.id, "fresh-response");
-        assert_eq!(response.output[0]["content"][0]["text"], "fresh");
-    }
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-}
-
-#[rstest]
 #[case::system("system", json!("answer ALPHA"), json!("answer BETA"))]
 #[case::stop_sequences("stop_sequences", json!(["STOP"]), json!(["END"]))]
 #[case::top_k("top_k", json!(5), json!(10))]
@@ -833,43 +788,6 @@ async fn namespaces_and_surfaces_isolate_entries_on_shared_storage() {
     assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
 
-#[rstest]
-#[case::completed("completed", 1)]
-#[case::incomplete("incomplete", 2)]
-#[tokio::test]
-async fn responses_cache_only_reuses_completed_responses(
-    cache: Arc<dyn ResponseCacheService>,
-    #[case] status: &str,
-    #[case] expected_calls: usize,
-) {
-    use litellm_inference::responses::route::Responses;
-    use litellm_llms_types::formats::responses::ResponsesApiResponse;
-
-    let calls = AtomicUsize::new(0);
-    for _ in 0..2 {
-        let response = execute_unary::<Responses, _, _>(
-            cache_request(json!({"input":"hello"})),
-            Some(cache.clone()),
-            Some(CacheOptions::new(CacheScope::Shared)),
-            &(),
-            None,
-            || async {
-                let call = calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ResponsesApiResponse {
-                    id: call.to_string(),
-                    model: "test".into(),
-                    output: Vec::new(),
-                    extra: [("status".into(), json!(status))].into_iter().collect(),
-                })
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(response.extra.get("status"), Some(&json!(status)));
-    }
-    assert_eq!(calls.load(Ordering::SeqCst), expected_calls);
-}
-
 mod support;
 use support::traces;
 
@@ -1028,9 +946,6 @@ impl Interceptors<RouteError> for ChangingHooks {
 #[case::messages_credentials("messages", "credentials")]
 #[case::messages_endpoint("messages", "endpoint")]
 #[case::messages_callback("messages", "callback")]
-#[case::responses_credentials("responses", "credentials")]
-#[case::responses_endpoint("responses", "endpoint")]
-#[case::responses_callback("responses", "callback")]
 #[tokio::test]
 async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
     cache: Arc<dyn ResponseCacheService>,
@@ -1041,19 +956,14 @@ async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
     use litellm_inference::{
         chat_completions::{ChatCompletionsRoute, types::ChatCompletionsRequest},
         messages::MessagesCall,
-        responses::types::ResponsesCall,
     };
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     let first = MockServer::start().await;
     let second = MockServer::start().await;
-    let response = if surface == "responses" {
-        json!({"id":"response-test", "model":"test", "output":[], "status":"completed"})
-    } else {
-        json!({"id":"message-test", "type":"message", "role":"assistant", "model":"test",
-            "content":[{"type":"text", "text":"answer"}], "stop_reason":"end_turn", "stop_sequence":null,
-            "usage":{"input_tokens":3,"output_tokens":2}})
-    };
+    let response = json!({"id":"message-test", "type":"message", "role":"assistant", "model":"test",
+        "content":[{"type":"text", "text":"answer"}], "stop_reason":"end_turn", "stop_sequence":null,
+        "usage":{"input_tokens":3,"output_tokens":2}});
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(response.clone()))
         .expect(if change == "endpoint" { 1 } else { 2 })
@@ -1116,26 +1026,6 @@ async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
                     api_key:None,api_base:None,custom_llm_provider:None,extra_headers:None,provider_specific_header:None,timeout:None,shaping:Default::default(),
                 }, &hooks, None).await.unwrap();
             }
-            "responses" => {
-                support::responses_route(secrets.clone())
-                    .with_cache(cache)
-                    .execute(
-                        ResponsesCall {
-                            model: "test".into(),
-                            input: json!("hello"),
-                            optional_params: Default::default(),
-                            api_key: None,
-                            api_base: None,
-                            custom_llm_provider: None,
-                            extra_headers: None,
-                            timeout: None,
-                        },
-                        &hooks,
-                        None,
-                    )
-                    .await
-                    .unwrap();
-            }
             _ => unreachable!(),
         }
     }
@@ -1153,12 +1043,10 @@ async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
     }
     let requests = first.received_requests().await.unwrap();
     if change == "credentials" {
-        let header = if surface == "responses" {
-            "authorization"
-        } else {
-            "x-api-key"
-        };
-        assert_ne!(requests[0].headers[header], requests[1].headers[header]);
+        assert_ne!(
+            requests[0].headers["x-api-key"],
+            requests[1].headers["x-api-key"]
+        );
     }
     if change == "callback" {
         assert_eq!(

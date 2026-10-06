@@ -8,63 +8,28 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use litellm_http::HttpClientConfig;
-use litellm_inference::test_support::{http_config, no_secrets, provider_http, resources};
+use litellm_inference::test_support::{http_config, provider_http, resources};
 use litellm_secrets::source::SecretSource;
 use serde_json::Value;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
 
-/// A port nothing listens on, for calls that must fail before any request is sent.
-pub const UNREACHABLE_BASE: &str = "http://127.0.0.1:1";
-
-pub fn messages_route(
+pub fn responses_route(
     secrets: Arc<dyn SecretSource>,
-) -> litellm_inference::messages::MessagesRoute {
+) -> litellm_inference_responses::ResponsesRoute {
     let resources = resources();
-    litellm_inference::messages::MessagesRoute::new(
+    litellm_inference_responses::ResponsesRoute::new(
         provider_http(&resources, &http_config()),
         resources.auth,
         secrets,
     )
 }
 
-pub fn chat_completions_route() -> litellm_inference::chat_completions::ChatCompletionsRoute {
-    let resources = resources();
-    litellm_inference::chat_completions::ChatCompletionsRoute::new(
-        provider_http(&resources, &http_config()),
-        resources.auth,
-        no_secrets(),
-    )
-}
-
-pub fn build_ocr_route(
-    resources: &litellm_inference::resources::CoreResources,
-    config: &HttpClientConfig,
-    url_policy: litellm_http::media::UrlPolicy,
-    settings: litellm_llms::base_llm::ocr::settings::OcrSettings,
-    secrets: Arc<dyn SecretSource>,
-) -> litellm_inference::ocr::OcrRoute {
-    litellm_inference::ocr::OcrRoute::new(
-        litellm_llms::base_llm::ocr::handler::OcrClient::new(
-            &resources.pool,
-            config,
-            url_policy,
-            resources.auth.clone(),
-            settings,
-            secrets,
-        )
-        .unwrap(),
-    )
-}
-
-/// Starts an upstream that answers its n-th request with the n-th response and 404s after.
 pub async fn upstream(responses: impl IntoIterator<Item = ResponseTemplate>) -> MockServer {
     let server = MockServer::start().await;
     respond_in_order(&server, responses).await;
     server
 }
 
-/// Scripts responses on a started server, for responses that need its address.
 pub async fn respond_in_order(
     server: &MockServer,
     responses: impl IntoIterator<Item = ResponseTemplate>,
