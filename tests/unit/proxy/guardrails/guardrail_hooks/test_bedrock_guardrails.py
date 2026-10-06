@@ -5663,8 +5663,8 @@ def test_initialize_bedrock_wires_streaming_flags():
     assert defaulted.streaming_buffer_until_moderated is True
     assert defaulted.streaming_sampling_rate == 5
     assert defaulted.streaming_end_of_stream_only is False
-    assert defaulted.streaming_buffer_release_on_scan is True
-    assert defaulted._streams_incrementally() is True
+    assert defaulted.streaming_buffer_release_on_scan is False
+    assert defaulted._streams_incrementally() is False
 
 
 def test_initialize_bedrock_rejects_non_positive_sampling_rate():
@@ -5701,8 +5701,8 @@ def test_update_in_memory_litellm_params_round_trips_streaming_flags():
     assert guardrail.streaming_buffer_until_moderated is True
     assert guardrail.streaming_sampling_rate == 5
     assert guardrail.streaming_end_of_stream_only is False
-    assert guardrail.streaming_buffer_release_on_scan is True
-    assert guardrail._streams_incrementally() is True
+    assert guardrail.streaming_buffer_release_on_scan is False
+    assert guardrail._streams_incrementally() is False
 
 
 async def _run_streaming_hook_recording_order(guardrail: BedrockGuardrail) -> list:
@@ -5799,20 +5799,21 @@ async def test_buffered_default_hook_scans_before_any_chunk():
 
     events = await _run_streaming_hook_recording_order(guardrail)
 
-    assert guardrail._streams_incrementally() is True
+    assert guardrail._streams_incrementally() is False
     assert events[0] == "scan"
     assert all(e == "scan" or e[0] == "chunk" for e in events)
     assert len([e for e in events if e != "scan"]) >= 1
 
 
 @pytest.mark.asyncio
-async def test_default_streaming_scans_each_window_before_release():
+async def test_sync_strategy_scans_each_window_before_release():
     guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-sync-default",
+        guardrail_name="bedrock-sync-windows",
         guardrailIdentifier="test-id",
         guardrailVersion="DRAFT",
         event_hook=GuardrailEventHooks.post_call,
         default_on=True,
+        streaming_strategy="sync",
     )
     events = []
     parts = ("a", "b", "c", "d", "e", "f")
@@ -6002,6 +6003,7 @@ async def test_sync_stream_withholds_text_bedrock_anonymized():
         guardrailVersion="DRAFT",
         event_hook=GuardrailEventHooks.post_call,
         default_on=True,
+        streaming_strategy="sync",
     )
     yielded: list[object] = []
 

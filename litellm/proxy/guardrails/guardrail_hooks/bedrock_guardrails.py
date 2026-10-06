@@ -2784,10 +2784,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         Process streaming response chunks with a post_call OUTPUT scan.
 
-        The default holds each window of chunks, waits for ApplyGuardrail, then
-        releases that window. aggregate still holds the whole stream for one scan.
-        Raw SSE on a route with a streaming translation follows that same strategy.
-        Frames with no translation stay on the full-stream scan.
+        The default holds the whole stream for one ApplyGuardrail call. sync holds
+        each window, waits for that call, then releases the window. async sends
+        chunks immediately and scans once at the end. Raw SSE on a route with a
+        streaming translation follows the selected strategy. Frames with no
+        translation stay on the full-stream scan.
         """
         if self._streams_incrementally():
             response_iterator: Final = response.__aiter__()
