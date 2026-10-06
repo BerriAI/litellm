@@ -8,8 +8,8 @@ Deploys the componentized LiteLLM proxy on GCP:
 
 - **VPC** + Private Services Access range + a Serverless VPC Access connector
   so Cloud Run can reach private IPs
-- **Cloud SQL for PostgreSQL** — primary instance + optional read replica
-  (`create_read_replica`, default true). Password auth via Secret Manager
+- **Cloud SQL for PostgreSQL** — primary instance + optional cross-zone read
+  replica (`create_read_replica`, default true). Password auth via Secret Manager
 - **Memorystore (Redis)** for caching + rate limiting, private IP only
 - **GCS bucket** — private, versioned, uniform IAM; exposed as `GCS_BUCKET_NAME`
 - **Secret Manager** entries for `LITELLM_MASTER_KEY` and `DATABASE_PASSWORD`
@@ -559,6 +559,9 @@ masterKey:
   secretName: <kubernetes-secret-with-master-key>
 ```
 
+With `create_read_replica = false`, leave out the `reader` block, since
+`cloudsql_reader_ip` is null
+
 Create the database Secret with keys `username` (the `db_username` output)
 and `password` (read it with `gcloud secrets versions access latest
 --secret=<db_password_secret_id>`), and the master key Secret from
@@ -586,6 +589,12 @@ Two opt-in tripwires guard against accidental data loss on
 
 Flip `cloudsql_deletion_protection` to `false` or `gcs_force_destroy` to
 `true` only for ephemeral / CI stacks where you accept losing the data.
+
+Setting `create_read_replica = false` on an existing stack destroys the
+replica, so that apply also needs `cloudsql_deletion_protection = false`;
+set it back to `true` afterwards. Terraform deletes the replica before it
+rolls the Cloud Run revisions that drop `DATABASE_URL_READ_REPLICA`, so
+reads routed to the replica can fail until the new revisions are serving
 
 ## Redis encryption
 

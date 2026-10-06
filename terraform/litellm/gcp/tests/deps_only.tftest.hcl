@@ -37,6 +37,7 @@ run "default_creates_everything" {
       length(google_cloud_run_v2_job.migrations) == 1,
       length(google_compute_global_address.lb) == 1,
       length(terraform_data.migration) == 1,
+      length(google_sql_database_instance.reader) == 1,
     ])
     error_message = "The default mode must create networking, runtime services, the load balancer, and migrations."
   }
@@ -193,7 +194,7 @@ run "skip_read_replica" {
 
   assert {
     condition     = length(local.shared_env_kv) == 10
-    error_message = "Without a replica, shared env should be 10 (no DATABASE_*_READ_REPLICA)."
+    error_message = "Writer-only mode must omit both DATABASE_*_READ_REPLICA entries."
   }
 
   assert {
