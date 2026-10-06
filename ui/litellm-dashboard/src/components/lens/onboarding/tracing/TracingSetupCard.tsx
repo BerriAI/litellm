@@ -5,7 +5,6 @@ import { useState } from "react";
 import { useTimeout } from "usehooks-ts";
 
 import { cn } from "@/lib/cva.config";
-import { LensPreviewButton } from "../../ui/LensPreviewButton";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { copyToClipboard } from "@/utils/dataUtils";
@@ -683,7 +682,6 @@ export function TracingSetupCard(props: TracingSetupProps) {
 
   return (
     <div className="w-full max-w-3xl pb-8" data-testid="tracing-setup-card">
-      {!props.connected && <LensPreviewButton />}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <h2 className="text-xl font-semibold tracking-tight">{setupTitle(enabled, props.connected ?? false)}</h2>
         <span role="status" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">

@@ -50,16 +50,18 @@ export function TimeRangeControls({
   showLive = true,
   onLiveChange,
 }: TimeRangeControlsProps) {
+  const label = fixedRange ? fixedRangeLabel(fixedRange) : presetLabel(rangeHours);
   return (
-    <div className="flex items-stretch divide-x divide-border border-l border-border">
+    <div className="flex min-w-0 max-w-full items-stretch divide-x divide-border border-l border-border">
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Time range"
-          className={cn(SEGMENT, "text-foreground hover:bg-muted/60")}
+          className={cn(SEGMENT, "min-w-0 text-foreground hover:bg-muted/60")}
+          title={label}
           data-testid="time-range-trigger"
         >
-          <span className="tabular-nums">{fixedRange ? fixedRangeLabel(fixedRange) : presetLabel(rangeHours)}</span>
-          <ChevronDown className="size-3.5 text-muted-foreground" />
+          <span className="truncate tabular-nums">{label}</span>
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-auto min-w-44">
           <DropdownMenuRadioGroup
@@ -81,6 +83,7 @@ export function TimeRangeControls({
           onClick={() => onLiveChange(!live)}
           className={cn(
             SEGMENT,
+            "shrink-0",
             live ? "bg-info/10 text-info hover:bg-info/15" : "text-muted-foreground hover:text-foreground",
           )}
         >

@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import HiddenParams
 
@@ -161,6 +161,9 @@ MCPTokenEndpointAuthMethod = Literal["client_secret_basic", "client_secret_post"
 
 
 class MCPCredentials(TypedDict, total=False):
+    dcr_issuer: ReadOnly[str | None]
+    dcr_server_url: ReadOnly[str | None]
+
     auth_value: str | None
     """
     Authentication value

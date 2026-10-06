@@ -84,6 +84,11 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     validate_managed_files_requirement,
     validate_managed_id_requirement,
 )
+from litellm.proxy.openai_files_endpoints.file_usage_caps import (
+    batch_file_record_limit,
+    enforce_batch_file_upload_limit,
+    enforce_file_download_limit,
+)
 from litellm.proxy.openai_files_endpoints.general_upload_validation import (
     MB,
     check_allowed_extension,
@@ -574,6 +579,7 @@ async def create_file(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
+        general_settings_view,
         llm_router,
         proxy_config,
         proxy_logging_obj,
@@ -672,6 +678,7 @@ async def create_file(
                 file_source,
                 _MAX_BATCH_FILE_SIZE_MB_ADAPTER.validate_python(general_settings.get("max_batch_file_size_mb")),
                 PASSTHROUGH_BATCH_LINE_SHAPE if passthrough else BATCH_LINE_SHAPE,
+                batch_file_record_limit(user_api_key_dict, general_settings_view()),
             )
             if batch_file_failure is not None:
                 raise_batch_file_validation_failure(batch_file_failure)
@@ -746,6 +753,11 @@ async def create_file(
             expires_after = FileExpiresAfter(
                 anchor="created_at",  # Literal, not expires_after_anchor variable
                 seconds=expires_after_seconds,
+            )
+
+        if purpose == "batch":
+            await enforce_batch_file_upload_limit(
+                proxy_logging_obj.file_usage_cache, user_api_key_dict, general_settings_view()
             )
 
         # Include original request and headers in the data
@@ -964,6 +976,7 @@ async def get_file_content(
     """
     from litellm.proxy.proxy_server import (
         general_settings,
+        general_settings_view,
         llm_router,
         proxy_config,
         proxy_logging_obj,
@@ -977,6 +990,9 @@ async def get_file_content(
             resource_kind="file",
             user_api_key_dict=user_api_key_dict,
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
+        await enforce_file_download_limit(
+            proxy_logging_obj.file_usage_cache, user_api_key_dict, general_settings_view(), file_id
         )
 
         # Include original request and headers in the data
@@ -1216,6 +1232,8 @@ async def get_file_content(
         )
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.retrieve_file_content(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, ProxyException):
+            raise e
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -1652,7 +1670,8 @@ async def delete_file(
 def _as_file_list_page(response: object) -> object:
     if not isinstance(response, list):
         return response
-    return FileListPage(**build_list_page(_LISTED_FILES_ADAPTER.validate_python(response)))
+    page: Final = build_list_page(_LISTED_FILES_ADAPTER.validate_python(response))
+    return FileListPage.model_validate(page)
 
 
 @router.get(

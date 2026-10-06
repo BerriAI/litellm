@@ -1955,6 +1955,20 @@ class ComplexityRouterConfig(BaseModel):
     def _normalize_classification_examples_field(cls, value: str | None) -> str | None:
         return normalize_classification_examples(value)
 
+    def resolve_default_model(self, default_model: str | None = None) -> str | None:
+        if default_model is not None:
+            return default_model
+        if self.default_model is not None:
+            return self.default_model
+        derived: Final = (
+            (self.tiers.get(self.fallback_tier) if self.fallback_tier is not None else None)
+            or self.tiers.get("MEDIUM")
+            or self.tiers.get("SIMPLE")
+        )
+        if isinstance(derived, list):
+            return derived[0] if derived else None
+        return derived
+
     @property
     def has_custom_tiers(self) -> bool:
         """True when the operator replaced the built-in tier set via tier_definitions."""
