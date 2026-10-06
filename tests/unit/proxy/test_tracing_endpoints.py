@@ -92,6 +92,7 @@ TRACE_RESPONSE: Final = {
         "output_tokens": 0,
         "models": [],
         "spend": None,
+        "priced_calls": 0,
     },
     "agents": [],
     "spans": [],

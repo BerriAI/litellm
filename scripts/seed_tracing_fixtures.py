@@ -78,7 +78,12 @@ def spend_fixtures(directory: Path = SPEND_FIXTURES) -> tuple[tuple[str, tuple[S
             path.stem.removesuffix("_spend_logs"),
             SPEND_ROWS.validate_python(
                 tuple(
-                    {"litellm_call_id": "", **JSON_OBJECT.validate_json(line)} for line in path.read_text().splitlines()
+                    {
+                        "litellm_call_id": "",
+                        "provider_request_id": "",
+                        **JSON_OBJECT.validate_json(line),
+                    }
+                    for line in path.read_text().splitlines()
                 )
             ),
         )
