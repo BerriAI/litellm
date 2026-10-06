@@ -178,12 +178,26 @@ def test_container_routes_refuse_another_users_key_and_serve_the_owner(gateway: 
         owner: Final = _client(gateway, owner_key, model)
         other: Final = _client(gateway, other_key, model)
         _routable_over_alias(gateway, model)
-        container_id: Final = _create(owner, model, 0)
+        created: Final = owner.containers.create(
+            name="c-0",
+            expires_after={"anchor": "last_active_at", "minutes": 20},
+            file_ids=["file-seed"],
+            extra_body={"model": model},
+        )
+        container_id: Final = created.id
         assert ResponsesAPIRequestUtils.decode_container_id_to_original(container_id) == original, container_id
         assert _owner_rows(original) == [
             {"unified_object_id": container_id, "file_purpose": "container", "created_by": owner_id}
         ]
-        assert _requests(wire) == [("POST", "/v1/containers", f"Bearer {provider_key}")]
+        create_requests: Final = wire.drain()
+        assert [
+            (request.method, request.target, request.headers["authorization"]) for request in create_requests
+        ] == [("POST", "/v1/containers", f"Bearer {provider_key}")]
+        assert json.loads(create_requests[0].body) == {
+            "name": "c-0",
+            "expires_after": {"anchor": "last_active_at", "minutes": 20},
+            "file_ids": ["file-seed"],
+        }, create_requests[0].body
 
         _refused_with_sdk(lambda: other.containers.retrieve(container_id))
         _refused_with_sdk(lambda: other.containers.files.list(container_id))

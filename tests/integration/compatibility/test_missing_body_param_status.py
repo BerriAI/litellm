@@ -1656,21 +1656,38 @@ def test_openai_sdk_multipart_video_create_forwards_input_reference_as_a_file(ga
     seen: Final[list[Request]] = []
     with wire_server(_video_upstream(seen)) as wire, gateway.scenario() as scenario:
         model: Final = _video_model(scenario, wire)
-        client: Final = _routable_video_client(gateway, model)
-        video: Final = client.videos.create(
-            prompt="p", model=model, seconds="8", size="1280x720", input_reference=("r.png", _PNG, "image/png")
+        versioned: Final = _routable_video_client(gateway, model)
+        unversioned: Final = versioned.with_options(base_url=str(gateway.client.base_url))
+        videos: Final = tuple(
+            client.videos.create(
+                prompt=prompt,
+                model=model,
+                seconds="8",
+                size="1280x720",
+                input_reference=("r.png", _PNG, "image/png"),
+                extra_body={"style_hint": "noir"},
+            )
+            for client, prompt in ((versioned, "p-v1"), (unversioned, "p-alias"))
         )
-        assert video == _client_video(video.id, model, created=True), video
-        assert _upstream_video_id(video) == ("openai", _VIDEO_UPSTREAM_ID), video.id
-        assert [_video_target(request) for request in seen] == [("POST", "/v1/videos", f"Bearer {_VIDEO_PROVIDER_KEY}")]
-        assert _multipart_parts(seen[0]) == (
-            ("model", None, "text/plain", b"sora-2"),
-            ("prompt", None, "text/plain", b"p"),
-            ("seconds", None, "text/plain", b"8"),
-            ("size", None, "text/plain", b"1280x720"),
-            ("input_reference", "input_reference.png", "image/png", _PNG),
-        ), seen[0].body
-        assert len(wire.drain()) == 1
+        for video in videos:
+            assert video == _client_video(video.id, model, created=True), video
+            assert _upstream_video_id(video) == ("openai", _VIDEO_UPSTREAM_ID), video.id
+        assert [_video_target(request) for request in seen] == [
+            ("POST", "/v1/videos", f"Bearer {_VIDEO_PROVIDER_KEY}"),
+            ("POST", "/v1/videos", f"Bearer {_VIDEO_PROVIDER_KEY}"),
+        ]
+        assert [_multipart_parts(request) for request in seen] == [
+            (
+                ("model", None, "text/plain", b"sora-2"),
+                ("prompt", None, "text/plain", prompt),
+                ("seconds", None, "text/plain", b"8"),
+                ("size", None, "text/plain", b"1280x720"),
+                ("style_hint", None, "text/plain", b"noir"),
+                ("input_reference", "input_reference.png", "image/png", _PNG),
+            )
+            for prompt in (b"p-v1", b"p-alias")
+        ], [request.body for request in seen]
+        assert len(wire.drain()) == 2
 
 
 def test_openai_sdk_multipart_video_edit_forwards_the_uploaded_video_file(gateway: Gateway) -> None:
@@ -1991,21 +2008,39 @@ def test_json_video_create_decodes_character_ids_into_text_parts(gateway: Gatewa
         model: Final = _video_model(scenario, wire)
         _routable_over_gateway(gateway, model)
         character: Final = encode_character_id_with_provider("char_source", "openai", None)
-        response: Final = gateway.request(
-            "POST",
-            "/v1/videos",
-            {"model": model, "prompt": "p", "seconds": 8, "size": "1280x720", "characters": [{"id": character}]},
+        responses: Final = tuple(
+            gateway.request(
+                "POST",
+                path,
+                {
+                    "model": model,
+                    "prompt": prompt,
+                    "seconds": 8,
+                    "size": "1280x720",
+                    "characters": [{"id": character}],
+                    "style_hint": "noir",
+                },
+            )
+            for path, prompt in (("/v1/videos", "p-v1"), ("/videos", "p-alias"))
         )
-        assert response.status_code == 200, response.text
-        video: Final = Video.model_validate_json(response.text)
-        assert video == _client_video(video.id, model, created=True), response.text
-        assert _upstream_video_id(video) == ("openai", _VIDEO_UPSTREAM_ID), response.text
-        assert [_video_target(request) for request in seen] == [("POST", "/v1/videos", f"Bearer {_VIDEO_PROVIDER_KEY}")]
-        assert _multipart_parts(seen[0]) == (
-            ("model", None, "text/plain", b"sora-2"),
-            ("prompt", None, "text/plain", b"p"),
-            ("seconds", None, "text/plain", b"8"),
-            ("size", None, "text/plain", b"1280x720"),
-            ("characters[][id]", None, "text/plain", b"char_source"),
-        ), seen[0].body
-        assert len(wire.drain()) == 1
+        for response in responses:
+            assert response.status_code == 200, response.text
+            video = Video.model_validate_json(response.text)
+            assert video == _client_video(video.id, model, created=True), response.text
+            assert _upstream_video_id(video) == ("openai", _VIDEO_UPSTREAM_ID), response.text
+        assert [_video_target(request) for request in seen] == [
+            ("POST", "/v1/videos", f"Bearer {_VIDEO_PROVIDER_KEY}"),
+            ("POST", "/v1/videos", f"Bearer {_VIDEO_PROVIDER_KEY}"),
+        ], [response.text for response in responses]
+        assert [_multipart_parts(request) for request in seen] == [
+            (
+                ("model", None, "text/plain", b"sora-2"),
+                ("prompt", None, "text/plain", prompt),
+                ("seconds", None, "text/plain", b"8"),
+                ("size", None, "text/plain", b"1280x720"),
+                ("characters[][id]", None, "text/plain", b"char_source"),
+                ("style_hint", None, "text/plain", b"noir"),
+            )
+            for prompt in (b"p-v1", b"p-alias")
+        ], [request.body for request in seen]
+        assert len(wire.drain()) == 2

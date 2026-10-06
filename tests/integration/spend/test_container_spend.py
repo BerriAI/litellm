@@ -36,7 +36,12 @@ def test_container_create_charges_one_code_interpreter_session(gateway: Gateway)
         client: Final = OpenAI(base_url=str(gateway.client.base_url.join("/v1")), api_key=key, max_retries=0)
         eventually(lambda: tuple(entry.id for entry in client.models.list()), lambda ids: model in ids)
 
-        raw: Final = client.containers.with_raw_response.create(name="c", extra_body={"model": model})
+        raw: Final = client.containers.with_raw_response.create(
+            name="c",
+            expires_after={"anchor": "last_active_at", "minutes": 5},
+            file_ids=["file-spend"],
+            extra_body={"model": model},
+        )
         assert raw.http_response.status_code == 200, raw.http_response.text
         created: Final = raw.parse()
         assert created.model_copy(update={"id": container_id}) == ContainerCreateResponse.model_validate(scripted), (
@@ -49,7 +54,11 @@ def test_container_create_charges_one_code_interpreter_session(gateway: Gateway)
         assert [(request.method, request.target, request.headers["authorization"]) for request in requests] == [
             ("POST", "/v1/containers", f"Bearer {PROVIDER_KEY}")
         ]
-        assert json.loads(requests[0].body) == {"name": "c"}, requests[0].body
+        assert json.loads(requests[0].body) == {
+            "name": "c",
+            "expires_after": {"anchor": "last_active_at", "minutes": 5},
+            "file_ids": ["file-spend"],
+        }, requests[0].body
 
         logged: Final = eventually(
             lambda: read_rows(
