@@ -2327,6 +2327,15 @@ def _map_exception_by_status(
                 litellm_debug_info=extra_information,
                 exception_status_code=status_code,
             )
+        case 402:
+            raise APIError(
+                status_code=402,
+                message=message,
+                llm_provider=custom_llm_provider,
+                model=model,
+                request=original_exception.request if hasattr(original_exception, "request") else None,
+                litellm_debug_info=extra_information,
+            )
         case _ if status_code < 500:
             raise BadRequestError(
                 message=message,

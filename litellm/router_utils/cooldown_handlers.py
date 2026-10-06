@@ -250,11 +250,7 @@ def _is_cooldown_required(
                 # Cool down 429 Rate Limit Errors
                 return True
 
-            elif exception_status == 401:
-                # Cool down 401 Auth Errors
-                return True
-
-            elif exception_status == 408 or exception_status == 404:
+            elif exception_status in (401, 402, 408, 404):
                 return True
 
             else:

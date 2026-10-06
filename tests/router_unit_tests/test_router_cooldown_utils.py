@@ -265,6 +265,18 @@ def test_should_cooldown_deployment_auth_limit_error(testing_litellm_router):
     )
 
 
+@pytest.mark.parametrize("exception_status", (401, 402))
+def test_is_cooldown_required_for_account_errors(testing_litellm_router, exception_status):
+    assert (
+        _is_cooldown_required(
+            litellm_router_instance=testing_litellm_router,
+            model_id="test_deployment",
+            exception_status=exception_status,
+        )
+        is True
+    )
+
+
 @pytest.mark.asyncio
 async def test_should_cooldown_deployment(testing_litellm_router):
     """

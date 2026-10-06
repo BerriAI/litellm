@@ -745,11 +745,12 @@ class _UpstreamHTTPError(Exception):
         self.response = httpx.Response(status_code=status_code, request=self.request, text="upstream failure")
 
 
-UPSTREAM_STATUS_CODES = (400, 401, 403, 404, 408, 422, 429, 500, 503)
+UPSTREAM_STATUS_CODES = (400, 401, 402, 403, 404, 408, 422, 429, 500, 503)
 
 OPENAI_SHAPED = {
     400: (litellm.BadRequestError, 400),
     401: (litellm.AuthenticationError, 401),
+    402: (litellm.APIError, 402),
     403: (litellm.APIError, 403),
     404: (litellm.NotFoundError, 404),
     408: (litellm.Timeout, 408),
@@ -783,6 +784,7 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         500: (litellm.APIError, 500),
     },
     "nlp_cloud": {
+        402: (litellm.RateLimitError, 429),
         403: (litellm.AuthenticationError, 403),
         404: (litellm.APIError, 404),
         408: (litellm.APIError, 408),
@@ -794,6 +796,7 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
     "replicate": {
         403: (litellm.APIError, 500),
         404: (litellm.APIError, 500),
+        402: (litellm.APIError, 500),
         422: (litellm.UnprocessableEntityError, 422),
         500: (litellm.ServiceUnavailableError, 503),
         503: (litellm.APIError, 500),
