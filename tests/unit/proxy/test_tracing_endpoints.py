@@ -86,6 +86,7 @@ TRACE_RESPONSE: Final = {
         "agent_count": 0,
         "agent_invocations": 0,
         "llm_calls": 0,
+        "priced_calls": 0,
         "tool_calls": 0,
         "error_count": 0,
         "input_tokens": 0,
