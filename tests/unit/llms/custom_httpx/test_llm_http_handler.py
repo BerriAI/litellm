@@ -15,9 +15,11 @@ from botocore.credentials import RefreshableCredentials
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.code_interpreter_interception.handler import (
-    CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
+    CodeInterpreterInterceptionLogger,
 )
+from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
+from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -25,12 +27,15 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
-from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
-from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS
-from litellm.llms.brave.search.transformation import BraveSearchConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import BaseImageGenerationConfig
+from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
+from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaudeMessagesConfig,
+)
+from litellm.llms.brave.search.transformation import BraveSearchConfig
 from litellm.llms.chatgpt.authenticator import Authenticator as ChatGPTAuthenticator
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -41,13 +46,8 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _has_pre_call_deployment_hook,
     _rust_responses_websocket_enabled,
 )
-from litellm.llms.azure.videos.transformation import AzureVideoConfig
-from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaudeMessagesConfig,
-)
-from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
-from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
 from litellm.llms.mistral.files.transformation import MistralFilesConfig
+from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
 from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
@@ -243,6 +243,37 @@ def test_response_api_handler_streams_when_provider_transform_adds_stream():
 
     assert client.post.call_args.kwargs["stream"] is True
     assert client.post.call_args.kwargs["json"]["stream"] is True
+
+
+def test_response_api_handler_passes_model_to_url_builder():
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://test.net/ai-gateway/mlflow/v1/responses"
+    config.transform_responses_api_request.return_value = {"model": "system.ai.gpt-5-5", "input": "hi"}
+    config.sign_request.return_value = ({}, None)
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://test.net/ai-gateway/mlflow/v1/responses"),
+        )
+    )
+
+    handler.response_api_handler(
+        model="system.ai.gpt-5-5",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="databricks",
+        litellm_params=GenericLiteLLMParams(api_base="https://test.net/serving-endpoints"),
+        logging_obj=Mock(),
+        client=client,
+    )
+
+    url_builder_params = config.get_complete_url.call_args.kwargs["litellm_params"]
+    assert url_builder_params["model"] == "system.ai.gpt-5-5"
+    assert url_builder_params["api_base"] == "https://test.net/serving-endpoints"
 
 
 def test_response_api_handler_runs_agentic_hooks_in_sync_path(monkeypatch):
@@ -1831,6 +1862,7 @@ def _make_responses_handler_call(signed_body):
     signing provider (e.g. Bedrock Mantle).
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.router import GenericLiteLLMParams
@@ -1886,6 +1918,7 @@ def test_responses_handler_signs_after_fake_stream_prep_strips_stream():
     We snapshot request_data at sign time and assert "stream" is already gone.
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import ResponsesAPIResponse
@@ -1949,6 +1982,7 @@ def _make_compact_handler_call(signed_body, is_async):
     signing provider (e.g. Bedrock Mantle SigV4 / bearer).
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.router import GenericLiteLLMParams
@@ -4255,10 +4289,9 @@ class _ScriptedClientWebSocket(_FakeClientWebSocket):
 
 @pytest.mark.asyncio
 async def test_async_realtime_bridges_a_transcription_session_through_the_provider_backend():
-    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
-
     from datetime import timedelta
 
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
     from google.cloud.speech_v2.types import (
         RecognitionResponseMetadata,
         SpeechRecognitionAlternative,

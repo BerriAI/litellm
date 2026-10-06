@@ -1,9 +1,6 @@
 
-import pytest
 
-from unittest.mock import patch
 
-import litellm
 from litellm.llms.databricks.responses.transformation import (
     DatabricksResponsesAPIConfig,
 )
@@ -40,6 +37,22 @@ class TestDatabricksResponsesAPIConfig:
             url
             == "https://my-workspace.cloud.databricks.com/serving-endpoints/responses"
         )
+
+    def test_get_complete_url_routes_unity_model_to_ai_gateway(self):
+        config = DatabricksResponsesAPIConfig()
+        url = config.get_complete_url(
+            api_base="https://my-workspace.cloud.databricks.com/serving-endpoints",
+            litellm_params={"model": "system.ai.gpt-5-5"},
+        )
+        assert url == "https://my-workspace.cloud.databricks.com/ai-gateway/mlflow/v1/responses"
+
+    def test_get_complete_url_keeps_legacy_endpoint_for_endpoint_model(self):
+        config = DatabricksResponsesAPIConfig()
+        url = config.get_complete_url(
+            api_base="https://my-workspace.cloud.databricks.com/serving-endpoints",
+            litellm_params={"model": "databricks-gpt-5-5"},
+        )
+        assert url == "https://my-workspace.cloud.databricks.com/serving-endpoints/responses"
 
     def test_transform_request_strips_provider_prefix(self):
         config = DatabricksResponsesAPIConfig()

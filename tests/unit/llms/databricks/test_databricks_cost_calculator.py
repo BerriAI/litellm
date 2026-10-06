@@ -1,7 +1,6 @@
 import json
 from decimal import Decimal
 from pathlib import Path
-from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -70,6 +69,10 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-gpt-5-4-mini": ("10.714", "64.286", "10.714", "1.071"),
     "databricks/databricks-gpt-5-4-nano": ("2.857", "17.857", "2.857", "0.286"),
     "databricks/databricks-gemini-3-6-flash": ("26.786", "133.929", "26.786", "2.679"),
+    "databricks/databricks-gemini-3-8-flash": ("10.714", "53.571", "10.714", "1.071"),
+    "databricks/databricks-gemini-3-7-flash": ("10.714", "53.571", "10.714", "1.071"),
+    "databricks/databricks-gemini-3-pro-image": ("35.714", "2142.86", "35.714", "35.714"),
+    "databricks/databricks-gemini-3-1-flash-image": ("8.929", "1071.43", "8.929", "8.929"),
     "databricks/databricks-gemini-3-5-flash": ("26.786", "160.714", "26.786", "2.679"),
     "databricks/databricks-gemini-3-5-flash-lite": ("5.357", "44.643", "5.357", "0.536"),
     "databricks/databricks-gemini-3-1-pro": ("35.714", "214.286", "35.714", "3.571"),
@@ -109,22 +112,6 @@ ENTRIES_STORING_LIST_RATE_DESPITE_PROMOTION: Final = (
 CACHE_FIELDS: Final = ("cache_creation_input_token_cost", "cache_read_input_token_cost")
 UNITY_CATALOG_PREFIX: Final = "databricks/system.ai."
 ENDPOINT_PREFIX: Final = "databricks/databricks-"
-ENTRIES_PRICED_AT_GOOGLE_LIST_RATE: Final = MappingProxyType(
-    {
-        "databricks/databricks-gemini-3-8-flash": "gemini/gemini-3.8-flash",
-        "databricks/databricks-gemini-3-7-flash": "gemini/gemini-3.7-flash",
-        "databricks/databricks-gemini-3-1-flash-image": "gemini/gemini-3.1-flash-image",
-        "databricks/databricks-gemini-3-pro-image": "gemini/gemini-3-pro-image",
-    }
-)
-GOOGLE_LIST_RATE_FIELDS: Final = (
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "output_cost_per_reasoning_token",
-    "input_cost_per_image",
-    "output_cost_per_image",
-    "output_cost_per_image_token",
-)
 
 
 def _model_info(model: str) -> ModelInfo:
@@ -226,7 +213,6 @@ def test_every_model_without_published_cache_dbu_bills_cache_at_its_own_input_ra
         if model.startswith(ENDPOINT_PREFIX)
         and info.get("input_cost_per_token")
         and model not in PUBLISHED_DBU_PER_MILLION
-        and model not in ENTRIES_PRICED_AT_GOOGLE_LIST_RATE
     ]
 
     for model in without_published_rates:
@@ -307,17 +293,29 @@ def test_unity_catalog_name_routes_to_databricks_and_bills_like_its_endpoint(loc
     assert all(cost > 0 for cost in cost_per_token(model=unity_model, usage=usage))
 
 
-@pytest.mark.parametrize(("model", "google_model"), ENTRIES_PRICED_AT_GOOGLE_LIST_RATE.items())
-def test_unpublished_gemini_endpoints_bill_at_their_google_list_rate(
-    local_model_cost_map: None, model: str, google_model: str
-) -> None:
-    info: Final = _model_info(model)
-    google: Final = litellm.model_cost[google_model]
+NEWLY_PUBLISHED_GEMINI_ROWS: Final = (
+    "databricks/databricks-gemini-3-8-flash",
+    "databricks/databricks-gemini-3-7-flash",
+    "databricks/databricks-gemini-3-pro-image",
+    "databricks/databricks-gemini-3-1-flash-image",
+)
 
-    assert info["input_cost_per_token"] > 0
-    assert info["cache_creation_input_token_cost"] == pytest.approx(google["input_cost_per_token"])
-    assert info["cache_read_input_token_cost"] == pytest.approx(
-        google.get("cache_read_input_token_cost", google["input_cost_per_token"])
-    )
-    for field in GOOGLE_LIST_RATE_FIELDS:
-        assert info.get(field) == pytest.approx(google.get(field)), field
+
+@pytest.mark.parametrize("model", NEWLY_PUBLISHED_GEMINI_ROWS)
+def test_newly_published_gemini_rows_bill_at_their_dbu_rate(local_model_cost_map: None, model: str) -> None:
+    info: Final = _model_info(model)
+    raw_entry: Final = litellm.model_cost[model]
+    published: Final = PUBLISHED_DBU_PER_MILLION[model]
+
+    for field, dbu_per_million in zip(PRICE_FIELDS, published, strict=True):
+        assert info[field] == pytest.approx(_dollars_per_token(dbu_per_million)), field
+    assert raw_entry["input_dbu_cost_per_token"] == pytest.approx(float(Decimal(published[0]) / Decimal(10) ** 6))
+    assert raw_entry["output_dbu_cost_per_token"] == pytest.approx(float(Decimal(published[1]) / Decimal(10) ** 6))
+
+
+def test_gemini_flash_promotional_dbu_rate_matches_google_list_price(local_model_cost_map: None) -> None:
+    databricks: Final = _model_info("databricks/databricks-gemini-3-8-flash")
+    google: Final = litellm.model_cost["gemini/gemini-3.8-flash"]
+
+    for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"):
+        assert databricks[field] == pytest.approx(google[field], rel=1e-3), field

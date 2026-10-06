@@ -20435,21 +20435,21 @@
         "supports_video_input": true
     },
     "databricks/databricks-gemini-3-1-flash-image": {
-        "cache_creation_input_token_cost": 5e-07,
-        "cache_read_input_token_cost": 5e-07,
-        "input_cost_per_token": 5e-07,
+        "cache_creation_input_token_cost": 6.2503e-07,
+        "cache_read_input_token_cost": 6.2503e-07,
+        "input_cost_per_token": 6.2503e-07,
+        "input_dbu_cost_per_token": 8.929e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3.1-flash-image (standard tier only) until Databricks publishes DBU rates."
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields."
         },
         "mode": "chat",
-        "output_cost_per_image": 0.045,
-        "output_cost_per_image_token": 6e-05,
-        "output_cost_per_token": 3e-06,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "output_cost_per_token": 7.50001e-05,
+        "output_dbu_cost_per_token": 0.00107143,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supported_modalities": [
             "text",
             "image"
@@ -20463,21 +20463,21 @@
         "supports_vision": true
     },
     "databricks/system.ai.gemini-3-1-flash-image": {
-        "cache_creation_input_token_cost": 5e-07,
-        "cache_read_input_token_cost": 5e-07,
-        "input_cost_per_token": 5e-07,
+        "cache_creation_input_token_cost": 6.2503e-07,
+        "cache_read_input_token_cost": 6.2503e-07,
+        "input_cost_per_token": 6.2503e-07,
+        "input_dbu_cost_per_token": 8.929e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3.1-flash-image (standard tier only) until Databricks publishes DBU rates."
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields."
         },
         "mode": "chat",
-        "output_cost_per_image": 0.045,
-        "output_cost_per_image_token": 6e-05,
-        "output_cost_per_token": 3e-06,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "output_cost_per_token": 7.50001e-05,
+        "output_dbu_cost_per_token": 0.00107143,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supported_modalities": [
             "text",
             "image"
@@ -20491,22 +20491,21 @@
         "supports_vision": true
     },
     "databricks/databricks-gemini-3-pro-image": {
-        "cache_creation_input_token_cost": 2e-06,
-        "cache_read_input_token_cost": 2e-06,
-        "input_cost_per_image": 0.0011,
-        "input_cost_per_token": 2e-06,
+        "cache_creation_input_token_cost": 2.49998e-06,
+        "cache_read_input_token_cost": 2.49998e-06,
+        "input_cost_per_token": 2.49998e-06,
+        "input_dbu_cost_per_token": 3.5714e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 65536,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3-pro-image (standard tier only) until Databricks publishes DBU rates."
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields."
         },
         "mode": "chat",
-        "output_cost_per_image": 0.134,
-        "output_cost_per_image_token": 0.00012,
-        "output_cost_per_token": 1.2e-05,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "output_cost_per_token": 0.0001500002,
+        "output_dbu_cost_per_token": 0.00214286,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supported_modalities": [
             "text",
             "image"
@@ -20520,22 +20519,21 @@
         "supports_vision": true
     },
     "databricks/system.ai.gemini-3-pro-image": {
-        "cache_creation_input_token_cost": 2e-06,
-        "cache_read_input_token_cost": 2e-06,
-        "input_cost_per_image": 0.0011,
-        "input_cost_per_token": 2e-06,
+        "cache_creation_input_token_cost": 2.49998e-06,
+        "cache_read_input_token_cost": 2.49998e-06,
+        "input_cost_per_token": 2.49998e-06,
+        "input_dbu_cost_per_token": 3.5714e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 65536,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3-pro-image (standard tier only) until Databricks publishes DBU rates."
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields."
         },
         "mode": "chat",
-        "output_cost_per_image": 0.134,
-        "output_cost_per_image_token": 0.00012,
-        "output_cost_per_token": 1.2e-05,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "output_cost_per_token": 0.0001500002,
+        "output_dbu_cost_per_token": 0.00214286,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supported_modalities": [
             "text",
             "image"
@@ -20719,20 +20717,21 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-gemini-3-8-flash": {
-        "cache_creation_input_token_cost": 7.5e-07,
-        "cache_read_input_token_cost": 7.5e-08,
-        "input_cost_per_token": 7.5e-07,
+        "cache_creation_input_token_cost": 7.4998e-07,
+        "cache_read_input_token_cost": 7.497e-08,
+        "input_cost_per_token": 7.4998e-07,
+        "input_dbu_cost_per_token": 1.0714e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3.8-flash (standard tier only) until Databricks publishes DBU rates."
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields. Databricks marks these Gemini Flash DBU rates as a 50% promotion in effect through December 31, 2026; the promotional rate equals Google's own list price."
         },
         "mode": "chat",
-        "output_cost_per_reasoning_token": 3.75e-06,
-        "output_cost_per_token": 3.75e-06,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "output_cost_per_token": 3.74997e-06,
+        "output_dbu_cost_per_token": 5.3571e-05,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supported_modalities": [
             "text",
             "image",
@@ -20749,20 +20748,21 @@
         "supports_vision": true
     },
     "databricks/system.ai.gemini-3-8-flash": {
-        "cache_creation_input_token_cost": 7.5e-07,
-        "cache_read_input_token_cost": 7.5e-08,
-        "input_cost_per_token": 7.5e-07,
+        "cache_creation_input_token_cost": 7.4998e-07,
+        "cache_read_input_token_cost": 7.497e-08,
+        "input_cost_per_token": 7.4998e-07,
+        "input_dbu_cost_per_token": 1.0714e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3.8-flash (standard tier only) until Databricks publishes DBU rates."
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields. Databricks marks these Gemini Flash DBU rates as a 50% promotion in effect through December 31, 2026; the promotional rate equals Google's own list price."
         },
         "mode": "chat",
-        "output_cost_per_reasoning_token": 3.75e-06,
-        "output_cost_per_token": 3.75e-06,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "output_cost_per_token": 3.74997e-06,
+        "output_dbu_cost_per_token": 5.3571e-05,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supported_modalities": [
             "text",
             "image",
@@ -20779,20 +20779,21 @@
         "supports_vision": true
     },
     "databricks/databricks-gemini-3-7-flash": {
-        "cache_creation_input_token_cost": 7.5e-07,
-        "cache_read_input_token_cost": 7.5e-08,
-        "input_cost_per_token": 7.5e-07,
+        "cache_creation_input_token_cost": 7.4998e-07,
+        "cache_read_input_token_cost": 7.497e-08,
+        "input_cost_per_token": 7.4998e-07,
+        "input_dbu_cost_per_token": 1.0714e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3.7-flash (standard tier only) until Databricks publishes DBU rates."
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields. Databricks marks these Gemini Flash DBU rates as a 50% promotion in effect through December 31, 2026; the promotional rate equals Google's own list price."
         },
         "mode": "chat",
-        "output_cost_per_reasoning_token": 3.75e-06,
-        "output_cost_per_token": 3.75e-06,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "output_cost_per_token": 3.74997e-06,
+        "output_dbu_cost_per_token": 5.3571e-05,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supported_modalities": [
             "text",
             "image",
@@ -20809,20 +20810,21 @@
         "supports_vision": true
     },
     "databricks/system.ai.gemini-3-7-flash": {
-        "cache_creation_input_token_cost": 7.5e-07,
-        "cache_read_input_token_cost": 7.5e-08,
-        "input_cost_per_token": 7.5e-07,
+        "cache_creation_input_token_cost": 7.4998e-07,
+        "cache_read_input_token_cost": 7.497e-08,
+        "input_cost_per_token": 7.4998e-07,
+        "input_dbu_cost_per_token": 1.0714e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "metadata": {
-            "notes": "Databricks DBU rates not yet published for this model; priced at the Google list rate of gemini/gemini-3.7-flash (standard tier only) until Databricks publishes DBU rates."
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields. Databricks marks these Gemini Flash DBU rates as a 50% promotion in effect through December 31, 2026; the promotional rate equals Google's own list price."
         },
         "mode": "chat",
-        "output_cost_per_reasoning_token": 3.75e-06,
-        "output_cost_per_token": 3.75e-06,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "output_cost_per_token": 3.74997e-06,
+        "output_dbu_cost_per_token": 5.3571e-05,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supported_modalities": [
             "text",
             "image",

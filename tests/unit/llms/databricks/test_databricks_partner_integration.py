@@ -22,12 +22,10 @@ These tests align with Databricks Partner Architecture best practices:
     https://github.com/databrickslabs/partner-architecture
 """
 
-import json
 import sys
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-from unittest.mock import MagicMock, patch, Mock
-
 
 from litellm.llms.databricks.common_utils import DatabricksBase, DatabricksException
 
@@ -711,6 +709,35 @@ class TestEndpointURLConstruction:
             litellm_params={},
         ) == "https://test.net/ai-gateway/mlflow/v1/chat/completions"
         assert request["model"] == "catalog.schema.kimi-k3"
+
+    @pytest.mark.parametrize(
+        ("model", "expected_url"),
+        [
+            ("system.ai.bge-large-en", "https://test.net/ai-gateway/mlflow/v1/embeddings"),
+            ("databricks-bge-large-en", "https://test.net/serving-endpoints/embeddings"),
+        ],
+    )
+    def test_embedding_unity_model_routes_to_ai_gateway(self, monkeypatch, model, expected_url):
+        from litellm.llms.databricks.embed.handler import DatabricksEmbeddingHandler
+
+        monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+        monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+        handler = DatabricksEmbeddingHandler()
+
+        with patch(
+            "litellm.llms.openai_like.embedding.handler.OpenAILikeEmbeddingHandler.embedding"
+        ) as mock_embedding:
+            handler.embedding(
+                model=model,
+                input=["hello"],
+                timeout=30,
+                logging_obj=None,
+                api_key="test-key",
+                api_base="https://test.net/serving-endpoints",
+                optional_params={},
+            )
+
+        assert mock_embedding.call_args.kwargs["api_base"] == expected_url
 
     def test_chat_legacy_endpoint_remains_default(self, monkeypatch):
         from litellm.llms.databricks.chat.transformation import DatabricksConfig

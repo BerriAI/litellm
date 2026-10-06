@@ -2511,7 +2511,7 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
-            litellm_params=dict(litellm_params),
+            litellm_params={**dict(litellm_params), "model": model},
         )
 
         data = responses_api_provider_config.transform_responses_api_request(
@@ -2706,7 +2706,7 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
-            litellm_params=dict(litellm_params),
+            litellm_params={**dict(litellm_params), "model": model},
         )
 
         data = await responses_api_provider_config.async_transform_responses_api_request(
@@ -4452,7 +4452,7 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
-            litellm_params=dict(litellm_params),
+            litellm_params={**dict(litellm_params), "model": model},
         )
 
         (
@@ -4544,7 +4544,7 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
-            litellm_params=dict(litellm_params),
+            litellm_params={**dict(litellm_params), "model": model},
         )
 
         (

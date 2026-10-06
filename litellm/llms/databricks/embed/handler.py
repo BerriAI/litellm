@@ -8,7 +8,7 @@ from typing import Final
 from litellm.utils import EmbeddingResponse
 
 from ...openai_like.embedding.handler import OpenAILikeEmbeddingHandler
-from ..common_utils import DatabricksBase
+from ..common_utils import DatabricksBase, uses_unity_gateway
 
 
 class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
@@ -38,7 +38,7 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
         )
 
         api_base, headers = self.databricks_validate_environment(
-            api_base=api_base,
+            api_base=self._get_api_base(api_base, use_ai_gateway=True) if uses_unity_gateway(model) else api_base,
             api_key=api_key,
             endpoint_type="embeddings",
             custom_endpoint=custom_endpoint,
