@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -192,30 +193,42 @@ async def test_coralbricks_anthropic_messages_request(monkeypatch: pytest.Monkey
     assert response["content"][0]["text"] == "Hello from CoralBricks"
 
 
-def _coralbricks_row() -> dict:
-    model_cost: Final = litellm.model_cost
-    row: Final = model_cost[CORALBRICKS_MODEL]
+@dataclass(frozen=True)
+class CoralBricksRates:
+    input: float
+    output: float
+    cache_write: float
+    cache_read: float
+
+
+def _coralbricks_rates() -> CoralBricksRates:
+    row: Final = litellm.model_cost[CORALBRICKS_MODEL]
     assert row["litellm_provider"] == "coralbricks"
-    return dict(row)
+    return CoralBricksRates(
+        input=float(row["input_cost_per_token"]),
+        output=float(row["output_cost_per_token"]),
+        cache_write=float(row["cache_creation_input_token_cost"]),
+        cache_read=float(row["cache_read_input_token_cost"]),
+    )
 
 
 def _expected_cost(
-    row: dict,
+    rates: CoralBricksRates,
     uncached_input_tokens: int,
     cached_read_tokens: int,
     cache_write_tokens: int,
     billed_output_tokens: int,
 ) -> float:
     return (
-        uncached_input_tokens * row["input_cost_per_token"]
-        + cached_read_tokens * row["cache_read_input_token_cost"]
-        + cache_write_tokens * row["cache_creation_input_token_cost"]
-        + billed_output_tokens * row["output_cost_per_token"]
+        uncached_input_tokens * rates.input
+        + cached_read_tokens * rates.cache_read
+        + cache_write_tokens * rates.cache_write
+        + billed_output_tokens * rates.output
     )
 
 
 def test_coralbricks_chat_completion_cost_includes_cache_write_and_free_cached_read():
-    row: Final = _coralbricks_row()
+    rates: Final = _coralbricks_rates()
     with respx.mock() as upstream:
         upstream.post("https://inference.coralbricks.ai/v1/chat/completions").respond(
             200,
@@ -254,7 +267,7 @@ def test_coralbricks_chat_completion_cost_includes_cache_write_and_free_cached_r
     cost: Final = litellm.completion_cost(completion_response=response, model=CORALBRICKS_MODEL)
     assert cost == pytest.approx(
         _expected_cost(
-            row,
+            rates,
             uncached_input_tokens=4357 - 4352 - 5,
             cached_read_tokens=4352,
             cache_write_tokens=5,
@@ -264,7 +277,7 @@ def test_coralbricks_chat_completion_cost_includes_cache_write_and_free_cached_r
 
 
 def test_coralbricks_responses_cost_includes_cache_write_and_free_cached_read():
-    row: Final = _coralbricks_row()
+    rates: Final = _coralbricks_rates()
     with respx.mock() as upstream:
         upstream.post("https://inference.coralbricks.ai/v1/responses").respond(
             200,
@@ -305,7 +318,7 @@ def test_coralbricks_responses_cost_includes_cache_write_and_free_cached_read():
     cost: Final = litellm.completion_cost(completion_response=response, model=CORALBRICKS_MODEL)
     assert cost == pytest.approx(
         _expected_cost(
-            row,
+            rates,
             uncached_input_tokens=4357 - 4352 - 5,
             cached_read_tokens=4352,
             cache_write_tokens=5,
@@ -318,7 +331,7 @@ def test_coralbricks_responses_cost_includes_cache_write_and_free_cached_read():
 async def test_coralbricks_anthropic_messages_cost_includes_cache_write_and_free_cached_read(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    row: Final = _coralbricks_row()
+    rates: Final = _coralbricks_rates()
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
     with respx.mock() as upstream:
@@ -350,7 +363,7 @@ async def test_coralbricks_anthropic_messages_cost_includes_cache_write_and_free
     cost: Final = litellm.completion_cost(completion_response=response, model=CORALBRICKS_MODEL)
     assert cost == pytest.approx(
         _expected_cost(
-            row,
+            rates,
             uncached_input_tokens=0,
             cached_read_tokens=4352,
             cache_write_tokens=5,
@@ -363,7 +376,9 @@ def test_coralbricks_cost_map_backup_mirrors_main():
     main_map: Final = json.loads(
         (Path(litellm.__file__).parent.parent / "model_prices_and_context_window.json").read_text()
     )
-    backup_map: Final = litellm.model_cost
+    backup_map: Final = json.loads(
+        (Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json").read_text()
+    )
     main_keys: Final = {key for key in main_map if key.startswith("coralbricks/")}
     backup_keys: Final = {key for key in backup_map if key.startswith("coralbricks/")}
     assert main_keys and main_keys == backup_keys
@@ -376,9 +391,98 @@ def test_coralbricks_cost_map_rows_declare_same_endpoints_as_providers_json():
         (Path(litellm.__file__).parent / "llms" / "openai_like" / "providers.json").read_text()
     )
     declared: Final = providers_json["coralbricks"]["supported_endpoints"]
-    coralbricks_rows: Final = {
-        key: row for key, row in litellm.model_cost.items() if key.startswith("coralbricks/")
+    cost_map_paths: Final = (
+        Path(litellm.__file__).parent.parent / "model_prices_and_context_window.json",
+        Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json",
+    )
+    for cost_map_path in cost_map_paths:
+        cost_map: Final = json.loads(cost_map_path.read_text())
+        coralbricks_rows: Final = {
+            key: row for key, row in cost_map.items() if key.startswith("coralbricks/")
+        }
+        assert coralbricks_rows
+        for row in coralbricks_rows.values():
+            assert row["supported_endpoints"] == declared
+
+
+def test_coralbricks_streaming_chat_cost_includes_cache_write_and_free_cached_read():
+    rates: Final = _coralbricks_rates()
+    usage_chunk: Final = {
+        "id": "chatcmpl_coralbricks",
+        "object": "chat.completion.chunk",
+        "created": 1_789_550_000,
+        "model": CORALBRICKS_MODEL_ID,
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 4357,
+            "completion_tokens": 20,
+            "total_tokens": 4377,
+            "prompt_tokens_details": {
+                "cached_tokens": 4352,
+                "cache_write_tokens": 5,
+                "billable_cache_write_tokens": 5,
+                "cache_write_blocks": 3,
+            },
+            "completion_tokens_details": {"reasoning_tokens": 12},
+        },
     }
-    assert coralbricks_rows
-    for row in coralbricks_rows.values():
-        assert row["supported_endpoints"] == declared
+    stream_body: Final = (
+        "data: "
+        + json.dumps(
+            {
+                "id": "chatcmpl_coralbricks",
+                "object": "chat.completion.chunk",
+                "created": 1_789_550_000,
+                "model": CORALBRICKS_MODEL_ID,
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}],
+            }
+        )
+        + "\n\n"
+        + "data: "
+        + json.dumps(
+            {
+                "id": "chatcmpl_coralbricks",
+                "object": "chat.completion.chunk",
+                "created": 1_789_550_000,
+                "model": CORALBRICKS_MODEL_ID,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            }
+        )
+        + "\n\n"
+        + "data: "
+        + json.dumps(usage_chunk)
+        + "\n\n"
+        + "data: [DONE]\n\n"
+    )
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://inference.coralbricks.ai/v1/chat/completions").respond(
+            200, headers={"content-type": "text/event-stream"}, content=stream_body
+        )
+        response: Final = litellm.completion(
+            model=CORALBRICKS_MODEL,
+            messages=[{"role": "user", "content": "Say hello"}],
+            api_key="coralbricks-test-key",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        chunks: Final = list(response)
+
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert body["stream"] is True
+
+    built: Final = litellm.stream_chunk_builder(
+        chunks, messages=[{"role": "user", "content": "Say hello"}]
+    )
+    assert built.usage.prompt_tokens_details.cached_tokens == 4352
+    cost: Final = litellm.completion_cost(completion_response=built, model=CORALBRICKS_MODEL)
+    assert cost == pytest.approx(
+        _expected_cost(
+            rates,
+            uncached_input_tokens=0,
+            cached_read_tokens=4352,
+            cache_write_tokens=5,
+            billed_output_tokens=20,
+        )
+    )
