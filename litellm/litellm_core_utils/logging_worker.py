@@ -28,9 +28,13 @@ _CALLBACK_DEADLINE: Final[contextvars.ContextVar[float | None]] = contextvars.Co
 )
 
 
-def optional_callback_budget(maximum: float) -> float:
+def optional_callback_budget(maximum: float, *, fraction: float = 0.25) -> float:
     deadline: Final = _CALLBACK_DEADLINE.get()
-    return maximum if deadline is None else max(0.0, min(maximum, (deadline - asyncio.get_running_loop().time()) / 4))
+    return (
+        maximum
+        if deadline is None
+        else max(0.0, min(maximum, (deadline - asyncio.get_running_loop().time()) * fraction))
+    )
 
 
 def _coroutine_name(coroutine: Coroutine) -> str:

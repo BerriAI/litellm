@@ -285,7 +285,7 @@ def _writes(history: BaselineHistory, observation: BaselineObservation) -> tuple
                 observation.started_at + hit.ttl_seconds,
             ),
         )
-        if hit is not None and all(marker.fingerprint != hit.fingerprint for marker in markers)
+        if hit is not None
         else ()
     )
     return (
@@ -301,6 +301,7 @@ def _writes(history: BaselineHistory, observation: BaselineObservation) -> tuple
                 uncertain=bool(ambiguous),
             )
             for marker in markers
+            if hit is None or marker.prefix_tokens > hit.tokens
         ),
     )
 

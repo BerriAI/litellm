@@ -12,37 +12,15 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 from litellm.llms.anthropic.prompt_cache_prediction import CountedBreakpoint, CountedPromptCachePlan
 from litellm.llms.prompt_cache_policy import CacheHistoryPolicy, cache_history_policy, cache_ttl
+from litellm.router_utils.baseline_request import CACHE_SETTINGS, within_baseline_budget
 from litellm.types.utils import CacheCreationTokenDetails, ModelInfo, PromptTokensDetailsWrapper, Usage
 from litellm.utils import token_counter
 
 _OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
-_SETTINGS: Final = (
-    "system",
-    "instructions",
-    "tools",
-    "tool_choice",
-    "parallel_tool_calls",
-    "response_format",
-    "text",
-    "reasoning",
-    "reasoning_effort",
-    "thinking",
-    "verbosity",
-    "prompt_cache_key",
-    "cache_key",
-    "cached_content",
-    "previous_response_id",
-    "conversation",
-    "context_management",
-    "compaction",
-)
-_MODEL_SETTINGS: Final = frozenset(("reasoning", "reasoning_effort", "thinking"))
+_SETTINGS: Final = CACHE_SETTINGS
 _REQUEST_KEYS: Final = (*_SETTINGS, "messages", "input", "prompt_cache_options", "prompt_cache_retention")
-_MAX_BYTES: Final = 4 * 1024 * 1024
-_MAX_NODES: Final = 32768
 _MAX_PARTS: Final = 2048
-_MAX_DEPTH: Final = 32
 _TOKEN_CHUNK: Final = 8192
 
 
@@ -122,36 +100,6 @@ def _weight(model: str, text: str, counter: Callable[[str, str], int]) -> int:
     return max(
         1,
         sum(counter(model, text[start : start + _TOKEN_CHUNK]) for start in range(0, len(text), _TOKEN_CHUNK)),
-    )
-
-
-def _json_cost(value: object, depth: int = 0) -> Iterator[int]:
-    if depth > _MAX_DEPTH:
-        yield _MAX_BYTES + 1
-    elif isinstance(value, str):
-        yield (6 if value.isascii() else 12) * len(value) + 2
-    elif isinstance(value, dict):
-        yield 2
-        for key, item in cast(dict[object, object], value).items():
-            yield from _json_cost(key, depth + 1)
-            yield from _json_cost(item, depth + 1)
-            yield 2
-    elif isinstance(value, (list, tuple)):
-        yield 2
-        for item in cast(list[object] | tuple[object, ...], value):
-            yield from _json_cost(item, depth + 1)
-            yield 1
-    elif isinstance(value, int) and value.bit_length() > 64:
-        yield _MAX_BYTES + 1
-    elif value is None or isinstance(value, (bool, int, float)):
-        yield 32
-    else:
-        yield _MAX_BYTES + 1
-
-
-def _within_budget(value: object) -> bool:
-    return all(
-        size <= _MAX_BYTES and nodes <= _MAX_NODES for nodes, size in enumerate(accumulate(_json_cost(value)), 1)
     )
 
 
@@ -262,20 +210,20 @@ def prepare_cache_request(
     extra: Final = _selected(kwargs.get("extra_body"))
     baseline: Final = _selected(baseline_params)
     baseline_extra: Final = _selected(baseline_params.get("extra_body"))
-    if not _within_budget((request, extra, baseline, baseline_extra)):
+    if not within_baseline_budget((request, extra, baseline, baseline_extra)):
         return None
     supplied: Final = request.get("messages")
     messages: Final = resolve_structured_messages(_MESSAGES.validate_python(supplied) if supplied else None, request)
-    if not messages or not _within_budget(messages):
+    if not messages or not within_baseline_budget(messages):
         return None
     combined: Final = {
-        **{key: value for key, value in request.items() if key not in _MODEL_SETTINGS},
-        **{key: value for key, value in extra.items() if key not in _MODEL_SETTINGS},
+        **request,
+        **extra,
         **{key: value for key, value in baseline.items() if value is not None},
         **baseline_extra,
     }
     settings: Final = _OBJECT.validate_python({key: combined[key] for key in _SETTINGS if key in combined})
-    if not _within_budget((messages, settings)):
+    if not within_baseline_budget((messages, settings)):
         return None
     if any(settings.get(key) for key in ("previous_response_id", "conversation", "cached_content")):
         return None

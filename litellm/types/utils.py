@@ -319,6 +319,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
     prompt_cache_min_tokens: int | None
+    prompt_cache_mode: ReadOnly[Literal["explicit", "implicit"] | None]
+    prompt_cache_default_ttl_seconds: ReadOnly[int | None]
     off_peak_pricing: ReadOnly[OffPeakPricing | None]  # time-windowed off-peak rates
     input_cost_per_character: float | None  # only for vertex ai models
     input_cost_per_audio_token: float | None

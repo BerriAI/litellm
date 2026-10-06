@@ -204,9 +204,16 @@ class _Capture(CustomLogger):
 
 
 class _Rig:
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, retries: int = 0, count: TokenCounter = _count) -> None:
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        retries: int = 0,
+        count: TokenCounter = _count,
+        models: list[dict[str, JsonValue]] = _MODELS,
+    ) -> None:
         self.router: Final = Router(
-            model_list=_MODELS,
+            model_list=models,
             num_retries=retries,
             retry_policy=RetryPolicy(RateLimitErrorRetries=retries),
             disable_cooldowns=True,
@@ -732,9 +739,11 @@ async def test_native_count_timeout_preserves_observed_usage_and_session_equival
 
 
 @pytest.mark.parametrize("deployment_baseline", (False, True))
+@pytest.mark.parametrize("setting", ("reasoning_effort", "verbosity"))
 async def test_router_tier_effort_switch_reuses_baseline_prefix(
     monkeypatch: pytest.MonkeyPatch,
     deployment_baseline: bool,
+    setting: str,
 ) -> None:
     from datetime import timedelta
 
@@ -749,9 +758,9 @@ async def test_router_tier_effort_switch_reuses_baseline_prefix(
                     "model": "auto_router/complexity_router",
                     "complexity_router_config": {
                         "tiers": {
-                            "SIMPLE": {"model_name": "selected", "litellm_params": {"reasoning_effort": "low"}},
-                            "MEDIUM": {"model_name": "selected", "litellm_params": {"reasoning_effort": "low"}},
-                            "COMPLEX": {"model_name": "selected", "litellm_params": {"reasoning_effort": "high"}},
+                            "SIMPLE": {"model_name": "selected", "litellm_params": {setting: "low"}},
+                            "MEDIUM": {"model_name": "selected", "litellm_params": {setting: "low"}},
+                            "COMPLEX": {"model_name": "selected", "litellm_params": {setting: "high"}},
                             "REASONING": baseline,
                         },
                         "session_affinity": False,
@@ -825,9 +834,7 @@ async def test_router_tier_effort_switch_reuses_baseline_prefix(
                 litellm_session_id="tier-switch",
             )
             observations.put_nowait(_observation(await capture.payload()))
-        efforts: Final = tuple(
-            _JSON_OBJECT.validate_json(call.request.content)["reasoning_effort"] for call in route.calls
-        )
+        efforts: Final = tuple(_JSON_OBJECT.validate_json(call.request.content)[setting] for call in route.calls)
     assert efforts == ("low", "high")
     first, second = (observations.get_nowait() for _ in captures)
     assert first.scope == second.scope
@@ -835,3 +842,135 @@ async def test_router_tier_effort_switch_reuses_baseline_prefix(
     _, reused = advance_baseline_history(history, (second.observation,))
     assert initial[0].usage is not None and initial[0].usage.prompt_tokens_details.cached_tokens == 0
     assert reused[0].usage is not None and reused[0].usage.prompt_tokens_details.cached_tokens > 0
+
+
+@pytest.mark.parametrize("baseline_effort", (None, "medium"))
+async def test_native_tier_switch_uses_baseline_settings_and_preserves_history(
+    monkeypatch: pytest.MonkeyPatch,
+    baseline_effort: str | None,
+) -> None:
+    from litellm.proxy.spend_tracking.baseline_accounting import BaselineHistory, advance_baseline_history
+
+    models: Final = _MESSAGES.validate_python(
+        [
+            {
+                "model_name": "test-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": {"model_name": "sonnet", "litellm_params": {"reasoning_effort": "low"}},
+                            "MEDIUM": {"model_name": "sonnet", "litellm_params": {"reasoning_effort": "low"}},
+                            "COMPLEX": {"model_name": "sonnet", "litellm_params": {"reasoning_effort": "high"}},
+                            "REASONING": "opus",
+                        },
+                        "session_affinity": False,
+                        "keyword_tier_rules": [{"keywords": ["ESCALATE"], "tier": "COMPLEX"}],
+                    },
+                },
+            },
+            _MODELS[1],
+            {
+                "model_name": "opus",
+                "model_info": {"id": "baseline"},
+                "litellm_params": {
+                    "model": "anthropic/claude-opus-5",
+                    "api_key": "test-selected",
+                    **({"reasoning_effort": baseline_effort} if baseline_effort else {}),
+                },
+            },
+        ]
+    )
+    rig: Final = _Rig(monkeypatch, models=models)
+    captures: Final[asyncio.Queue[CapturedBaselineObservation]] = asyncio.Queue()
+    with _transport(_upstream) as route:
+        for suffix in ("", " ESCALATE"):
+            log: Final = rig.logging()
+            await rig.router.anthropic_messages(
+                model="test-router",
+                max_tokens=4096,
+                messages=_MESSAGES.validate_json(_MESSAGES_JSON.replace("question", "question" + suffix)),
+                litellm_logging_obj=log,
+                litellm_call_id=rig.call_id,
+                litellm_metadata={"user_api_key_hash": "test-caller-hash"},
+                litellm_session_id="native-tiers",
+            )
+            captures.put_nowait(_observation(await rig.capture.payload()))
+        first_wire, second_wire = (_JSON_OBJECT.validate_json(call.request.content) for call in route.calls)
+    assert (first_wire.get("thinking"), first_wire.get("output_config")) != (
+        second_wire.get("thinking"),
+        second_wire.get("output_config"),
+    )
+    first, second = (captures.get_nowait() for _ in range(2))
+    assert first.scope == second.scope
+    assert first.observation.plan is not None and second.observation.plan is not None
+    assert first.observation.plan.breakpoints == second.observation.plan.breakpoints
+    history, _ = advance_baseline_history(
+        BaselineHistory(),
+        (first.observation.model_copy(update={"request_id": "first", "started_at": 1000.0, "available_at": 1001.0}),),
+    )
+    _, result = advance_baseline_history(
+        history,
+        (second.observation.model_copy(update={"request_id": "second", "started_at": 1020.0, "available_at": 1021.0}),),
+    )
+    assert result[0].usage is not None and result[0].usage.prompt_tokens_details.cached_tokens == 5000
+
+
+@pytest.mark.parametrize("call_type", (CallTypes.acompletion, CallTypes.aresponses, CallTypes.anthropic_messages))
+async def test_plain_requests_do_not_initialize_or_warn(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    call_type: CallTypes,
+) -> None:
+    rig: Final = _Rig(monkeypatch)
+    logging: Final = rig.logging()
+    await rig.hook.async_pre_call_deployment_hook(
+        {
+            "litellm_logging_obj": logging,
+            "litellm_metadata": {"session_id": "ordinary"},
+        },
+        call_type,
+    )
+    assert logging.baseline_cache_context is None
+    assert "baseline observation could not be initialized" not in caplog.text
+    assert not rig.hook.counts
+
+
+async def test_plain_fallback_invalidates_existing_autorouter_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    rig: Final = _Rig(monkeypatch)
+    logging: Final = rig.logging()
+    await rig.hook.async_pre_call_deployment_hook(_kwargs(logging), CallTypes.anthropic_messages)
+    assert logging.baseline_cache_context is not None
+    await rig.hook.async_pre_call_deployment_hook({"litellm_logging_obj": logging}, CallTypes.anthropic_messages)
+    assert logging.baseline_observation is not None
+    assert logging.baseline_observation.observation.reason == "retried_request"
+
+
+async def test_native_count_finishing_after_quarter_worker_budget_keeps_plan_and_spend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils import logging_worker
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+
+    release: Final = asyncio.Event()
+
+    async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int:
+        if not release.is_set():
+            asyncio.get_running_loop().call_later(2.3, release.set)
+            await release.wait()
+        return await _count(model, api_key, body)
+
+    worker: Final = LoggingWorker(timeout=8.0)
+    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", worker)
+    rig: Final = _Rig(monkeypatch, count=count)
+    try:
+        with _transport(_upstream):
+            await _call(rig.router, rig.logging())
+            payload: Final = await rig.capture.payload()
+        observed: Final = _observation(payload).observation
+        assert observed.outcome == "complete" and observed.reason is None
+        assert observed.plan is not None and observed.plan.breakpoints[0].prefix_tokens == 5000
+        assert payload["response_cost"] is not None and worker._timeout_total == 0
+    finally:
+        release.set()
+        await worker.stop()

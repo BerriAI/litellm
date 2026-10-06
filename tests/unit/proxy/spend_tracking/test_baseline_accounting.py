@@ -111,7 +111,13 @@ def test_prefix_match_expiry_and_usage_pricing_fields(ttl: int) -> None:
     assert warm.usage.prompt_tokens_details.cached_tokens == 6000
     assert cold.usage.prompt_tokens_details.cached_tokens == 0
     assert cold.usage.prompt_tokens_details.cache_creation_tokens == 6000
-    unaffected: Final = {"prompt_tokens", "total_tokens", "prompt_tokens_details", "cache_read_input_tokens", "cache_creation_input_tokens"}
+    unaffected: Final = {
+        "prompt_tokens",
+        "total_tokens",
+        "prompt_tokens_details",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    }
     assert warm.usage.model_dump(exclude=unaffected) == first.usage.model_dump(exclude=unaffected)
     assert cold.usage.model_dump(exclude=unaffected) == first.usage.model_dump(exclude=unaffected)
 
@@ -124,7 +130,10 @@ def test_growth_lookback_and_mixed_ttl_keep_distinct_read_write_buckets(warm_tai
     second: Final = _replay(first, _observation("second", 10001.0, plan=grown))[-1]
     assert second.reason == "history_unavailable"
     history: Final = BaselineHistory(
-        first_at=1.0, last_at=10000.0, equivalent=False, uncertain_before=1.0,
+        first_at=1.0,
+        last_at=10000.0,
+        equivalent=False,
+        uncertain_before=1.0,
         entries=(CacheEntry("tail:300", "tail", 7000, 300, 10000.0, 10300.0),) if warm_tail else (),
     )
     _, estimates = advance_baseline_history(history, (_observation("mixed", 10001.0, plan=grown),))
@@ -134,8 +143,12 @@ def test_growth_lookback_and_mixed_ttl_keep_distinct_read_write_buckets(warm_tai
     # Anthropic billing locations: B is the highest 1h breakpoint AFTER the highest hit A.
     # https://platform.claude.com/docs/en/build-with-claude/prompt-caching#mixing-different-ttls (2026-09-15)
     assert usage.prompt_tokens_details.cached_tokens == (7000 if warm_tail else 0)
-    assert usage.prompt_tokens_details.cache_creation_token_details.ephemeral_1h_input_tokens == (0 if warm_tail else 6500)
-    assert usage.prompt_tokens_details.cache_creation_token_details.ephemeral_5m_input_tokens == (0 if warm_tail else 500)
+    assert usage.prompt_tokens_details.cache_creation_token_details.ephemeral_1h_input_tokens == (
+        0 if warm_tail else 6500
+    )
+    assert usage.prompt_tokens_details.cache_creation_token_details.ephemeral_5m_input_tokens == (
+        0 if warm_tail else 500
+    )
 
 
 @pytest.mark.parametrize("change", ["prefix", "ttl", "unavailable", "failed", "response_cache"])
@@ -201,6 +214,23 @@ def test_mixed_lifetime_lookback_preserves_a_compatible_native_hit() -> None:
     assert usage.prompt_tokens_details.cache_creation_token_details == CacheCreationTokenDetails(
         ephemeral_5m_input_tokens=500, ephemeral_1h_input_tokens=500
     )
+
+
+def test_short_lifetime_hit_cannot_seed_an_unpaid_long_lifetime_entry() -> None:
+    first: Final = _observation("initial", plan=CountedPromptCachePlan(6200, (_marker("5", 3600, 6000),)))
+    short: Final = _observation("short", 13700.0, plan=CountedPromptCachePlan(6200, (_marker("3", 300, 4600),)))
+    mixed: Final = _observation(
+        "mixed",
+        13710.0,
+        plan=CountedPromptCachePlan(6200, (_marker("3", 3600, 4600), _marker("4", 300, 5500, ("3",)))),
+    )
+    later: Final = _observation("later", 14710.0, plan=CountedPromptCachePlan(6200, (_marker("3", 3600, 4600),)))
+    _, _, upgrade, after_expiry = _replay(first, short, mixed, later)
+    assert upgrade.usage is not None and after_expiry.usage is not None
+    assert upgrade.usage.prompt_tokens_details.cached_tokens == 4600
+    assert upgrade.usage.prompt_tokens_details.cache_creation_token_details.ephemeral_1h_input_tokens == 0
+    assert after_expiry.usage.prompt_tokens_details.cached_tokens == 0
+    assert after_expiry.usage.prompt_tokens_details.cache_creation_token_details.ephemeral_1h_input_tokens == 4600
 
 
 def test_overlapping_uncertain_request_cannot_be_warmed_by_a_later_callback() -> None:

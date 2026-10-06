@@ -50,6 +50,23 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
 
 
+def without_prompt_cache_breakpoint(value: Mapping[str, object]) -> Mapping[str, object]:
+    def clean(key: str, item: object) -> object:
+        if key == "content" and isinstance(item, list):
+            return [
+                without_prompt_cache_breakpoint(cast(Mapping[str, object], block)) if isinstance(block, dict) else block
+                for block in cast(list[object], item)
+            ]
+        if key == "function" and isinstance(item, dict):
+            return without_prompt_cache_breakpoint(cast(Mapping[str, object], item))
+        return item
+
+    filtered: Final = {key: clean(key, item) for key, item in value.items() if key != "prompt_cache_breakpoint"}
+    return (
+        value if len(filtered) == len(value) and all(item is value[key] for key, item in filtered.items()) else filtered
+    )
+
+
 def handle_any_messages_to_chat_completion_str_messages_conversion(
     messages: object,
 ) -> list[dict[str, str]]:

@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     hoist_images_from_tool_messages,
     system_messages_first,
     tool_with_sanitized_parameters,
+    without_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -55,7 +56,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     chat_completion_tool_call_from_dict,
 )
-from litellm.utils import convert_to_model_response_object
+from litellm.utils import convert_to_model_response_object, supports_prompt_cache_breakpoint
 
 from ..common_utils import OpenAIError
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
@@ -441,8 +442,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             custom_llm_provider, api_base
         )
 
-    def _sanitized_tools_update_for_openai(
+    def _provider_tools_update(
         self,
+        model: str,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
     ) -> Mapping[str, object]:
@@ -455,10 +457,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         the same validator, so regexes are dropped there too, while the lossier
         combinator flattening stays limited to api.openai.com hosts.
         """
-        tools: Final = optional_params.get("tools")
+        controls: Final = self._breakpoint_tools_update(model, optional_params, litellm_params)
+        tools: Final = controls.get("tools", optional_params.get("tools"))
         provider: Final = litellm_params.get("custom_llm_provider")
         if not isinstance(tools, list) or provider != "openai":
-            return _NO_TOOLS_UPDATE
+            return controls
         raw_api_base: Final = litellm_params.get("api_base")
         sanitize: Final = (
             flatten_combinators_and_drop_non_python_regex_patterns
@@ -471,13 +474,43 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         return MappingProxyType({"tools": sanitized})
 
     def _prompt_cache_ordered_messages(
-        self, messages: list[AllMessageValues], litellm_params: Mapping[str, object]
+        self, messages: list[AllMessageValues], litellm_params: Mapping[str, object], model: str
     ) -> list[AllMessageValues]:
+        filtered: Final = (
+            messages
+            if self._accepts_prompt_cache_breakpoint(model, litellm_params)
+            else [cast(AllMessageValues, without_prompt_cache_breakpoint(message)) for message in messages]
+        )
         if not litellm.openai_system_messages_first:
-            return messages
+            return filtered
         if litellm_params.get("custom_llm_provider") not in OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS:
-            return messages
-        return system_messages_first(messages)
+            return filtered
+        return system_messages_first(filtered)
+
+    def _accepts_prompt_cache_breakpoint(self, model: str, litellm_params: Mapping[str, object]) -> bool:
+        provider: Final = litellm_params.get("custom_llm_provider")
+        api_base: Final = litellm_params.get("api_base")
+        return self._should_preserve_cache_control_for_endpoint(
+            provider if isinstance(provider, str) else None,
+            api_base if isinstance(api_base, str) else None,
+        ) or supports_prompt_cache_breakpoint(model, provider if isinstance(provider, str) else None)
+
+    def _breakpoint_tools_update(
+        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        tools: Final = optional_params.get("tools")
+        if not isinstance(tools, list) or self._accepts_prompt_cache_breakpoint(model, litellm_params):
+            return MappingProxyType({})
+        return MappingProxyType(
+            {
+                "tools": [
+                    without_prompt_cache_breakpoint(cast(Mapping[str, object], tool))
+                    if isinstance(tool, dict)
+                    else tool
+                    for tool in cast(list[object], tools)
+                ]
+            }
+        )
 
     def transform_request(
         self,
@@ -494,7 +527,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             dict: The transformed request. Sent as the body of the API call.
         """
         messages = self._transform_messages(
-            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model
+            messages=self._prompt_cache_ordered_messages(messages, litellm_params, model), model=model
         )
         if not self._should_preserve_cache_control_for_endpoint(
             litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
@@ -513,7 +546,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "model": model,
             "messages": messages,
             **optional_params,
-            **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
+            **self._provider_tools_update(model, optional_params, litellm_params),
         }
 
     async def async_transform_request(
@@ -525,7 +558,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         headers: dict,
     ) -> dict:
         transformed_messages = await self._transform_messages(
-            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model, is_async=True
+            messages=self._prompt_cache_ordered_messages(messages, litellm_params, model), model=model, is_async=True
         )
         if not self._should_preserve_cache_control_for_endpoint(
             litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
@@ -547,7 +580,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 "model": model,
                 "messages": transformed_messages,
                 **optional_params,
-                **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
+                **self._provider_tools_update(model, optional_params, litellm_params),
             }
         else:
             ## allow for any object specific behaviour to be handled

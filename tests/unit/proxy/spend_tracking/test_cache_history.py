@@ -557,11 +557,15 @@ def test_routed_tier_settings_do_not_reset_baseline_history(
     baseline_params: dict[str, object],
     tier_settings: dict[str, object],
 ) -> None:
+    from litellm.router_utils.baseline_request import baseline_request
+
     history, _ = advance_baseline_history(
         BaselineHistory(), (_observation(_request(), baseline_params=baseline_params),)
     )
     request: Final = _request(**({"extra_body": tier_settings} if nested else tier_settings))
-    _, estimates = advance_baseline_history(history, (_observation(request, 10002.0, baseline_params=baseline_params),))
+    projected: Final = baseline_request(request, {}, baseline_params)
+    assert projected is not None
+    _, estimates = advance_baseline_history(history, (_observation(projected, 10002.0),))
     assert estimates[0].usage is not None
     assert estimates[0].usage.prompt_tokens_details.cached_tokens == 8000
     assert estimates[0].usage.prompt_tokens_details.cache_creation_tokens == 0
@@ -583,3 +587,18 @@ def test_baseline_model_settings_still_invalidate_prefixes(baseline_params: dict
     assert estimates[0].usage is not None
     assert estimates[0].usage.prompt_tokens_details.cached_tokens == 0
     assert estimates[0].usage.prompt_tokens_details.cache_creation_tokens == 8000
+
+
+@pytest.mark.parametrize(
+    "setting",
+    (
+        {"verbosity": "high"},
+        {"reasoning_effort": "high"},
+        {"output_config": {"effort": "high"}},
+    ),
+)
+def test_changed_caller_settings_invalidate_estimated_prefix(setting: dict[str, object]) -> None:
+    history, _ = advance_baseline_history(BaselineHistory(), (_observation(_request()),))
+    _, estimates = advance_baseline_history(history, (_observation(_request(**setting), 10002.0),))
+    assert estimates[0].usage is not None
+    assert estimates[0].usage.prompt_tokens_details.cached_tokens == 0

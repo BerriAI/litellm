@@ -50,6 +50,7 @@ from litellm.proxy.spend_tracking.savings import (
     _proxy_llm_router,  # pyright: ignore[reportPrivateUsage]  # existing optional proxy-router owner
     _resolve_model,  # pyright: ignore[reportPrivateUsage]  # shared model identity resolver
 )
+from litellm.router_utils.baseline_request import CACHE_SETTINGS, baseline_request, capture_baseline_parameters
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import CallTypes, ModelInfo, Usage
@@ -98,6 +99,7 @@ class BaselineCacheContext:
     baseline_deployment_id: str | None
     estimated_request: PreparedCacheRequest | None = None
     estimated: bool = False
+    baseline_parameters: Mapping[str, JsonValue] | None = field(default=None, repr=False)
     native_capture: _NativeCapture | CapturedBaselineObservation | None = field(default=None, repr=False)
     invalidated: str | None = None
     finalization: asyncio.Task[CapturedBaselineObservation] | None = field(default=None, repr=False, compare=False)
@@ -179,6 +181,8 @@ class AutoRouterBaselineCache(CustomLogger):
                     return
                 await invalidate_baseline_cache(logging_obj, "retried_request")
                 return
+            if not isinstance(metadata.get("_autorouter_baseline_route"), BaselineRouteStamp):
+                return
             request: Final = _Metadata.model_validate(metadata)
             session: Final = kwargs.get("litellm_session_id") or request.session_id or logging_obj.litellm_session_id
             if not isinstance(session, str) or not session or len(session) > 256:
@@ -212,10 +216,17 @@ class AutoRouterBaselineCache(CustomLogger):
             estimated: Final = call_type != CallTypes.anthropic_messages or not isinstance(
                 target, NativePredictionTarget
             )
-            estimated_request: Final = (
-                prepare_cache_request(kwargs, identity.model, identity.provider, prices, params) if estimated else None
+            projected: Final = (
+                baseline_request(kwargs, request.route.request_parameters, params)
+                if request.route.request_parameters is not None
+                else None
             )
-            scope: Final = "autorouter-baseline:v3:" + _digest(
+            estimated_request: Final = (
+                prepare_cache_request(projected, identity.model, identity.provider, prices, {})
+                if estimated and projected is not None
+                else None
+            )
+            scope: Final = "autorouter-baseline:v4:" + _digest(
                 (
                     request.user_api_key_hash,
                     session,
@@ -251,7 +262,13 @@ class AutoRouterBaselineCache(CustomLogger):
                 ),
             )
             logging_obj.baseline_cache_context = BaselineCacheContext(
-                self, capture, target, request.route.baseline_deployment_id, estimated_request, estimated
+                self,
+                capture,
+                target,
+                request.route.baseline_deployment_id,
+                estimated_request,
+                estimated,
+                capture_baseline_parameters(projected) if projected is not None else None,
             )
         except Exception:  # noqa: BLE001  # optional observation cannot fail inference
             verbose_proxy_logger.warning("Auto-router baseline observation could not be initialized")
@@ -367,7 +384,12 @@ async def finalize_baseline_cache(logging_obj: Logging, response_obj: object) ->
             task.add_done_callback(_consume_finalization)
         active: Final = prepared if prepared.finalization is not None else replace(prepared, finalization=task)
         logging_obj.baseline_cache_context = active
-        capture: Final = await asyncio.wait_for(asyncio.shield(task), timeout=optional_callback_budget(_COUNT_TIMEOUT))
+        budget: Final = (
+            optional_callback_budget(_COUNT_TIMEOUT)
+            if active.estimated
+            else optional_callback_budget(_COUNT_TIMEOUT + 0.1, fraction=0.75)
+        )
+        capture: Final = await asyncio.wait_for(asyncio.shield(task), timeout=budget)
         if logging_obj.baseline_cache_context is active:
             logging_obj.baseline_observation = capture  # rebind-ok: attach only to the captured request owner
     except TimeoutError:
@@ -442,8 +464,19 @@ def _prepare_native_capture(
             )
         )
     body: Final = _JSON_BODY.validate_json(wire.content)
-    same: Final = (
-        logging_obj.get_router_model_id() == context.baseline_deployment_id and body.get("model") == target.model
+    from litellm.llms.anthropic.prompt_cache_prediction import project_baseline_body
+
+    projected: Final = project_baseline_body(body, context.baseline_parameters, target.model)
+    if projected is None:
+        return context.capture.model_copy(
+            update={
+                "observation": original.model_copy(
+                    update={"available_at": available, "usage": usage, "reason": "unsupported_baseline_settings"}
+                )
+            }
+        )
+    same: Final = logging_obj.get_router_model_id() == context.baseline_deployment_id and all(
+        body.get(key) == projected.get(key) for key in ("model", "messages", "cache_control", *CACHE_SETTINGS)
     )
     minimum: Final = get_prompt_cache_min_tokens(target.model)
     captured: Final = context.capture.model_copy(
@@ -462,7 +495,7 @@ def _prepare_native_capture(
         )
     )
 
-    return _NativeCapture(captured, target, wire, body)
+    return _NativeCapture(captured, target, wire, projected)
 
 
 async def _capture(
