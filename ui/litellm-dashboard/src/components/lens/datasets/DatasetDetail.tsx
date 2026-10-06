@@ -1,29 +1,16 @@
 "use client";
 
-import { Fragment, useId, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowUpRight, Download, Loader2, TriangleAlert } from "lucide-react";
+import { useState } from "react";
+import { ChevronRight, Database, Download, Loader2, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/cva.config";
 import { StateMessage } from "../ui/StateMessage";
-import { useDatasetRoute, useOpenSourceTrace } from "../route";
+import { useDatasetRoute } from "../route";
+import { IdChip } from "../traces/ui/IdChip";
 import { isRevisionConflict, useDataset, useExportDataset, useSaveRevision } from "./api";
-import type { Dataset, DatasetCase, DatasetToolCall } from "./types";
-
-interface CaseEdit {
-  readonly included?: boolean;
-  readonly expected?: string;
-}
-
-type Edits = Readonly<Record<string, CaseEdit>>;
-
-const editedCase = (item: DatasetCase, edit: CaseEdit | undefined): DatasetCase =>
-  edit ? { ...item, included: edit.included ?? item.included, expected: edit.expected ?? item.expected } : item;
-
-const isChanged = (item: DatasetCase, edit: CaseEdit | undefined): boolean => {
-  const next = editedCase(item, edit);
-  return next.included !== item.included || next.expected !== item.expected;
-};
+import { CasePanel } from "./CasePanel";
+import { CaseTable } from "./CaseTable";
+import { changedCount, withEdits, type CaseEdit, type CaseEdits } from "./caseView";
+import type { Dataset } from "./types";
 
 export interface DatasetDetailProps {
   readonly datasetId: string;
@@ -88,21 +75,19 @@ interface DatasetRevisionProps {
 
 function DatasetRevision(props: DatasetRevisionProps) {
   const { dataset, latestRevision, readOnly, onBack, onPickRevision, onShowLatest, onReload } = props;
-  const [edits, setEdits] = useState<Edits>({});
+  const { caseId, setCaseId } = useDatasetRoute();
+  const [edits, setEdits] = useState<CaseEdits>({});
   const save = useSaveRevision();
   const exportDataset = useExportDataset();
   const isLatest = dataset.revision === latestRevision;
   const editable = isLatest && !readOnly;
-  const changed = dataset.cases.filter((item) => isChanged(item, edits[item.id])).length;
-  const included = dataset.cases.filter((item) => editedCase(item, edits[item.id]).included).length;
+  const cases = withEdits(dataset.cases, edits);
+  const changed = changedCount(dataset.cases, edits);
   const edit = (id: string, next: CaseEdit) =>
     setEdits((current) => ({ ...current, [id]: { ...current[id], ...next } }));
   const saveRevision = () =>
     save.mutate(
-      {
-        datasetId: dataset.id,
-        body: { base_revision: dataset.revision, cases: dataset.cases.map((item) => editedCase(item, edits[item.id])) },
-      },
+      { datasetId: dataset.id, body: { base_revision: dataset.revision, cases } },
       { onSuccess: onShowLatest },
     );
   const reload = () => {
@@ -112,32 +97,42 @@ function DatasetRevision(props: DatasetRevisionProps) {
   };
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-3 py-2 sm:px-4">
-        <Button variant="ghost" size="icon" className="size-7" aria-label="All datasets" onClick={onBack}>
-          <ArrowLeft className="size-4" />
-        </Button>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <h2 className="truncate text-sm font-semibold">{dataset.name}</h2>
-          <p className="truncate text-xs text-muted-foreground">
-            {dataset.agent_name || "Any agent"} · {included} of {dataset.cases.length} included
-          </p>
+      <header className="flex shrink-0 flex-col gap-1 border-b bg-background px-3 pt-2.5 pb-2 sm:px-4">
+        <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-xs text-muted-foreground">
+          <button type="button" onClick={onBack} className="rounded hover:text-foreground hover:underline">
+            Datasets
+          </button>
+          <ChevronRight aria-hidden="true" className="size-3" />
+          <span className="truncate">{dataset.name}</span>
+        </nav>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <Database aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+            <h2 className="min-w-0 truncate text-base font-semibold">{dataset.name}</h2>
+            <IdChip value={dataset.id} label="Copy dataset ID" />
+            <span className="hidden truncate text-xs text-muted-foreground sm:inline">
+              {dataset.agent_name || "Any agent"}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <RevisionPicker revision={dataset.revision} latest={latestRevision} onPick={onPickRevision} />
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={exportDataset.isPending}
+              onClick={() => exportDataset.mutate({ id: dataset.id, name: dataset.name, revision: dataset.revision })}
+            >
+              <Download className="size-3.5" />
+              Export JSONL
+            </Button>
+            {editable && (
+              <Button size="sm" disabled={changed === 0 || save.isPending} onClick={saveRevision}>
+                {save.isPending && <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" />}
+                Save as revision {dataset.revision + 1}
+              </Button>
+            )}
+          </div>
         </div>
-        <RevisionPicker revision={dataset.revision} latest={latestRevision} onPick={onPickRevision} />
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={exportDataset.isPending}
-          onClick={() => exportDataset.mutate({ id: dataset.id, name: dataset.name, revision: dataset.revision })}
-        >
-          <Download className="size-3.5" />
-          Export JSONL
-        </Button>
-        {editable && (
-          <Button size="sm" disabled={changed === 0 || save.isPending} onClick={saveRevision}>
-            {save.isPending && <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" />}
-            Save as revision {dataset.revision + 1}
-          </Button>
-        )}
       </header>
       <SaveProblem error={save.error ?? exportDataset.error} onReload={reload} />
       {!isLatest && (
@@ -145,22 +140,28 @@ function DatasetRevision(props: DatasetRevisionProps) {
           Revision {dataset.revision} is read-only. Switch to the latest revision to make changes.
         </p>
       )}
-      {dataset.cases.length === 0 ? (
+      {cases.length === 0 ? (
         <p className="px-4 py-10 text-center text-sm text-muted-foreground">
           This revision has no cases. Add some from a trace or a finding.
         </p>
       ) : (
-        <ol aria-label="Cases" className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 sm:p-4">
-          {dataset.cases.map((item, index) => (
-            <CaseCard
+        <CaseTable
+          cases={cases}
+          editable={editable}
+          selectedId={caseId}
+          onSelect={setCaseId}
+          onToggle={(id, included) => edit(id, { included })}
+        >
+          {(item) => (
+            <CasePanel
               key={item.id}
-              item={editedCase(item, edits[item.id])}
-              index={index}
+              item={item}
+              datasetName={dataset.name}
               editable={editable}
               onEdit={(next) => edit(item.id, next)}
             />
-          ))}
-        </ol>
+          )}
+        </CaseTable>
       )}
     </div>
   );
@@ -212,100 +213,5 @@ function RevisionPicker({
         </option>
       ))}
     </select>
-  );
-}
-
-interface CaseCardProps {
-  readonly item: DatasetCase;
-  readonly index: number;
-  readonly editable: boolean;
-  readonly onEdit: (edit: CaseEdit) => void;
-}
-
-function CaseCard({ item, index, editable, onEdit }: CaseCardProps) {
-  const expectedId = useId();
-  const label = `Case ${index + 1}`;
-  const openSourceTrace = useOpenSourceTrace();
-  const { trace_id: traceId, trace_ref: traceRef, span_id: spanId } = item.source;
-  return (
-    <li
-      aria-label={label}
-      className={cn(
-        "flex flex-col gap-3 rounded-xl bg-muted/40 p-3 transition-opacity",
-        !item.included && "opacity-60",
-      )}
-    >
-      <div className="flex items-center gap-2">
-        <label className="flex items-center gap-2 text-sm font-medium">
-          <input
-            type="checkbox"
-            aria-label={`Include ${label}`}
-            className="size-4 rounded border-input accent-foreground disabled:opacity-50"
-            checked={item.included}
-            disabled={!editable}
-            onChange={(event) => onEdit({ included: event.target.checked })}
-          />
-          {label}
-        </label>
-        {!item.included && <span className="text-xs text-muted-foreground">excluded</span>}
-        {traceId && (
-          <button
-            type="button"
-            className="ml-auto inline-flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => openSourceTrace({ traceId, traceRef, spanId })}
-          >
-            Source trace
-            <ArrowUpRight aria-hidden="true" className="size-3" />
-          </button>
-        )}
-      </div>
-      <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
-        {item.messages.map((message, position) => (
-          <Fragment key={position}>
-            {message.content && (
-              <Turn role={message.name ? `${message.role} · ${message.name}` : message.role}>{message.content}</Turn>
-            )}
-            <ToolCalls calls={message.tool_calls} />
-          </Fragment>
-        ))}
-        {item.reply && <Turn role="reply">{item.reply}</Turn>}
-        <ToolCalls calls={item.tool_calls} />
-      </div>
-      <div className="flex flex-col gap-1">
-        <label htmlFor={expectedId} className="text-xs font-medium text-muted-foreground">
-          Expected
-        </label>
-        {editable ? (
-          <Textarea
-            id={expectedId}
-            value={item.expected}
-            placeholder="What a good reply looks like"
-            className="bg-background text-sm"
-            onChange={(event) => onEdit({ expected: event.target.value })}
-          />
-        ) : (
-          <p id={expectedId} className="text-sm whitespace-pre-wrap text-foreground">
-            {item.expected || <span className="text-muted-foreground">Not set</span>}
-          </p>
-        )}
-      </div>
-    </li>
-  );
-}
-
-function ToolCalls({ calls }: { calls: readonly DatasetToolCall[] }) {
-  return calls.map((call, position) => (
-    <Turn key={position} role={`tool call · ${call.name}`}>
-      <code className="text-xs break-all">{call.arguments}</code>
-    </Turn>
-  ));
-}
-
-function Turn({ role, children }: { role: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-xs font-medium text-muted-foreground">{role}</span>
-      <div className="text-sm whitespace-pre-wrap break-words text-foreground">{children}</div>
-    </div>
   );
 }
