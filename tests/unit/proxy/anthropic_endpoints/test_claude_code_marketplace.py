@@ -28,6 +28,7 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketp
     register_plugin,
     update_plugin,
 )
+from tests._master_key import MASTER_KEY
 
 
 def _make_mock_prisma():
@@ -80,7 +81,7 @@ def _make_mock_prisma():
 
 _USER = UserAPIKeyAuth(
     user_role=LitellmUserRoles.PROXY_ADMIN,
-    api_key="sk-1234",
+    api_key=MASTER_KEY,
     user_id="test-user",
 )
 
@@ -107,7 +108,7 @@ _ARCHIVE_SOURCE = {
 def _patch_proxy_globals(monkeypatch):
     """Scope prisma_client/master_key mutations to each test via monkeypatch."""
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
-    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
 
 @pytest.mark.asyncio

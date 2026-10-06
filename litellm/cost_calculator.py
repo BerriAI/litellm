@@ -100,7 +100,7 @@ from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_toke
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import DecisionsResponse, DecisionsUsage
-from litellm.types.llms.base import CachedTokensDetails
+from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
@@ -278,7 +278,7 @@ def _get_additional_costs(
 
     try:
         config_class = None
-        if custom_llm_provider == "azure_ai":
+        if custom_llm_provider in ("azure_ai", "azure"):
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
             config_class = AzureFoundryModelInfo.get_azure_ai_config_for_model(model)
@@ -1818,7 +1818,7 @@ def completion_cost(
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
-                if custom_llm_provider == "azure_ai" and not azure_ai_is_model_router_name(model):
+                if custom_llm_provider in ("azure_ai", "azure") and not azure_ai_is_model_router_name(model):
                     model_for_additional_costs = request_model_for_cost
                     if completion_response is not None:
                         hidden_params = getattr(completion_response, "_hidden_params", None) or {}
@@ -2839,12 +2839,12 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
 _RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete"})
 
 
-class _ResponsesWsEventResponse(BaseModel):
+class _ResponsesWsEventResponse(LiteLLMBaseModel):
     usage: Mapping[str, object] | None = None
     service_tier: str | None = None
 
 
-class _ResponsesWsEvent(BaseModel):
+class _ResponsesWsEvent(LiteLLMBaseModel):
     type: str = ""
     response: _ResponsesWsEventResponse | None = None
 

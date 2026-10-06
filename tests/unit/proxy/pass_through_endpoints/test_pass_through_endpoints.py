@@ -57,6 +57,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
+from tests._master_key import MASTER_KEY
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
 
@@ -287,7 +288,7 @@ async def test_make_multipart_http_request_removes_content_type_header():
     original_headers = {
         "content-type": "multipart/form-data; boundary=--------------------------416423083260054165225918",
         "user-agent": "PostmanRuntime/7.49.0",
-        "Authorization": "bearer sk-1234",
+        "Authorization": "bearer sk-9876",
     }
 
     # Test the function
@@ -311,7 +312,7 @@ async def test_make_multipart_http_request_removes_content_type_header():
 
     # Other headers should be preserved
     assert call_args["headers"]["user-agent"] == "PostmanRuntime/7.49.0"
-    assert call_args["headers"]["Authorization"] == "bearer sk-1234"
+    assert call_args["headers"]["Authorization"] == "bearer sk-9876"
 
     # Verify other parameters are correct
     assert call_args["method"] == "POST"
@@ -2519,7 +2520,7 @@ async def test_pass_through_request_query_params_forwarding():
 
                         # Create mock user API key dict
                         mock_user_api_key_dict = MagicMock()
-                        mock_user_api_key_dict.api_key = "sk-1234"
+                        mock_user_api_key_dict.api_key = MASTER_KEY
 
                         # Call pass_through_request
                         await pass_through_request(

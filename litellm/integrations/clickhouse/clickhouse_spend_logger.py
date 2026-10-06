@@ -20,6 +20,7 @@ from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBa
 from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
 from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
+from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.tracing.types import SpendLogRecord
 from litellm.types.utils import StandardLoggingPayload
@@ -156,6 +157,11 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
     return SpendLogRecord(
         request_id=request_id,
         response_id=strip_cache_hit_suffix(request_id),
+        provider_request_id=(
+            get_provider_request_id(kwargs.get("response_headers"))
+            or get_provider_request_id(hidden_params.get("additional_headers"))
+            or ""
+        ),
         litellm_call_id=payload.get("litellm_call_id") or "",
         call_type=payload.get("call_type") or "",
         api_key=metadata.get("user_api_key_hash") or "",
