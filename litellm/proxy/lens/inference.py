@@ -357,11 +357,8 @@ async def reserved_budget(
                 raise HTTPException(504, "Analysis request timed out waiting for budget") from error
             admitted.set()
             yield
-    except BaseException as error:
-        await repo.update(lens_id, lambda e: settle_amount(e, reservation_id, 0, None))
-        if isinstance(error, TimeoutError):
-            raise HTTPException(504, "Analysis request timed out waiting for budget or model output") from error
-        raise
+    except TimeoutError as error:
+        raise HTTPException(504, "Analysis request timed out waiting for budget or model output") from error
 
 
 async def analyze(
@@ -440,8 +437,9 @@ async def analyze(
                 ),
                 renew_budget_reservation(repo, lens.id, reservation_id, admitted),
             )
-    except (ProxyException, ContextWindowExceededError) as error:
-        if context_failure(error):
+    except BaseException as error:
+        await repo.update(lens.id, lambda e: settle_amount(e, reservation_id, 0, None))
+        if isinstance(error, (ProxyException, ContextWindowExceededError)) and context_failure(error):
             return ModelResult(content="", cost=0, context_exceeded=True)
         raise
     cost: Final = billed_cost if billed_cost is not None else completion_charge(deployments, response, estimate)

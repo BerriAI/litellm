@@ -563,3 +563,59 @@ async def test_model_call_and_budget_renewal_finish_together(outcome: str) -> No
         assert error.value.detail == ("Model failed" if outcome == "model_failed" else "Reservation lost")
     assert model_finished.is_set()
     assert renewal_finished.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timed_out", (False, True))
+async def test_renewal_preserves_the_original_failure_while_request_cleanup_is_pending(timed_out: bool) -> None:
+    import asyncio
+
+    from litellm.proxy.lens.inference import (
+        BUDGET_LEASE,
+        model_with_renewal,
+        renew_reservation,
+        reserve_amount,
+        reserved_budget,
+    )
+    from litellm.proxy.lens.models import BudgetReservation
+    from litellm.proxy.lens.repository import LensRepository
+    from tests.unit.proxy.lens.test_endpoints import ResultDatabase
+    from tests.unit.proxy.lens.test_state import NOW, lens
+
+    db: Final = ResultDatabase(lens())
+    repo: Final = LensRepository(db)
+    hold: Final = BudgetReservation(
+        id="active", job_id="run", amount=90, month=db.stored.budget_month, expires_at=NOW + BUDGET_LEASE
+    )
+    admitted: Final = asyncio.Event()
+    unwinding: Final = asyncio.Event()
+    renewed: Final = asyncio.Event()
+    stopped: Final = asyncio.Event()
+    failure: Final = (
+        TimeoutError("Model timed out") if timed_out else HTTPException(400, "Provider rejected the request")
+    )
+
+    async def model() -> tuple[ModelResponse, float | None]:
+        try:
+            async with reserved_budget(repo, "lens", hold.id, lambda e: reserve_amount(e, hold, NOW), admitted):
+                raise failure
+        except HTTPException:
+            unwinding.set()
+            await renewed.wait()
+            raise
+
+    async def renewal() -> None:
+        try:
+            await unwinding.wait()
+            await repo.update("lens", lambda e: renew_reservation(e, hold.id, NOW))
+            renewed.set()
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    with pytest.raises(HTTPException) as error:
+        await model_with_renewal(model(), renewal())
+    assert (error.value.__cause__ is failure) if timed_out else (error.value is failure)
+    assert error.value.status_code == (504 if timed_out else 400)
+    assert stopped.is_set()
+    assert db.stored.reservations == (hold,)
