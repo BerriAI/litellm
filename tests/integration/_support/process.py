@@ -180,6 +180,54 @@ def _launch_until_bound(
     return _launch_until_bound(command, root, environment, output, attempts - 1)
 
 
+def _proxy_root() -> Path:
+    return Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
+
+
+def _proxy_environment(
+    gateway: Gateway, overrides: Mapping[str, str], remove_environment: tuple[str, ...]
+) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            **{
+                name: value
+                for name, value in {**os.environ, **proxy_database_environment()}.items()
+                if name not in remove_environment
+            },
+            "LITELLM_MASTER_KEY": gateway.key,
+            "LITELLM_SALT_KEY": os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"),
+            "STORE_MODEL_IN_DB": "True",
+            **overrides,
+        }
+    )
+
+
+def setup_only_proxy_run(
+    gateway: Gateway, overrides: Mapping[str, str], *, config: Path, workers: int
+) -> subprocess.CompletedProcess[str]:
+    """The proxy CLI's `--skip_server_startup` pass (the image's setup step), run to completion with the
+    environment an owned proxy gets."""
+    return subprocess.run(  # test-quality-ok: the checkout at the working directory is the proxy under test
+        (
+            sys.executable,
+            "-m",
+            "integration._support.proxy",
+            "--config",
+            str(config),
+            "--num_workers",
+            str(workers),
+            *DB_PUSH,
+            "--skip_server_startup",
+        ),
+        cwd=_proxy_root(),
+        env=dict(_proxy_environment(gateway, overrides, ())),
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+
+
 @contextmanager
 def owned_proxy_process(
     gateway: Gateway,
@@ -192,18 +240,8 @@ def owned_proxy_process(
     database_setup: tuple[str, ...] = DB_PUSH,
     extra_arguments: tuple[str, ...] = (),
 ) -> Iterator[OwnedProxy]:
-    root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
-    environment: Final = {
-        **{
-            name: value
-            for name, value in {**os.environ, **proxy_database_environment()}.items()
-            if name not in remove_environment
-        },
-        "LITELLM_MASTER_KEY": gateway.key,
-        "LITELLM_SALT_KEY": os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"),
-        "STORE_MODEL_IN_DB": "True",
-        **overrides,
-    }
+    root: Final = _proxy_root()
+    environment: Final = _proxy_environment(gateway, overrides, remove_environment)
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
     command: Final = (
@@ -228,6 +266,84 @@ def owned_proxy_process(
             yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log)
     finally:
         _stop(process)
+
+
+@contextmanager
+def owned_gateway_image(
+    gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path, workers: int
+) -> Iterator[OwnedProxy]:
+    """The componentized gateway started the way its image starts it: `docker/component_entrypoint.sh` running
+    `python -m gateway.launch`, with the config handed over as `CONFIG_FILE_PATH`. It serves the data plane only,
+    so keys come from a proxy that shares its database."""
+    root: Final = _proxy_root()
+    environment: Final = _proxy_environment(gateway, {**overrides, "CONFIG_FILE_PATH": str(config)}, ())
+    output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
+    output.mkdir(parents=True, exist_ok=True)
+    command: Final = (
+        str(root / "docker" / "component_entrypoint.sh"),
+        sys.executable,
+        "-m",
+        "gateway.launch",
+        "--workers",
+        str(workers),
+        "--host",
+        "127.0.0.1",
+    )
+    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
+    try:
+        with httpx.Client(
+            base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
+        ) as client:
+            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), launch.process, launch.log)
+    finally:
+        _stop(launch.process)
+
+
+def _is_ready(client: httpx.Client) -> bool:
+    try:
+        return client.get("/health/readiness", timeout=2).status_code == 200
+    except httpx.TransportError:
+        return False
+
+
+def refused_boot_log(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    config: Path | None = None,
+) -> str:
+    """Start the proxy and return its log once it exits non-zero instead of becoming ready."""
+    root: Final = _proxy_root()
+    environment: Final = _proxy_environment(gateway, overrides, ())
+    output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
+    output.mkdir(parents=True, exist_ok=True)
+    command: Final = (
+        sys.executable,
+        "-m",
+        "integration._support.proxy",
+        "--config",
+        str(config or "tests/integration/proxy_config.yaml"),
+        "--host",
+        "127.0.0.1",
+        "--num_workers",
+        "1",
+        *DB_PUSH,
+    )
+    launch: Final = _launch(command, root, environment, output)
+    try:
+        with httpx.Client(base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False) as client:
+            deadline: Final = time.monotonic() + 70
+            while launch.process.poll() is None:
+                assert not _is_ready(client), (
+                    f"Proxy became ready instead of refusing to boot:\n{launch.log.read_text()}"
+                )
+                assert time.monotonic() < deadline, "Proxy neither exited nor became ready within the deadline"
+                time.sleep(0.1)
+        assert launch.process.returncode != 0, f"Proxy exited 0 instead of refusing to boot:\n{launch.log.read_text()}"
+        return launch.log.read_text()
+    finally:
+        _stop(launch.process)
 
 
 _UPSTREAM_READY_SECONDS: Final = 60
@@ -282,7 +398,7 @@ class UpstreamSlot:
 
 @contextmanager
 def owned_upstream(directory: Path) -> Generator[UpstreamSlot]:
-    root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
+    root: Final = _proxy_root()
     slot: Final = UpstreamSlot(directory, _free_port(), root)
     slot.start()
     try:

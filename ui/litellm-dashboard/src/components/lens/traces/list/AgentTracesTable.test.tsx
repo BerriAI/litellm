@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import { Inspector } from "@/components/shared/Inspector";
@@ -27,6 +28,7 @@ const renderEmpty = (rangeEmpty: boolean) => {
     inList(
       <AgentTracesTable
         traces={[]}
+        findings={new Map()}
         isLoading={false}
         error={null}
         hasMore={false}
@@ -51,6 +53,31 @@ describe("AgentTracesTable empty state", () => {
   });
 });
 
+describe("AgentTracesTable loading state", () => {
+  it("fills the first page load with skeleton rows instead of an empty table", () => {
+    render(
+      inList(
+        <AgentTracesTable
+          traces={[]}
+          findings={new Map()}
+          isLoading
+          error={null}
+          hasMore={false}
+          onLoadMore={vi.fn()}
+          rangeEmpty
+          onSetUpTracing={vi.fn()}
+        />,
+      ),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Loading runs…");
+    const placeholders = screen.getAllByTestId("runs-placeholder");
+    expect(placeholders.length).toBeGreaterThanOrEqual(8);
+    const columnCount = screen.getAllByRole("columnheader").length;
+    expect(within(placeholders[0]).getAllByRole("cell", { hidden: true })).toHaveLength(columnCount);
+    expect(screen.queryByText(/No runs/)).not.toBeInTheDocument();
+  });
+});
+
 describe("AgentTracesTable virtualization", () => {
   const template = (traceList as TracePage).data[0] as TraceSummary;
   const manyRuns: TraceSummary[] = Array.from({ length: 500 }, (_, i) => ({
@@ -64,6 +91,7 @@ describe("AgentTracesTable virtualization", () => {
       inList(
         <AgentTracesTable
           traces={manyRuns}
+          findings={new Map()}
           isLoading={false}
           error={null}
           hasMore={false}
@@ -82,5 +110,75 @@ describe("AgentTracesTable virtualization", () => {
     expect(screen.getAllByTestId("agent-trace-row").length).toBeLessThan(50);
     expect(screen.getByText("question 499")).toBeInTheDocument();
     expect(screen.queryByText("question 0")).not.toBeInTheDocument();
+  });
+});
+
+describe("AgentTracesTable column picker", () => {
+  const runs = (traceList as TracePage).data as TraceSummary[];
+  const renderRuns = () =>
+    renderWithProviders(
+      inList(
+        <AgentTracesTable
+          traces={runs}
+          findings={new Map()}
+          isLoading={false}
+          error={null}
+          hasMore={false}
+          onLoadMore={vi.fn()}
+          onSetUpTracing={vi.fn()}
+        />,
+      ),
+    );
+  const headers = () => screen.getAllByRole("columnheader").map((header) => header.textContent);
+
+  beforeEach(() => localStorage.clear());
+
+  it("hides a column from the header picker and keeps it hidden after a remount", async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderRuns();
+    const before = headers().length;
+    expect(headers()).toContain("Cost");
+
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    expect(screen.queryByTestId("view-option-time")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("view-option-agent")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("view-option-open")).not.toBeInTheDocument();
+    await user.click(await screen.findByTestId("view-option-cost"));
+
+    expect(headers()).not.toContain("Cost");
+    expect(headers()).toHaveLength(before - 1);
+    const [firstRow] = screen.getAllByTestId("agent-trace-row");
+    expect(within(firstRow).getAllByRole("cell")).toHaveLength(before - 1);
+
+    unmount();
+    renderRuns();
+    expect(headers()).not.toContain("Cost");
+    expect(headers()).toHaveLength(before - 1);
+  });
+
+  it("shapes loading skeletons to the columns still visible", async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderRuns();
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    await user.click(await screen.findByTestId("view-option-cost"));
+    unmount();
+
+    render(
+      inList(
+        <AgentTracesTable
+          traces={[]}
+          findings={new Map()}
+          isLoading
+          error={null}
+          hasMore={false}
+          onLoadMore={vi.fn()}
+          rangeEmpty
+          onSetUpTracing={vi.fn()}
+        />,
+      ),
+    );
+    const columnCount = screen.getAllByRole("columnheader").length;
+    const [placeholder] = screen.getAllByTestId("runs-placeholder");
+    expect(within(placeholder).getAllByRole("cell", { hidden: true })).toHaveLength(columnCount);
   });
 });

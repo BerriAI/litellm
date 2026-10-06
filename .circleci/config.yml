@@ -38,7 +38,7 @@ commands:
     parameters:
       category:
         type: enum
-        enum: ["backend", "client", "provider-harness"]
+        enum: ["backend", "client", "provider-harness", "redis-compat"]
         default: "backend"
     steps:
       - run:
@@ -229,6 +229,19 @@ commands:
       - wait_for_service:
           url: tcp://localhost:6379
           timeout: "60"
+  install_codecov_cli:
+    steps:
+      - run:
+          name: Install Codecov CLI (pinned v11.3.1)
+          when: always
+          command: |
+            curl -sSLf -o /tmp/codecov https://cli.codecov.io/v11.3.1/linux/codecov
+            curl -sSLf -o /tmp/codecov.SHA256SUM https://cli.codecov.io/v11.3.1/linux/codecov.SHA256SUM
+            [ "$(cat /tmp/codecov.SHA256SUM)" = "ca1d64196d2d34771084afe76ea657d581bf628e31d993ff8e52ea09cc88a56d  codecov" ]
+            (cd /tmp && sha256sum -c codecov.SHA256SUM)
+            chmod +x /tmp/codecov
+            mkdir -p "$HOME/.local/bin"
+            mv /tmp/codecov "$HOME/.local/bin/codecov"
   start_openai_record_replay_proxy:
     description: "Start the record/replay proxy (tests/_openai_record_replay_proxy.py) on host port 8090 and wait until healthy. Models whose api_base points here replay recorded provider responses, so the E2E run neither pays for nor depends on the live provider. The default upstream is OpenAI; a non-OpenAI model must point its api_base at /__recorder_upstream/<host>/ so the recorder forwards there instead of defaulting to OpenAI. Run after uv deps are synced."
     steps:
@@ -3279,30 +3292,164 @@ jobs:
       - store_artifacts:
           path: test-results
 
-  unit:
+  postgres_suite:
+    parameters:
+      test_path:
+        type: string
+      seed:
+        type: boolean
+      coverage_flag:
+        type: string
+        default: ""
+      timeout_minutes:
+        type: integer
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: large
     working_directory: ~/project
-    parallelism: 4
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/litellm_test
     steps:
+      - checkout
+      - skip_if_unrelated_changes
+      - setup_litellm_test_deps
+      - start_postgres:
+          db_name: litellm_test
+          image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+      - run:
+          name: Generate Prisma client
+          command: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+      - when:
+          condition: << parameters.seed >>
+          steps:
+            - run:
+                name: Seed database schema
+                command: uv run --no-sync prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+      - run:
+          name: Run << parameters.test_path >>
+          command: |
+            mkdir -p test-results
+            coverage_args=()
+            if [ -n "<< parameters.coverage_flag >>" ]; then
+              coverage_args=(--cov=./litellm --cov-report=xml:coverage.xml)
+            fi
+            timeout --signal=TERM << parameters.timeout_minutes >>m uv run --no-sync pytest \
+              << parameters.test_path >> -vv --tb=short --durations=10 -o junit_family=xunit1 \
+              --junitxml=test-results/junit.xml "${coverage_args[@]}"
+      - when:
+          condition: << parameters.coverage_flag >>
+          steps:
+            - install_codecov_cli
+            - run:
+                name: Upload coverage
+                when: always
+                command: |
+                  [ -f coverage.xml ] || { echo "no coverage.xml produced"; exit 1; }
+                  codecov upload-process --disable-search --fail-on-error -f coverage.xml \
+                    -F << parameters.coverage_flag >> -C "$CIRCLE_SHA1" \
+                    -n "<< parameters.coverage_flag >>-${CIRCLE_BUILD_NUM}" --git-service github
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
+
+  mcp_integration:
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    environment:
+      COVERAGE_CORE: sysmon
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    steps:
+      - checkout
+      - skip_if_unrelated_changes
       - setup_litellm_test_deps
       - run:
           name: Generate Prisma client
           command: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
       - run:
-          name: Run unit tests
+          name: Install MCP SDK1 peer
           command: |
-            mkdir -p test-results/unit
-            shard="$(find tests/unit -name 'test_*.py' | sort | circleci tests split --split-by=timings --timings-type=filename)"
-            if [ -z "${shard}" ]; then echo "shard ${CIRCLE_NODE_INDEX} received no tests/unit files; nothing to run"; exit 0; fi
-            mapfile -t files < <(printf '%s\n' "${shard}")
-            set +e
-            LITELLM_LOCAL_MODEL_COST_MAP=True uv run --no-sync pytest "${files[@]}" -p no:rerunfailures -p no:pytest-retry --timeout=90 -n 4 --dist=loadscope --tb=short -o junit_family=xunit1 --junitxml=test-results/unit/junit.xml
-            status=$?
-            set -e
-            if [ "$status" -eq 5 ]; then echo "pytest collected no tests from tests/unit; passing"; exit 0; fi
-            exit "$status"
+            uv venv --python 3.12 .venv-mcp-peer
+            uv pip install --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
+            echo "export MCP_TEST_PEER_PYTHON=$PWD/.venv-mcp-peer/bin/python" >> "$BASH_ENV"
+      - run:
+          name: Run MCP integration tests
+          command: |
+            mkdir -p test-results
+            env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
+              timeout --signal=TERM 20m uv run --no-sync pytest \
+              tests/mcp_tests tests/unit/experimental_mcp_client tests/unit/proxy/_experimental/mcp_server \
+              tests/unit/responses/mcp --tb=short -vv --maxfail=10 -n 2 --dist=loadscope --reruns 0 \
+              --reruns-delay 1 --timeout=120 --rerun-except "from pytest-timeout" --durations=20 \
+              --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml:coverage.xml \
+              --cov-config=pyproject.toml -o junit_family=xunit1 --junitxml=test-results/junit.xml
+      - install_codecov_cli
+      - run:
+          name: Upload MCP integration coverage
+          when: always
+          command: |
+            [ -f coverage.xml ] || { echo "no coverage.xml produced"; exit 1; }
+            codecov upload-process --disable-search --fail-on-error -f coverage.xml \
+              -F mcp-integration -C "$CIRCLE_SHA1" \
+              -n "mcp-integration-${CIRCLE_BUILD_NUM}" --git-service github
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
+
+  redis_compat:
+    parameters:
+      redis_py:
+        type: string
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    steps:
+      - checkout
+      - skip_if_unrelated_changes:
+          category: redis-compat
+      - setup_litellm_test_deps
+      - run:
+          name: Pin redis-py version
+          command: |
+            uv pip install "redis==<< parameters.redis_py >>"
+            uv run --no-sync python -c "import redis; assert redis.__version__ == '<< parameters.redis_py >>', redis.__version__; print('redis-py', redis.__version__)"
+      - run:
+          name: Install redis-server 7.2.16
+          command: |
+            mkdir -p "$HOME/.local/bin"
+            cid="$(docker create redis:7.2.16@sha256:0637954999d01b7c9ce9167db2da50656e2590d3b884f1c600c5f63bb6e6773c)"
+            docker cp "${cid}":/usr/local/bin/redis-server "$HOME/.local/bin/redis-server"
+            docker rm "$cid"
+            redis-server --version | grep -q 'v=7.2.16'
+      - run:
+          name: Run Redis compatibility tests
+          command: |
+            mkdir -p test-results
+            env -u CASSETTE_REDIS_URL -u AZURE_CLIENT_ID -u AZURE_CLIENT_SECRET -u AZURE_TENANT_ID \
+              timeout --signal=TERM 15m uv run --no-sync pytest \
+              tests/unit/test_redis.py tests/unit/caching/test_redis_connection_pool.py \
+              tests/unit/caching/test_redis_cluster_cache.py tests/unit/caching/test_evicted_client_closer.py \
+              tests/local_testing/test_caching.py::test_sync_cluster_authenticates_with_azure_credentials \
+              tests/local_testing/test_caching.py::test_sync_cluster_authenticates_with_gcp_credentials \
+              --tb=short -vv --reruns 2 --reruns-delay 1 --durations=20 --cov=./litellm \
+              --cov-report=xml:coverage.xml -o junit_family=xunit1 --junitxml=test-results/junit.xml
+      - when:
+          condition:
+            equal: ["5.3.1", << parameters.redis_py >>]
+          steps:
+            - install_codecov_cli
+            - run:
+                name: Upload Redis compatibility coverage
+                when: always
+                command: |
+                  [ -f coverage.xml ] || { echo "no coverage.xml produced"; exit 1; }
+                  codecov upload-process --disable-search --fail-on-error -f coverage.xml \
+                    -F redis-compat -C "$CIRCLE_SHA1" \
+                    -n "redis-compat-${CIRCLE_BUILD_NUM}" --git-service github
       - store_test_results:
           path: test-results
       - store_artifacts:
@@ -3376,6 +3523,39 @@ workflows:
             parameters:
               suite: [management, database]
               mode: [replica]
+      - postgres_suite:
+          name: proxy-behavior
+          test_path: tests/proxy_behavior
+          seed: true
+          coverage_flag: lens-postgres
+          timeout_minutes: 25
+      - postgres_suite:
+          name: proxy-security
+          test_path: tests/proxy_security_tests
+          seed: true
+          timeout_minutes: 15
+      - postgres_suite:
+          name: schema-migration
+          test_path: tests/proxy_migration_tests
+          seed: false
+          timeout_minutes: 20
+      - postgres_suite:
+          name: roi-database
+          test_path: tests/integration/database/test_roi_observed.py
+          seed: false
+          coverage_flag: roi-postgres
+          timeout_minutes: 10
+      - mcp_integration:
+          name: mcp-integration
+      - redis_compat:
+          name: redis-compat-<< matrix.redis_py >>
+          matrix:
+            parameters:
+              redis_py:
+                - "5.3.1"
+                - "6.4.0"
+                - "7.4.1"
+                - "8.0.1"
   build_and_test:
     unless:
       or:
@@ -3385,7 +3565,6 @@ workflows:
     jobs:
       - using_litellm_on_windows
       - windows_release_wheel
-      - unit
       - provider_replay_harness
       - base_sdk_install
       - local_testing_part1

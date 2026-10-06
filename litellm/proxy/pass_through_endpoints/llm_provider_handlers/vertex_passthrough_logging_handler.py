@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -55,6 +55,7 @@ else:
 
 _VERTEX_INTERACTIONS_PATH: Final = re.compile(r"/projects/[^/]+/locations/[^/]+/interactions/?$")
 _INTERACTIONS_RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def _interactions_model(
@@ -99,7 +100,7 @@ class VertexPassthroughLoggingHandler:
         litellm_model_response: Final = ModelResponse(
             model=model,
             usage=InteractionsUsageObjectTransformation.transform_interactions_usage_object(
-                cast(Mapping[str, Any], usage_object)
+                _JSON_OBJECT.validate_python(usage_object)
             ),
         )
         logging_obj.custom_llm_provider = custom_llm_provider
@@ -349,7 +350,7 @@ class VertexPassthroughLoggingHandler:
 
         model: Final = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
-        _json_response: Final[dict[str, object]] = httpx_response.json()
+        _json_response: Final = _JSON_OBJECT.validate_python(httpx_response.json())
 
         litellm_prediction_response: ModelResponse | EmbeddingResponse | ImageResponse = ModelResponse()
         if VertexPassthroughLoggingHandler._is_audio_predict_response(

@@ -82,6 +82,7 @@ from litellm.proxy.auth.auth_object_prefetch import (
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
+    fallback_target_model_name,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
@@ -146,7 +147,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     normalize_route_for_root_path,
 )
-from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.repositories.table_repositories import JWTKeyMappingRepository, TeamMembershipRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
@@ -1037,7 +1038,7 @@ async def _auto_register_jwt_mapping(
 
     try:
         async with db_span("auto_register_jwt_mapping", "LiteLLM_JWTKeyMapping"):
-            await prisma_client.db.litellm_jwtkeymapping.create(
+            await JWTKeyMappingRepository(prisma_client).table.create(
                 data={
                     "jwt_issuer": jwt_issuer or "",
                     "jwt_claim_name": virtual_key_claim_field,
@@ -2386,7 +2387,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         include={"litellm_budget_table": True},
                     )
                     if _db_member is not None:
-                        team_member_info = LiteLLM_TeamMembership(**_db_member.model_dump())
+                        team_member_info = LiteLLM_TeamMembership.model_validate(_db_member.model_dump())
                         await user_api_key_cache.async_set_cache(
                             key=_cache_key,
                             value=team_member_info,
@@ -3796,7 +3797,7 @@ async def _enforce_key_and_fallback_model_access(
         fallback_names: Final = tuple(
             name
             for target in iter_request_fallback_targets(request_data)
-            if (name := _fallback_target_model_name(target)) is not None
+            if (name := fallback_target_model_name(target)) is not None
         )
 
         for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
@@ -3811,16 +3812,6 @@ async def _enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
                 user_model=None,
             )
-
-
-def _fallback_target_model_name(target: object) -> str | None:
-    if isinstance(target, str):
-        return target
-    if isinstance(target, dict):
-        model: Final = target.get("model")
-        if isinstance(model, str):
-            return model
-    return None
 
 
 async def _run_post_custom_auth_checks(

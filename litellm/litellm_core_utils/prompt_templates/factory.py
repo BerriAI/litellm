@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
+from pydantic import BaseModel
 
 import litellm
 import litellm.types

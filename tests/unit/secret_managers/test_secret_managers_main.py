@@ -431,3 +431,38 @@ def test_secret_manager_would_be_consulted_is_false_without_a_client(monkeypatch
     monkeypatch.setattr(litellm, "secret_manager_client", None)
 
     assert secret_manager_would_be_consulted("os.environ/ANY_NAME") is False
+
+
+class _FixedValueSecretManager(CustomSecretManager):
+    def __init__(self, value):
+        self.value = value
+
+    def sync_read_secret(self, secret_name, optional_params=None, timeout=None):
+        return self.value
+
+    async def async_read_secret(self, secret_name, optional_params=None, timeout=None):
+        return self.value
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        ("True", True),
+        ("False", False),
+        ("1", "1"),
+        ("[True]", "[True]"),
+        ("'True'", "'True'"),
+        ("sk-not-a-literal", "sk-not-a-literal"),
+        ("", ""),
+    ],
+)
+def test_get_secret_turns_only_boolean_literals_from_the_secret_manager_into_bools(monkeypatch, stored, expected):
+    monkeypatch.setattr(litellm, "secret_manager_client", _FixedValueSecretManager(stored))
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    monkeypatch.delenv("STORED_FLAG", raising=False)
+
+    secret = get_secret("os.environ/STORED_FLAG")
+
+    assert secret == expected
+    assert type(secret) is type(expected)

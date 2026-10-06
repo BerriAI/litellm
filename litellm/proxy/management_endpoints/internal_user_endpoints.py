@@ -37,6 +37,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
 )
+from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
 from litellm.proxy.auth.password_policy import (
     validate_password_not_breached,
     validate_password_policy,
@@ -53,7 +54,7 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
-from litellm.proxy.management.teams.access import is_team_admin
+from litellm.proxy.management.teams.authz import is_team_admin
 from litellm.proxy.management_endpoints.common_daily_activity import (
     DailySpendRecord,
     ScopeDenied,
@@ -586,6 +587,9 @@ async def new_user(
                 status_code=403,
                 detail=f"Only proxy admins can create administrative users (proxy_admin, proxy_admin_viewer). Attempted to create user with role: {data.user_role}. Your role: {user_api_key_dict.user_role}",
             )
+
+        if data.auto_create_key and isinstance(user_api_key_dict, UserAPIKeyAuth):
+            enforce_batch_limits_are_admin_only(data, None, user_api_key_dict, "key")
 
         _check_permissions_caller_permission(
             data=data,
