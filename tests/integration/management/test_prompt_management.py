@@ -1,5 +1,6 @@
 import json
 import uuid
+from collections.abc import Callable
 from typing import Final
 
 import httpx
@@ -106,12 +107,6 @@ def _assert_chat_response(response: httpx.Response) -> None:
     completion: Final = ChatCompletion.model_validate_json(response.content)
     assert completion.choices[0].message.content == "management response", response.text
 
-
-def _has_chat_response(response: httpx.Response) -> bool:
-    if response.status_code != 200:
-        return False
-    completion: Final = ChatCompletion.model_validate_json(response.content)
-    return completion.choices[0].message.content == "management response"
 
 
 def _chat_reply(content: str) -> Reply:
@@ -255,28 +250,45 @@ def test_prompt_create_persists_and_resolves_on_primary(gateway: Gateway) -> Non
         ]
 
 
-def test_prompt_create_resolves_on_peer_after_database_sync(gateway: Gateway, peer: Gateway) -> None:
+def _rendered_body(marker: str) -> dict[str, JsonValue]:
+    return {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": marker},
+            {"role": "user", "content": "Hi x"},
+            {"role": "user", "content": "client turn"},
+        ],
+        "temperature": 0.2,
+    }
+
+
+def _replies_with(content: str) -> Callable[[httpx.Response], bool]:
+    def matches(response: httpx.Response) -> bool:
+        if response.status_code != 200:
+            return False
+        return ChatCompletion.model_validate_json(response.content).choices[0].message.content == content
+
+    return matches
+
+
+def test_prompt_create_and_patch_resolve_on_peer_after_database_sync(gateway: Gateway, peer: Gateway) -> None:
+    replies: Final = {
+        json.dumps(_rendered_body("staging one"), sort_keys=True): "created template",
+        json.dumps(_rendered_body("staging one patched"), sort_keys=True): "patched template",
+    }
+
     def respond(request: Request) -> Reply:
         if _is_discovery_probe(request):
             return Reply(body=b'{"object":"list","data":[]}')
         assert request.headers["authorization"] == f"Bearer {_PROVIDER_KEY}"
-        assert request.method == "POST"
-        assert request.target == "/v1/chat/completions"
+        assert (request.method, request.target) == ("POST", "/v1/chat/completions"), request
         body: Final[dict[str, JsonValue]] = json.loads(request.body)
-        expected: Final = {
-            "model": "gpt-4o-mini",
-            "messages": [
-                {"role": "system", "content": "staging one"},
-                {"role": "user", "content": "Hi x"},
-                {"role": "user", "content": "client turn"},
-            ],
-            "temperature": 0.2,
-        }
         raw: Final = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "client turn"}]}
         if body == raw:
             return _chat_reply("prompt has not synchronized")
-        assert body == expected, body
-        return _chat_reply("management response")
+        canonical: Final = json.dumps(body, sort_keys=True)
+        assert canonical in replies, body
+        return _chat_reply(replies[canonical])
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=f"{wire.url}/v1", api_key=_PROVIDER_KEY)
@@ -286,26 +298,42 @@ def test_prompt_create_resolves_on_peer_after_database_sync(gateway: Gateway, pe
         )
         assert created.status_code == 200, created.text
         scenario.cleanups.callback(_delete_prompt, gateway, prompt_id)
-        response: Final = eventually(
+        assert PromptSpec.model_validate_json(created.content).prompt_id == f"{prompt_id}.v1", created.text
+        synced: Final = eventually(
             lambda: _chat(peer, model, prompt_id, "staging"),
-            _has_chat_response,
-            seconds=60,
+            _replies_with("created template"),
+            seconds=40,
         )
-        _assert_chat_response(response)
+        assert ChatCompletion.model_validate_json(synced.content).choices[0].message.content == "created template", (
+            synced.text
+        )
+
+        patched: Final = gateway.request(
+            "PATCH",
+            f"/prompts/{prompt_id}.v1",
+            {
+                "litellm_params": {
+                    "prompt_id": prompt_id,
+                    "prompt_integration": "dotprompt",
+                    "dotprompt_content": _template(model, "staging one patched"),
+                },
+            },
+            params={"environment": "staging"},
+        )
+        assert patched.status_code == 200, patched.text
+        resynced: Final = eventually(
+            lambda: _chat(peer, model, prompt_id, "staging"),
+            _replies_with("patched template"),
+            seconds=40,
+        )
+        assert (
+            ChatCompletion.model_validate_json(resynced.content).choices[0].message.content == "patched template"
+        ), resynced.text
         requests: Final = [request for request in wire.drain() if not _is_discovery_probe(request)]
-        assert requests
         assert all((request.method, request.target) == ("POST", "/v1/chat/completions") for request in requests), (
             requests
         )
-        assert json.loads(requests[-1].body) == {
-            "model": "gpt-4o-mini",
-            "messages": [
-                {"role": "system", "content": "staging one"},
-                {"role": "user", "content": "Hi x"},
-                {"role": "user", "content": "client turn"},
-            ],
-            "temperature": 0.2,
-        }, requests[-1].body
+        assert json.loads(requests[-1].body) == _rendered_body("staging one patched"), requests[-1].body
 
 
 def test_prompt_update_patch_and_environment_delete_are_isolated(gateway: Gateway) -> None:

@@ -295,6 +295,21 @@ def test_memory_routes_enforce_personal_and_team_write_ownership(gateway: Gatewa
                 "updated_by": None,
             }
         ]
+        member_team_read: Final = _memory_request(gateway, "GET", team_only_key, caller=key_b)
+        assert member_team_read.status_code == 200, member_team_read.text
+        assert (
+            LiteLLM_MemoryRow.model_validate_json(member_team_read.content).model_dump(include={"key", "value"})
+        ) == {"key": team_only_key, "value": "team value"}, member_team_read.text
+        member_list: Final = gateway.request("GET", "/v1/memory", key=key_b)
+        assert member_list.status_code == 200, member_list.text
+        member_memories: Final = MemoryListResponse.model_validate_json(member_list.content)
+        assert (member_memories.total, sorted((row.key, row.value) for row in member_memories.memories)) == (
+            2,
+            sorted(((personal_key, "a2"), (team_only_key, "team value"))),
+        ), member_list.text
+        outsider_team_read: Final = _memory_request(gateway, "GET", team_only_key, caller=outsider_key)
+        assert outsider_team_read.status_code == 404, outsider_team_read.text
+
         member_team_write: Final = _memory_request(
             gateway,
             "PUT",
@@ -322,6 +337,28 @@ def test_memory_routes_enforce_personal_and_team_write_ownership(gateway: Gatewa
         )
         assert admin_write.status_code == 200, admin_write.text
         assert LiteLLM_MemoryRow.model_validate_json(admin_write.content).value == "admin overwrite", admin_write.text
+
+        team_admin_personal_write: Final = _memory_request(
+            gateway,
+            "PUT",
+            personal_key,
+            caller=admin_key,
+            body={"value": "team admin overwrite"},
+        )
+        assert team_admin_personal_write.status_code == 403, team_admin_personal_write.text
+        assert team_admin_personal_write.text == (
+            '{"detail":"You do not have permission to modify this memory entry."}'
+        ), team_admin_personal_write.text
+        assert _memory_rows(personal_key) == [
+            {
+                "key": personal_key,
+                "value": "a2",
+                "user_id": member_a,
+                "team_id": team,
+                "created_by": member_a,
+                "updated_by": member_a,
+            }
+        ]
 
         master_read: Final = _memory_request(gateway, "GET", personal_key, caller=gateway.key)
         assert master_read.status_code == 200, master_read.text

@@ -407,17 +407,23 @@ def test_tag_budget_duration_can_be_cleared_and_limits_are_read_back(gateway: Ga
         gateway.post("/tag/delete", {"name": tag})
 
     with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
         gateway.post(
             "/tag/new",
-            {"name": tag, "max_budget": 100, "rpm_limit": 7, "budget_duration": "30d"},
+            {"name": tag, "max_budget": 100, "rpm_limit": 100, "budget_duration": "30d"},
         )
         scenario.cleanups.callback(delete_tag)
+        first: Final = _tagged_request(gateway, model, tag, "body", f"tag duration first {tag}")
+        assert first.status_code == 200, first.text
         updated: Final = gateway.request(
             "POST",
             "/tag/update",
-            {"name": tag, "budget_duration": None},
+            {"name": tag, "budget_duration": None, "rpm_limit": 1},
         )
         assert updated.status_code == 200, updated.text
+        blocked: Final = _tagged_request(gateway, model, tag, "body", f"tag duration blocked {tag}")
+        assert blocked.status_code == 429, blocked.text
+        assert tag in blocked.text, blocked.text
 
         info_response: Final = gateway.request("POST", "/tag/info", {"names": [tag]})
         assert info_response.status_code == 200, info_response.text
@@ -427,15 +433,21 @@ def test_tag_budget_duration_can_be_cleared_and_limits_are_read_back(gateway: Ga
             "max_budget": budget_info["max_budget"],
             "rpm_limit": budget_info["rpm_limit"],
             "budget_duration": budget_info["budget_duration"],
-        } == {"max_budget": 100, "rpm_limit": 7, "budget_duration": None}, info_response.text
+            "budget_reset_at": budget_info["budget_reset_at"],
+        } == {"max_budget": 100, "rpm_limit": 1, "budget_duration": None, "budget_reset_at": None}, (
+            info_response.text
+        )
 
         tag_rows: Final = read_rows('SELECT budget_id FROM "LiteLLM_TagTable" WHERE tag_name = %s', (tag,))
         assert len(tag_rows) == 1, tag_rows
         budget_rows: Final = read_rows(
-            'SELECT budget_duration FROM "LiteLLM_BudgetTable" WHERE budget_id = %s',
+            'SELECT max_budget, rpm_limit, budget_duration, budget_reset_at FROM "LiteLLM_BudgetTable" '
+            "WHERE budget_id = %s",
             (str(tag_rows[0]["budget_id"]),),
         )
-        assert budget_rows == [{"budget_duration": None}], budget_rows
+        assert budget_rows == [
+            {"max_budget": 100, "rpm_limit": 1, "budget_duration": None, "budget_reset_at": None}
+        ], budget_rows
 
 
 @pytest.mark.parametrize("tag_source", ("body", "header", "key"), ids=("body-tags", "tag-header", "key-tags"))

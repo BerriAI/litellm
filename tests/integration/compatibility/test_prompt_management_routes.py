@@ -274,6 +274,48 @@ def test_chat_completion_resolves_prompt_id_by_version_and_environment(
         assert [(request.method, request.target) for request in requests] == [("POST", "/v1/chat/completions")]
 
 
+def test_chat_completion_resolves_versioned_prompt_id_returned_by_create(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: prompt_id '<id>.v1' (the id POST /prompts returns) with prompt_environment=staging renders the "
+        "latest staging version 'staging two' instead of version 1 'staging one'"
+    )
+
+    def respond(request: Request) -> Reply:
+        if _is_discovery_probe(request):
+            return Reply(body=b'{"object":"list","data":[]}')
+        assert (request.method, request.target) == ("POST", "/v1/chat/completions"), request
+        body: Final[dict[str, JsonValue]] = json.loads(request.body)
+        assert body == {
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "system", "content": "staging one"},
+                {"role": "user", "content": "Hi x"},
+                {"role": "user", "content": "client turn"},
+            ],
+            "temperature": 0.2,
+        }, body
+        return _chat_response()
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(api_base=f"{wire.url}/v1", api_key=_OPENAI_KEY)
+        key: Final = scenario.key(models=[model])
+        prompt_id: Final = f"prompt-{uuid.uuid4().hex}"
+        _prompt_setup(gateway, scenario, model, prompt_id)
+        with _client(gateway, key) as client:
+            response: Final = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "client turn"}],
+                extra_body={
+                    "prompt_id": f"{prompt_id}.v1",
+                    "prompt_variables": {"name": "x"},
+                    "prompt_environment": "staging",
+                },
+            )
+        assert response.choices[0].message.content == _ANSWER, response.model_dump_json()
+        requests: Final = [request for request in wire.drain() if not _is_discovery_probe(request)]
+        assert [(request.method, request.target) for request in requests] == [("POST", "/v1/chat/completions")]
+
+
 def test_streaming_chat_completion_resolves_prompt_and_preserves_streaming(
     gateway: Gateway,
 ) -> None:
@@ -320,12 +362,47 @@ def test_streaming_chat_completion_resolves_prompt_and_preserves_streaming(
         assert [(request.method, request.target) for request in requests] == [("POST", "/v1/chat/completions")]
 
 
+_TEXT_INPUT: Final = "client turn"
+_MESSAGE_INPUT: Final[list[JsonValue]] = [{"role": "user", "content": "client turn"}]
+_TEXT_TURN: Final[dict[str, JsonValue]] = {"role": "user", "content": "client turn"}
+_TYPED_TURN: Final[dict[str, JsonValue]] = {
+    "type": "message",
+    "role": "user",
+    "content": [{"type": "input_text", "text": "client turn"}],
+}
+_TYPED_ITEM_INPUT: Final[list[JsonValue]] = [_TYPED_TURN]
+
+
 @pytest.mark.parametrize(
-    ("stream", "base_path"),
-    ((False, "/v1"), (True, "/v1"), (False, ""), (True, "")),
+    ("version", "environment", "client_input", "client_turn", "marker", "stream", "base_path"),
+    (
+        (2, "staging", _TEXT_INPUT, _TEXT_TURN, "staging two", False, "/v1"),
+        (2, "staging", _TEXT_INPUT, _TEXT_TURN, "staging two", True, "/v1"),
+        ("2", "staging", _TEXT_INPUT, _TEXT_TURN, "staging two", False, ""),
+        ("1", "staging", _TEXT_INPUT, _TEXT_TURN, "staging one", True, ""),
+        (None, None, _TEXT_INPUT, _TEXT_TURN, "production two", False, "/v1"),
+        (None, None, _TEXT_INPUT, _TEXT_TURN, "production two", True, ""),
+        ("2", "staging", _MESSAGE_INPUT, _TEXT_TURN, "staging two", False, "/v1"),
+        (2, "staging", _TYPED_ITEM_INPUT, _TYPED_TURN, "staging two", True, "/v1"),
+    ),
+    ids=(
+        "int-version-staging",
+        "int-version-staging-stream",
+        "string-version-staging-root-path",
+        "string-version-one-stream-root-path",
+        "default-environment-latest",
+        "default-environment-latest-stream-root-path",
+        "message-list-input",
+        "typed-item-list-input-stream",
+    ),
 )
 def test_responses_create_resolves_prompt_and_shapes_template_messages(
     gateway: Gateway,
+    version: int | str | None,
+    environment: str | None,
+    client_input: str | list[JsonValue],
+    client_turn: dict[str, JsonValue],
+    marker: str,
     stream: bool,
     base_path: str,
 ) -> None:
@@ -339,9 +416,9 @@ def test_responses_create_resolves_prompt_and_shapes_template_messages(
         assert body == {
             "model": "gpt-4o-mini",
             "input": [
-                {"role": "system", "content": "staging two"},
+                {"role": "system", "content": marker},
                 {"role": "user", "content": "Hi x"},
-                {"role": "user", "content": "client turn"},
+                client_turn,
             ],
             "temperature": 0.2,
             "stream": stream,
@@ -381,13 +458,14 @@ def test_responses_create_resolves_prompt_and_shapes_template_messages(
         with _client(gateway, key, base_path) as client:
             response: Final = client.responses.create(
                 model=model,
-                input="client turn",
+                input=client_input,  # pyright: ignore[reportArgumentType]  # the SDK param union rejects JsonValue
                 stream=stream,
                 extra_body={
                     "prompt_id": prompt_id,
                     "prompt_variables": {"name": "x"},
-                    "prompt_version": 2,
-                    "prompt_environment": "staging",
+                    "prompt_label": "release",
+                    **({"prompt_version": version} if version is not None else {}),
+                    **({"prompt_environment": environment} if environment is not None else {}),
                 },
             )
             if stream:
