@@ -69,6 +69,7 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     _check_provider_match,
     _get_potential_model_names,
+    _is_litellm_router_call,
     _is_streaming_request,
     _run_success_deployment_hook_on_converted_chat_stream,
     _snapshot_exception_for_hook,
@@ -4753,6 +4754,129 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
     assert standard_logging_object["response_cost"] > 0
     assert standard_logging_object["stream"] is True
     assert success_kwargs["stream"] is True
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        ({"metadata": {"model_group": "g"}}, True),
+        ({"litellm_metadata": {"model_group": "g"}}, True),
+        ({}, False),
+        ({"metadata": None}, False),
+    ],
+)
+def test_is_litellm_router_call_checks_both_metadata_buckets(
+    kwargs: Mapping[str, object], expected: bool
+) -> None:
+    assert _is_litellm_router_call(kwargs) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+async def test_router_aresponses_does_not_run_sdk_retries(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    retry_recorder: Final = AsyncMock(side_effect=RuntimeError("SDK retries should be skipped"))
+    monkeypatch.setattr(litellm, "aresponses_with_retries", retry_recorder)
+    model_list: Final = [
+        {
+            "model_name": "responses-retry",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "sk-test",
+                "api_base": "https://responses-retry.local/v1",
+                "num_retries": 2,
+            },
+        }
+    ]
+    router: Final = litellm.Router(
+        model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as respx_mock:
+            upstream: Final = respx_mock.post("https://responses-retry.local/v1/responses").mock(
+                return_value=httpx.Response(
+                    503,
+                    headers={"retry-after": "0"},
+                    json={"error": {"message": "model is down", "type": "server_error"}},
+                )
+            )
+            with pytest.raises(litellm.ServiceUnavailableError):
+                await router.aresponses(model="responses-retry", input="hi", stream=stream)
+
+        assert upstream.call_count == 3
+        retry_recorder.assert_not_awaited()
+    finally:
+        router.discard()
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.asyncio
+async def test_aresponses_uses_sdk_retries_without_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    retry_result: Final = object()
+    retry_recorder: Final = AsyncMock(return_value=retry_result)
+    monkeypatch.setattr(litellm, "aresponses_with_retries", retry_recorder)
+
+    try:
+        with respx.mock(assert_all_called=True) as respx_mock:
+            upstream: Final = respx_mock.post("https://responses-direct.local/v1/responses").mock(
+                return_value=httpx.Response(
+                    503,
+                    headers={"retry-after": "0"},
+                    json={"error": {"message": "model is down", "type": "server_error"}},
+                )
+            )
+            result: Final = await litellm.aresponses(
+                model="openai/gpt-4o-mini",
+                input="hi",
+                api_base="https://responses-direct.local/v1",
+                api_key="k",
+                num_retries=2,
+            )
+
+        assert result is retry_result
+        assert upstream.call_count == 1
+        retry_recorder.assert_awaited_once()
+        assert retry_recorder.await_args.kwargs["num_retries"] == 2
+    finally:
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+def test_responses_uses_sdk_retries_without_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    retry_result: Final = object()
+    retry_recorder: Final = MagicMock(return_value=retry_result)
+    monkeypatch.setattr(litellm, "responses_with_retries", retry_recorder)
+
+    try:
+        with respx.mock(assert_all_called=True) as respx_mock:
+            upstream: Final = respx_mock.post("https://responses-sync.local/v1/responses").mock(
+                return_value=httpx.Response(
+                    503,
+                    headers={"retry-after": "0"},
+                    json={"error": {"message": "model is down", "type": "server_error"}},
+                )
+            )
+            result: Final = litellm.responses(
+                model="openai/gpt-4o-mini",
+                input="hi",
+                api_base="https://responses-sync.local/v1",
+                api_key="k",
+                num_retries=2,
+            )
+
+        assert result is retry_result
+        assert upstream.call_count == 1
+        retry_recorder.assert_called_once()
+        assert retry_recorder.call_args.kwargs["num_retries"] == 2
+    finally:
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
 
 @pytest.mark.asyncio
