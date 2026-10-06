@@ -1,4 +1,5 @@
 import json
+from base64 import b64decode
 from collections.abc import Callable
 from hashlib import sha256
 from typing import Final
@@ -17,7 +18,7 @@ OUTPUT_RATE: Final = 0.002
 EXPECTED_SPEND: Final = PROMPT_TOKENS * INPUT_RATE + COMPLETION_TOKENS * OUTPUT_RATE
 
 
-def _responses_reply(prompts: tuple[str, ...]) -> Callable[[Request], Reply]:
+def _responses_reply(prompt: str, response_id: str) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target == "/v1/models":
             return Reply(
@@ -27,10 +28,10 @@ def _responses_reply(prompts: tuple[str, ...]) -> Callable[[Request], Reply]:
         assert request.target == "/v1/responses", request.target
         body: Final = object_value(json.loads(request.body))
         encoded_input: Final = json.dumps(body["input"])
-        assert any(prompt in encoded_input for prompt in prompts), encoded_input
+        assert prompt in encoded_input, encoded_input
         assert body.get("stream") is not True, body
         response: Final = {
-            "id": f"resp_{uuid4().hex}",
+            "id": response_id,
             "object": "response",
             "created_at": 1700000000,
             "status": "completed",
@@ -66,10 +67,9 @@ def _rows_for_key(key: str) -> list[dict[str, JsonValue]]:
 def test_bridged_chat_completion_above_log_offload_threshold_logs_and_charges_once(gateway: Gateway) -> None:
     prompt_prefix: Final = f"spend once {uuid4().hex[:8]} "
     long_prompt: Final = (prompt_prefix + "lorem ipsum " * 30_000)[:300_000]
-    sentinel_prefix: Final = f"spend sentinel {uuid4().hex[:8]} "
-    sentinel_prompt: Final = (sentinel_prefix + "lorem ipsum " * 30_000)[:300_000]
+    upstream_id: Final = f"resp_{uuid4().hex}"
     with (
-        wire_server(_responses_reply((long_prompt, sentinel_prompt))) as wire,
+        wire_server(_responses_reply(long_prompt, upstream_id)) as wire,
         gateway.scenario() as scenario,
     ):
         model: Final = scenario.model(
@@ -89,33 +89,23 @@ def test_bridged_chat_completion_above_log_offload_threshold_logs_and_charges_on
         )
         assert response.status_code == 200, response.text
         assert "ok" in response.text, response.text
+        assert response.json()["id"] == upstream_id, response.text
         call_id: Final = response.headers["x-litellm-call-id"]
-
-        sentinel_response: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {"model": model, "messages": [{"role": "user", "content": sentinel_prompt}], "stream": False},
-            key=key,
-        )
-        assert sentinel_response.status_code == 200, sentinel_response.text
-        assert "ok" in sentinel_response.text, sentinel_response.text
-        sentinel_call_id: Final = sentinel_response.headers["x-litellm-call-id"]
 
         rows: Final = eventually(
             lambda: _rows_for_key(key),
-            lambda values: (
-                any(row["litellm_call_id"] == call_id for row in values)
-                and any(row["litellm_call_id"] == sentinel_call_id for row in values)
-            ),
+            lambda values: any(row["litellm_call_id"] == call_id for row in values),
             seconds=70,
         )
         call_rows: Final = [row for row in rows if row["litellm_call_id"] == call_id]
         assert len(call_rows) == 1, rows
         assert float(str(call_rows[0]["spend"])) == pytest.approx(EXPECTED_SPEND), rows
+        logged_id: Final = b64decode(str(call_rows[0]["request_id"]).removeprefix("resp_")).decode()
+        assert logged_id.startswith("litellm:") and f";response_id:{upstream_id}" in logged_id, rows
 
         key_spend: Final = eventually(
             lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)),
-            lambda values: len(values) == 1 and float(str(values[0]["spend"])) >= 2 * EXPECTED_SPEND,
+            lambda values: len(values) == 1 and float(str(values[0]["spend"])) >= EXPECTED_SPEND,
             seconds=70,
         )
-        assert float(str(key_spend[0]["spend"])) == pytest.approx(2 * EXPECTED_SPEND), key_spend
+        assert float(str(key_spend[0]["spend"])) == pytest.approx(EXPECTED_SPEND), key_spend
