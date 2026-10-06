@@ -799,26 +799,20 @@ class TestResolveRequestedServer:
     def test_path_scope_resolves_server_when_no_server_id(self):
         alpha: Final = _mcp_server(server_id="id-alpha", name="alpha")
         beta: Final = _mcp_server(server_id="id-beta", name="beta")
-        token = operations._mcp_gateway_server_name.set("alpha")
-        try:
-            resolved = operations.resolve_requested_server(
-                requested_server_id=None,
-                allowed_mcp_servers=[alpha, beta],
-            )
-        finally:
-            operations._mcp_gateway_server_name.reset(token)
+        resolved = operations.resolve_requested_server(
+            requested_server_id=None,
+            allowed_mcp_servers=[alpha, beta],
+            scoped_server_name="alpha",
+        )
         assert resolved is alpha
 
     def test_path_scope_matches_alias(self):
         alpha: Final = _mcp_server(server_id="id-alpha", name="alpha-internal", alias="alpha")
-        token = operations._mcp_gateway_server_name.set("alpha")
-        try:
-            resolved = operations.resolve_requested_server(
-                requested_server_id=None,
-                allowed_mcp_servers=[alpha],
-            )
-        finally:
-            operations._mcp_gateway_server_name.reset(token)
+        resolved = operations.resolve_requested_server(
+            requested_server_id=None,
+            allowed_mcp_servers=[alpha],
+            scoped_server_name="alpha",
+        )
         assert resolved is alpha
 
     def test_path_scope_picks_the_path_server_when_two_share_a_tool(self):
@@ -826,41 +820,32 @@ class TestResolveRequestedServer:
         # global mapping points at whichever listed last. The path must win.
         alpha: Final = _mcp_server(server_id="id-alpha", name="alpha")
         beta: Final = _mcp_server(server_id="id-beta", name="beta")
-        token = operations._mcp_gateway_server_name.set("beta")
-        try:
-            resolved = operations.resolve_requested_server(
-                requested_server_id=None,
-                allowed_mcp_servers=[alpha, beta],
-            )
-        finally:
-            operations._mcp_gateway_server_name.reset(token)
+        resolved = operations.resolve_requested_server(
+            requested_server_id=None,
+            allowed_mcp_servers=[alpha, beta],
+            scoped_server_name="beta",
+        )
         assert resolved is beta
 
     def test_path_scope_cannot_reach_a_server_the_key_lacks(self):
         # Rejected path: the scope names a real server that is not in the key's
         # allowed set, so it must not resolve. A path may narrow, never widen.
         allowed: Final = _mcp_server(server_id="id-alpha", name="alpha")
-        token = operations._mcp_gateway_server_name.set("forbidden")
-        try:
-            resolved = operations.resolve_requested_server(
-                requested_server_id=None,
-                allowed_mcp_servers=[allowed],
-            )
-        finally:
-            operations._mcp_gateway_server_name.reset(token)
+        resolved = operations.resolve_requested_server(
+            requested_server_id=None,
+            allowed_mcp_servers=[allowed],
+            scoped_server_name="forbidden",
+        )
         assert resolved is None
 
     def test_server_id_wins_over_path_scope(self):
         alpha: Final = _mcp_server(server_id="id-alpha", name="alpha")
         beta: Final = _mcp_server(server_id="id-beta", name="beta")
-        token = operations._mcp_gateway_server_name.set("alpha")
-        try:
-            resolved = operations.resolve_requested_server(
-                requested_server_id="id-beta",
-                allowed_mcp_servers=[alpha, beta],
-            )
-        finally:
-            operations._mcp_gateway_server_name.reset(token)
+        resolved = operations.resolve_requested_server(
+            requested_server_id="id-beta",
+            allowed_mcp_servers=[alpha, beta],
+            scoped_server_name="alpha",
+        )
         assert resolved is beta
 
     def test_no_scope_and_no_server_id_resolves_nothing(self):
@@ -872,3 +857,51 @@ class TestResolveRequestedServer:
             )
             is None
         )
+
+
+class TestScopedServerNameReachesTheResolver:
+    """The six cases above all pass even if nothing ever delivers the scope, so
+    the transport from the legacy adapter to the resolver needs its own cover."""
+
+    def test_prepare_context_carries_the_scope(self):
+        assert operations.prepare_context(scoped_server_name="alpha").scoped_server_name == "alpha"
+        assert operations.prepare_context().scoped_server_name is None
+
+    @pytest.mark.asyncio
+    async def test_tool_call_dispatch_resolves_through_the_context_scope(self, monkeypatch):
+        """prepare_context -> dispatch -> _execute_mcp_tool -> resolve_requested_server.
+
+        The call cannot complete because no upstream registry is loaded here, so
+        it is suppressed; the assertions are that the scope arrived at the
+        resolver and selected the server the path names.
+        """
+        import contextlib
+        from datetime import datetime, timezone
+
+        from litellm.proxy._experimental.mcp_server.contracts import AuthorizedToolCall
+
+        alpha: Final = _mcp_server(server_id="id-alpha", name="alpha")
+        observed: dict[str, object] = {}
+        resolve: Final = operations.resolve_requested_server
+
+        def _spy(**kwargs):
+            resolved = resolve(**kwargs)
+            observed.update(kwargs, resolved=resolved)
+            return resolved
+
+        monkeypatch.setattr(operations, "resolve_requested_server", _spy)
+        with contextlib.suppress(Exception):
+            await operations.GatewayOperations().execute(
+                AuthorizedToolCall(
+                    name="get_task_result",
+                    arguments={},
+                    allowed_mcp_servers=(alpha,),
+                    start_time=datetime.now(timezone.utc),
+                    host_progress_callback=None,
+                    guardrail_context=None,
+                    logging_data={},
+                ),
+                operations.prepare_context(scoped_server_name="alpha"),
+            )
+        assert observed["scoped_server_name"] == "alpha"
+        assert observed["resolved"] is alpha

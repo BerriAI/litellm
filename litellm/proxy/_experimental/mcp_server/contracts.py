@@ -45,6 +45,9 @@ class OperationContext:
     mcp_proxy_mode: bool = False
     wire_compat: WireCompat = WireCompat.LEGACY
     protocol_version: str | None = None
+    # Server named by a single-server `/{server_name}/mcp` path. Set by the
+    # legacy adapter from request state, never from a client-supplied header.
+    scoped_server_name: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_caller", copy_caller(self._caller))

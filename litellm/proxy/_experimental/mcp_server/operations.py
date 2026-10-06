@@ -80,7 +80,6 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     classify_list_exception,
     outcome_wire_value,
 )
-from litellm.proxy._experimental.mcp_server.mcp_context import _mcp_gateway_server_name
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     ListedToolsCaller,
     MCPServerManager,
@@ -1878,12 +1877,15 @@ def resolve_requested_server(
     *,
     requested_server_id: str | None,
     allowed_mcp_servers: list[MCPServer],
+    scoped_server_name: str | None = None,
 ) -> MCPServer | None:
     """Resolve the server a tool call is scoped to, from server-side state only.
 
-    ``requested_server_id`` (REST) wins, then the single-server path recorded in
-    ``_mcp_gateway_server_name``. Both are set server-side, never from a
-    client-supplied header, so either may be treated as authoritative for routing.
+    ``requested_server_id`` (REST) wins, then ``scoped_server_name`` — the single
+    server named by a ``/{server_name}/mcp`` path, which the legacy adapter reads
+    out of request state and puts on ``OperationContext``. Both are set
+    server-side, never from a client-supplied header, so either may be treated as
+    authoritative for routing.
 
     This matters because the fallback is the process-wide tool_name -> server
     mapping, which is empty until some caller has listed the server and is
@@ -1901,7 +1903,6 @@ def resolve_requested_server(
         if by_id is not None:
             return by_id
 
-    scoped_server_name: Final[str | None] = _mcp_gateway_server_name.get()
     if not scoped_server_name:
         return None
 
@@ -1934,6 +1935,7 @@ async def _execute_mcp_tool(
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
     wire_compat: WireCompat = WireCompat.LEGACY,
+    scoped_server_name: str | None = None,
     **kwargs: Any,
 ) -> CallToolResult | InputRequiredResult:
     """
@@ -1951,6 +1953,8 @@ async def _execute_mcp_tool(
         mcp_server_auth_headers: Optional server-specific auth headers
         oauth2_headers: Optional OAuth2 headers
         raw_headers: Optional raw HTTP headers
+        scoped_server_name: Server named by a single-server ``/{server_name}/mcp``
+            path, when the request arrived on one
         **kwargs: Additional arguments (e.g., litellm_logging_obj)
 
     Returns:
@@ -1970,6 +1974,7 @@ async def _execute_mcp_tool(
     requested_server: MCPServer | None = resolve_requested_server(
         requested_server_id=requested_server_id,
         allowed_mcp_servers=allowed_mcp_servers,
+        scoped_server_name=scoped_server_name,
     )
 
     name_is_prefixed = False
@@ -3186,6 +3191,7 @@ def prepare_context(
     mcp_proxy_mode: bool = False,
     wire_compat: WireCompat = WireCompat.LEGACY,
     protocol_version: str | None = None,
+    scoped_server_name: str | None = None,
 ) -> OperationContext:
     return OperationContext(
         _caller=user_api_key_auth,
@@ -3198,6 +3204,7 @@ def prepare_context(
         mcp_proxy_mode=mcp_proxy_mode,
         wire_compat=wire_compat,
         protocol_version=protocol_version,
+        scoped_server_name=scoped_server_name,
     )
 
 
@@ -3325,6 +3332,7 @@ class GatewayOperations:
                     host_progress_callback=operation.host_progress_callback,
                     guardrail_context=operation.guardrail_context,
                     wire_compat=context.wire_compat,
+                    scoped_server_name=context.scoped_server_name,
                     **operation.logging_data,
                 )
             case ListToolsRequest(params=params):
