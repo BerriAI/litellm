@@ -10,7 +10,21 @@ from litellm.router import Deployment, LiteLLM_Params
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
+@pytest.fixture
+def isolate_passthrough_endpoint_router_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        passthrough_endpoint_router,
+    )
+
+    monkeypatch.setattr(
+        passthrough_endpoint_router,
+        "deployment_key_to_vertex_credentials",
+        passthrough_endpoint_router.deployment_key_to_vertex_credentials.copy(),
+    )
+
+
 @pytest.mark.parametrize("reusable_credentials", [True, False])
+@pytest.mark.usefixtures("isolate_passthrough_endpoint_router_state")
 def test_initialize_deployment_for_pass_through_success(reusable_credentials):
     """
     Test successful initialization of a Vertex AI pass-through deployment
@@ -120,6 +134,7 @@ def test_initialize_deployment_when_pass_through_disabled():
     assert True
 
 
+@pytest.mark.usefixtures("isolate_passthrough_endpoint_router_state")
 def test_add_vertex_pass_through_deployment():
     """
     Test adding a Vertex AI deployment with pass-through configuration
