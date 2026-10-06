@@ -81,6 +81,28 @@ describe("TraceConversation", () => {
     }
   });
 
+  it("refreshes successful content too when a batch previously returned only some spans", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceSpansCall)
+      .mockResolvedValueOnce([rootDetail])
+      .mockImplementation(async (_token, _trace, ids) =>
+        ids.map((id) => (id === "root" ? { ...rootDetail, output: "Updated final answer" } : toolDetail)),
+      );
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Conversation" }));
+    expect(await screen.findByRole("button", { name: "Retry batch" })).toBeVisible();
+    expect(screen.getByText("Read the release notes")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Refresh run" }));
+    expect(await screen.findByText("Updated final answer")).toBeVisible();
+    expect(screen.queryByText("The release is ready")).not.toBeInTheDocument();
+    expect(vi.mocked(agentTraceSpansCall).mock.calls.map((call) => call[2])).toEqual([
+      ["root", "tool"],
+      ["root", "tool"],
+    ]);
+  });
+
   it("switches to a readable transcript and opens the exact tool step from it", async () => {
     const user = userEvent.setup();
     renderWithProviders(

@@ -49,7 +49,9 @@ export function useConversationDetails(trace: Trace, accessToken: string) {
         queryKey,
         queryFn: async (): Promise<BatchResult> => {
           const previous = queryClient.getQueryData<BatchResult>(queryKey);
-          const pending = previous?.failedIds.length ? previous.failedIds : ids;
+          const refreshAll = queryClient.getQueryState(queryKey)?.isInvalidated;
+          const retryIds = previous?.failedIds;
+          const pending = !refreshAll && retryIds?.length ? retryIds : ids;
           const result = await readBatch(traces, traceId, pending, traceRef);
           const details = [
             ...new Map(
