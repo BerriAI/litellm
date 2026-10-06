@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Final, NoReturn, TypeVar
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 from typing_extensions import assert_never
 
 import litellm
@@ -42,6 +42,7 @@ from litellm.llms.base_llm.auth.types import (
     TokenTransportError,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOKEN_EXCHANGE_PATH
+from litellm.types.llms.base import LiteLLMBaseModel
 
 _JWT_BEARER_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 _DEFAULT_API_BASE: Final = "https://api.anthropic.com"
@@ -119,7 +120,7 @@ _EMPTY_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _IdentitySourceVariant = TypeVar("_IdentitySourceVariant", bound="InternalIssuerSource | KeycloakSource")
 
 
-class AnthropicWifParams(BaseModel):
+class AnthropicWifParams(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     federation_rule_id: str

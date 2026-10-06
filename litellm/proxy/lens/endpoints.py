@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, Field
 
 from litellm.litellm_core_utils.secret_redaction import redact_internal_details
 from litellm.proxy._types import LitellmUserRoles, ModelAccessDeniedProxyException, ProxyException, UserAPIKeyAuth
@@ -69,6 +69,7 @@ from litellm.proxy.lens.state import (
     summarized,
 )
 from litellm.proxy.tracing_runtime import provide_storage
+from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"])
 _bearer: Final = HTTPBearer()
@@ -403,7 +404,7 @@ async def update_finding(lens_id: str, finding_id: str, body: FindingUpdate, aut
     )
 
 
-class Preview(BaseModel):
+class Preview(LiteLLMBaseModel):
     as_of: AwareDatetime | None = None
     offset: int = Field(default=0, ge=0)
     selection: ActivitySelection
@@ -429,7 +430,7 @@ async def preview_sample(body: Preview, auth: Auth, storage: StorageDep) -> Samp
     )
 
 
-class WorkerBilling(BaseModel):
+class WorkerBilling(LiteLLMBaseModel):
     analysis_key_id: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
