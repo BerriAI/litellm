@@ -291,12 +291,21 @@ def test_sdk_run_create_stream_yields_events(gateway: Gateway, tmp_path: Path, p
             assert json.loads(requests[0].body) == {**_RUN_REQUEST, "stream": True}, response_text
 
 
-_THREAD: Final[dict[str, JsonValue]] = {
-    "id": "thread_abc",
-    "object": "thread",
-    "created_at": 1700000000,
+_MARKER_MESSAGE: Final[dict[str, JsonValue]] = {
+    "id": "msg_marker",
+    "assistant_id": None,
+    "attachments": [],
+    "completed_at": None,
+    "object": "thread.message",
+    "content": [{"type": "text", "text": {"value": "marker", "annotations": []}}],
+    "created_at": 1700000005,
+    "incomplete_at": None,
+    "incomplete_details": None,
     "metadata": {},
-    "tool_resources": {"code_interpreter": {"file_ids": ["file-abc"]}},
+    "role": "user",
+    "run_id": None,
+    "status": "completed",
+    "thread_id": "thread_abc",
 }
 _HELD_FRAME: Final = b":" + b"x" * 4_000_000 + b"\n\n"
 
@@ -307,18 +316,18 @@ def _held_respond(gate: threading.Event, run_reply: Reply) -> Callable[[Request]
             return run_reply
         if request.method == "GET" and request.target == "/v1/threads/thread_abc/runs/run_abc":
             return Reply(body=json.dumps(_QUEUED_RUN).encode())
-        if request.method == "GET" and request.target == "/v1/threads/thread_abc":
-            return Reply(body=json.dumps(_THREAD).encode())
+        if request.method == "POST" and request.target == "/v1/threads/thread_abc/messages":
+            return Reply(body=json.dumps(_MARKER_MESSAGE).encode())
         return Reply(status=404, body=b'{"error":"unexpected upstream request"}')
 
     assert run_reply.gate_after_first is gate
     return respond
 
 
-def _marker_thread(base_url: str, key: str) -> str:
+def _marker_message(base_url: str, key: str) -> str:
     with OpenAI(base_url=base_url, api_key=key, max_retries=0) as client:
-        raw: Final = client.beta.threads.with_raw_response.retrieve("thread_abc")
-    assert json.loads(raw.http_response.text) == _THREAD, raw.http_response.text
+        raw: Final = client.beta.threads.messages.with_raw_response.create("thread_abc", role="user", content="marker")
+    assert json.loads(raw.http_response.text) == _MARKER_MESSAGE, raw.http_response.text
     return raw.http_response.text
 
 
@@ -351,11 +360,11 @@ def test_run_stream_client_disconnect_releases_upstream_without_polling(gateway:
             response_text: Final = json.dumps({"event": first.event, "data": first.data.to_dict(mode="json")})
             assert (first.event, first.data.to_dict(mode="json")) == ("thread.run.created", _QUEUED_RUN), response_text
             assert wire.disconnected.get(timeout=10) == "/v1/threads/thread_abc/runs", response_text
-            marker_text: Final = _marker_thread(base_url, candidate.key)
+            marker_text: Final = _marker_message(base_url, candidate.key)
             requests: Final = wire.drain()
             assert [(request.method, request.target) for request in requests] == [
                 ("POST", "/v1/threads/thread_abc/runs"),
-                ("GET", "/v1/threads/thread_abc"),
+                ("POST", "/v1/threads/thread_abc/messages"),
             ], f"{response_text}\n{marker_text}"
             assert json.loads(requests[0].body) == {"assistant_id": "asst_abc", "stream": True}, response_text
 
@@ -377,10 +386,10 @@ def test_run_client_disconnect_does_not_leave_the_proxy_polling(gateway: Gateway
                         client.beta.threads.runs.create("thread_abc", assistant_id="asst_abc")
             finally:
                 gate.set()
-            marker_text: Final = _marker_thread(base_url, candidate.key)
+            marker_text: Final = _marker_message(base_url, candidate.key)
             requests: Final = wire.drain()
             assert [(request.method, request.target) for request in requests] == [
                 ("POST", "/v1/threads/thread_abc/runs"),
-                ("GET", "/v1/threads/thread_abc"),
+                ("POST", "/v1/threads/thread_abc/messages"),
             ], marker_text
             assert json.loads(requests[0].body) == {"assistant_id": "asst_abc"}, marker_text
