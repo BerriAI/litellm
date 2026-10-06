@@ -127,27 +127,26 @@ class LangfuseOtelLogger(OpenTelemetry):
 
     @staticmethod
     def _message_observation_output(item) -> dict:
-        """Flatten a Responses API message item into an observation output dict.
+        """Flatten a Responses API ``message`` item into an observation output dict.
 
-        Joins every ``output_text`` part (multi-part messages previously lost
-        everything past the first), maps ``refusal`` parts to a ``refusal`` key
-        (previously dropped entirely), and tolerates an empty content list
-        (previously raised IndexError). Mirrors the OTel v2 path's
-        ``_responses_parts_text`` in ``litellm/integrations/otel/model/payloads.py``.
+        A message carries every content part, not just the first, so all
+        ``output_text`` parts are joined and ``refusal`` parts are kept under
+        their own key. Indexing ``content[0]`` instead dropped everything past
+        the first part, lost refusal text entirely, and raised IndexError on an
+        empty content list. Mirrors the OTel v2 path's ``_responses_parts_text``
+        in ``litellm/integrations/otel/model/payloads.py``.
         """
-        text_parts: Final[list[str]] = []
-        refusal_parts: Final[list[str]] = []
-        for part in getattr(item, "content", None) or []:
-            part_type = getattr(part, "type", None)
-            if part_type == "output_text":
-                text = getattr(part, "text", None)
-                if isinstance(text, str):
-                    text_parts.append(text)
-            elif part_type == "refusal":
-                refusal = getattr(part, "refusal", None)
-                if isinstance(refusal, str):
-                    refusal_parts.append(refusal)
-        message_output: dict = {"role": getattr(item, "role", "assistant")}
+        text_parts: Final = tuple(
+            part.text
+            for part in (getattr(item, "content", None) or ())
+            if getattr(part, "type", None) == "output_text" and isinstance(getattr(part, "text", None), str)
+        )
+        refusal_parts: Final = tuple(
+            part.refusal
+            for part in (getattr(item, "content", None) or ())
+            if getattr(part, "type", None) == "refusal" and isinstance(getattr(part, "refusal", None), str)
+        )
+        message_output: Final = {"role": getattr(item, "role", "assistant")}
         if text_parts:
             message_output["content"] = "".join(text_parts)
         if refusal_parts:
@@ -219,7 +218,9 @@ class LangfuseOtelLogger(OpenTelemetry):
                                     }
                                 )
                     elif item_type == "message":
-                        output_items_data.append(LangfuseOtelLogger._message_observation_output(item))
+                        output_items_data.append(
+                            LangfuseOtelLogger._message_observation_output(item)
+                        )
                     elif item_type == "function_call":
                         arguments_str = getattr(item, "arguments", "{}")
                         arguments_obj = (
