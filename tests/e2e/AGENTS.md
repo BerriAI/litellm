@@ -324,3 +324,5 @@ other.<area>.<case>.<assertion>
 - spin up a local proxy by running the litellm proxy locally (`litellm --config <your-e2e-config>.yml --port 4000`; see CONTRIBUTING.md), make sure all tests pass. if a test fails due to an internally found issue, let users know to create a linear ticket for it. 
 
 - do not use xfail markers, tests should be written in a form that the end user expects it to pass
+
+- a cell addresses the stack through its front door (`PROXY_BASE_URL`) the way a customer does, never a gateway pod by address, and proves a cross-replica property with N independent calls through that door, naming the miss odds (2^-N at two pods) in its docstring. `PROXY_REPLICA_URLS` is for read-backs that are per pod by nature (polling until a management write has converged on every replica, `/metrics`, RSS), never for steering the scenario a cell asserts on at a chosen pod

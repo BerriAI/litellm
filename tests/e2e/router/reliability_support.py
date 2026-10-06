@@ -23,7 +23,6 @@ from pydantic import BaseModel, ValidationError
 from proxy_client import ProxyClient
 from e2e_config import CHEAP_OPENAI_MODEL, PROXY_BASE_URL, unique_marker
 from e2e_http import NetworkError, StreamHead, StreamingResponse
-from transport import Transport
 from models import (
     CacheControl,
     ChatMessage,
@@ -254,6 +253,12 @@ def create_always_picked_small_context_deployment(proxy: ProxyClient, name: str)
     )
 
 
+def create_canned_deployment(proxy: ProxyClient, name: str) -> str:
+    """A deployment that answers from a canned reply, so a call to it goes through the
+    router's deployment pick like any other but never reaches a provider."""
+    return proxy.create_model(name, LiteLLMParamsBody(model=REAL_MODEL, mock_response="ok"))
+
+
 def create_zero_weight_backup_deployment(proxy: ProxyClient, name: str) -> str:
     """The other half of a retry pair: healthy, but weight 0, so the weighted shuffle
     never opens on it. It is reachable only once its sibling is out of the running,
@@ -280,36 +285,9 @@ def chat_turns_override(
 ) -> StreamingResponse:
     """POST /chat/completions with an optional per-request router_settings_override,
     returning the raw outcome so tests read status, body, and reliability headers."""
-    return chat_turns_override_via(
-        proxy.transport, key, model, turns, override=override, stream=stream, cache=cache, max_tokens=max_tokens
-    )
-
-
-def chat_override_via(
-    transport: Transport,
-    key: str,
-    model: str,
-    content: str,
-    override: RouterSettingsOverride | None = None,
-) -> StreamingResponse:
-    """`chat_override` aimed at one replica's transport (from `proxy.replicas`) instead of
-    the client's default, for cells that must know which gateway took the call."""
-    return chat_turns_override_via(transport, key, model, [ChatMessage(role="user", content=content)], override=override)
-
-
-def chat_turns_override_via(
-    transport: Transport,
-    key: str,
-    model: str,
-    turns: Sequence[ChatMessage],
-    override: RouterSettingsOverride | None = None,
-    stream: bool = False,
-    cache: dict[str, bool] | None = {"no-cache": True},
-    max_tokens: int = 512,
-) -> StreamingResponse:
-    return transport.send(
+    return proxy.transport.send(
         "/chat/completions",
-        headers=transport.bearer(key),
+        headers=proxy.transport.bearer(key),
         json=ReliabilityChatBody(
             model=model,
             messages=turns,
