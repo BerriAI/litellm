@@ -87,12 +87,6 @@ class TestProxyInitializationHelpers:
         ]
 
         # Execute
-        with pytest.raises(ValueError, match="Invalid test value"):
-            ProxyInitializationHelpers._run_test_chat_completion(
-                "localhost", 8000, "gpt-3.5-turbo", True
-            )
-
-        # Test with valid string test value
         ProxyInitializationHelpers._run_test_chat_completion(
             "localhost", 8000, "gpt-3.5-turbo", "http://test-url"
         )
@@ -102,6 +96,40 @@ class TestProxyInitializationHelpers:
             api_key="My API Key", base_url="http://test-url"
         )
         mock_client.chat.completions.create.assert_called()
+
+    @patch("openai.OpenAI")
+    @patch("click.echo")
+    @patch("builtins.print")
+    def test_run_test_chat_completion_flag_uses_host_and_port(
+        self, mock_print, mock_echo, mock_openai
+    ):
+        mock_client = MagicMock()
+        mock_openai.return_value = mock_client
+
+        ProxyInitializationHelpers._run_test_chat_completion(
+            "127.0.0.1", 4000, "gpt-3.5-turbo", True
+        )
+
+        mock_openai.assert_called_once_with(
+            api_key="My API Key", base_url="http://127.0.0.1:4000"
+        )
+        assert mock_client.chat.completions.create.call_count == 2
+
+    @patch("openai.OpenAI")
+    def test_test_flag_on_cli_sends_request_to_host_and_port(self, mock_openai):
+        from click.testing import CliRunner
+
+        result = CliRunner().invoke(
+            run_server,
+            ["--test", "--host", "127.0.0.1", "--port", "4000", "--model", "my-model"],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_openai.assert_called_once_with(
+            api_key="My API Key", base_url="http://127.0.0.1:4000"
+        )
+        first_call = mock_openai.return_value.chat.completions.create.call_args_list[0]
+        assert first_call.kwargs["model"] == "my-model"
 
     def test_get_default_unvicorn_init_args(self):
         # Test without log_config
