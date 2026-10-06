@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import _is_api_route_allowed
 from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
 from litellm.proxy.auth.route_checks import RouteChecks
 
@@ -4463,4 +4464,91 @@ def test_non_admin_trace_reads_reach_endpoint_visibility_checks(route: str) -> N
     assert RouteChecks.is_llm_api_route(route)
     RouteChecks.non_proxy_admin_allowed_routes_check(
         user_obj=user, _user_role=user_role.value, route=route, request=request, valid_token=auth, request_data={}
+    )
+
+
+_DENY_TEST_REGISTERED_ROUTES: Final = {
+    "test-uuid-1:subpath:/svc:GET,POST": {
+        "endpoint_id": "test-uuid-1",
+        "path": "/svc",
+        "type": "subpath",
+        "auth": True,
+    },
+}
+
+
+def _check_route_with_registered_routes(
+    route: str, valid_token: UserAPIKeyAuth, user_role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER
+) -> None:
+    request: Final = MagicMock(spec=Request)
+    request.method = "POST"
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            _DENY_TEST_REGISTERED_ROUTES,
+        ),
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+    ):
+        _is_api_route_allowed(
+            route=route,
+            request=request,
+            request_data={},
+            valid_token=valid_token,
+            user_obj=LiteLLM_UserTable(user_id="test_user", user_role=user_role.value),
+        )
+
+
+@pytest.mark.parametrize(
+    "metadata, team_metadata, denied_route",
+    [
+        ({"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]}, {}, "/svc/admin"),
+        ({"denied_passthrough_routes": ["/svc/admin"]}, {"allowed_passthrough_routes": ["/svc"]}, "/svc/admin"),
+        ({"allowed_passthrough_routes": ["/svc"]}, {"denied_passthrough_routes": ["/svc/admin"]}, "/svc/admin"),
+        ({"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/adm*"]}, {}, "/svc/adm*"),
+    ],
+    ids=["key-deny-beats-key-allow", "key-deny-beats-team-allow", "team-deny-beats-key-allow", "wildcard-deny"],
+)
+def test_denied_passthrough_routes_win_over_allow(metadata, team_metadata, denied_route):
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata=metadata,
+        team_metadata=team_metadata,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_route_with_registered_routes(route="/svc/admin/users", valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert f"Matched `{denied_route}` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/svc/public", "/svc/administrator", "/anthropic/v1/messages", "/chat/completions"],
+    ids=["allowed-sibling", "no-false-prefix-match", "built-in-provider-route", "llm-api-route"],
+)
+def test_denied_passthrough_routes_leave_other_routes_untouched(route):
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={
+            "allowed_passthrough_routes": ["/svc"],
+            "denied_passthrough_routes": ["/svc/admin", "/anthropic", "/chat/completions"],
+        },
+    )
+
+    _check_route_with_registered_routes(route=route, valid_token=valid_token)
+
+
+def test_denied_passthrough_routes_do_not_restrict_proxy_admins():
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        metadata={"denied_passthrough_routes": ["/svc"]},
+        team_metadata={"denied_passthrough_routes": ["/svc"]},
+    )
+
+    _check_route_with_registered_routes(
+        route="/svc/admin/users", valid_token=valid_token, user_role=LitellmUserRoles.PROXY_ADMIN
     )

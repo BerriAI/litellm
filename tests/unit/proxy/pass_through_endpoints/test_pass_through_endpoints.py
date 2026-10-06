@@ -8351,3 +8351,28 @@ def test_a_pass_through_added_after_a_lazy_feature_loaded_takes_over_its_path(mo
         assert client.post("/v1/decider").json() == {"served_by": "pass-through"}
         assert not SafeRouteAdder.add_api_route_if_not_exists(app, "/v1/decider", pass_through, ["POST"])
         assert client.post("/v1/decider").json() == {"served_by": "pass-through"}
+
+
+@pytest.mark.asyncio
+async def test_filter_endpoints_by_team_allowed_routes_drops_denied():
+    from litellm.proxy._types import PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _filter_endpoints_by_team_allowed_routes,
+    )
+
+    endpoints = [
+        PassThroughGenericEndpoint(id="endpoint-1", path="/api/public", target="http://example.com/api1"),
+        PassThroughGenericEndpoint(id="endpoint-2", path="/api/admin", target="http://example.com/api2"),
+    ]
+    mock_prisma_client = MagicMock()
+    mock_team = MagicMock()
+    mock_team.metadata = {"denied_passthrough_routes": ["/api/admin"]}
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team)
+
+    result = await _filter_endpoints_by_team_allowed_routes(
+        team_id="test-team-123",
+        pass_through_endpoints=endpoints,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert [endpoint.path for endpoint in result] == ["/api/public"]

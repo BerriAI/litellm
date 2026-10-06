@@ -3576,7 +3576,8 @@ async def _filter_endpoints_by_team_allowed_routes(
     prisma_client,
 ) -> list[PassThroughGenericEndpoint]:
     """
-    Filter pass-through endpoints based on team's allowed_passthrough_routes metadata.
+    Filter pass-through endpoints based on team's allowed_passthrough_routes and
+    denied_passthrough_routes metadata.
 
     Args:
         team_id: The team ID to check permissions for
@@ -3612,6 +3613,15 @@ async def _filter_endpoints_by_team_allowed_routes(
             in cast(  # cast-ok: guarded above; team metadata stores this key as a list of route paths
                 Sequence[str], team_metadata.get("allowed_passthrough_routes")
             )
+        ]
+    if team_metadata is not None and team_metadata.get("denied_passthrough_routes"):
+        from litellm.proxy.auth.route_checks import RouteChecks
+
+        pass_through_endpoints = [
+            endpoint
+            for endpoint in pass_through_endpoints
+            if RouteChecks.matching_denied_passthrough_route(route=endpoint.path, metadata_sources=(team_metadata,))
+            is None
         ]
 
     return pass_through_endpoints

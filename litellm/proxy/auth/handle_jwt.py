@@ -1648,6 +1648,10 @@ class JWTAuthManager:
         ):
             return True
 
+        team_metadata: Final = (team_object.metadata or {}) if team_object else {}
+        if RouteChecks.matching_denied_passthrough_route(route=route, metadata_sources=(team_metadata,)) is not None:
+            return False
+
         if RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=team_allowed_routes):
             return True
 
@@ -1655,7 +1659,7 @@ class JWTAuthManager:
         # so beyond the JWT config grant above, only the selected team's metadata grants access.
         return RouteChecks.check_passthrough_route_access(
             route=route,
-            user_api_key_dict=UserAPIKeyAuth(team_metadata=(team_object.metadata or {}) if team_object else {}),
+            user_api_key_dict=UserAPIKeyAuth(team_metadata=team_metadata),
         )
 
     @staticmethod

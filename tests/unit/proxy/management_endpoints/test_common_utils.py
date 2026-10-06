@@ -732,6 +732,35 @@ class TestCheckPassthroughRoutesCallerPermission:
         )
 
 
+    @pytest.mark.parametrize(
+        "kwargs, field",
+        [
+            ({"denied_passthrough_routes": ["/v1/foo"]}, "denied_passthrough_routes"),
+            ({"metadata": {"denied_passthrough_routes": ["/v1/foo"]}}, "metadata.denied_passthrough_routes"),
+        ],
+    )
+    def test_denied_routes_rejected_for_non_admin(self, kwargs, field):
+        from fastapi import HTTPException
+        from pydantic import BaseModel
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_passthrough_routes_caller_permission,
+        )
+
+        class _RouteData(BaseModel):
+            denied_passthrough_routes: list | None = None
+            metadata: dict | None = None
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_passthrough_routes_caller_permission(
+                _RouteData(**kwargs), self._non_admin(), entity="team"
+            )
+
+        assert exc_info.value.detail == {
+            "error": f"Only proxy admins can set `{field}` on a team."
+        }
+
+
 class TestCheckDisableGlobalGuardrailsCallerPermission:
     """Only proxy admins may set disable_global_guardrails (top-level or under
     metadata); non-admins get a 403 naming the entity."""

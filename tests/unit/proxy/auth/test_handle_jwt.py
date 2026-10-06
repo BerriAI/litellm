@@ -8252,3 +8252,29 @@ async def test_check_admin_access_names_the_route_and_the_expanded_allow_list_wh
         "Admin not allowed to access this route. Route=/key/generate, "
         f"Allowed Routes={[*LiteLLMRoutes.info_routes.value, '/custom/admin/route']}"
     )
+
+
+@pytest.mark.parametrize(
+    "team_allowed_routes, team_metadata",
+    [
+        ((), {"allowed_passthrough_routes": ["/model-host"], "denied_passthrough_routes": ["/model-host/v1"]}),
+        (("/model-host/*",), {"denied_passthrough_routes": ["/model-host/v1/*"]}),
+    ],
+    ids=["team-metadata-allow", "jwt-team-allowed-routes-grant"],
+)
+def test_team_has_passthrough_route_access_denied_route_wins(team_allowed_routes, team_metadata):
+    team = LiteLLM_TeamTable(team_id="team-a", metadata=team_metadata)
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            _AUTH_ENFORCED_MODEL_HOST_ROUTES,
+        ),
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+    ):
+        assert not JWTAuthManager._team_has_passthrough_route_access(
+            team_object=team,
+            route="/model-host/v1/extractor/predict",
+            request_method="POST",
+            team_allowed_routes=team_allowed_routes,
+        )

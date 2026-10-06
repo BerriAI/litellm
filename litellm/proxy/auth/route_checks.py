@@ -1,5 +1,5 @@
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Iterable, Mapping
 from typing import Final
 
 from fastapi import HTTPException, Request, status
@@ -694,6 +694,40 @@ class RouteChecks:
         )
 
     @staticmethod
+    def matching_denied_passthrough_route(route: str, metadata_sources: Iterable[Mapping | None]) -> str | None:
+        """
+        First ``denied_passthrough_routes`` entry across ``metadata_sources`` that matches ``route``.
+        Unlike the allowlist (key list, else team list), every source's deny list applies.
+        """
+        for metadata in metadata_sources:
+            denied_routes = (metadata or {}).get("denied_passthrough_routes") or []
+            for denied_route in denied_routes:
+                if RouteChecks._route_matches_allowed_route(
+                    route=route, allowed_route=denied_route
+                ) or RouteChecks.route_matches_wildcard_pattern(route=route, pattern=denied_route):
+                    return denied_route
+        return None
+
+    @staticmethod
+    def passthrough_route_denied_exception(route: str, denied_route: str) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Key/team denied access to passthrough route {route}. "
+                f"Matched `{denied_route}` in `denied_passthrough_routes`."
+            ),
+        )
+
+    @staticmethod
+    def _raise_if_passthrough_route_denied(route: str, valid_token: UserAPIKeyAuth) -> None:
+        denied_route: Final = RouteChecks.matching_denied_passthrough_route(
+            route=route,
+            metadata_sources=(valid_token.metadata, valid_token.team_metadata),
+        )
+        if denied_route is not None:
+            raise RouteChecks.passthrough_route_denied_exception(route=route, denied_route=denied_route)
+
+    @staticmethod
     def jwt_team_routes_grant_pass_through(route: str, team_allowed_routes: Collection[str]) -> bool:
         """
         Explicit paths and trailing-wildcard prefixes grant auth=true pass-through. Blanket grants never do:
@@ -724,8 +758,10 @@ class RouteChecks:
     ) -> None:
         """
         Require an explicit grant for auth=true pass-through: ``allowed_passthrough_routes`` on the
-        key or team, or an explicit JWT ``team_allowed_routes`` entry.
+        key or team, or an explicit JWT ``team_allowed_routes`` entry. A key or team
+        ``denied_passthrough_routes`` match blocks the route even when one of those grants it.
         """
+        RouteChecks._raise_if_passthrough_route_denied(route=route, valid_token=valid_token)
         if RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
             return
         if RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=jwt_team_allowed_routes):
