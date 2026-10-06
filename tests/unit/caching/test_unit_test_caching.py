@@ -251,6 +251,33 @@ def test_get_model_param_value():
     assert cache._get_model_param_value(kwargs) == "not-in-caching-group-gpt-3.5-turbo"
 
 
+def test_get_model_param_value_reads_model_group_from_litellm_metadata():
+    cache = Cache()
+    request = {
+        "model": "openai/gpt-5.6",
+        "input": "search this text",
+        "tools": [{"type": "web_search_preview", "search_context_size": "medium"}],
+    }
+
+    assert cache._get_model_param_value({**request, "litellm_metadata": {"model_group": "group-a"}}) == "group-a"
+    assert (
+        cache._get_model_param_value({**request, "litellm_params": {"litellm_metadata": {"model_group": "group-a"}}})
+        == "group-a"
+    )
+    assert cache._get_model_param_value(
+        {
+            **request,
+            "litellm_metadata": {
+                "model_group": "group-a",
+                "caching_groups": [("group-a", "group-b")],
+            },
+        }
+    ) == "('group-a', 'group-b')"
+    assert cache.get_cache_key(**request, litellm_metadata={"model_group": "group-a"}) != cache.get_cache_key(
+        **request, litellm_metadata={"model_group": "group-b"}
+    )
+
+
 def test_preset_cache_key():
     """
     Test that the preset cache key is used if it is set in kwargs["litellm_params"]

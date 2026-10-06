@@ -28,4 +28,4 @@ reqwest.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 google-cloud-auth.workspace = true
 rstest.workspace = true
-wiremock = "0.6.5"
+wiremock.workspace = true

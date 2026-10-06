@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
+_ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
 
 
 def test_get_format_from_file_id():
@@ -1620,39 +1621,74 @@ class TestToolWithSanitizedParameters:
 
         assert tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns) is tool
 
+    def test_sanitizes_the_input_schema_of_an_anthropic_tool(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+            tool_with_sanitized_parameters,
+        )
+
+        tool = {
+            "name": "ArtifactData",
+            "description": "Read a shared database",
+            "input_schema": {
+                "type": "object",
+                "properties": {"doc_id": {"type": "string", "pattern": _ARTIFACT_DATA_ID_PATTERN}},
+            },
+        }
+
+        result = tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns)
+
+        assert result == {
+            "name": "ArtifactData",
+            "description": "Read a shared database",
+            "input_schema": {"type": "object", "properties": {"doc_id": {"type": "string"}}},
+        }
+        assert tool["input_schema"]["properties"]["doc_id"]["pattern"] == _ARTIFACT_DATA_ID_PATTERN
+
+    def test_returns_the_same_anthropic_tool_when_its_schema_has_nothing_to_drop(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+            tool_with_sanitized_parameters,
+        )
+
+        tool = {"name": "Read", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}
+
+        assert tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns) is tool
+
+
+def _regex_schema(pattern):
+    return {
+        "type": "object",
+        "properties": {
+            "field": {"type": "string", "pattern": pattern},
+            "writes": {
+                "type": "array",
+                "items": {"properties": {"doc_id": {"type": "string", "pattern": pattern}}},
+            },
+            "query": {"anyOf": [{"type": "string", "pattern": pattern}, {"type": "null"}]},
+            "pair": {"type": "array", "prefixItems": [{"type": "string", "pattern": pattern}]},
+            "extra": {"type": "object", "additionalProperties": {"type": "string", "pattern": pattern}},
+            "tagged": {
+                "type": "object",
+                "patternProperties": {pattern: {"type": "string"}, "^x_": {"type": "integer"}},
+            },
+        },
+        "$defs": {"segment": {"type": "string", "pattern": pattern}},
+        "required": ["field"],
+    }
+
 
 class TestDropNonPythonRegexPatterns:
     """Claude Code's Artifact tool declares ECMA-262 ``\\p{..}`` escapes that OpenAI's
     validator, which compiles ``pattern`` values and ``patternProperties`` keys with
     Python ``re``, refuses as "not a 'regex'"."""
 
-    def _schema(self, pattern):
-        return {
-            "type": "object",
-            "properties": {
-                "field": {"type": "string", "pattern": pattern},
-                "writes": {
-                    "type": "array",
-                    "items": {"properties": {"doc_id": {"type": "string", "pattern": pattern}}},
-                },
-                "query": {"anyOf": [{"type": "string", "pattern": pattern}, {"type": "null"}]},
-                "pair": {"type": "array", "prefixItems": [{"type": "string", "pattern": pattern}]},
-                "extra": {"type": "object", "additionalProperties": {"type": "string", "pattern": pattern}},
-                "tagged": {
-                    "type": "object",
-                    "patternProperties": {pattern: {"type": "string"}, "^x_": {"type": "integer"}},
-                },
-            },
-            "$defs": {"segment": {"type": "string", "pattern": pattern}},
-            "required": ["field"],
-        }
-
     def test_drops_every_regex_python_re_rejects_from_every_schema_position(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             drop_non_python_regex_patterns,
         )
 
-        schema = self._schema(_ARTIFACT_FIELD_PATTERN)
+        schema = _regex_schema(_ARTIFACT_FIELD_PATTERN)
 
         result = drop_non_python_regex_patterns(schema)
 
@@ -1666,14 +1702,14 @@ class TestDropNonPythonRegexPatterns:
         assert properties["tagged"]["patternProperties"] == {"^x_": {"type": "integer"}}
         assert result["$defs"]["segment"] == {"type": "string"}
         assert result["required"] == ["field"]
-        assert schema == self._schema(_ARTIFACT_FIELD_PATTERN)
+        assert schema == _regex_schema(_ARTIFACT_FIELD_PATTERN)
 
     def test_keeps_regexes_python_re_compiles_and_returns_the_same_object(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             drop_non_python_regex_patterns,
         )
 
-        schema = self._schema(r'^(?!__.*__$)[^"\\./[\]]{1,200}$')
+        schema = _regex_schema(r'^(?!__.*__$)[^"\\./[\]]{1,200}$')
 
         assert drop_non_python_regex_patterns(schema) is schema
 
@@ -1735,6 +1771,137 @@ class TestDropNonPythonRegexPatterns:
         )
 
         assert drop_non_python_regex_patterns(schema) is schema
+
+
+class TestDropLookaroundRegexPatterns:
+    """Kimi K3 and Grok 4.6/4.7 on Bedrock Converse reject every tool schema regex that
+    uses a lookaround assertion, Claude Code's ``ArtifactData`` ``pattern`` included."""
+
+    @pytest.mark.parametrize(
+        "pattern",
+        [r"^(?!x).*$", r"^(?=.*a).*$", r"^.*(?<!x)$", r"^.*(?<=a)$", _ARTIFACT_DATA_ID_PATTERN],
+        ids=["negative-lookahead", "positive-lookahead", "negative-lookbehind", "positive-lookbehind", "ArtifactData"],
+    )
+    def test_drops_every_lookaround_regex_from_every_schema_position(self, pattern):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+        )
+
+        schema = _regex_schema(pattern)
+
+        result = drop_lookaround_regex_patterns(schema)
+
+        assert '"pattern"' not in json.dumps(result)
+        properties = result["properties"]
+        assert properties["field"] == {"type": "string"}
+        assert properties["writes"]["items"]["properties"]["doc_id"] == {"type": "string"}
+        assert properties["query"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+        assert properties["pair"]["prefixItems"] == [{"type": "string"}]
+        assert properties["extra"]["additionalProperties"] == {"type": "string"}
+        assert properties["tagged"]["patternProperties"] == {"^x_": {"type": "integer"}}
+        assert result["$defs"]["segment"] == {"type": "string"}
+        assert result["required"] == ["field"]
+        assert schema == _regex_schema(pattern)
+
+    @pytest.mark.parametrize(
+        "pattern",
+        [r"^[A-Za-z0-9_\-.~:@+]{1,200}$", r"^(?:a|b)+$", r"^(?P<name>\w+)$", r"^(?i)abc$", r"^[^\p{Cc}\p{Cf}]{1,200}$"],
+        ids=["plain", "non-capturing-group", "named-group", "inline-flag", "non-python-without-lookaround"],
+    )
+    def test_keeps_regexes_without_lookaround_and_returns_the_same_object(self, pattern):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+        )
+
+        schema = _regex_schema(pattern)
+
+        assert drop_lookaround_regex_patterns(schema) is schema
+
+    def test_lookaround_inside_data_positions_is_not_a_regex(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+        )
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string"},
+                "template": {"type": "object", "default": {"pattern": _ARTIFACT_DATA_ID_PATTERN}},
+                "hint": {"type": "string", "description": "ids match " + _ARTIFACT_DATA_ID_PATTERN},
+            },
+            "required": ["pattern"],
+        }
+
+        assert drop_lookaround_regex_patterns(schema) is schema
+
+
+@pytest.mark.parametrize(
+    ("dropper", "patterns"),
+    [
+        ("drop_non_python_regex_patterns", (_ARTIFACT_FIELD_PATTERN, r"^\p{L}+$")),
+        ("drop_lookaround_regex_patterns", (_ARTIFACT_DATA_ID_PATTERN, r"^(?=.*[a-z])\w+$")),
+    ],
+    ids=["non-python", "lookaround"],
+)
+class TestDroppedPatternPropertiesKeepTheirNamesAllowed:
+    """Dropping a ``patternProperties`` key from an object closed by ``additionalProperties:
+    false`` must not ban the names that key allowed: its value schema takes over as the
+    object's ``additionalProperties``."""
+
+    @staticmethod
+    def _drop(dropper):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+            drop_non_python_regex_patterns,
+        )
+
+        return {
+            "drop_non_python_regex_patterns": drop_non_python_regex_patterns,
+            "drop_lookaround_regex_patterns": drop_lookaround_regex_patterns,
+        }[dropper]
+
+    def test_closed_object_takes_the_dropped_value_schema(self, dropper, patterns):
+        schema = {
+            "type": "object",
+            "patternProperties": {patterns[0]: {"type": "string", "pattern": patterns[0]}},
+            "additionalProperties": False,
+        }
+
+        assert self._drop(dropper)(schema) == {
+            "type": "object",
+            "patternProperties": {},
+            "additionalProperties": {"type": "string"},
+        }
+
+    def test_closed_object_losing_two_entries_accepts_either_value_schema(self, dropper, patterns):
+        schema = {
+            "type": "object",
+            "patternProperties": {
+                patterns[0]: {"type": "string"},
+                patterns[1]: {"type": "integer"},
+                "^x_": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        }
+
+        assert self._drop(dropper)(schema) == {
+            "type": "object",
+            "patternProperties": {"^x_": {"type": "boolean"}},
+            "additionalProperties": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+        }
+
+    def test_object_with_its_own_additional_properties_schema_keeps_it(self, dropper, patterns):
+        schema = {
+            "type": "object",
+            "patternProperties": {patterns[0]: {"type": "string"}},
+            "additionalProperties": {"type": "integer"},
+        }
+
+        assert self._drop(dropper)(schema) == {
+            "type": "object",
+            "patternProperties": {},
+            "additionalProperties": {"type": "integer"},
+        }
 
 
 class TestRequestContainsImageContent:
@@ -1878,6 +2045,20 @@ class TestEncryptedReasoningReplay:
         assert all(block["signature"] for block in assistant_content if block["type"] == "thinking")
         assert messages[0] == {"role": "user", "content": "question"}
         assert messages[2] == {"role": "user", "content": [{"type": "text", "text": "follow-up"}]}
+
+    def test_strip_uses_predicate_to_keep_selected_encrypted_blocks(self):
+        kept_signature = encrypted_reasoning_signature("keep")
+        stripped_signature = encrypted_reasoning_signature("strip")
+        content = [
+            {"type": "thinking", "thinking": "keep", "signature": kept_signature},
+            {"type": "thinking", "thinking": "strip", "signature": stripped_signature},
+        ]
+        messages = [{"role": "assistant", "content": content}]
+
+        strip_encrypted_reasoning_from_messages(messages, should_strip=lambda block: block.get("thinking") == "strip")
+
+        assert messages[0]["content"] is content
+        assert content == [{"type": "thinking", "thinking": "keep", "signature": kept_signature}]
 
     @pytest.mark.parametrize(
         "messages",

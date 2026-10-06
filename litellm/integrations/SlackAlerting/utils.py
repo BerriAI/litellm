@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import AlertType
 from litellm.secret_managers.main import get_secret
+from litellm.types.integrations.slack_alerting import AlertType
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _Logging
