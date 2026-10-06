@@ -175,7 +175,7 @@ def test_calls_refuses_missing_forged_and_proxy_credentials_without_reaching_ope
         token: Final = ClientSecretCreateResponse.model_validate_json(minted.content).value
         assert wire.drain()[0].target.endswith("/v1/realtime/client_secrets")
 
-        refusals: Final = {
+        refusals: Final[dict[str, tuple[Mapping[str, str], dict[str, str]]]] = {
             "no_header": ({}, {"error": "Missing or invalid Authorization header"}),
             "virtual_key": ({"Authorization": f"Bearer {key}"}, {"error": "Invalid or expired token"}),
             "master_key": ({"Authorization": f"Bearer {gateway.key}"}, {"error": "Invalid or expired token"}),
