@@ -31,6 +31,7 @@ from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
 from litellm.integrations.otel.model.semconv import LiteLLM, Metric, MetricBuckets
+from litellm.integrations.otel.plumbing.histograms import create_histogram
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
@@ -309,6 +310,7 @@ class OpenTelemetryConfig:
     headers: str | None = None
     enable_metrics: bool = False
     enable_events: bool = False
+    semconv_histogram_buckets: bool = False
     service_name: str | None = None
     deployment_environment: str | None = None
     model_id: str | None = None
@@ -374,6 +376,9 @@ class OpenTelemetryConfig:
         )  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
         enable_metrics: Final[bool] = os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", "false").lower() == "true"
         enable_events: Final[bool] = os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", "false").lower() == "true"
+        semconv_histogram_buckets: Final[bool] = (
+            os.getenv("LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS", "false").lower() == "true"
+        )
         service_name: Final = os.getenv("OTEL_SERVICE_NAME", "litellm")
         deployment_environment: Final = os.getenv("OTEL_ENVIRONMENT_NAME", "production")
         model_id: Final = os.getenv("OTEL_MODEL_ID", service_name)
@@ -386,6 +391,7 @@ class OpenTelemetryConfig:
             headers=headers,  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
             enable_metrics=enable_metrics,
             enable_events=enable_events,
+            semconv_histogram_buckets=semconv_histogram_buckets,
             service_name=service_name,
             deployment_environment=deployment_environment,
             model_id=model_id,
@@ -710,40 +716,51 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         meter: Final = meter_provider.get_meter(__name__)
 
-        self._operation_duration_histogram = meter.create_histogram(
+        semconv_buckets: Final = self.config.semconv_histogram_buckets
+
+        def buckets(boundaries: tuple[float, ...]) -> tuple[float, ...] | None:
+            return boundaries if semconv_buckets else None
+
+        self._operation_duration_histogram = create_histogram(
+            meter,
             name=Metric.OPERATION_DURATION,
             description="GenAI operation duration",
             unit="s",
-            explicit_bucket_boundaries_advisory=MetricBuckets.OPERATION_DURATION,
+            boundaries=buckets(MetricBuckets.OPERATION_DURATION),
         )
-        self._token_usage_histogram = meter.create_histogram(
+        self._token_usage_histogram = create_histogram(
+            meter,
             name=Metric.TOKEN_USAGE,
             description="GenAI token usage",
             unit="{token}",
-            explicit_bucket_boundaries_advisory=MetricBuckets.TOKEN_USAGE,
+            boundaries=buckets(MetricBuckets.TOKEN_USAGE),
         )
-        self._cost_histogram = meter.create_histogram(
+        self._cost_histogram = create_histogram(
+            meter,
             name=Metric.TOKEN_COST,
             description="GenAI request cost",
             unit="USD",
         )
-        self._time_to_first_token_histogram = meter.create_histogram(
+        self._time_to_first_token_histogram = create_histogram(
+            meter,
             name=Metric.TIME_TO_FIRST_TOKEN,
             description="Time to first token for streaming requests",
             unit="s",
-            explicit_bucket_boundaries_advisory=MetricBuckets.TIME_TO_FIRST_TOKEN,
+            boundaries=buckets(MetricBuckets.TIME_TO_FIRST_TOKEN),
         )
-        self._time_per_output_token_histogram = meter.create_histogram(
+        self._time_per_output_token_histogram = create_histogram(
+            meter,
             name=Metric.TIME_PER_OUTPUT_TOKEN,
             description="Average time per output token (generation time / completion tokens)",
             unit="s",
-            explicit_bucket_boundaries_advisory=MetricBuckets.TIME_PER_OUTPUT_TOKEN,
+            boundaries=buckets(MetricBuckets.TIME_PER_OUTPUT_TOKEN),
         )
-        self._response_duration_histogram = meter.create_histogram(
+        self._response_duration_histogram = create_histogram(
+            meter,
             name=Metric.RESPONSE_DURATION,
             description="Total LLM API generation time (excludes LiteLLM overhead)",
             unit="s",
-            explicit_bucket_boundaries_advisory=MetricBuckets.RESPONSE_DURATION,
+            boundaries=buckets(MetricBuckets.RESPONSE_DURATION),
         )
 
     def _init_logs(self, logger_provider):
