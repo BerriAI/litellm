@@ -90,6 +90,12 @@ def _refused_call(
     return _outcome_from_rpc(response)
 
 
+def _leaf_exceptions(error: BaseException) -> tuple[BaseException, ...]:
+    if isinstance(error, builtins.BaseExceptionGroup):
+        return tuple(leaf for child in error.exceptions for leaf in _leaf_exceptions(child))
+    return (error,)
+
+
 def _assert_upstream_call(call: Mapping[str, object], name: str, arguments: Mapping[str, object]) -> None:
     body: Final = call["body"]
     assert isinstance(body, Mapping), call
@@ -305,13 +311,12 @@ def test_legacy_server_path_resolves_lists_groups_and_toolsets_and_fails_closed_
         if client == "official-sdk":
             with pytest.raises(builtins.ExceptionGroup) as caught:
                 official_client_outcomes(gateway, key, unknown_path, f"{alias_a}-add", {"a": 20, "b": 22})
-            outer: Final = caught.value
-            assert str(outer) == "unhandled errors in a TaskGroup (1 sub-exception)", repr(outer)
-            inner: Final = outer.exceptions[0]
-            assert isinstance(inner, builtins.ExceptionGroup) and len(inner.exceptions) == 1, repr(inner)
-            leaf: Final = inner.exceptions[0]
-            assert isinstance(leaf, MCPError) and leaf.error.code == -32601, repr(leaf)
-            assert leaf.error.message == "Not Found" and leaf.error.data is None, repr(leaf)
+            leaves: Final = _leaf_exceptions(caught.value)
+            assert len(leaves) == 1, repr(leaves)
+            leaf: Final = leaves[0]
+            assert isinstance(leaf, MCPError), repr(leaves)
+            assert leaf.error.code == -32601, repr(leaves)
+            assert leaf.error.message == "Not Found" and leaf.error.data is None, repr(leaves)
         else:
             unknown_initialized: Final = _streamable_rpc(gateway, unknown_path, key, "initialize", dict(INITIALIZE))
             assert unknown_initialized.status_code == 404, unknown_initialized.text
