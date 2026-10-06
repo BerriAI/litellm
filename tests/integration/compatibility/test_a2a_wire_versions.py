@@ -396,7 +396,6 @@ _TRANSPORT_HEADERS: Final = frozenset(
         "content-type",
         "user-agent",
         "cache-control",
-        "a2a-version",
     }
 )
 
@@ -460,6 +459,7 @@ def test_a2a_send_forwards_configured_headers_and_minted_identity_but_never_spoo
                 "x-api-key": "client-secret",
                 "x-tenant": "tenant-1",
                 "x-region": "eu-1",
+                "a2a-version": "0.3",
                 "x-litellm-agent-id": identity,
                 "x-litellm-trace-id": forwarded.get("x-litellm-trace-id", "<missing>"),
                 "x-litellm-user-id": user,
