@@ -183,26 +183,26 @@ run "skip_read_replica" {
 
   assert {
     condition     = length(google_sql_database_instance.reader) == 0
-    error_message = "create_read_replica = false must omit the Cloud SQL replica."
+    error_message = "create_read_replica = false must omit the replica instance."
   }
 
   assert {
     condition     = output.cloudsql_reader_ip == null
-    error_message = "cloudsql_reader_ip must be null when the replica is not created."
+    error_message = "cloudsql_reader_ip must be null without a replica."
   }
 
   assert {
     condition     = length(local.shared_env_kv) == 10
-    error_message = "Without a replica the runtime env must drop DATABASE_HOST/PORT_READ_REPLICA (12 → 10)."
+    error_message = "Without a replica, shared env should be 10 (no DATABASE_*_READ_REPLICA)."
   }
 
   assert {
     condition     = length([for env in local.shared_env_kv : env if env.name == "DATABASE_HOST_READ_REPLICA"]) == 0
-    error_message = "DATABASE_HOST_READ_REPLICA must not be set when the replica is omitted."
+    error_message = "DATABASE_HOST_READ_REPLICA must be unset without a replica."
   }
 
   assert {
     condition     = length(local.database_url_fragment) == 1
-    error_message = "Without a replica the startup script must export only DATABASE_URL."
+    error_message = "Without a replica, only DATABASE_URL should be exported."
   }
 }

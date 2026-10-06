@@ -137,8 +137,6 @@ locals {
     "python -c \"import os, base64, pathlib; pathlib.Path(os.environ['REDIS_SSL_CA_CERTS']).write_bytes(base64.b64decode(os.environ['REDIS_CA_PEM_B64']))\""
   ] : []
 
-  # DATABASE_URL_READ_REPLICA is opt-in. Unset, LiteLLM keeps a single Prisma
-  # client on the writer (docs: https://docs.litellm.ai/docs/proxy/db_read_replica).
   database_url_fragment = concat(
     [
       "export DATABASE_URL=\"postgresql://$${DATABASE_USER}:$${DATABASE_PASSWORD}@$${DATABASE_HOST}:$${DATABASE_PORT}/$${DATABASE_NAME}\"",

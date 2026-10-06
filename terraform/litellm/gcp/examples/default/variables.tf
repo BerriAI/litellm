@@ -33,7 +33,7 @@ variable "create_runtime" {
 }
 
 variable "create_read_replica" {
-  description = "Create the Cloud SQL read replica and set DATABASE_URL_READ_REPLICA. False → writer-only."
+  description = "Create the Cloud SQL read replica. False = writer only."
   type        = bool
   default     = true
 }

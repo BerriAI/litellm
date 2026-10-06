@@ -29,7 +29,7 @@ output "cloudsql_writer_ip" {
 }
 
 output "cloudsql_reader_ip" {
-  description = "Private IP of the Cloud SQL read replica. Null when create_read_replica is false."
+  description = "Private IP of the Cloud SQL read replica, or null if none."
   value       = module.litellm.cloudsql_reader_ip
 }
 

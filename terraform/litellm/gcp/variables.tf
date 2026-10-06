@@ -331,14 +331,7 @@ variable "ui_max_instance_request_concurrency" {
 # ---------- Cloud SQL ----------
 
 variable "create_read_replica" {
-  description = <<-EOT
-    Create a Cloud SQL read replica and set DATABASE_URL_READ_REPLICA so the
-    proxy routes reads (find_*, count, group_by, query_raw) to it. Default
-    true, matching today's always-on replica. Set false for a single-instance
-    stack: LiteLLM then uses the writer for every query (same as leaving
-    DATABASE_URL_READ_REPLICA unset on Helm / docker). Dev and cost-sensitive
-    environments usually want false.
-  EOT
+  description = "Create a Cloud SQL read replica and set DATABASE_URL_READ_REPLICA. Default true. Set false to run writer-only."
   type        = bool
   default     = true
 }
