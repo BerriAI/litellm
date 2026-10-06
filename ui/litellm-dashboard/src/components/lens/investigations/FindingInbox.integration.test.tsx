@@ -58,7 +58,7 @@ it("restores inbox filters from a link and keeps filter changes in the URL", asy
   expect(await screen.findByRole("row", { name: issue.title })).toBeVisible();
   expect(screen.queryByRole("row", { name: data.lenses[1].findings[0].title })).not.toBeInTheDocument();
   await user.click(screen.getByRole("combobox", { name: "Filter by priority" }));
-  await user.click(screen.getByRole("option", { name: "Low" }));
+  await user.click(await screen.findByRole("option", { name: "Low" }));
   expect(await screen.findByText("No findings match these filters.")).toBeVisible();
   await waitFor(() =>
     expect(new URLSearchParams(onUrlUpdate.mock.lastCall?.[0].queryString).get("priority")).toBe("low"),
@@ -95,7 +95,7 @@ it("keeps finding rows collapsed across filter changes and expands them on reque
   await user.click(screen.getByRole("button", { name: `Hide findings for ${support.settings.name}` }));
   expect(screen.queryByRole("row", { name: issue.title })).not.toBeInTheDocument();
   await user.click(screen.getByRole("combobox", { name: "Filter by priority" }));
-  await user.click(screen.getByRole("option", { name: "High" }));
+  await user.click(await screen.findByRole("option", { name: "High" }));
   const expand = await screen.findByRole("button", { name: `Show findings for ${support.settings.name}` });
   expect(expand).toHaveAttribute("aria-expanded", "false");
   expect(screen.queryByRole("row", { name: issue.title })).not.toBeInTheDocument();
@@ -121,11 +121,34 @@ it("keeps grouped findings available when search leaves only a secondary owner",
 });
 
 it("retains feedback and the open finding when a grouped review fails", async () => {
+  proxy.get.mockImplementation(async (path) =>
+    path === "/lens"
+      ? {
+          lenses: [
+            {
+              ...support,
+              findings: [
+                {
+                  ...issue,
+                  status: proxy.patch.mock.calls.some(([reviewPath]) => reviewPath.startsWith("/lens/support/"))
+                    ? "resolved"
+                    : "open",
+                },
+              ],
+            },
+            twin,
+          ],
+          workers: [],
+          tracing_enabled: true,
+        }
+      : { data: [] },
+  );
   const user = userEvent.setup();
   proxy.patch.mockImplementation(async (path) => {
     if (path.startsWith("/lens/twin/")) throw new Error("Review could not be saved");
   });
-  renderWithLens(<InvestigationsView />, { searchParams: "?tab=investigations" });
+  const onUrlUpdate = vi.fn();
+  renderWithLens(<InvestigationsView />, { searchParams: "?tab=investigations", onUrlUpdate });
   await user.click(await screen.findByRole("row", { name: issue.title }));
   const panel = within(screen.getByRole("complementary", { name: "Finding details" }));
   fireEvent.change(panel.getByRole("textbox"), { target: { value: "Keep this feedback" } });
@@ -133,6 +156,10 @@ it("retains feedback and the open finding when a grouped review fails", async ()
   expect(await screen.findByText("Review could not be saved")).toBeVisible();
   expect(panel.getByRole("textbox")).toHaveValue("Keep this feedback");
   expect(screen.getByRole("button", { name: "Mark resolved" })).toBeEnabled();
+  await waitFor(() =>
+    expect(new URLSearchParams(onUrlUpdate.mock.lastCall?.[0].queryString).get("issue")).toBe(findingKey(twin, issue)),
+  );
+  expect(screen.getByRole("row", { name: issue.title })).toHaveAttribute("aria-selected", "true");
 });
 
 it("reviews only the selected check when two findings have the same title", async () => {

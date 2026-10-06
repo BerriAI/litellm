@@ -64,11 +64,13 @@ export function InboxDetail({
   row,
   readOnly,
   busy,
+  reason,
   onReview,
 }: {
   row: InboxRow;
   readOnly: boolean;
   busy: boolean;
+  reason?: string;
   onReview: (row: InboxRow, status: Finding["status"], reason: string) => void;
 }) {
   const { evidence, setEvidence } = useEvidenceRoute();
@@ -80,7 +82,7 @@ export function InboxDetail({
       <div hidden={evidence !== null} className={evidence ? undefined : "flex min-h-0 flex-1 flex-col"}>
         <FindingDetails
           key={row.key}
-          finding={inboxFinding(row)}
+          finding={{ ...inboxFinding(row), ...(reason !== undefined ? { reason } : {}) }}
           agents={row.agents}
           sampledRuns={row.sources.flatMap(({ lens }) => sampledExecutions(lens))}
           readOnly={readOnly}

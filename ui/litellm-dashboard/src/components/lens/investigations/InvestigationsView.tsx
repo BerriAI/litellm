@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -58,6 +58,7 @@ function Banners({ error, activityReady, flush, refresh }: BannersProps) {
 }
 
 export function InvestigationsView({ readOnly = false }: InvestigationsViewProps) {
+  const [reviewDraft, setReviewDraft] = useState<{ key: string; reason: string } | null>(null);
   const api = useLensApi();
   const invalidateLenses = useInvalidateLenses();
   const actions = useInvestigationActions();
@@ -101,8 +102,15 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
     if (saved) setIssueKey(null);
   };
   const reviewInbox = async (row: InboxRow, status: Finding["status"], reason: string) => {
-    const saved = await actions.reviewInbox(row, status, reason);
-    if (saved) setIssueKey(null);
+    const result = await actions.reviewInbox(row, status, reason);
+    if (result.ok) {
+      setReviewDraft(null);
+      setIssueKey(null);
+      return;
+    }
+    const key = findingKey(result.source.lens, result.source.finding);
+    setReviewDraft({ key, reason });
+    setIssueKey(key);
   };
   const dialogLens = target ? lenses.find((candidate) => candidate.id === target) : lens;
   const refresh = () => {
@@ -127,6 +135,11 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
           row={row.inbox}
           readOnly={readOnly}
           busy={actions.busy}
+          reason={
+            reviewDraft && row.inbox.sources.some(({ lens, finding }) => findingKey(lens, finding) === reviewDraft.key)
+              ? reviewDraft.reason
+              : undefined
+          }
           onReview={(row, status, reason) => void reviewInbox(row, status, reason)}
         />
       );
