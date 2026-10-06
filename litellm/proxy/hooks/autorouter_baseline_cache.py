@@ -24,6 +24,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
     TokenCounter,
     UnsupportedCachePlan,
     UnsupportedPredictionTarget,
+    capture_native_baseline_parameters,
     count_cache_plan,
     count_prompt_tokens,
     parse_cache_plan,
@@ -36,7 +37,7 @@ from litellm.proxy.spend_tracking.savings import (
     _effective_model_info,  # pyright: ignore[reportPrivateUsage]  # existing deployment-price owner
     _proxy_llm_router,  # pyright: ignore[reportPrivateUsage]  # existing optional proxy-router owner
 )
-from litellm.router_utils.baseline_request import baseline_request, capture_baseline_parameters
+from litellm.router_utils.baseline_request import baseline_request
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import CallTypes, ModelInfo, Usage
@@ -166,7 +167,7 @@ class AutoRouterBaselineCache(CustomLogger):
             )
             scope: Final = "autorouter-baseline:v3:" + _digest(
                 (
-                    "baseline_request_v1",
+                    "baseline_request_v2",
                     request.user_api_key_hash,
                     session,
                     request.route.router_name,
@@ -193,13 +194,18 @@ class AutoRouterBaselineCache(CustomLogger):
                     reason="incomplete_response",
                 ),
             )
+            selected_model: Final = kwargs.get("model")
             logging_obj.baseline_cache_context = BaselineCacheContext(
                 self,
                 capture,
                 target,
                 request.route.baseline_deployment_id,
-                capture_baseline_parameters(projected) if projected is not None else None,
-                capture_baseline_parameters(kwargs, include_extra_body=False),
+                capture_native_baseline_parameters(projected, target.model)
+                if projected is not None and isinstance(target, NativePredictionTarget)
+                else None,
+                capture_native_baseline_parameters(
+                    kwargs, selected_model if isinstance(selected_model, str) else logging_obj.model
+                ),
             )
         except Exception:  # noqa: BLE001  # optional observation cannot fail inference
             verbose_proxy_logger.warning("Auto-router baseline observation could not be initialized")

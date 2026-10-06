@@ -13,6 +13,7 @@ import httpx
 from pydantic import ConfigDict, Field, JsonValue, StrictInt, TypeAdapter, ValidationError
 
 import litellm
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, is_anthropic_oauth_key
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES
@@ -20,7 +21,12 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
-from litellm.router_utils.baseline_request import BASELINE_PARAMETERS, baseline_request
+from litellm.router_utils.baseline_request import (
+    BASELINE_PARAMETERS,
+    baseline_request,
+    capture_baseline_parameters,
+    within_baseline_budget,
+)
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import ModelResponse
@@ -28,6 +34,8 @@ from litellm.utils import supports_thinking_cache_preservation
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _HEADERS: Final = TypeAdapter(dict[str, str])
+_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
+_SYSTEM: Final = TypeAdapter(str | list[dict[str, JsonValue]] | None)
 _counter: Final = AnthropicCountTokensHandler()
 
 
@@ -619,6 +627,32 @@ def resolve_baseline_prediction_target(params: LiteLLM_Params) -> NativePredicti
     return _resolve_prediction_target(params, allow_configured_endpoint=True)
 
 
+def capture_native_baseline_parameters(request: Mapping[str, object], model: str) -> Mapping[str, JsonValue] | None:
+    parameters: Final = capture_baseline_parameters(request, include_extra_body=False)
+    if (
+        parameters is None
+        or parameters.get("system") is None
+        or not (
+            litellm.enable_anthropic_prompt_caching is True
+            or request.get("enable_prompt_caching") is True
+            or request.get("cache_control_injection_points")
+        )
+    ):
+        return parameters
+    messages: Final = request.get("messages") or []
+    if not within_baseline_budget(messages):
+        return None
+    _, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+        messages=_MESSAGES.validate_python(messages),
+        system=_SYSTEM.validate_python(parameters.get("system")),
+        kwargs={key: value for key, value in request.items() if key not in ("metadata", "litellm_metadata")},
+        model=model,
+        custom_llm_provider="anthropic",
+        tools=_MESSAGES.validate_python(parameters.get("tools") or []),
+    )
+    return capture_baseline_parameters({**parameters, "system": system}, include_extra_body=False)
+
+
 def project_baseline_body(
     body: Mapping[str, JsonValue], parameters: Mapping[str, JsonValue] | None, model: str
 ) -> dict[str, JsonValue] | None:
@@ -628,7 +662,7 @@ def project_baseline_body(
     if projected is None:
         return None
     owned: Final = _JSON_OBJECT.validate_python(projected)
-    messages: Final = TypeAdapter(list[dict[str, JsonValue]]).validate_python(owned.get("messages"))
+    messages: Final = _MESSAGES.validate_python(owned.get("messages"))
     options: Final = {
         **{key: value for key, value in owned.items() if key not in ("messages", "model")},
         "max_tokens": owned.get("max_tokens", body.get("max_tokens")),

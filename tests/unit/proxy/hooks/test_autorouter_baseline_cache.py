@@ -357,9 +357,18 @@ async def test_provider_counting_does_not_hold_the_inference_response(
 
 
 @pytest.mark.parametrize("baseline_effort", (None, "medium"))
+@pytest.mark.parametrize("automatic_system, caching", (
+    (None, "explicit"),
+    ("stable system", "request"),
+    ([{"type": "text", "text": "stable system"}], "request"),
+    ("stable system", "global"),
+    ([{"type": "text", "text": "stable system"}], "configured"),
+))
 async def test_native_tier_switch_uses_baseline_settings_and_preserves_history(
     monkeypatch: pytest.MonkeyPatch,
     baseline_effort: str | None,
+    automatic_system: str | list[dict[str, str]] | None,
+    caching: str,
 ) -> None:
     from litellm.proxy.spend_tracking.baseline_accounting import BaselineHistory, advance_baseline_history
 
@@ -394,6 +403,11 @@ async def test_native_tier_switch_uses_baseline_settings_and_preserves_history(
         ]
     )
     rig: Final = _Rig(monkeypatch, models=models)
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", caching == "global")
+    controls: Final = {"cache_control_injection_points": [
+        {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+        {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "1h"}},
+    ]} if caching == "configured" else {"enable_prompt_caching": caching == "request"}
     captures: Final[asyncio.Queue[CapturedBaselineObservation]] = asyncio.Queue()
     with _transport(_upstream) as route:
         for suffix in ("", " ESCALATE"):
@@ -401,7 +415,13 @@ async def test_native_tier_switch_uses_baseline_settings_and_preserves_history(
             await rig.router.anthropic_messages(
                 model="test-router",
                 max_tokens=4096,
-                messages=_MESSAGES.validate_json(_MESSAGES_JSON.replace("question", "question" + suffix)),
+                messages=(
+                    [{"role": "user", "content": "question" + suffix}]
+                    if automatic_system is not None
+                    else _MESSAGES.validate_json(_MESSAGES_JSON.replace("question", "question" + suffix))
+                ),
+                system=automatic_system,
+                **controls,
                 litellm_logging_obj=log,
                 litellm_call_id=rig.call_id,
                 litellm_metadata={"user_api_key_hash": "test-caller-hash"},
@@ -416,14 +436,15 @@ async def test_native_tier_switch_uses_baseline_settings_and_preserves_history(
     first, second = (captures.get_nowait() for _ in range(2))
     assert first.scope == second.scope
     assert first.observation.plan is not None and second.observation.plan is not None
-    assert first.observation.plan.breakpoints == second.observation.plan.breakpoints
+    assert first.observation.plan.breakpoints[0] == second.observation.plan.breakpoints[0]
+    assert len(first.observation.plan.breakpoints) == (2 if automatic_system is not None else 1)
     history, _ = advance_baseline_history(
-        BaselineHistory(),
-        (first.observation.model_copy(update={"request_id": "first", "started_at": 1000.0, "available_at": 1001.0}),),
+        BaselineHistory(first_at=0.0),
+        (first.observation.model_copy(update={"request_id": "first", "started_at": 10000.0, "available_at": 10001.0}),),
     )
     _, result = advance_baseline_history(
         history,
-        (second.observation.model_copy(update={"request_id": "second", "started_at": 1020.0, "available_at": 1021.0}),),
+        (second.observation.model_copy(update={"request_id": "second", "started_at": 10020.0, "available_at": 10021.0}),),
     )
     assert result[0].usage is not None and result[0].usage.prompt_tokens_details.cached_tokens == 5000
 
@@ -561,3 +582,41 @@ async def test_native_baseline_identity_respects_caller_limit_and_tier_override(
         wire: Final = _JSON_OBJECT.validate_json(route.calls.last.request.content)
     assert wire["max_tokens"] == tier_limit
     assert observed.baseline_equivalent == (tier_limit == 8)
+
+
+@pytest.mark.parametrize("nested", (False, True))
+async def test_native_baseline_projection_matches_wire_parameter_placement(
+    monkeypatch: pytest.MonkeyPatch,
+    nested: bool,
+) -> None:
+    counted: Final[asyncio.Queue[Mapping[str, JsonValue]]] = asyncio.Queue()
+
+    async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int:
+        counted.put_nowait(body)
+        return await _count(model, api_key, body)
+
+    models: Final = _MESSAGES.validate_python(
+        [{**entry, "litellm_params": {**_JSON_OBJECT.validate_python(entry["litellm_params"]), "model": "anthropic/claude-opus-5"}}
+         if entry["model_name"] == "sonnet" else entry for entry in _MODELS]
+    )
+    rig: Final = _Rig(monkeypatch, count=count, models=models)
+    settings: Final = {"speed": "standard", "thinking": {"type": "adaptive"}, "output_config": {"effort": "medium"}}
+    with _transport(_upstream) as route:
+        await rig.router.anthropic_messages(
+            model="test-router",
+            max_tokens=4096,
+            messages=_MESSAGES.validate_json(_MESSAGES_JSON),
+            litellm_logging_obj=rig.logging(),
+            litellm_call_id=rig.call_id,
+            litellm_metadata={"user_api_key_hash": "test-caller-hash"},
+            litellm_session_id="native-placement",
+            **({"extra_body": settings} if nested else settings),
+        )
+        captured: Final = _observation(await rig.capture.payload())
+        wire: Final = _JSON_OBJECT.validate_json(route.calls.last.request.content)
+    assert captured.observation.plan is not None and not captured.observation.baseline_equivalent
+    projected: Final = counted.get_nowait()
+    assert {key: projected[key] for key in settings if key in projected} == {
+        key: wire[key] for key in settings if key in wire
+    }
+    assert {key: wire[key] for key in settings if key in wire} == ({} if nested else settings)
