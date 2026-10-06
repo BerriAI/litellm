@@ -10,6 +10,7 @@ from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
 from litellm.proxy.list_api.list_framework import handle_list
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management.teams.dependencies import get_roster_db, get_team_access, get_teams
+from litellm.proxy.management.teams.exceptions import roster_problem
 from litellm.proxy.management.teams.repository import RawQuery, TeamMemberRows
 from litellm.proxy.management.teams.schemas import TeamMemberListItem
 from litellm.proxy.management.teams.service import (
@@ -24,30 +25,6 @@ from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V
 from litellm.types.proxy.management_endpoints.management_v1 import ListResponse, ProblemDetail
 
 router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
-
-
-def _roster_problem(refusal: TeamNotFound | RosterHidden) -> ManagementProblem:
-    match refusal:
-        case TeamNotFound(team_id=team_id):
-            return ManagementProblem(
-                ProblemDetail(
-                    type=f"{PROBLEM_TYPE_BASE}team-not-found",
-                    title="Team not found",
-                    status=404,
-                    detail=f"Team id={team_id} does not exist in db",
-                )
-            )
-        case RosterHidden(team_id=team_id):
-            return ManagementProblem(
-                ProblemDetail(
-                    type=f"{PROBLEM_TYPE_BASE}forbidden",
-                    title="Forbidden",
-                    status=403,
-                    detail=f"Not allowed to read the members of team={team_id}",
-                )
-            )
-        case _:
-            assert_never(refusal)
 
 
 @router.get(
@@ -97,7 +74,7 @@ async def list_team_members(
                     caller=user_api_key_dict,
                 )
             case TeamNotFound() | RosterHidden():
-                raise _roster_problem(lookup)
+                raise roster_problem(lookup)
             case _:
                 assert_never(lookup)
     except ManagementProblem:
