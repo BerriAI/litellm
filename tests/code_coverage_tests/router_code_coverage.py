@@ -85,6 +85,8 @@ ignored_function_names = [
     "_delete_claude_code_session_router_binding",  # Tested through Redis cleanup failure in test_router.py
     "_resolve_claude_code_session_router",  # Tested through Claude Code session routing in test_router.py
     "_get_claude_code_session_router_binding",  # Tested through the two-worker session routing test in test_router.py
+    "_claude_code_session_router_binding_key",  # Tested through the session binding prefetch tests in test_router.py
+    "_arm_claude_code_session_router_binding_prefetch",  # Tested through the session binding prefetch tests in test_router.py
     "_apply_updated_routing_strategy_args",  # Tested via update_settings in test_lowest_latency.py (file lacks "router" in name)
     "arm_routing_read_prefetch",  # Tested in tests/unit/caching/test_request_redis_batch_pre_call.py (file lacks "router" in name)
     "_configured_model_info",  # Tested through get_configured_service_tiers in test_router.py

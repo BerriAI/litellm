@@ -371,6 +371,23 @@ async def test_a_delete_rides_the_pipeline_under_the_namespace_and_reads_as_miss
 
 
 @pytest.mark.asyncio
+async def test_a_cluster_read_leaves_when_declared_so_the_flush_only_waits_for_it() -> None:
+    client = FakeClient(replies)
+    cache = FakeClusterCache(client)
+    cache.store["binding"] = "deployment-a"
+    batch = RedisBatch(cache)
+    got = batch.mget(["binding"])
+    await asyncio.sleep(0)
+    assert cache.alone == [("MGET", ("binding",))]
+    assert got.done
+    assert batch.pending == 1
+    await batch.flush()
+    assert batch.pending == 0
+    assert await got == {"binding": "deployment-a"}
+    assert cache.alone == [("MGET", ("binding",))]
+
+
+@pytest.mark.asyncio
 async def test_a_delete_on_a_cluster_cache_runs_as_its_own_del() -> None:
     client = FakeClient(replies)
     cache = FakeClusterCache(client)

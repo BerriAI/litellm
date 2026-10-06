@@ -21,6 +21,7 @@ from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import BatchResult, active_request_redis_batches
+from litellm.caching.redis_cache import RedisCache
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
 
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
 ROUTER_COOLDOWNS_USAGE_TARGET: Final = "router_cooldowns_usage"
 ROUTER_USAGE_TARGET: Final = "router_usage"
 _PREFETCH_SLOT: Final = "routing_read"
+_BINDING_PREFETCH_SLOT: Final = "claude_code_session_router_binding"
 
 
 def _routing_read_target(cooldown_keys: Sequence[str], usage_keys: Sequence[str]) -> str:
@@ -149,6 +151,35 @@ class RoutingPrefetch:
             return armed
         if isinstance(armed, RoutingPrefetch):
             armed.release()
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionBindingPrefetch:
+    """One session binding key declared on the request's Redis batch next to the routing read, so the binding
+    lookup at route time rides a round trip the request makes anyway instead of a GET of its own."""
+
+    key: str
+    result: BatchResult[Mapping[str, object]]
+
+    @staticmethod
+    def arm(redis_cache: RedisCache, key: str) -> None:
+        request: Final = active_request_redis_batches()
+        if request is None or _BINDING_PREFETCH_SLOT in request.prefetched:
+            return
+        request.prefetched[_BINDING_PREFETCH_SLOT] = SessionBindingPrefetch(
+            key=key, result=request.batch(redis_cache).mget((key,))
+        )
+
+    @staticmethod
+    def take(key: str) -> BatchResult[Mapping[str, object]] | None:
+        """The armed read when it is for `key`; taken once, so a second lookup in the request reads fresh."""
+        request: Final = active_request_redis_batches()
+        if request is None:
+            return None
+        armed: Final = request.prefetched.pop(_BINDING_PREFETCH_SLOT, None)
+        if isinstance(armed, SessionBindingPrefetch) and armed.key == key:
+            return armed.result
         return None
 
 
