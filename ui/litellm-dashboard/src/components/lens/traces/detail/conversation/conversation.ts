@@ -486,30 +486,40 @@ export function groupConversation(items: readonly ConversationItem[], spans: rea
       return parentById.has(parent) ? [] : [parent];
     }),
   );
-  const directBranch = (item: ConversationItem, parent?: string): string | undefined => {
-    let id = item.branchId;
-    const visited = new Set<string>();
-    while (id && !visited.has(id)) {
-      visited.add(id);
-      const ancestor = parentById.get(id);
-      if (parent ? ancestor === parent : ancestor !== undefined && roots.has(ancestor)) return id;
-      id = ancestor;
+  const members = new Map<string | undefined, ConversationGroup[]>();
+  const groupsFor = (id?: string): ConversationGroup[] => {
+    const existing = members.get(id);
+    if (existing) return existing;
+    const groups: ConversationGroup[] = [];
+    members.set(id, groups);
+    return groups;
+  };
+  const names = new Map<string, string>();
+  for (const item of items) {
+    if (item.branchId && item.agentName && !names.has(item.branchId)) names.set(item.branchId, item.agentName);
+  }
+  const registered = new Set<string>();
+  for (const item of items) {
+    const ownBranch = item.parentBranchId ? item.branchId : undefined;
+    groupsFor(ownBranch).push({ kind: "item", item });
+    const path = new Set<string>();
+    let id = ownBranch;
+    while (id && !roots.has(id) && !registered.has(id)) {
+      path.add(id);
+      registered.add(id);
+      const parent = parentById.get(id);
+      const container = parent && !roots.has(parent) && !path.has(parent) ? parent : undefined;
+      const group: ConversationGroup = {
+        kind: "branch",
+        id,
+        name: names.get(id) || byId.get(id)?.name || "Subagent",
+        children: groupsFor(id),
+      };
+      groupsFor(container).push(group);
+      id = container;
     }
-    return undefined;
-  };
-  const build = (parent?: string, ancestors = new Set<string>()): ConversationGroup[] => {
-    const seen = new Set<string>();
-    return items.flatMap((item): ConversationGroup[] => {
-      if (parent ? item.branchId === parent : !item.parentBranchId) return [{ kind: "item", item }];
-      const id = directBranch(item, parent);
-      if (!id || seen.has(id) || ancestors.has(id)) return [];
-      seen.add(id);
-      const first = items.find((candidate) => candidate.branchId === id);
-      const name = first?.agentName || byId.get(id)?.name || "Subagent";
-      return [{ kind: "branch", id, name, children: build(id, new Set([...ancestors, id])) }];
-    });
-  };
-  return build();
+  }
+  return groupsFor();
 }
 
 export function conversationWarnings(details: ReadonlyMap<string, SpanDetail>, complete: boolean): string[] {

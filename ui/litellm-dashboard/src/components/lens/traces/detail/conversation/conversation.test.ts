@@ -40,6 +40,60 @@ describe("trace conversation", () => {
     expect(pending.has("child")).toBe(true);
   });
 
+  it("groups 20,000 sibling actors without rescanning unrelated conversation entries", () => {
+    const spans = Array.from({ length: 20_000 }, (_, index) => ({
+      ...root,
+      span_id: `step-${index}`,
+      actor_id: `actor-${index}`,
+      parent_actor_id: "root-actor",
+    }));
+    const items = spans.map((span) => ({
+      id: span.span_id,
+      span,
+      messages: [],
+      branchId: span.actor_id,
+      parentBranchId: "root-actor",
+      agentName: span.actor_id,
+    }));
+    const groups = groupConversation(items, spans);
+    expect(groups).toHaveLength(spans.length);
+    expect(
+      groups.every((group, index) => {
+        if (group.kind !== "branch" || group.id !== `actor-${index}`) return false;
+        return (
+          group.children.length === 1 && group.children[0].kind === "item" && group.children[0].item === items[index]
+        );
+      }),
+    ).toBe(true);
+  });
+
+  it("retains each actor once when parent identities form a cycle", () => {
+    const spans = ["first", "second"].map((id, index) => ({
+      ...root,
+      span_id: id,
+      actor_id: id,
+      parent_actor_id: index ? "first" : "second",
+    }));
+    const items = spans.map((span) => ({
+      id: span.span_id,
+      span,
+      messages: [],
+      branchId: span.actor_id,
+      parentBranchId: span.parent_actor_id,
+    }));
+    expect(groupConversation(items, spans)).toEqual([
+      {
+        kind: "branch",
+        id: "second",
+        name: root.name,
+        children: [
+          { kind: "branch", id: "first", name: root.name, children: [{ kind: "item", item: items[0] }] },
+          { kind: "item", item: items[1] },
+        ],
+      },
+    ]);
+  });
+
   it("builds a conversation below 20,000 hidden framework spans", () => {
     const chain = Array.from(
       { length: 20_000 },

@@ -246,7 +246,7 @@ impl<'a> Resolution<'a> {
     }
 
     pub(super) fn unique_tools(&self) -> Vec<usize> {
-        let mut by_call: IndexMap<&str, usize> = IndexMap::new();
+        let mut by_call: IndexMap<(&str, &str), usize> = IndexMap::new();
         for index in
             (0..self.graph.rows.len()).filter(|index| self.kind(*index) == ObservationType::Tool)
         {
@@ -256,7 +256,7 @@ impl<'a> Resolution<'a> {
             } else {
                 &row.tool_call_id
             };
-            by_call.entry(key).or_insert(index);
+            by_call.entry((&row.session_id, key)).or_insert(index);
         }
         by_call.into_values().collect()
     }
