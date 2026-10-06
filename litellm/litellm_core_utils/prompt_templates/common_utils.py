@@ -297,14 +297,16 @@ def _responses_text_parts(value: object, positions: Mapping[str, int]) -> Iterat
 
 
 def _responses_first_text_field(item: object, positions: Mapping[str, int]) -> Iterator[str]:
-    for key in ("text", "output", "input_text", "output_text"):
-        text: Final = _field(item, key)
-        if isinstance(text, (list, tuple)):
-            yield from _responses_text_parts(text, positions)
-            return
-        if isinstance(text, str) and text.strip():
-            yield text.strip()
-            return
+    fields: Final = (_field(item, key) for key in ("text", "output", "input_text", "output_text"))
+    text: Final = next((field for field in fields if _is_text_field(field)), None)
+    if isinstance(text, (list, tuple)):
+        yield from _responses_text_parts(text, positions)
+    elif isinstance(text, str):
+        yield text.strip()
+
+
+def _is_text_field(field: object) -> bool:
+    return isinstance(field, (list, tuple)) or (isinstance(field, str) and bool(field.strip()))
 
 
 def _tool_call_text(name: object, arguments: object) -> str:
