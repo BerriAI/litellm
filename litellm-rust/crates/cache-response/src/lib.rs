@@ -15,7 +15,7 @@ pub use codec::ResponseCacheCodec;
 pub use entry::CacheEntry;
 pub use envelope::ResponseEnvelope;
 pub use exact::{ConnectionProbe, ExactResponseCache};
-pub use key::{CacheKey, CacheKeyInput, CacheTarget};
+pub use key::{CacheKey, CacheKeyInput, CacheTarget, extra_headers};
 pub use request::{CacheAccess, ResponseCacheRequest};
 pub use scope::{CacheOptions, CachePolicy, CacheScope, ScopedCache};
 pub use service::{ResponseCacheConfig, ResponseCacheService};

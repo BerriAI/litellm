@@ -10,7 +10,7 @@ use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_response::{
     CacheKey, CacheKeyInput, CacheOptions, CachePolicy, CacheTarget, ResponseCacheRequest,
-    ResponseCacheService, ResponseEnvelope, ScopedCache,
+    ResponseCacheService, ResponseEnvelope, ScopedCache, extra_headers,
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
@@ -20,7 +20,7 @@ use litellm_host::{
     protocol::Protocol,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use tokio_util::codec::Decoder;
 
 use crate::RouteError;
@@ -37,44 +37,9 @@ pub trait CacheKeyProjection {
     fn cache_key_input(&self, model_group: Option<&str>) -> Result<CacheKeyInput, RouteError>;
 }
 
-fn key_input(
-    target: CacheTarget,
-    parameters: impl IntoIterator<Item = (String, Value)>,
-    headers: impl IntoIterator<Item = (&'static str, Value)>,
-) -> CacheKeyInput {
-    CacheKeyInput::request(
-        target,
-        Value::Object(
-            parameters
-                .into_iter()
-                .filter(|(name, _)| name != "model")
-                .chain(
-                    headers
-                        .into_iter()
-                        .map(|(name, value)| (name.to_owned(), value)),
-                )
-                .collect(),
-        ),
-    )
-}
-
-fn extra_headers(headers: Option<&Map<String, Value>>) -> Option<(&'static str, Value)> {
-    headers.map(|headers| {
-        (
-            "extra_headers",
-            Value::Object(
-                headers
-                    .iter()
-                    .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
-                    .collect(),
-            ),
-        )
-    })
-}
-
 impl CacheKeyProjection for crate::chat_completions::types::ChatCompletionsRequest<'_> {
     fn cache_key_input(&self, model_group: Option<&str>) -> Result<CacheKeyInput, RouteError> {
-        Ok(key_input(
+        Ok(CacheKeyInput::forwarded(
             CacheTarget::resolve(
                 model_group,
                 self.model,
@@ -92,7 +57,7 @@ impl CacheKeyProjection for crate::chat_completions::types::ChatCompletionsReque
 
 impl CacheKeyProjection for crate::responses::types::ResponsesCall {
     fn cache_key_input(&self, model_group: Option<&str>) -> Result<CacheKeyInput, RouteError> {
-        Ok(key_input(
+        Ok(CacheKeyInput::forwarded(
             CacheTarget::resolve(
                 model_group,
                 &self.model,
@@ -124,7 +89,7 @@ impl CacheKeyProjection for crate::messages::MessagesCall {
             .transpose()
             .map_err(invalid)?
             .map(|header| ("provider_specific_header", header));
-        Ok(key_input(
+        Ok(CacheKeyInput::forwarded(
             CacheTarget::resolve(
                 model_group,
                 &self.body.model,
