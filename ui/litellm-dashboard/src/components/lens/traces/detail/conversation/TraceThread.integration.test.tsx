@@ -74,6 +74,34 @@ describe("TraceThread", () => {
     expect(screen.getByRole("treeitem", { selected: true })).toHaveAttribute("data-row-id", "tool");
   });
 
+  it.each(["reply", "tool"])("labels an unassigned %s without attributing it to the root actor", async (kind) => {
+    const user = userEvent.setup();
+    const foreign = {
+      ...(kind === "reply" ? llm : tool),
+      span_id: "foreign",
+      actor_id: null,
+      actor_unassigned: true,
+      agent: "",
+    };
+    vi.mocked(agentTraceCall).mockResolvedValue({ ...trace, spans: [root, foreign] } as Trace);
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) =>
+      id === "root"
+        ? { ...details.root, output: "" }
+        : { span_id: id, input: "", output: "Content from an unknown actor", attributes: {} },
+    );
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Thread" }));
+    const thread = await screen.findByRole("region", { name: "Trace thread" });
+    if (kind === "tool") {
+      await user.click(await within(thread).findByRole("button", { name: /^Worked/ }));
+      await user.click(within(thread).getByRole("button", { name: "Expand read_file tool call" }));
+    }
+    expect(await within(thread).findByText("Content from an unknown actor")).toBeVisible();
+    expect(within(thread).getByText("Unassigned", { exact: true })).toBeVisible();
+  });
+
   it("continues native child branches and merges actor coverage across trace pages", async () => {
     const user = userEvent.setup();
     const spans = [
