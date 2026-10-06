@@ -1,7 +1,8 @@
-import hashlib
 from datetime import datetime, timedelta
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal
+from uuid import uuid4
 
 from litellm.proxy.lens.models import (
     MAX_REVIEWS,
@@ -21,6 +22,7 @@ from litellm.proxy.lens.models import (
     Step,
     Worker,
 )
+from litellm.proxy.lens.reviews import criteria_key
 
 
 def can_access(viewer: Scope, target: Scope) -> bool:
@@ -52,7 +54,7 @@ def scheduled_window(lens: Lens, now: datetime) -> tuple[datetime, datetime]:
 
 
 def next_scan_start(lens: Lens, job: Job, failed: bool) -> datetime | None:
-    if failed or job.trigger == "manual":
+    if failed or job.trigger == "manual" or criteria_key(lens.settings) != criteria_key(job.settings):
         return lens.last_scan_at
     return max(lens.last_scan_at or job.end, job.end)
 
@@ -140,8 +142,9 @@ def update_activity(activities: tuple[Activity, ...], activity: Activity | None)
 def add_review(job: Job, review: Review | None) -> Job:
     if review is None:
         return job
+    summary: Final = review.model_copy(update=MappingProxyType({"extraction": None, "content_version": ""}))
     return job.model_copy(
-        update=MappingProxyType({"reviews": (*job.reviews, review)[-MAX_REVIEWS:], "reviewed": job.reviewed + 1})
+        update=MappingProxyType({"reviews": (*job.reviews, summary)[-MAX_REVIEWS:], "reviewed": job.reviewed + 1})
     )
 
 
@@ -185,52 +188,81 @@ def renew_budget(lens: Lens, now: datetime) -> Lens:
     return lens.model_copy(update=MappingProxyType({"budget_month": month, "spent": 0}))
 
 
-def merge_finding(lens: Lens, draft: FindingDraft, revision: int, now: datetime) -> Finding:
-    legacy_identity: Final = hashlib.sha256(f"{lens.id}:{draft.check_id}:{draft.title.lower()}".encode()).hexdigest()[
-        :24
-    ]
-    identity: Final = hashlib.sha256(
-        f"{lens.id}:{draft.check_id}:{draft.kind}:{draft.title.lower()}".encode()
-    ).hexdigest()[:24]
-    identities: Final = (draft.existing_finding_id, identity, legacy_identity)
-    previous: Final = next(
-        (f for f in lens.findings if f.id in identities and f.kind == draft.kind and f.check_id == draft.check_id),
-        None,
+def merge_finding(
+    lens: Lens,
+    draft: FindingDraft,
+    revision: int,
+    now: datetime,
+    job_id: str | None = None,
+    *,
+    match_titles: bool = True,
+) -> Finding:
+    identities: Final = frozenset((draft.existing_finding_id, *draft.merged_finding_ids))
+    matches: Final = tuple(
+        sorted(
+            (
+                finding
+                for finding in lens.findings
+                if finding.kind == draft.kind
+                and (
+                    finding.id in identities
+                    or bool(identities.intersection(finding.merged_finding_ids))
+                    or (
+                        match_titles
+                        and draft.existing_finding_id is None
+                        and finding.title.casefold() == draft.title.casefold()
+                        and finding.check_id == draft.check_id
+                    )
+                )
+            ),
+            key=lambda finding: (finding.first_seen, finding.id),
+        )
     )
-    occurrences: Final = tuple(sorted(frozenset(e.execution_id for e in draft.evidence if e.role == "support")))
-    if previous is None:
-        return Finding(
-            title=draft.title,
-            description=draft.description,
-            check_id=draft.check_id,
-            kind=draft.kind,
-            priority=draft.priority,
-            suggestion=draft.suggestion,
-            limitation=draft.limitation,
-            brief=draft.brief,
-            evidence=draft.evidence,
-            existing_finding_id=draft.existing_finding_id,
-            id=identity,
-            first_seen=now,
-            last_seen=now,
-            occurrences=occurrences,
-            revision=revision,
-        )
-    new_occurrence: Final = bool(frozenset(occurrences) - frozenset(previous.occurrences))
-    return previous.model_copy(
-        update=MappingProxyType(
-            {
-                "last_seen": now if new_occurrence else previous.last_seen,
-                "occurrences": tuple(sorted(frozenset((*previous.occurrences, *occurrences)))),
-                "evidence": tuple(
-                    MappingProxyType(
-                        {(e.execution_id, e.span_id, e.quote): e for e in (*previous.evidence, *draft.evidence)}
-                    ).values()
-                )[-20:],
-                "status": "open" if previous.status == "resolved" and new_occurrence else previous.status,
-                "brief": draft.brief or previous.brief,
-            }
-        )
+    previous: Final = tuple(
+        finding for finding in matches if (finding.status, finding.reason) == (matches[0].status, matches[0].reason)
+    )
+    occurrences: Final = frozenset(quote.execution_id for quote in draft.evidence if quote.role == "support")
+    prior_occurrences: Final = frozenset(chain.from_iterable(finding.occurrences for finding in previous))
+    new_occurrence: Final = bool(occurrences - prior_occurrences)
+    first: Final = previous[0] if previous else None
+    checks: Final = tuple(
+        sorted(frozenset(chain.from_iterable((finding.check_id, *finding.check_ids) for finding in (*previous, draft))))
+    )
+    return Finding(
+        **draft.model_copy(
+            update=MappingProxyType(
+                {
+                    "check_ids": checks,
+                    "brief": draft.brief or (first.brief if first else None),
+                    "evidence": tuple(
+                        dict.fromkeys(chain.from_iterable(finding.evidence for finding in (*previous, draft)))
+                    ),
+                    "merged_finding_ids": tuple(
+                        sorted(
+                            frozenset(
+                                chain.from_iterable((finding.id, *finding.merged_finding_ids) for finding in previous)
+                            )
+                            - ({first.id} if first else set())
+                        )
+                    ),
+                }
+            )
+        ).model_dump(),
+        id=first.id if first else str(uuid4()),
+        status="open" if first is None or (first.status == "resolved" and new_occurrence) else first.status,
+        reason=first.reason if first else "",
+        first_seen=first.first_seen if first else now,
+        last_seen=now if new_occurrence else max((finding.last_seen for finding in previous), default=now),
+        occurrences=tuple(sorted(prior_occurrences | occurrences)),
+        revision=revision,
+        investigation_runs=tuple(
+            dict.fromkeys(
+                (
+                    *chain.from_iterable(finding.investigation_runs for finding in previous),
+                    *((job_id,) if job_id and new_occurrence else ()),
+                )
+            )
+        ),
     )
 
 

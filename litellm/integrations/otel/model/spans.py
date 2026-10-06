@@ -350,6 +350,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_WorkflowMessage",
         "LiteLLM_Lens",
         "LiteLLM_LensRun",
+        "LiteLLM_LensReview",
         "LiteLLM_LensWorker",
     )
 )

@@ -64,6 +64,8 @@ async def main() -> None:
             return httpx.Response(200, json=claim.model_dump(mode="json"))
         if path.endswith("/sample"):
             return httpx.Response(200, json=Sample(executions=(execution,), eligible=1).model_dump())
+        if path.endswith("/reviews"):
+            return httpx.Response(200, json=[])
         if path.endswith("/content"):
             content: Final = ExecutionContent(
                 execution=execution,

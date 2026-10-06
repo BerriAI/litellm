@@ -239,7 +239,8 @@ async def run_agent(
                     "initial_evidence": tuple(part.model_dump() for part in initial.evidence),
                     "supplied": initial.supplied,
                     "existing_findings": tuple(
-                        finding.model_dump(mode="json") for finding in initial.existing_findings
+                        finding.model_dump(mode="json", exclude={"evidence", "occurrences", "investigation_runs"})
+                        for finding in initial.existing_findings
                     ),
                 },
                 ensure_ascii=False,

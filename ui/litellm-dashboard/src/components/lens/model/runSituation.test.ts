@@ -91,6 +91,8 @@ const input = (overrides: Partial<SituationInput> & { jobPatch?: Partial<Job> })
   return { lens, job: { ...job, ...jobPatch }, findings: [], connected: true, ...rest };
 };
 const failed = { status: "failed", error: "Model request failed" } as const;
+const insufficientBudget =
+  "Model request failed (HTTP 402): This model request needs up to $9.600, but $5.000 remains in the investigation budget. Use a smaller deployment output allowance or increase the limit.";
 const watching = { ...lens, settings: { ...settings, enabled: true } };
 
 describe("runSituation", () => {
@@ -98,8 +100,21 @@ describe("runSituation", () => {
     ["never", input({ job: undefined }), "run"],
     ["queued", input({ jobPatch: { status: "queued" } }), "stop"],
     ["running", input({ jobPatch: { status: "running" } }), "stop"],
-    ["budget", input({ jobPatch: failed, lens: { ...lens, spent: 20 } }), "raiseBudget"],
+    ["failed", input({ jobPatch: failed, lens: { ...lens, spent: 20 } }), "retry"],
     ["budget", input({ jobPatch: { ...failed, error: "Monthly lens budget reached" } }), "raiseBudget"],
+    ["budget", input({ jobPatch: { ...failed, error: insufficientBudget } }), "raiseBudget"],
+    [
+      "budget",
+      input({ jobPatch: { status: "completed", error: `Finding consolidation is incomplete: ${insufficientBudget}` } }),
+      "raiseBudget",
+    ],
+    [
+      "budget",
+      input({
+        jobPatch: { status: "completed", error: "Finding consolidation is incomplete: Monthly lens budget reached" },
+      }),
+      "raiseBudget",
+    ],
     ["offline", input({ jobPatch: failed, connected: false }), "connectWorker"],
     ["failed", input({ jobPatch: failed }), "retry"],
     ["failed", input({ jobPatch: { ...failed, error: "Could not reserve analysis budget" } }), "retry"],
@@ -123,5 +138,16 @@ describe("runSituation", () => {
     expect(runSituation(input({ jobPatch: failed, lens: { ...lens, spent: 99, budget_month: "1999-01" } }))).toBe(
       "failed",
     );
+  });
+
+  it("keeps the recorded budget failure after the limit increases", () => {
+    expect(
+      runSituation(
+        input({
+          jobPatch: { ...failed, error: "Monthly lens budget reached" },
+          lens: { ...lens, settings: { ...settings, monthly_budget: 100 } },
+        }),
+      ),
+    ).toBe("budget");
   });
 });

@@ -21,6 +21,8 @@ export function RunPicker({ lens, job }: RunPickerProps) {
   const { batchId, selectRun } = useRunRoute();
   const history = useRunHistory(lens, 0);
   const options = history.data ?? lens.jobs;
+  const reused = job?.coverage?.reused ?? 0;
+  const newlyReviewed = Math.max(0, (job?.coverage?.screened ?? 0) - reused);
   const aggregate = batchId === "latest" || batchId === "all";
   const outsideHistory = !aggregate && !options.some((j) => j.id === batchId);
   return (
@@ -55,7 +57,7 @@ export function RunPicker({ lens, job }: RunPickerProps) {
           <PopoverContent align="end" className="gap-3">
             <PopoverTitle>Run details</PopoverTitle>
             <p className="text-xs text-muted-foreground">
-              {job.coverage?.screened ?? 0} / {job.coverage?.selected ?? 0} selected runs reviewed
+              {newlyReviewed} newly reviewed · {reused} reused reviews
               <ScanDuration job={job} />
             </p>
             <p className="text-xs text-muted-foreground">

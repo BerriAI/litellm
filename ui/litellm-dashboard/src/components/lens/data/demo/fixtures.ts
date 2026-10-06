@@ -132,6 +132,9 @@ export function createLensDemoData(now = Date.now()) {
   }): Finding => ({
     id,
     check_id: check,
+    check_ids: [check],
+    investigation_runs: [],
+    merged_finding_ids: [],
     title,
     description,
     suggestion,
@@ -279,6 +282,7 @@ export function createLensDemoData(now = Date.now()) {
         findings: snapshot,
         settings,
         revision: 1,
+        review_versions: [],
         assessments: sample.map((e) => ({
           execution_id: e.id,
           cannot_assess: false,
@@ -299,6 +303,10 @@ export function createLensDemoData(now = Date.now()) {
           model: settings.model,
           at: iso(now - 320_000 - day * 60_000 + index * 1000),
           duration_ms: 1200,
+          content_version: "",
+          reused: false,
+          consolidated: false,
+          partial: false,
           cannot_assess: false,
           reasoning:
             snapshot.find((finding) => finding.occurrences.includes(execution.id))?.description ??
@@ -327,6 +335,8 @@ export function createLensDemoData(now = Date.now()) {
           partial: 0,
           unassessable: 0,
           failed_tasks: 0,
+          reused: 0,
+          reusable: 0,
         },
         status: "completed",
         stage: "Complete",
@@ -340,6 +350,7 @@ export function createLensDemoData(now = Date.now()) {
     return {
       id: definition.id,
       version: 1,
+      reservations: [],
       revision: 1,
       spent: jobs.reduce((sum, job) => sum + job.cost, 0),
       scope: { all_teams: true, api_key_hash: "", team_id: "" },
