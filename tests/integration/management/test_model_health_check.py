@@ -339,25 +339,19 @@ def test_team_scoped_health_probes_access_group_targets_and_hides_routing_fields
             models=[access_group],
         )
 
-        by_other_team_name: Final = gateway.request(
-            "GET", "/health", key=team_key, params={"model": public_b}
-        )
+        by_other_team_name: Final = gateway.request("GET", "/health", key=team_key, params={"model": public_b})
         assert by_other_team_name.status_code == 403, by_other_team_name.text
         assert by_other_team_name.json() == {
             "detail": {"error": f"key not allowed to health-check model {public_b}"}
         }, by_other_team_name.text
-        by_other_team_id: Final = gateway.request(
-            "GET", "/health", key=team_key, params={"model_id": team_b_model_id}
-        )
+        by_other_team_id: Final = gateway.request("GET", "/health", key=team_key, params={"model_id": team_b_model_id})
         assert by_other_team_id.status_code == 403, by_other_team_id.text
         assert by_other_team_id.json() == {
             "detail": {"error": f"key not allowed to health-check model_id {team_b_model_id}"}
         }, by_other_team_id.text
         assert team_b_wire.drain() == ()
 
-        public_model_report: Final = gateway.request(
-            "GET", "/health", key=team_key, params={"model": public_a}
-        )
+        public_model_report: Final = gateway.request("GET", "/health", key=team_key, params={"model": public_a})
         assert public_model_report.status_code == 200, public_model_report.text
         public_model_body: Final = public_model_report.json()
         healthy_endpoint: Final = {
@@ -502,7 +496,13 @@ def _health_connection_credential(gateway: Gateway, credential_name: str, api_ke
     assert created.status_code == 200, created.text
 
 
-def _health_connection_response(request: Request, model: str, *, validate_request_body: bool = True) -> Reply:
+def _health_connection_response(
+    request: Request,
+    model: str,
+    *,
+    validate_request_body: bool = True,
+    expected_temperature: float | None = None,
+) -> Reply:
     response_body: Final = {
         "/v1/chat/completions": {
             "id": "chatcmpl-connection",
@@ -580,8 +580,18 @@ def _health_connection_response(request: Request, model: str, *, validate_reques
             body: Final = JSON_OBJECT.validate_json(request.body)
             if request.target == "/v1/chat/completions":
                 assert body in (
-                    {"model": model, "messages": _HEALTH_CHAT_MESSAGES[0], "max_tokens": 16},
-                    {"model": model, "messages": _HEALTH_CHAT_MESSAGES[1], "max_tokens": 16},
+                    {
+                        "model": model,
+                        "messages": _HEALTH_CHAT_MESSAGES[0],
+                        "max_tokens": 16,
+                        **({"temperature": expected_temperature} if expected_temperature is not None else {}),
+                    },
+                    {
+                        "model": model,
+                        "messages": _HEALTH_CHAT_MESSAGES[1],
+                        "max_tokens": 16,
+                        **({"temperature": expected_temperature} if expected_temperature is not None else {}),
+                    },
                 ), request.body.decode()
             elif request.target == "/v1/embeddings":
                 assert body == {
@@ -610,6 +620,7 @@ def _health_connection_response(request: Request, model: str, *, validate_reques
     if request.target == "/v1/messages":
         assert request.headers["x-api-key"] == "synthetic-health-credential", request.headers
         assert request.headers["anthropic-version"] == "2023-06-01", request.headers
+        assert "authorization" not in request.headers, request.headers
     else:
         assert request.headers["authorization"] == "Bearer synthetic-health-credential", request.headers
     return Reply(body=json.dumps(response_body[request.target]).encode())
@@ -624,55 +635,65 @@ def test_health_test_connection_modes_use_stored_credentials_and_reject_environm
             ("responses", "openai"),
             ("anthropic_messages", "anthropic"),
         ):
-            model: Final = f"{provider}/health-{mode}-{uuid.uuid4().hex}"
-            provider_model: Final = model.split("/", maxsplit=1)[1]
+            model = f"{provider}/health-{mode}-{uuid.uuid4().hex}"
+            provider_model = model.split("/", maxsplit=1)[1]
             with wire_server(
                 lambda request, expected_model=provider_model: _health_connection_response(request, expected_model)
             ) as wire:
-                credential_name: Final = f"health-{uuid.uuid4().hex}"
-                _health_connection_credential(gateway, credential_name, "synthetic-health-credential")
-                scenario.cleanups.callback(_delete_health_credential_if_present, gateway, credential_name)
-                base: Final = wire.url if mode == "anthropic_messages" else f"{wire.url}/v1"
-                response: Final = gateway.request(
+                mode_credential_name = f"health-{uuid.uuid4().hex}"
+                _health_connection_credential(gateway, mode_credential_name, "synthetic-health-credential")
+                scenario.cleanups.callback(_delete_health_credential_if_present, gateway, mode_credential_name)
+                base = wire.url if mode == "anthropic_messages" else f"{wire.url}/v1"
+                response = gateway.request(
                     "POST",
                     "/health/test_connection",
                     {
                         "litellm_params": {
                             "model": model,
                             "api_base": base,
-                            "litellm_credential_name": credential_name,
+                            "litellm_credential_name": mode_credential_name,
                         },
+                        "model_info": {"mode": mode},
                         "mode": mode,
                     },
                 )
                 assert response.status_code == 200, response.text
-                assert response.json() == {
+                assert JSON_OBJECT.validate_json(response.content) == {
                     "status": "success",
                     "result": {"model": model, "api_base": base},
                 }, response.text
-                requests: Final = wire.drain()
+                requests = wire.drain()
                 assert len(requests) == 1, requests
-                assert requests[0].target == {
-                    "chat": "/v1/chat/completions",
-                    "embedding": "/v1/embeddings",
-                    "image_generation": "/v1/images/generations",
-                    "audio_transcription": "/v1/audio/transcriptions",
-                    "responses": "/v1/responses",
-                    "anthropic_messages": "/v1/messages",
-                }[mode], requests
+                assert (
+                    requests[0].target
+                    == {
+                        "chat": "/v1/chat/completions",
+                        "embedding": "/v1/embeddings",
+                        "image_generation": "/v1/images/generations",
+                        "audio_transcription": "/v1/audio/transcriptions",
+                        "responses": "/v1/responses",
+                        "anthropic_messages": "/v1/messages",
+                    }[mode]
+                ), requests
 
         configured_provider_model: Final = f"health-credential-{uuid.uuid4().hex}"
         configured_model: Final = f"openai/{configured_provider_model}"
-        with wire_server(
-            lambda request: _health_connection_response(request, configured_provider_model)
-        ) as submitted_wire, wire_server(lambda request: Reply(status=500)) as configured_wire:
-            credential_name: Final = f"health-submitted-{uuid.uuid4().hex}"
-            _health_connection_credential(gateway, credential_name, "synthetic-health-credential")
-            scenario.cleanups.callback(_delete_health_credential_if_present, gateway, credential_name)
+        with (
+            wire_server(
+                lambda request: _health_connection_response(
+                    request, configured_provider_model, expected_temperature=0.2
+                )
+            ) as submitted_wire,
+            wire_server(lambda request: Reply(status=500)) as configured_wire,
+        ):
+            configured_credential_name: Final = f"health-submitted-{uuid.uuid4().hex}"
+            _health_connection_credential(gateway, configured_credential_name, "synthetic-health-credential")
+            scenario.cleanups.callback(_delete_health_credential_if_present, gateway, configured_credential_name)
             scenario.model(
                 model=configured_model,
                 api_base=f"{configured_wire.url}/v1",
                 api_key="synthetic-config-credential",
+                temperature=0.9,
             )
             submitted_base: Final = f"{submitted_wire.url}/v1"
             submitted: Final = gateway.request(
@@ -682,17 +703,37 @@ def test_health_test_connection_modes_use_stored_credentials_and_reject_environm
                     "litellm_params": {
                         "model": configured_model,
                         "api_base": submitted_base,
-                        "litellm_credential_name": credential_name,
+                        "litellm_credential_name": configured_credential_name,
+                        "temperature": 0.2,
                     },
+                    "model_info": {"mode": "chat"},
                     "mode": "chat",
                 },
             )
             assert submitted.status_code == 200, submitted.text
-            assert submitted.json() == {
+            assert JSON_OBJECT.validate_json(submitted.content) == {
                 "status": "success",
                 "result": {"model": configured_model, "api_base": submitted_base},
             }, submitted.text
-            assert len(submitted_wire.drain()) == 1
+            submitted_requests: Final = submitted_wire.drain()
+            assert len(submitted_requests) == 1, submitted.text
+            assert submitted_requests[0].headers["authorization"] == "Bearer synthetic-health-credential", (
+                submitted.text
+            )
+            assert JSON_OBJECT.validate_json(submitted_requests[0].body) in (
+                {
+                    "model": configured_provider_model,
+                    "messages": _HEALTH_CHAT_MESSAGES[0],
+                    "max_tokens": 16,
+                    "temperature": 0.2,
+                },
+                {
+                    "model": configured_provider_model,
+                    "messages": _HEALTH_CHAT_MESSAGES[1],
+                    "max_tokens": 16,
+                    "temperature": 0.2,
+                },
+            ), submitted.text
             assert configured_wire.drain() == ()
 
             rejected: Final = gateway.request(
@@ -704,11 +745,12 @@ def test_health_test_connection_modes_use_stored_credentials_and_reject_environm
                         "api_base": submitted_base,
                         "api_key": "os.environ/X",
                     },
+                    "model_info": {"mode": "chat"},
                     "mode": "chat",
                 },
             )
             assert rejected.status_code == 400, rejected.text
-            assert rejected.json() == {
+            assert JSON_OBJECT.validate_json(rejected.content) == {
                 "detail": {"error": "Environment variable references are not permitted in request parameters."}
             }, rejected.text
             assert submitted_wire.drain() == ()

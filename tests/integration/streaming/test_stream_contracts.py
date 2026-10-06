@@ -11,11 +11,14 @@ import pytest
 import yaml
 from hypothesis import Phase, example, given, settings
 from hypothesis import strategies as st
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from openai import OpenAI
+from pydantic import JsonValue, TypeAdapter
+
+JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
 def frame(identity: str, delta: dict, *, finish: str | None = None) -> bytes:
@@ -486,9 +489,7 @@ def _native_anthropic_stream(model: str, identity: str, text: str) -> tuple[byte
                 },
             }
         ),
-        _native_sse_event(
-            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
-        ),
+        _native_sse_event({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
         _native_sse_event(
             {
                 "type": "content_block_delta",
@@ -765,18 +766,41 @@ def test_native_messages_and_responses_routes_fall_back_and_bill_the_fallback(
             assert request.method == "POST" and request.target == path, (request.method, request.target)
             expected_body: Final = primary_body if name == "primary" else fallback_body
             assert json.loads(request.body) == expected_body, request.body.decode()
+            if is_messages:
+                assert request.headers.get("x-api-key") == "synthetic-native-fallback-key", request.headers
+                assert request.headers.get("anthropic-version") == "2023-06-01", request.headers
+                assert "authorization" not in request.headers, request.headers
+            else:
+                assert request.headers.get("authorization") == "Bearer synthetic-native-fallback-key", request.headers
             call_order.put(name)
             received.put((name, request))
             if name == "primary" and failure_mode == "mid-stream":
-                first_event: Final = (
-                    _native_anthropic_stream(primary_model, identity + "-primary", primary_text)[0]
+                primary_events: Final = (
+                    _native_anthropic_stream(primary_model, identity + "-primary", primary_text)
                     if is_messages
-                    else _native_responses_stream(primary_model, identity + "-primary", primary_text)[0]
+                    else _native_responses_stream(primary_model, identity + "-primary", primary_text)
+                )
+                first_event: Final = primary_events[0]
+                second_event: Final = (
+                    primary_events[1]
+                    if is_messages
+                    else _native_sse_event(
+                        {
+                            "type": "response.in_progress",
+                            "sequence_number": 1,
+                            "response": {
+                                **_native_responses_response(primary_model, identity + "-primary", primary_text),
+                                "status": "in_progress",
+                                "output": [],
+                            },
+                        }
+                    )
                 )
                 return Reply(
                     content_type="text/event-stream",
-                    chunks=(first_event, b"data: incomplete\n\n"),
-                    abort_after=1,
+                    chunks=(first_event, second_event, first_event),
+                    abort_after=2,
+                    pause_between_chunks=0.05,
                 )
             if name == "primary" and failure_mode in (
                 "non-streaming",
@@ -791,9 +815,10 @@ def test_native_messages_and_responses_routes_fall_back_and_bill_the_fallback(
 
         return handle
 
-    with wire_server(upstream("primary", primary_model)) as primary, wire_server(
-        upstream("fallback", fallback_model)
-    ) as fallback:
+    with (
+        wire_server(upstream("primary", primary_model)) as primary,
+        wire_server(upstream("fallback", fallback_model)) as fallback,
+    ):
         config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
         config["model_list"] = [
             {
@@ -820,9 +845,12 @@ def test_native_messages_and_responses_routes_fall_back_and_bill_the_fallback(
         proxy_config.write_text(yaml.safe_dump(config))
         with owned_proxy(gateway, tmp_path, {}, config=proxy_config) as candidate:
             request_headers: Final = {
-                "Authorization": f"Bearer {candidate.key}",
                 "x-litellm-call-id": identity,
-                **({"anthropic-version": "2023-06-01"} if is_messages else {}),
+                **(
+                    {"x-api-key": candidate.key, "anthropic-version": "2023-06-01"}
+                    if is_messages
+                    else {"Authorization": f"Bearer {candidate.key}"}
+                ),
             }
             with candidate.client.stream("POST", path, json=client_body, headers=request_headers) as response:
                 response_text: Final = response.read().decode()
@@ -835,7 +863,7 @@ def test_native_messages_and_responses_routes_fall_back_and_bill_the_fallback(
             ) == (("primary", "POST", path, primary_body), ("fallback", "POST", path, fallback_body))
             if stream:
                 event_lines: Final = tuple(line for line in sse_data_lines(response_text) if line != "[DONE]")
-                events: Final = tuple(json.loads(line) for line in event_lines)
+                events: Final = tuple(JSON_OBJECT.validate_json(line) for line in event_lines)
                 event_types: Final = tuple(event["type"] for event in events)
                 expected_types: Final = (
                     (
@@ -849,19 +877,26 @@ def test_native_messages_and_responses_routes_fall_back_and_bill_the_fallback(
                     if is_messages
                     else ("response.created", "response.output_text.delta", "response.completed")
                 )
-                assert event_types == expected_types, response_text
                 assert event_types.count("message_start" if is_messages else "response.created") == 1, response_text
+                assert event_types.count("message_stop" if is_messages else "response.completed") == 1, response_text
                 assert event_types[-1] == ("message_stop" if is_messages else "response.completed"), response_text
+                assert event_types == expected_types, response_text
                 output_text: Final = (
-                    "".join(event["delta"]["text"] for event in events if event["type"] == "content_block_delta")
+                    "".join(
+                        string_value(object_value(event["delta"])["text"])
+                        for event in events
+                        if event["type"] == "content_block_delta"
+                    )
                     if is_messages
                     else "".join(
-                        event["delta"] for event in events if event["type"] == "response.output_text.delta"
+                        string_value(event["delta"])
+                        for event in events
+                        if event["type"] == "response.output_text.delta"
                     )
                 )
                 assert output_text == fallback_text, response_text
             else:
-                response_body: Final = response.json()
+                response_body: Final = JSON_OBJECT.validate_json(response.content)
                 expected_response: Final = (
                     _native_anthropic_message(fallback_model, identity, fallback_text)
                     if is_messages
@@ -919,7 +954,7 @@ def test_native_messages_and_responses_routes_fall_back_and_bill_the_fallback(
                     assert response_body["id"].startswith("resp_"), response_text
             rows: Final = eventually(
                 lambda: read_rows(
-                    'SELECT model, model_group, spend, prompt_tokens, completion_tokens, status '
+                    "SELECT model, model_group, spend, prompt_tokens, completion_tokens, status "
                     'FROM "LiteLLM_SpendLogs" WHERE request_id=%s OR litellm_call_id=%s',
                     (identity, identity),
                 ),

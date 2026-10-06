@@ -1,12 +1,15 @@
+import hashlib
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pytest
 import yaml
-from integration._support.client import Gateway, eventually
+from integration._support.client import JSON_OBJECT, Gateway, eventually
 from integration._support.database import scratch_database
-from integration._support.database_relay import database_relay
+from integration._support.database_relay import database_relay, held_statement_relay
 from integration._support.process import owned_proxy
 
 _READINESS_PROBE_QUERY: Final = b"SELECT 1"
@@ -55,14 +58,13 @@ def test_public_readiness_reports_database_outage_and_allow_unavailable_setting(
             ) as candidate:
                 ready_before_outage: Final = candidate.request("GET", "/health/readiness")
                 assert ready_before_outage.status_code == 200, ready_before_outage.text
-                assert ready_before_outage.json() == {"status": "healthy", "db": "connected"}, (
-                    ready_before_outage.text
-                )
+                assert ready_before_outage.json() == {"status": "healthy", "db": "connected"}, ready_before_outage.text
                 relay.arm()
                 disconnected_after_outage: Final = eventually(
                     lambda: candidate.request("GET", "/health/readiness"),
-                    lambda response: relay.tripped.is_set()
-                    and response.json() == {"status": "healthy", "db": "disconnected"},
+                    lambda response: (
+                        relay.tripped.is_set() and response.json() == {"status": "healthy", "db": "disconnected"}
+                    ),
                     seconds=45,
                     return_last_on_timeout=True,
                 )
@@ -96,8 +98,9 @@ def test_public_readiness_reports_database_outage_and_allow_unavailable_setting(
                 relay.arm()
                 disconnected_with_allow: Final = eventually(
                     lambda: candidate.request("GET", "/health/readiness"),
-                    lambda response: relay.tripped.is_set()
-                    and response.json() == {"status": "healthy", "db": "disconnected"},
+                    lambda response: (
+                        relay.tripped.is_set() and response.json() == {"status": "healthy", "db": "disconnected"}
+                    ),
                     seconds=45,
                     return_last_on_timeout=True,
                 )
@@ -107,6 +110,104 @@ def test_public_readiness_reports_database_outage_and_allow_unavailable_setting(
                     "status": "healthy",
                     "db": "disconnected",
                 }, disconnected_with_allow.text
+
+
+@pytest.mark.timeout(180)
+def test_public_readiness_reports_stalled_database_lookups(gateway: Gateway, tmp_path: Path) -> None:
+    with scratch_database() as database_url:
+        for allow_unavailable in (False, True):
+            unknown_key = "sk-" + uuid.uuid4().hex
+            lookup_hash = hashlib.sha256(unknown_key.encode()).hexdigest().encode()
+            config = (
+                _health_routing_config(tmp_path, {"allow_requests_on_db_unavailable": True})
+                if allow_unavailable
+                else None
+            )
+            with held_statement_relay(database_url, lookup_hash) as (relay, relayed_url):
+                overrides = {
+                    "DATABASE_URL": _plaintext_database_url(relayed_url),
+                    "PRISMA_HEALTH_WATCHDOG_ENABLED": "false",
+                    "PROXY_DB_LOOKUP_DEADLINE_SECONDS": "1",
+                    "PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS": "3",
+                }
+                with owned_proxy(
+                    gateway,
+                    tmp_path,
+                    overrides,
+                    config=config,
+                    workers=1,
+                ) as candidate:
+                    expected_request_status = 400 if allow_unavailable else 503
+                    unknown_model_message = (
+                        "/chat/completions: Invalid model name passed in model=unconfigured-stalled-readiness-model. "
+                        "Call `/v1/models` to view available models for your key."
+                    )
+                    expected_request_body = (
+                        {
+                            "error": {
+                                "message": unknown_model_message,
+                                "type": "invalid_request_error",
+                                "param": None,
+                                "code": "400",
+                                "provider_specific_fields": {"error": unknown_model_message},
+                            }
+                        }
+                        if allow_unavailable
+                        else {
+                            "error": {
+                                "message": (
+                                    "Service Unavailable, the authentication database is temporarily unreachable. "
+                                    "Please retry shortly."
+                                ),
+                                "type": "no_db_connection",
+                                "param": "None",
+                                "code": "503",
+                            }
+                        }
+                    )
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        pending = executor.submit(
+                            candidate.request,
+                            "POST",
+                            "/v1/chat/completions",
+                            {
+                                "model": "unconfigured-stalled-readiness-model",
+                                "messages": [{"role": "user", "content": "stalled lookup control"}],
+                            },
+                            key=unknown_key,
+                        )
+                        assert relay.held.wait(30), "unknown-key lookup did not reach the held statement relay"
+                        expected_status = 200 if allow_unavailable else 503
+                        stalled = eventually(
+                            lambda: candidate.request("GET", "/health/readiness"),
+                            lambda response, expected_status=expected_status: (
+                                response.status_code == expected_status
+                                and response.json() == {"status": "healthy", "db": "stalled"}
+                            ),
+                            seconds=5,
+                            return_last_on_timeout=True,
+                        )
+                        assert stalled.status_code == expected_status, stalled.text
+                        assert stalled.json() == {"status": "healthy", "db": "stalled"}, stalled.text
+
+                        relay.release()
+                        recovered = eventually(
+                            lambda: candidate.request("GET", "/health/readiness"),
+                            lambda response: (
+                                response.status_code == 200
+                                and response.json() == {"status": "healthy", "db": "connected"}
+                            ),
+                            seconds=10,
+                            return_last_on_timeout=True,
+                        )
+                        assert recovered.status_code == 200, recovered.text
+                        assert recovered.json() == {"status": "healthy", "db": "connected"}, recovered.text
+
+                        rejected = pending.result(timeout=60)
+                        assert (rejected.status_code, JSON_OBJECT.validate_json(rejected.content)) == (
+                            expected_request_status,
+                            expected_request_body,
+                        ), rejected.text
 
 
 def test_drain_endpoint_requires_token_and_changes_health_state_only_after_authorization(

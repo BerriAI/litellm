@@ -8,11 +8,22 @@ from typing import Final
 import httpx
 import pytest
 import yaml
-from integration._support.client import JSON_OBJECT, Gateway, eventually
+from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
+
+JSON_ARRAY: Final = TypeAdapter(list[JsonValue])
+
+
+def _assistant_content(response: httpx.Response) -> str:
+    body: Final = JSON_OBJECT.validate_json(response.content)
+    choices: Final = JSON_ARRAY.validate_python(body["choices"])
+    assert len(choices) == 1, response.text
+    choice: Final = object_value(choices[0])
+    message: Final = object_value(choice["message"])
+    return string_value(message["content"])
 
 
 def _tier_peer(model: str, prompts: tuple[str, ...]) -> Callable[[Request], Reply]:
@@ -23,8 +34,7 @@ def _tier_peer(model: str, prompts: tuple[str, ...]) -> Callable[[Request], Repl
         assert request.target == "/v1/chat/completions", request.target
         body: Final = JSON_OBJECT.validate_json(request.body)
         expected_bodies: Final = tuple(
-            {"model": model, "messages": [{"role": "user", "content": prompt}]}
-            for prompt in prompts
+            {"model": model, "messages": [{"role": "user", "content": prompt}]} for prompt in prompts
         )
         assert body in expected_bodies, request.body.decode()
         return Reply(
@@ -77,6 +87,8 @@ def _session_response(
     session_id: str,
     database_url: str | None = None,
     stored_session_id: str | None = None,
+    seconds: float = 70,
+    return_last_on_timeout: bool = False,
 ) -> httpx.Response:
     if database_url is None or stored_session_id is None:
         return eventually(
@@ -87,7 +99,8 @@ def _session_response(
                 key=key,
             ),
             lambda response: response.status_code == 200,
-            seconds=70,
+            seconds=seconds,
+            return_last_on_timeout=return_last_on_timeout,
         )
 
     key_hash: Final = hashlib.sha256(key.encode()).hexdigest()
@@ -109,7 +122,8 @@ def _session_response(
     response_state: Final = eventually(
         read_response_state,
         lambda state: state[0].status_code == 200 or state[1],
-        seconds=70,
+        seconds=seconds,
+        return_last_on_timeout=return_last_on_timeout,
     )
     return response_state[0]
 
@@ -122,9 +136,9 @@ def _assert_rollup_row(
 ) -> None:
     key_hash: Final = hashlib.sha256(api_key.encode()).hexdigest()
     rows: Final = read_rows(
-        'SELECT session_id, router_name, router_type, last_model, turns, spend, saved_spend, '
-        'savings_estimated_turns, savings_estimated_actual_spend, savings_estimated_saved_spend, '
-        'savings_estimated_baseline_models, baseline_models, tier_turns '
+        "SELECT session_id, router_name, router_type, last_model, turns, spend, saved_spend, "
+        "savings_estimated_turns, savings_estimated_actual_spend, savings_estimated_saved_spend, "
+        "savings_estimated_baseline_models, baseline_models, tier_turns "
         'FROM "LiteLLM_AutoRouterSession" WHERE api_key = %s AND session_id = %s AND router_name = %s',
         (key_hash, expected_session_id, router_name),
         database_url=database_url,
@@ -147,19 +161,45 @@ def _assert_rollup_row(
     }
 
 
+def _session_contract(session_id: str, router_name: str) -> dict[str, object]:
+    return {
+        "session_id": session_id,
+        "router_name": router_name,
+        "router_type": "complexity",
+        "turns": 1,
+        "last_model": "openai/integration-simple",
+        "spend": pytest.approx(0.000015),
+        "savings_estimated_turns": 1,
+        "savings_estimated_actual_spend": pytest.approx(0.000015),
+        "saved_spend": pytest.approx(0.000135),
+        "baseline_spend": pytest.approx(0.00015),
+        "savings_estimated_baseline_spend": pytest.approx(0.00015),
+        "baseline_model": "openai/integration-baseline",
+        "baseline_models": {"openai/integration-baseline": 1},
+    }
+
+
+@pytest.mark.timeout(300)
 def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids(
     gateway: Gateway,
     tmp_path: Path,
 ) -> None:
-    normal_session_id: Final = "auto-session-" + uuid.uuid4().hex
+    normal_session_id: Final = str(uuid.uuid4())
+    codex_session_id: Final = str(uuid.uuid4())
+    codex_thread_id: Final = str(uuid.uuid4())
+    thread_only_session_id: Final = str(uuid.uuid4())
     long_session_id: Final = "s" * 300
     router_name: Final = "auto-router-" + uuid.uuid4().hex[:8]
     normal_prompt: Final = f"integration-auto-simple {normal_session_id}"
+    codex_prompt: Final = f"integration-auto-simple {codex_session_id}"
+    thread_only_prompt: Final = f"integration-auto-simple {thread_only_session_id}"
     long_prompt: Final = f"integration-auto-simple {long_session_id}"
 
     with (
         scratch_database() as database_url,
-        wire_server(_tier_peer("integration-simple", (normal_prompt, long_prompt))) as simple,
+        wire_server(
+            _tier_peer("integration-simple", (normal_prompt, codex_prompt, thread_only_prompt, long_prompt))
+        ) as simple,
         wire_server(_tier_peer("integration-medium", (normal_prompt,))) as medium,
         wire_server(_tier_peer("integration-complex", (normal_prompt,))) as complex_tier,
         wire_server(_tier_peer("integration-baseline", (normal_prompt,))) as baseline,
@@ -200,13 +240,13 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                     "/v1/chat/completions",
                     {"model": router_name, "messages": [{"role": "user", "content": normal_prompt}]},
                     key=key,
-                    headers={"x-litellm-session-id": normal_session_id},
+                    headers={"x-claude-code-session-id": normal_session_id},
                 )
                 assert response.status_code == 200, response.text
-                assert response.json()["choices"][0]["message"]["content"] == "synthetic tier response", response.text
+                assert _assistant_content(response) == "synthetic tier response", response.text
 
                 session: Final = _session_response(candidate, key, normal_session_id)
-                assert session.json() == {
+                assert JSON_OBJECT.validate_json(session.content) == {
                     "session_id": normal_session_id,
                     "router_name": router_name,
                     "router_type": "complexity",
@@ -230,9 +270,76 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                     key=other_key,
                 )
                 assert hidden.status_code == 404, hidden.text
-                assert hidden.json() == {
+                assert JSON_OBJECT.validate_json(hidden.content) == {
                     "detail": f"No auto-routed turns recorded for session {normal_session_id!r} under this key"
                 }, hidden.text
+
+                codex_response: Final = candidate.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {"model": router_name, "messages": [{"role": "user", "content": codex_prompt}]},
+                    key=key,
+                    headers={
+                        "user-agent": "codex_cli_rs/0.50.0",
+                        "session-id": codex_session_id,
+                        "thread-id": codex_thread_id,
+                    },
+                )
+                assert codex_response.status_code == 200, codex_response.text
+                assert _assistant_content(codex_response) == "synthetic tier response", codex_response.text
+                codex_session: Final = _session_response(candidate, key, codex_session_id)
+                assert JSON_OBJECT.validate_json(codex_session.content) == _session_contract(
+                    codex_session_id, router_name
+                ), codex_session.text
+                _assert_rollup_row(key, database_url, router_name, codex_session_id)
+                codex_thread: Final = candidate.request(
+                    "GET",
+                    "/auto_router/session",
+                    params={"session_id": codex_thread_id},
+                    key=key,
+                )
+                assert codex_thread.status_code == 404, codex_thread.text
+                assert JSON_OBJECT.validate_json(codex_thread.content) == {
+                    "detail": f"No auto-routed turns recorded for session {codex_thread_id!r} under this key"
+                }, codex_thread.text
+                codex_hidden: Final = candidate.request(
+                    "GET",
+                    "/auto_router/session",
+                    params={"session_id": codex_session_id},
+                    key=other_key,
+                )
+                assert codex_hidden.status_code == 404, codex_hidden.text
+                assert JSON_OBJECT.validate_json(codex_hidden.content) == {
+                    "detail": f"No auto-routed turns recorded for session {codex_session_id!r} under this key"
+                }, codex_hidden.text
+
+                thread_only_response: Final = candidate.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {"model": router_name, "messages": [{"role": "user", "content": thread_only_prompt}]},
+                    key=key,
+                    headers={
+                        "user-agent": "codex_cli_rs/0.50.0",
+                        "thread-id": thread_only_session_id,
+                    },
+                )
+                assert thread_only_response.status_code == 200, thread_only_response.text
+                assert _assistant_content(thread_only_response) == "synthetic tier response", thread_only_response.text
+                thread_only_session: Final = _session_response(candidate, key, thread_only_session_id)
+                assert JSON_OBJECT.validate_json(thread_only_session.content) == _session_contract(
+                    thread_only_session_id, router_name
+                ), thread_only_session.text
+                _assert_rollup_row(key, database_url, router_name, thread_only_session_id)
+                thread_only_hidden: Final = candidate.request(
+                    "GET",
+                    "/auto_router/session",
+                    params={"session_id": thread_only_session_id},
+                    key=other_key,
+                )
+                assert thread_only_hidden.status_code == 404, thread_only_hidden.text
+                assert JSON_OBJECT.validate_json(thread_only_hidden.content) == {
+                    "detail": f"No auto-routed turns recorded for session {thread_only_session_id!r} under this key"
+                }, thread_only_hidden.text
 
                 long_response: Final = candidate.request(
                     "POST",
@@ -242,9 +349,7 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                     headers={"x-litellm-session-id": long_session_id},
                 )
                 assert long_response.status_code == 200, long_response.text
-                assert (
-                    long_response.json()["choices"][0]["message"]["content"] == "synthetic tier response"
-                ), long_response.text
+                assert _assistant_content(long_response) == "synthetic tier response", long_response.text
 
                 bounded_session_id: Final = "sha256:" + hashlib.sha256(long_session_id.encode()).hexdigest()
                 long_session: Final = _session_response(
@@ -253,8 +358,10 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                     long_session_id,
                     database_url,
                     bounded_session_id,
+                    seconds=30,
+                    return_last_on_timeout=True,
                 )
-                assert long_session.json() == {
+                assert JSON_OBJECT.validate_json(long_session.content) == {
                     "session_id": long_session_id,
                     "router_name": router_name,
                     "router_type": "complexity",
@@ -282,8 +389,15 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
             for request in simple_calls
         ) == (
             ("POST", "/v1/chat/completions", "integration-simple", [{"role": "user", "content": normal_prompt}]),
+            ("POST", "/v1/chat/completions", "integration-simple", [{"role": "user", "content": codex_prompt}]),
+            (
+                "POST",
+                "/v1/chat/completions",
+                "integration-simple",
+                [{"role": "user", "content": thread_only_prompt}],
+            ),
             ("POST", "/v1/chat/completions", "integration-simple", [{"role": "user", "content": long_prompt}]),
-        )
-        assert tuple(request for request in medium.drain() if request.method == "POST") == ()
-        assert tuple(request for request in complex_tier.drain() if request.method == "POST") == ()
-        assert tuple(request for request in baseline.drain() if request.method == "POST") == ()
+        ), response.text
+        assert tuple(request for request in medium.drain() if request.method == "POST") == (), response.text
+        assert tuple(request for request in complex_tier.drain() if request.method == "POST") == (), response.text
+        assert tuple(request for request in baseline.drain() if request.method == "POST") == (), response.text
