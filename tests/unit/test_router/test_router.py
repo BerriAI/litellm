@@ -8995,7 +8995,7 @@ def test_get_deployment_credentials_with_provider_returns_none_for_blocked_deplo
 
 def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
     """
-    Exercises Router._is_deployment_blocked so router_code_coverage.py (AST call graph)
+    Exercises Router.is_deployment_blocked so router_code_coverage.py (AST call graph)
     marks the helper as covered by router-named tests.
     """
     import types
@@ -9006,17 +9006,28 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
     blocked_dep = router.get_deployment("dep-0")
     unblocked_dep = router.get_deployment("dep-1")
     assert blocked_dep is not None and unblocked_dep is not None
-    assert litellm.Router._is_deployment_blocked(blocked_dep) is True
-    assert litellm.Router._is_deployment_blocked(unblocked_dep) is False
+    assert litellm.Router.is_deployment_blocked(blocked_dep) is True
+    assert litellm.Router.is_deployment_blocked(unblocked_dep) is False
 
     # No model_info on deployment object → treated as not blocked
-    assert litellm.Router._is_deployment_blocked(object()) is False
+    assert litellm.Router.is_deployment_blocked(object()) is False
     missing_blocked = types.SimpleNamespace()
-    assert litellm.Router._is_deployment_blocked(types.SimpleNamespace(model_info=missing_blocked)) is False
+    assert litellm.Router.is_deployment_blocked(types.SimpleNamespace(model_info=missing_blocked)) is False
     assert (
-        litellm.Router._is_deployment_blocked(types.SimpleNamespace(model_info=types.SimpleNamespace(blocked=True)))
+        litellm.Router.is_deployment_blocked(types.SimpleNamespace(model_info=types.SimpleNamespace(blocked=True)))
         is True
     )
+
+
+def test_routing_groups_legacy_property_forwards_to_public_attribute():
+    router = _router_with_two_deployments([False, False])
+
+    assert router._routing_groups is router.routing_groups
+
+    replacement = dict(router.routing_groups)
+    router._routing_groups = replacement
+
+    assert router.routing_groups is replacement
 
 
 class TestRouterRequestTimeoutPropagation:

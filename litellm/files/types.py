@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import Literal, NamedTuple, NotRequired, TypedDict
+from typing import Literal, NamedTuple, TypedDict
 
-from typing_extensions import ReadOnly
+from typing_extensions import NotRequired, ReadOnly
 
 FileContentProvider = Literal[
     "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic", "manus", "mistral"

@@ -13,8 +13,6 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
-from opentelemetry.trace import Span
-
 import litellm
 from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
@@ -36,11 +34,15 @@ from .router_callbacks.track_deployment_metrics import (
 )
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
+    Span = _Span | Any
 else:
     LitellmRouter = Any
+    Span = Any
 
 _ADVISOR_ORCHESTRATION_FAILURE_ATTR: Final = "_litellm_advisor_orchestration_failure"
 
