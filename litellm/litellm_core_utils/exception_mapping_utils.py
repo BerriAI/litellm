@@ -556,7 +556,6 @@ def _map_anthropic_exception(
             message=f"AnthropicException - {error_str}",
             model=model,
             llm_provider="anthropic",
-            response=getattr(original_exception, "response", None),
         )
     if "Invalid API Key" in error_str:
         raise AuthenticationError(

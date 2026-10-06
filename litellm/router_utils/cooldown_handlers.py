@@ -359,11 +359,16 @@ def _should_cooldown_deployment(
         )
 
     exception_status_int: Final = cast_exception_status_to_int(exception_status)
-    if is_single_deployment_model_group and exception_status_int == 402:
+    dep_policy, dep_allowed_fails = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
+    if (
+        is_single_deployment_model_group
+        and exception_status_int == 402
+        and _resolve_allowed_fails_from_policy(dep_policy, original_exception) is None
+        and litellm_router_instance.get_allowed_fails_from_policy(original_exception) is None
+    ):
         return False
 
     ## CHECK DEPLOYMENT-LEVEL POLICY FIRST (overrides router-level)
-    dep_policy, dep_allowed_fails = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
     if dep_policy is not None or dep_allowed_fails is not None:
         return _should_cooldown_based_on_deployment_policy(
             litellm_router_instance,

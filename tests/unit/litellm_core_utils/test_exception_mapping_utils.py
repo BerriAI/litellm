@@ -417,6 +417,7 @@ def test_anthropic_billing_errors_map_to_payment_required(status_code: int, prov
 
     assert isinstance(excinfo.value, litellm.BadRequestError)
     assert excinfo.value.status_code == 402
+    assert excinfo.value.response.status_code == 402
 
 
 def test_anthropic_unrelated_invalid_request_remains_bad_request() -> None:
