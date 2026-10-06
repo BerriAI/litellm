@@ -35,14 +35,14 @@ The same ownership rule applies to Messages, Responses, Chat Completions, OCR, a
   - Clamping effort, choosing a thinking budget, rewriting content, mapping finish reasons, computing normalized usage, and translating between API formats are policy or transformations and belong outside this crate, even when they are pure functions
 
 - Keep call envelopes and execution state in their owning crates
-  - `MessagesCall`, `MessagesShaping`, prepared provider requests, and the response wrapper containing a live stream belong in `core`
+  - `MessagesCall`, `MessagesShaping`, prepared provider requests, and the response wrapper containing a live stream belong in `inference-messages`
   - Provider config traits, `MessagesTransformContext`, `MessagesModelCapabilities`, `ThinkingBudgets`, `StreamShape`, and transformer state belong in `llms`
   - Catalog records and pricing belong in `model-catalog`, which may reuse wire enums such as `ReasoningEffort`
   - Host hooks, Python objects, credentials, clients, timeouts, and routing decisions do not become API payload types merely because they cross a crate boundary
   - Legacy logging operation selection belongs in `callbacks-legacy-python`, not this crate
 
 - Stream-event data belongs here, but live streams, decoders, framing, buffering, and stream lifecycle decisions do not
-  - Keep SSE and AWS framing in `framer`, provider decoding and conversion in `llms`, and call orchestration in `core`
+  - Keep SSE and AWS framing in `framer`, provider decoding and conversion in `llms`, and call orchestration in the `inference-<fmt>` crates
   - `ResponsesWsEvent` belongs here
   - `ResponsesWsTransformResult` wraps the output of a provider transformation rather than a wire event and lives in `llms::base_llm::responses::transformation`
   - Protocol error payloads may live here, while operational errors remain in the crate that raises them

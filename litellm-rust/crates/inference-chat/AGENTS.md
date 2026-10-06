@@ -1,0 +1,3 @@
+- Shared base and layering rules: [`../inference/AGENTS.md`](../inference/AGENTS.md)
+- This crate owns Chat Completions call orchestration; payloads belong in `litellm-llms-types`, transformations in `llms/src/base_llm/chat` and `llms/src/<provider>/chat`
+- Chat Completions is currently non-streaming: the route returns its completed response, cached through `litellm_inference::caching::execute_unary`
