@@ -4,6 +4,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
+from integration._support.openai_wire import answering_model_discovery
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -64,7 +65,7 @@ def test_interactions_with_an_openai_model_answers_in_the_interactions_shape(
     include_usage: bool,
     expected_usage: dict[str, JsonValue] | None,
 ) -> None:
-    with wire_server(_peer(include_usage)) as wire, gateway.scenario() as scenario:
+    with wire_server(answering_model_discovery(_peer(include_usage))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"openai/{_BACKEND}", api_base=f"{wire.url}/v1", api_key=_API_KEY)
         response: Final = gateway.request(
             "POST",
@@ -85,7 +86,7 @@ def test_interactions_with_an_openai_model_answers_in_the_interactions_shape(
         assert isinstance(created, str) and created == payload["updated"], response.text
         local_created: Final = datetime.fromisoformat(created).replace(tzinfo=UTC)
         assert abs(local_created - datetime.fromtimestamp(_CREATED_AT, UTC)) <= _WIDEST_UTC_OFFSET, response.text
-        requests: Final = wire.drain()
+        requests: Final = tuple(request for request in wire.drain() if request.method == "POST")
         assert len(requests) == 1, requests
         outbound: Final = _JSON_OBJECT.validate_json(requests[0].body)
         assert outbound["model"] == _BACKEND and outbound["input"] == "synthetic interaction", requests[0].body

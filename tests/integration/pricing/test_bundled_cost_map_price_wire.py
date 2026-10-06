@@ -4,6 +4,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
+from integration._support.openai_wire import answering_model_discovery, posted_targets
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -44,7 +45,7 @@ def test_a_deployment_with_no_configured_price_is_charged_at_the_packaged_cost_m
     output_rate: Final = packaged["output_cost_per_token"]
     assert isinstance(input_rate, float) and isinstance(output_rate, float)
     assert input_rate > 0 and output_rate > 0
-    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+    with wire_server(answering_model_discovery(_peer)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"openai/{_BACKEND}", api_base=f"{wire.url}/v1", api_key=_API_KEY)
         response: Final = gateway.request(
             "POST",
@@ -55,4 +56,4 @@ def test_a_deployment_with_no_configured_price_is_charged_at_the_packaged_cost_m
         assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(
             _PROMPT_TOKENS * input_rate + _COMPLETION_TOKENS * output_rate, rel=1e-9
         )
-        assert len(wire.drain()) == 1
+        assert posted_targets(wire) == ("/v1/chat/completions",)

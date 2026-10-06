@@ -2,6 +2,7 @@ import json
 from typing import Final
 
 from integration._support.client import Gateway
+from integration._support.openai_wire import MODEL_DISCOVERY, answering_model_discovery
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -48,7 +49,7 @@ def _peer(request: Request) -> Reply:
 def test_container_file_routes_reach_the_openai_paths_the_packaged_endpoint_table_declares(
     gateway: Gateway,
 ) -> None:
-    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+    with wire_server(answering_model_discovery(_peer)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"openai/{_BACKEND}", api_base=f"{wire.url}/v1", api_key=_API_KEY)
         created: Final = gateway.request("POST", "/v1/containers", {"model": model, "name": "wire"})
         assert created.status_code == 200, created.text
@@ -79,7 +80,8 @@ def test_container_file_routes_reach_the_openai_paths_the_packaged_endpoint_tabl
         }, deleted.text
 
         upstream_files: Final = f"/v1/containers/{_CONTAINER}/files"
-        assert [(request.method, request.target) for request in wire.drain()] == [
+        calls: Final = [(request.method, request.target) for request in wire.drain()]
+        assert [call for call in calls if call != MODEL_DISCOVERY] == [
             ("POST", "/v1/containers"),
             ("GET", upstream_files),
             ("GET", f"{upstream_files}?after=cfile_0&limit=2&order=desc"),

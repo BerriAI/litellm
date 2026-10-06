@@ -3,6 +3,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
+from integration._support.openai_wire import answering_model_discovery
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -109,7 +110,7 @@ def test_responses_forwards_a_reasoning_input_item_to_openai(
     item: dict[str, JsonValue],
     expected: dict[str, JsonValue],
 ) -> None:
-    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+    with wire_server(answering_model_discovery(_peer)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"openai/{_BACKEND}", api_base=f"{wire.url}/v1", api_key=_API_KEY)
         response: Final = gateway.request(
             "POST", "/v1/responses", {"model": model, "input": [_FIRST_TURN, item, _LAST_TURN]}
@@ -118,7 +119,7 @@ def test_responses_forwards_a_reasoning_input_item_to_openai(
         payload: Final = _JSON_OBJECT.validate_json(response.content)
         assert payload["status"] == "completed", response.text
         assert payload["output"][0]["content"][0]["text"] == "reasoning item control", response.text
-        requests: Final = wire.drain()
+        requests: Final = tuple(request for request in wire.drain() if request.method == "POST")
         assert len(requests) == 1, requests
         outbound: Final = _JSON_OBJECT.validate_json(requests[0].body)["input"]
         assert isinstance(outbound, list) and len(outbound) == 3, requests[0].body
