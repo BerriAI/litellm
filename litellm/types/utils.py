@@ -376,6 +376,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_image: float | None
     output_cost_per_pixel: ReadOnly[float | None]
     output_cost_per_image_token: float | None
+    output_cost_per_image_token_batches: ReadOnly[float | None]
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
     output_cost_per_reasoning_token: float | None
@@ -3820,6 +3821,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_character_above_128k_tokens: float | None = None
     output_cost_per_image: float | None = None
     output_cost_per_image_token: float | None = None
+    output_cost_per_image_token_batches: float | None = None
     output_cost_per_video_token: float | None = None
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
