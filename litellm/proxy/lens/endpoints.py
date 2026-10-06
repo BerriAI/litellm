@@ -22,6 +22,7 @@ from litellm.proxy.lens.inference import Deployment, deployment_prices
 from litellm.proxy.lens.models import (
     ActivitySelection,
     Claim,
+    Coverage,
     Execution,
     ExecutionContent,
     FindingDraft,
@@ -39,6 +40,8 @@ from litellm.proxy.lens.models import (
     RunRequest,
     Sample,
     Scope,
+    TraceFindingCount,
+    TraceFindingsRequest,
     WatchAllResult,
     WatchSkipped,
     Worker,
@@ -237,6 +240,12 @@ async def activity_available(auth: Auth, storage: StorageDep) -> ActivityAvailab
 async def list_agents(auth: Auth, storage: StorageDep) -> tuple[str, ...]:
     scope: Final = user_scope(auth)
     return await source_reader(storage).agents(scope) if storage is not None else ()
+
+
+@router.post("/traces/findings", response_model=tuple[TraceFindingCount, ...])
+async def trace_findings(body: TraceFindingsRequest, auth: Auth) -> tuple[TraceFindingCount, ...]:
+    user_scope(auth)
+    return await repository().trace_findings(body.traces)
 
 
 def watching(lens: Lens) -> Lens:
@@ -632,7 +641,7 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
             end_job(active, "failed" if body.error else "completed", now).model_copy(
                 update=MappingProxyType(
                     {
-                        "coverage": active.coverage if body.error else body.coverage,
+                        "coverage": active.coverage if body.error and body.coverage == Coverage() else body.coverage,
                         "error": body.error,
                         "assessments": body.assessments,
                         "findings": tuple(snapshot_finding(e, f, job.revision, now) for f in body.findings),

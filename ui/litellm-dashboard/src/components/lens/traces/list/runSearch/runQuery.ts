@@ -19,12 +19,14 @@ export type RunField = keyof typeof RUN_FIELDS;
 
 export const RUN_QUERY: QueryLanguage<RunField> = { fields: RUN_FIELDS, ops: ALL_OPERATORS };
 
+const runStatus = (run: TraceSummary): "ok" | "error" => (run.status === "error" ? "error" : "ok");
+
 /** Reads the run fields off a loaded page; free text searches trace id, input and name. */
 export const RUN_INDEX: ClientIndex<TraceSummary, RunField> = {
   read: {
     name: (run) => [run.name],
     agent: traceAgentNames,
-    status: (run) => [run.error_count > 0 ? "error" : "ok"],
+    status: (run) => [runStatus(run)],
     model: (run) => run.models,
     input: (run) => [previewText(run.input_preview)],
     trace_id: (run) => [run.trace_id],
@@ -38,7 +40,6 @@ export function filterRuns(
   filters: { agent: string; status: "all" | "ok" | "error" } = { agent: "", status: "all" },
 ): TraceSummary[] {
   const matchesAgent = (run: TraceSummary) => !filters.agent || traceAgentNames(run).includes(filters.agent);
-  const matchesStatus = (run: TraceSummary) =>
-    filters.status === "all" || (run.error_count > 0 ? "error" : "ok") === filters.status;
+  const matchesStatus = (run: TraceSummary) => filters.status === "all" || runStatus(run) === filters.status;
   return filterItems(RUN_QUERY, RUN_INDEX, runs, query).filter((run) => matchesAgent(run) && matchesStatus(run));
 }

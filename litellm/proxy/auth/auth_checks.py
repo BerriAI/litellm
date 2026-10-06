@@ -5366,20 +5366,26 @@ def can_customer_access_model(
     valid_token: UserAPIKeyAuth | None,
 ) -> Literal[True]:
     team_model_aliases: Final = team_model_aliases_for_auth_check(valid_token) if valid_token is not None else None
-    listed_names: Final = frozenset(end_user_object.models or ())
-    unlisted_aliases: Final = (
-        MappingProxyType({alias: target for alias, target in team_model_aliases.items() if alias not in listed_names})
-        if team_model_aliases
-        else None
-    )
     team_id: Final = valid_token.team_id if valid_token is not None else None
-    return _can_object_call_model(
-        model=_resolve_team_alias(model, unlisted_aliases, team_id, llm_router),
-        llm_router=llm_router,
-        models=end_user_object.models,
-        key_model_aliases=key_model_aliases_for_auth_check(valid_token),
-        object_type="customer",
-    )
+    key_model_aliases: Final = key_model_aliases_for_auth_check(valid_token)
+
+    def check(name: str) -> None:
+        team_target: Final = (
+            _live_team_alias_target(name, team_model_aliases, team_id, llm_router) if team_model_aliases else name
+        )
+        if team_target != name and name in (end_user_object.models or ()):
+            return
+        _can_object_call_model(
+            model=team_target,
+            llm_router=llm_router,
+            models=end_user_object.models,
+            key_model_aliases=key_model_aliases,
+            object_type="customer",
+        )
+
+    for name in (model,) if isinstance(model, str) else model:
+        check(name)
+    return True
 
 
 async def can_user_call_model(
