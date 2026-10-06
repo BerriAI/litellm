@@ -581,7 +581,7 @@ class PaymentRequiredError(BadRequestError):
         llm_provider,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
-    ):
+    ) -> None:
         super().__init__(
             message=message,
             model=model,
@@ -592,14 +592,14 @@ class PaymentRequiredError(BadRequestError):
         self.status_code = 402
         self.message = f"litellm.PaymentRequiredError: {self.message}"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return (
             self.message
             + (f" LiteLLM Retried: {self.num_retries} times" if self.num_retries else "")
             + (f", LiteLLM Max Retries: {self.max_retries}" if self.max_retries else "")
         )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return (
             self.message
             + (f" LiteLLM Retried: {self.num_retries} times" if self.num_retries else "")
