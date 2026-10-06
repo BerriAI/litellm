@@ -1060,7 +1060,7 @@ def test_fix_enum_types():
         },
     }
 
-    # Expected output: Non-string enums removed, string enums kept
+    # Expected output: String enums kept, integer enums preserved with format: enum and string values, boolean enums removed
     expected_output = {
         "type": "object",
         "properties": {
@@ -1069,11 +1069,13 @@ def test_fix_enum_types():
                 "type": "string",
                 "description": "How to truncate content",
             },
-            "maxLength": {  # enum removed
+            "maxLength": {  # integer enum converted to format: enum with string values
                 "type": "integer",
+                "format": "enum",
+                "enum": ["100", "200", "500"],
                 "description": "Maximum length",
             },
-            "enabled": {  # enum removed
+            "enabled": {  # enum removed for boolean
                 "type": "boolean",
                 "description": "Whether feature is enabled",
             },
@@ -1084,7 +1086,11 @@ def test_fix_enum_types():
                         "enum": ["a", "b", "c"],  # Kept - string type
                         "type": "string",
                     },
-                    "innerNonStringEnum": {"type": "integer"},  # enum removed
+                    "innerNonStringEnum": {
+                        "type": "integer",
+                        "format": "enum",
+                        "enum": ["1", "2", "3"],
+                    },
                 },
             },
             "anyOfField": {
@@ -1093,7 +1099,11 @@ def test_fix_enum_types():
                         "type": "string",
                         "enum": ["option1", "option2"],
                     },  # Kept - has string type
-                    {"type": "integer"},  # enum removed
+                    {
+                        "type": "integer",
+                        "format": "enum",
+                        "enum": ["1", "2", "3"],
+                    },
                 ]
             },
         },
@@ -1122,19 +1132,28 @@ def test_fix_enum_types():
         "c",
     ]
 
-    # 2. Non-string enums are removed
-    assert "enum" not in input_schema["properties"]["maxLength"]
-    assert "enum" not in input_schema["properties"]["enabled"]
+    # 2. Integer enums are converted to format: enum with stringified values
+    assert input_schema["properties"]["maxLength"]["format"] == "enum"
+    assert input_schema["properties"]["maxLength"]["enum"] == ["100", "200", "500"]
     assert (
-        "enum"
-        not in input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]
+        input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]["format"]
+        == "enum"
     )
+    assert input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]["enum"] == [
+        "1",
+        "2",
+        "3",
+    ]
 
-    # 3. anyOf with string type keeps enum, non-string removes it
+    # 3. Boolean/other non-string/non-integer enums are removed
+    assert "enum" not in input_schema["properties"]["enabled"]
+
+    # 4. anyOf with string/integer types preserves enums appropriately
     assert "enum" in input_schema["properties"]["anyOfField"]["anyOf"][0]
-    assert "enum" not in input_schema["properties"]["anyOfField"]["anyOf"][1]
+    assert input_schema["properties"]["anyOfField"]["anyOf"][1]["format"] == "enum"
+    assert input_schema["properties"]["anyOfField"]["anyOf"][1]["enum"] == ["1", "2", "3"]
 
-    # 4. Other properties preserved
+    # 5. Other properties preserved
     assert input_schema["properties"]["maxLength"]["type"] == "integer"
     assert input_schema["properties"]["enabled"]["type"] == "boolean"
 

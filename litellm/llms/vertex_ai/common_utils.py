@@ -647,13 +647,20 @@ def _fix_enum_types(schema, depth=0):
     if not isinstance(schema, dict):
         return
 
-    # If enum exists but type is not string (and anyOf doesn't include string), drop enum
+    # If enum exists on string, keep it.
+    # If enum exists on integer, Gemini/Vertex supports it as format: "enum" with stringified values.
+    # Otherwise, drop enum to avoid provider validation errors.
     if "enum" in schema and isinstance(schema["enum"], list):
         schema_type: Final = schema.get("type")
-        keep_enum = False
         if isinstance(schema_type, str) and schema_type.lower() == "string":
-            keep_enum = True
+            pass
+        elif isinstance(schema_type, str) and schema_type.lower() == "integer" and all(
+            isinstance(v, int) and not isinstance(v, bool) for v in schema["enum"]
+        ):
+            schema["format"] = "enum"
+            schema["enum"] = [str(v) for v in schema["enum"]]
         else:
+            keep_enum = False
             anyof = schema.get("anyOf")
             if isinstance(anyof, list):
                 for item in anyof:
@@ -663,8 +670,8 @@ def _fix_enum_types(schema, depth=0):
                             keep_enum = True
                             break
 
-        if not keep_enum:
-            schema.pop("enum", None)
+            if not keep_enum:
+                schema.pop("enum", None)
 
     # Recurse into nested structures
     properties: Final = schema.get("properties", None)
