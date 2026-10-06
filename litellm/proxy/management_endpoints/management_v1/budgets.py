@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -35,6 +35,7 @@ from litellm.proxy.list_api.list_framework import (
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.utils import PrismaClient
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.management_v1 import (
     ListResponse,
     ProblemDetail,
@@ -45,7 +46,7 @@ router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 BUDGET_TABLE: Final = '"LiteLLM_BudgetTable"'
 
 
-class BudgetListItem(BaseModel):
+class BudgetListItem(LiteLLMBaseModel):
     """One budget as the Budgets page reads it, and as it comes back off the table.
 
     Validating the raw row through here is what makes `tpm_limit` / `rpm_limit`
@@ -65,7 +66,7 @@ class BudgetListItem(BaseModel):
     updated_at: datetime
 
 
-class _RowCount(BaseModel):
+class _RowCount(LiteLLMBaseModel):
     count: int
 
 

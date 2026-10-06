@@ -24,7 +24,7 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -40,6 +40,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _safe_set_request_parsed_body
 from litellm.proxy.management_endpoints.sso_helper_utils import CLI_SSO_SESSIONS_TARGET
 from litellm.proxy.management_endpoints.ui_sso import CliSsoTeamDetail
+from litellm.types.llms.base import LiteLLMBaseModel
 
 GATEWAY_PREFIX: Final = "/claude_code_gateway"
 _DEVICE_CODE_GRANT: Final = "urn:ietf:params:oauth:grant-type:device_code"
@@ -52,7 +53,7 @@ _NO_SETTINGS: Final = MappingProxyType({})
 _POST_ONLY: Final = ["POST"]
 
 
-class _GatewaySessionData(BaseModel):
+class _GatewaySessionData(LiteLLMBaseModel):
     user_id: str
     user_role: LitellmUserRoles
     models: list[str] = Field(default_factory=list)
@@ -67,19 +68,19 @@ class _GatewayLogin:
     team: CliSsoTeamDetail
 
 
-class _OAuthErrorBody(BaseModel):
+class _OAuthErrorBody(LiteLLMBaseModel):
     error: str
     error_description: str | None = None
 
 
-class _AuthorizationServerMetadata(BaseModel):
+class _AuthorizationServerMetadata(LiteLLMBaseModel):
     issuer: str
     device_authorization_endpoint: str
     token_endpoint: str
     grant_types_supported: tuple[str, ...]
 
 
-class _DeviceAuthorizationBody(BaseModel):
+class _DeviceAuthorizationBody(LiteLLMBaseModel):
     device_code: str
     user_code: str
     verification_uri: str
@@ -88,13 +89,13 @@ class _DeviceAuthorizationBody(BaseModel):
     interval: int
 
 
-class _AccessTokenBody(BaseModel):
+class _AccessTokenBody(LiteLLMBaseModel):
     access_token: str
     expires_in: int
     token_type: str = "Bearer"
 
 
-class _ManagedSettingsBody(BaseModel):
+class _ManagedSettingsBody(LiteLLMBaseModel):
     uuid: str
     checksum: str
     settings: dict[str, object]

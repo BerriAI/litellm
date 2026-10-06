@@ -52,6 +52,7 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import MCPToolSearchSettings
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -168,11 +169,11 @@ def _resolve_ui_theme_field(stored_values: Mapping[str, object], field_name: str
     return env_value if _is_public_http_url(env_value) else None
 
 
-class IPAddress(BaseModel):
+class IPAddress(LiteLLMBaseModel):
     ip: str
 
 
-class UIThemeConfig(BaseModel):
+class UIThemeConfig(LiteLLMBaseModel):
     """Configuration for UI theme customization"""
 
     # Logo configuration
@@ -196,7 +197,7 @@ class UIThemeConfig(BaseModel):
     )
 
 
-class SettingsResponse(BaseModel):
+class SettingsResponse(LiteLLMBaseModel):
     """Base response model for settings with values and schema information"""
 
     values: dict[str, object]
@@ -206,7 +207,7 @@ class SettingsResponse(BaseModel):
     """Schema information including descriptions and property types for UI display"""
 
 
-class _SettingsWithSchema(BaseModel):
+class _SettingsWithSchema(LiteLLMBaseModel):
     values: dict[str, object]
     field_schema: dict[str, object]
 
@@ -233,7 +234,7 @@ class UIThemeSettingsResponse(SettingsResponse):
 _TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS))
 
 
-class UISettings(BaseModel):
+class UISettings(LiteLLMBaseModel):
     """Configuration for UI-specific flags"""
 
     model_config = ConfigDict(extra="allow")
@@ -476,7 +477,7 @@ def _get_effective_ui_settings_class() -> type[UISettings]:
     return _EFFECTIVE_UI_SETTINGS_CLASS
 
 
-class MCPSemanticFilterSettings(BaseModel):
+class MCPSemanticFilterSettings(LiteLLMBaseModel):
     """Configuration for MCP Semantic Tool Filter"""
 
     enabled: bool = Field(
@@ -512,7 +513,7 @@ class MCPToolSearchSettingsResponse(SettingsResponse):
     """Response model for native MCP tool search settings"""
 
 
-class WebSearchInterceptionSettings(BaseModel):
+class WebSearchInterceptionSettings(LiteLLMBaseModel):
     """Configuration for server-side web search interception"""
 
     enabled: bool = Field(

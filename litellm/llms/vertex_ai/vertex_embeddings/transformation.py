@@ -1,15 +1,14 @@
 import types
 from typing import Final, Literal
 
-from pydantic import BaseModel
-
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from .types import *
 
 
-class VertexAITextEmbeddingConfig(BaseModel):
+class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
     """
     Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api#TextEmbeddingInput
 

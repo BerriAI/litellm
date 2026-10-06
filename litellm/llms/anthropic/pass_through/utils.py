@@ -3,9 +3,10 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 import litellm
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelInfo
 
 if TYPE_CHECKING:
@@ -23,7 +24,7 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
 _THINKING_OFF: Final = "none"
 
 
-class _ClaudeCodeUserId(BaseModel):
+class _ClaudeCodeUserId(LiteLLMBaseModel):
     """The JSON Claude Code packs into ``metadata.user_id``; only ``session_id`` is per conversation."""
 
     model_config = ConfigDict(frozen=True)

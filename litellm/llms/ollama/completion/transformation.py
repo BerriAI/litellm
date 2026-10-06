@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.utils import (
     Delta,
@@ -44,7 +45,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class _OllamaGenerateReasoning(BaseModel):
+class _OllamaGenerateReasoning(LiteLLMBaseModel):
     """The two `/api/generate` fields a reply's reasoning can arrive in."""
 
     model_config = ConfigDict(extra="ignore")

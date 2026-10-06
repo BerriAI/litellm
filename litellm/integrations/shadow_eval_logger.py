@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.llm_judge import (
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
@@ -467,7 +468,7 @@ Return ONLY valid JSON in this exact format, no other text:
 }"""
 
 
-class PairwiseVerdict(BaseModel):
+class PairwiseVerdict(LiteLLMBaseModel):
     """The judge's blind A/B verdict: the response_format schema sent with the judge call
     and the validation contract on its reply. Both fields are required and preference is
     closed over the prompt's labels, so a malformed or truncated reply is an
@@ -731,7 +732,7 @@ class _JudgeVerdict:
     cost: float
 
 
-class ActiveShadowEvalJob(BaseModel):
+class ActiveShadowEvalJob(LiteLLMBaseModel):
     """One active job as the sampling path needs it, validated straight off the untyped
     job row: immutable config plus the attempt count as of the cache fill (the turn
     budget's staleness is bounded by the cache TTL). Every way a row can be unsamplable

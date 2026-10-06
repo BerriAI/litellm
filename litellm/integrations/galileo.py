@@ -9,7 +9,7 @@ from datetime import datetime, timezone, tzinfo
 from typing import Any, Final, Protocol, cast
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -24,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     HttpxBinaryResponseContent,
@@ -80,7 +81,7 @@ class GalileoStandardLoggingFields(TypedDict, total=False):
     endTime: float
 
 
-class LLMResponse(BaseModel):
+class LLMResponse(LiteLLMBaseModel):
     latency_ms: int
     status_code: int
     input_text: str

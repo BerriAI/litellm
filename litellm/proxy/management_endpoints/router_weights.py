@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, BeforeValidator, ValidationError
 
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
 
 
@@ -36,11 +37,11 @@ class _Router(Protocol):
         pass
 
 
-class _RouterWeightSettings(BaseModel):
+class _RouterWeightSettings(LiteLLMBaseModel):
     weights: RouterWeights | None = None
 
 
-class _RouterWeightModelInfo(BaseModel):
+class _RouterWeightModelInfo(LiteLLMBaseModel):
     team_id: str | None = None
     db_model: bool | None = None
     team_public_model_name: str | None = None
@@ -52,7 +53,7 @@ def _router_weight_model_info(value: object) -> _RouterWeightModelInfo:
     return _RouterWeightModelInfo.model_validate(value or {}, from_attributes=True)
 
 
-class _RouterWeightDeployment(BaseModel):
+class _RouterWeightDeployment(LiteLLMBaseModel):
     model_name: str
     model_info: Annotated[_RouterWeightModelInfo, BeforeValidator(_router_weight_model_info)]
 

@@ -20,7 +20,7 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import ConfigDict, Field, SecretStr, ValidationError
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
     AsymmetricSessionKeys,
@@ -35,6 +35,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     open_session_refresh_token,
     open_session_token,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 _SESSION_SIGNING_KEY_DOMAIN: Final = b"litellm-mcp-gateway:session-signing:"
 
@@ -71,7 +72,7 @@ def session_keys_from_master_key(master_key: str) -> SessionKeys:
     return SessionKeys(signing_key=SecretStr(signing))
 
 
-class SessionSigningPreviousKey(BaseModel):
+class SessionSigningPreviousKey(LiteLLMBaseModel):
     """One retired key in ``mcp_session_token_signing.previous_public_keys``: its ``kid``
     and the PEM public half (inline or an ``os.environ/`` reference)."""
 
@@ -80,7 +81,7 @@ class SessionSigningPreviousKey(BaseModel):
     public_key: str = Field(min_length=1)
 
 
-class MCPSessionTokenSigningSettings(BaseModel):
+class MCPSessionTokenSigningSettings(LiteLLMBaseModel):
     """The ``general_settings.mcp_session_token_signing`` block: opt-in asymmetric signing
     for the gateway session tokens. Absent, the gateway keeps the backward-compatible
     HS256 key derived from ``master_key``. ``private_key`` and each ``public_key`` accept
@@ -93,7 +94,7 @@ class MCPSessionTokenSigningSettings(BaseModel):
     previous_public_keys: tuple[SessionSigningPreviousKey, ...] = ()
 
 
-class SessionSigningConfigError(BaseModel):
+class SessionSigningConfigError(LiteLLMBaseModel):
     """``mcp_session_token_signing`` is present but unusable (bad shape, unresolvable
     secret reference, or a key that is not a loadable RSA PEM); the caller fails closed
     with a server error instead of silently falling back to HS256."""
@@ -164,14 +165,14 @@ def active_session_signing_keys(master_key: str) -> SessionSigningKeys | Session
     return resolve_session_signing_keys(master_key, general_settings.get("mcp_session_token_signing"))
 
 
-class NotSessionBearer(BaseModel):
+class NotSessionBearer(LiteLLMBaseModel):
     """The bearer is not session-shaped; admission continues on its normal path."""
 
     model_config = ConfigDict(frozen=True)
     tag: Literal["not_session_bearer"] = "not_session_bearer"
 
 
-class SessionBearerAdmitted(BaseModel):
+class SessionBearerAdmitted(LiteLLMBaseModel):
     """A valid session access token: the principal to admit under after a live reload."""
 
     model_config = ConfigDict(frozen=True)
@@ -179,7 +180,7 @@ class SessionBearerAdmitted(BaseModel):
     principal: SessionPrincipal
 
 
-class SessionBearerInvalid(BaseModel):
+class SessionBearerInvalid(LiteLLMBaseModel):
     """The bearer is session-shaped but must not admit (expired, tampered, wrong key, or a
     refresh token presented at the tool-call edge); admission fails closed with the
     ``invalid_token`` challenge rather than falling through to another arm. ``expired``
@@ -238,7 +239,7 @@ def resolve_session_bearer(
     return SessionBearerInvalid(expired=isinstance(opened, SessionExpired))
 
 
-class SessionRefreshOpened(BaseModel):
+class SessionRefreshOpened(LiteLLMBaseModel):
     """A valid session refresh token presented to the token endpoint: the principal to
     re-validate and renew under."""
 
@@ -248,7 +249,7 @@ class SessionRefreshOpened(BaseModel):
     jti: str
 
 
-class SessionRefreshInvalid(BaseModel):
+class SessionRefreshInvalid(LiteLLMBaseModel):
     """The presented refresh grant is not a valid session refresh token for this client
     (not refresh-shaped, will not open, or bound to a different ``client_id``); the token
     endpoint fails the refresh closed."""

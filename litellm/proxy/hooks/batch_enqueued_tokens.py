@@ -17,13 +17,14 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY, BATCH_ENQUEUED_TOKEN_TTL_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -160,7 +161,7 @@ def canonical_provider_batch_id(batch_id: str) -> str:
     return get_original_file_id(batch_id)
 
 
-class _BatchResponseView(BaseModel):
+class _BatchResponseView(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: str

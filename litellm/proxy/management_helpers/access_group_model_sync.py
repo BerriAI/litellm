@@ -8,19 +8,18 @@ the arrays alone strands every group on a name nothing serves any more.
 from collections.abc import Sequence
 from typing import Final, Protocol
 
-from pydantic import BaseModel
-
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.management_helpers.access_group_team_sync import invalidate_access_group_caches
 from litellm.repositories.table_repositories import AccessGroupRepository
 from litellm.router import Router
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class _TouchedGroupRow(BaseModel):
+class _TouchedGroupRow(LiteLLMBaseModel):
     access_group_id: str
 
 
-class _DeploymentCountRow(BaseModel):
+class _DeploymentCountRow(LiteLLMBaseModel):
     deployment_count: int
 
 

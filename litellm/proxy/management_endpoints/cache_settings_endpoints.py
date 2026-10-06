@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import Field, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm._redis import _redis_kwargs_from_environment
@@ -30,6 +30,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.repositories.table_repositories import CacheConfigRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints import (
     CACHE_SETTINGS_FIELDS,
     REDIS_TYPE_DESCRIPTIONS,
@@ -419,23 +420,23 @@ class CacheSettingsManager:
         CacheSettingsManager._last_cache_params = cache_params.copy()
 
 
-class CacheSettingsResponse(BaseModel):
+class CacheSettingsResponse(LiteLLMBaseModel):
     fields: list[CacheSettingsField] = Field(description="List of all configurable cache settings with metadata")
     current_values: dict[str, object] = Field(description="Current values of cache settings")
     redis_type_descriptions: dict[str, str] = Field(description="Descriptions for each Redis type option")
 
 
-class CacheTestRequest(BaseModel):
+class CacheTestRequest(LiteLLMBaseModel):
     cache_settings: dict[str, object] = Field(description="Cache settings to test connection with")
 
 
-class CacheTestResponse(BaseModel):
+class CacheTestResponse(LiteLLMBaseModel):
     status: str = Field(description="Connection status: 'success' or 'failed'")
     message: str = Field(description="Connection result message")
     error: str | None = Field(default=None, description="Error message if connection failed")
 
 
-class CacheSettingsUpdateRequest(BaseModel):
+class CacheSettingsUpdateRequest(LiteLLMBaseModel):
     cache_settings: dict[str, object] = Field(description="Cache settings to save")
 
 

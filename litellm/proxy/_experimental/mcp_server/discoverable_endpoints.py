@@ -12,7 +12,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -91,6 +91,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPTokenEndpointAuthMethod
 
@@ -278,7 +279,7 @@ def decode_state_hash(encrypted_state: str) -> dict:
 _BRIDGE_AUTH_CODE_PREFIX: Final = "llm_bcode_"
 
 
-class _BridgeAuthorizationCode(BaseModel):
+class _BridgeAuthorizationCode(LiteLLMBaseModel):
     """Authenticated caller and upstream code sealed for bridge or identity-bound per-user OAuth."""
 
     model_config = ConfigDict(frozen=True)
@@ -340,7 +341,7 @@ def open_bridge_authorization_code(code: str) -> _BridgeAuthorizationCode | None
 _PASSTHROUGH_AUTH_CODE_PREFIX: Final = "llm_ptcode_"
 
 
-class PassthroughAuthorizationCode(BaseModel):
+class PassthroughAuthorizationCode(LiteLLMBaseModel):
     """The ephemeral DCR client and upstream code the gateway seals into the authorization code it
     forwards for a client-forwarded-token server (``true_passthrough`` / ``oauth_delegate``) whose
     authorize fell through to gateway-side registration. These modes forbid the gateway from storing
@@ -1380,7 +1381,7 @@ async def exchange_token_with_server(
     return JSONResponse(result, headers=TOKEN_NO_CACHE_HEADERS)
 
 
-class _DcrClientRegistration(BaseModel):
+class _DcrClientRegistration(LiteLLMBaseModel):
     """RFC 7591 dynamic client registration response, narrowed to the fields the gateway
     must persist to authenticate later token-endpoint calls. Extra members are ignored."""
 
@@ -1389,7 +1390,7 @@ class _DcrClientRegistration(BaseModel):
     token_endpoint_auth_method: str | None = None
 
 
-class _PersistedDcrCredentials(BaseModel):
+class _PersistedDcrCredentials(LiteLLMBaseModel):
     dcr_issuer: str | None = None
     dcr_server_url: str | None = None
     client_id: str | None = None
@@ -1784,7 +1785,7 @@ async def _post_dcr_registration(
     return response
 
 
-class EphemeralDcrClient(BaseModel):
+class EphemeralDcrClient(LiteLLMBaseModel):
     """A DCR client minted for a single authorize round trip and never stored by the gateway."""
 
     model_config = ConfigDict(frozen=True)

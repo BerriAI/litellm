@@ -16,11 +16,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.gateway_requests import (
     GatewayRequestActivityResponse,
     GatewayRequestBreakdownEntry,
@@ -44,7 +45,7 @@ _AGGREGATE_SQL: Final = """
 """
 
 
-class _AggregateRow(BaseModel):
+class _AggregateRow(LiteLLMBaseModel):
     """Validates one query_raw row so the handler works with typed values, not Any."""
 
     date: str

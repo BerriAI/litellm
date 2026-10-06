@@ -5,10 +5,12 @@ Vantage endpoint types for LiteLLM Proxy
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class VantageInitRequest(BaseModel):
+class VantageInitRequest(LiteLLMBaseModel):
     """Request model for initializing Vantage settings"""
 
     api_key: str = Field(..., description="Vantage API key for authentication")
@@ -26,14 +28,14 @@ class VantageInitRequest(BaseModel):
         return v
 
 
-class VantageInitResponse(BaseModel):
+class VantageInitResponse(LiteLLMBaseModel):
     """Response model for Vantage initialization"""
 
     message: str
     status: str
 
 
-class VantageExportRequest(BaseModel):
+class VantageExportRequest(LiteLLMBaseModel):
     """Request model for Vantage export operations (actual export, no default limit)"""
 
     limit: int | None = Field(
@@ -44,13 +46,13 @@ class VantageExportRequest(BaseModel):
     end_time_utc: datetime | None = Field(None, description="End time for data export in UTC")
 
 
-class VantageDryRunRequest(BaseModel):
+class VantageDryRunRequest(LiteLLMBaseModel):
     """Request model for Vantage dry-run operations (capped for preview)"""
 
     limit: int | None = Field(500, description="Limit on number of records to preview (default: 500)")
 
 
-class VantageExportResponse(BaseModel):
+class VantageExportResponse(LiteLLMBaseModel):
     """Response model for Vantage export operations"""
 
     message: str
@@ -61,7 +63,7 @@ class VantageExportResponse(BaseModel):
     summary: dict[str, Any] | None = Field(None, description="Summary statistics for dry run")
 
 
-class VantageSettingsView(BaseModel):
+class VantageSettingsView(LiteLLMBaseModel):
     """Response model for viewing Vantage settings with masked API key"""
 
     api_key_masked: str | None = Field(
@@ -76,7 +78,7 @@ class VantageSettingsView(BaseModel):
     status: str | None = Field(None, description="Configuration status")
 
 
-class VantageSettingsUpdate(BaseModel):
+class VantageSettingsUpdate(LiteLLMBaseModel):
     """Request model for updating Vantage settings"""
 
     api_key: str | None = Field(None, description="New Vantage API key for authentication")

@@ -23,7 +23,7 @@ from fastapi import (
     Request,
     Response,
 )
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -73,6 +73,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 if TYPE_CHECKING:
@@ -248,7 +249,7 @@ class ScimUserData(TypedDict):
     roles: list[SCIMMultiValuedAttribute] | None
 
 
-class GroupMemberExtractionResult(BaseModel):
+class GroupMemberExtractionResult(LiteLLMBaseModel):
     """Result of extracting and processing group members.
 
     ``all_member_ids`` is deduped order-preserving; ``existing_member_ids`` is not,

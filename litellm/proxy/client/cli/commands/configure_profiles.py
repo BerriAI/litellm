@@ -9,7 +9,7 @@ from typing import Final, Literal, TypeAlias
 
 import click
 from filelock import FileLock, Timeout
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import ConfigDict, Field, ValidationError, field_validator
 
 from litellm.litellm_core_utils.private_json import (
     commit_staged_json,
@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.private_json import (
     ensure_private_dir,
     stage_private_json,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .agents import codex_config_path
 from .claude_settings import claude_settings_path, configure_state_path
@@ -27,7 +28,7 @@ Target: TypeAlias = Literal["claude", "codex"]
 TARGETS: Final[tuple[Target, ...]] = ("claude", "codex")
 
 
-class SavedSetup(BaseModel):
+class SavedSetup(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     version: Literal[1] = 1

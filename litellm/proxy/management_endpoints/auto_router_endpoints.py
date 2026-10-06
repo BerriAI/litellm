@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Protocol
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
+from pydantic import ConfigDict, TypeAdapter, field_validator
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -62,6 +62,7 @@ from litellm.router_utils.auto_router_model_naming import (
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import (
     SHADOW_EVAL_TURN_VALVE,
     AutoRouterAvailabilityRequest,
@@ -627,7 +628,7 @@ async def preview_auto_router_routing(
     )
 
 
-class _SessionAggRow(BaseModel):
+class _SessionAggRow(LiteLLMBaseModel):
     """One router's window: session shape from overlapping sessions, money from the selected days."""
 
     router_name: str
@@ -1249,7 +1250,7 @@ def _is_unique_violation(error: Exception) -> bool:
     return isinstance(error, UniqueViolationError)
 
 
-class _AttemptAggRow(BaseModel):
+class _AttemptAggRow(LiteLLMBaseModel):
     grp: str
     turn_count: int
     real_wins: int
@@ -1361,7 +1362,7 @@ WHERE group_id = $1 AND stopped_by IS NULL
 """
 
 
-class _FunnelTotalsRow(BaseModel):
+class _FunnelTotalsRow(LiteLLMBaseModel):
     legs_with_rows: int
     not_sampled: int
     unjudgeable: int
@@ -1369,7 +1370,7 @@ class _FunnelTotalsRow(BaseModel):
     withheld: int
 
 
-class _AttemptCountRow(BaseModel):
+class _AttemptCountRow(LiteLLMBaseModel):
     job_id: str
     attempt_count: int
     spend: float
@@ -1395,7 +1396,7 @@ WHERE group_id IN (
 """
 
 
-class _AttemptTotalsRow(BaseModel):
+class _AttemptTotalsRow(LiteLLMBaseModel):
     judged_count: int
     error_count: int
     judge_spend: float
@@ -1429,7 +1430,7 @@ def _leg_group_id(leg: "_LegRow") -> str:
     return leg.group_id
 
 
-class _LegRow(BaseModel):
+class _LegRow(LiteLLMBaseModel):
     """One LiteLLM_ShadowEvalJob row, validated off the untyped prisma record. A row is
     one target's leg of a job; the legs of a job share group_id and identical config,
     written together by one create_many. The API's job id is the group id, so leg ids

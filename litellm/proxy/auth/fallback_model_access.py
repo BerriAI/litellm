@@ -12,19 +12,20 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.router import Router
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class _RequestMetadata(BaseModel):
+class _RequestMetadata(LiteLLMBaseModel):
     user_api_key_auth: UserAPIKeyAuth | None = None
 
 
-class _FallbackAccessSettings(BaseModel):
+class _FallbackAccessSettings(LiteLLMBaseModel):
     enforce_fallback_model_access: bool = False
 
 

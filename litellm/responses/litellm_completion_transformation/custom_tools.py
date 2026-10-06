@@ -20,8 +20,9 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
@@ -39,7 +40,7 @@ def openai_shaped_tool_call_item_id(item_type: str, tool_id: str) -> str:
     return f"{prefix}_{tool_id}"
 
 
-class _ToolNameFields(BaseModel):
+class _ToolNameFields(LiteLLMBaseModel):
     type: str = ""
     name: str = ""
     tools: tuple[object, ...] = ()
@@ -151,7 +152,7 @@ def build_tool_call_item_kwargs(
     return kwargs
 
 
-class _CustomToolFormat(BaseModel):
+class _CustomToolFormat(LiteLLMBaseModel):
     syntax: str = ""
     definition: str = ""
 

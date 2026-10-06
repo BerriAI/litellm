@@ -16,7 +16,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -50,6 +50,7 @@ from litellm.rust_bridge.trace.generated.types import (
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.otlp_http import InvalidOTLPPayloadError, encode_otlp_response
+from litellm.types.llms.base import LiteLLMBaseModel
 
 router = APIRouter(tags=["agent tracing"])
 
@@ -150,7 +151,7 @@ async def ingest_otlp_traces(
     return Response(content=body, media_type=media_type)
 
 
-class TraceReadFailure(BaseModel):
+class TraceReadFailure(LiteLLMBaseModel):
     """The body of every failed trace read. Clients branch on `code`, never on `message`."""
 
     model_config = ConfigDict(frozen=True)

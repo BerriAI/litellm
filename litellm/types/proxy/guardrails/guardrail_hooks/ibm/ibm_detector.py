@@ -1,7 +1,9 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from ..base import GuardrailConfigModel
 from .base import IBMGuardrailsBaseConfigModel
@@ -52,7 +54,7 @@ class IBMDetectorResponseOrchestrator(TypedDict):
 # Pydantic Config Models
 
 
-class IBMDetectorOptionalParams(BaseModel):
+class IBMDetectorOptionalParams(LiteLLMBaseModel):
     """Optional parameters for IBM Detector guardrail"""
 
     detector_params: dict[str, Any] | None = Field(

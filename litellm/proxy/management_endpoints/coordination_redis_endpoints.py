@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Final
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -39,6 +39,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints import (
     COORDINATION_REDIS_SETTINGS_FIELDS,
     CoordinationRedisSettingsField,
@@ -270,7 +271,7 @@ async def _emit_coordination_redis_audit_log(
     task.add_done_callback(_log_audit_task_exception)
 
 
-class CoordinationRedisSettingsResponse(BaseModel):
+class CoordinationRedisSettingsResponse(LiteLLMBaseModel):
     values: dict[str, object] = Field(description="Current coordination Redis settings, with credentials redacted")
     fields: list[CoordinationRedisSettingsField] = Field(
         description="List of all configurable coordination Redis settings with metadata"
@@ -280,11 +281,11 @@ class CoordinationRedisSettingsResponse(BaseModel):
     )
 
 
-class CoordinationRedisSettingsRequest(BaseModel):
+class CoordinationRedisSettingsRequest(LiteLLMBaseModel):
     settings: dict[str, object] = Field(description="Coordination Redis connection params")
 
 
-class CoordinationRedisTestResponse(BaseModel):
+class CoordinationRedisTestResponse(LiteLLMBaseModel):
     status: str = Field(description="Connection status: 'healthy' or 'unhealthy'")
     error: str | None = Field(default=None, description="Error message if the connection failed")
 

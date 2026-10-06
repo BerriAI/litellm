@@ -12,7 +12,7 @@ from typing import Any, ClassVar, Final, Literal, TypeVar
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, StrictBool, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import (
@@ -51,6 +51,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesToolChoice,
     AnthropicThinkingParam,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
@@ -349,11 +350,11 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     return headers, api_key
 
 
-class _EagerInputStreamingFunction(BaseModel):
+class _EagerInputStreamingFunction(LiteLLMBaseModel):
     eager_input_streaming: StrictBool | None = None
 
 
-class _EagerInputStreamingTool(BaseModel):
+class _EagerInputStreamingTool(LiteLLMBaseModel):
     eager_input_streaming: StrictBool | None = None
     function: _EagerInputStreamingFunction | None = None
 
@@ -388,11 +389,11 @@ def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -
     return value if isinstance(value, str) else None
 
 
-class _AnthropicModelListEntry(BaseModel):
+class _AnthropicModelListEntry(LiteLLMBaseModel):
     id: str
 
 
-class _AnthropicModelsPage(BaseModel):
+class _AnthropicModelsPage(LiteLLMBaseModel):
     data: Sequence[_AnthropicModelListEntry] = Field(default_factory=tuple)
     has_more: bool = False
     last_id: str | None = None
@@ -1784,13 +1785,13 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any
     return out
 
 
-class _ReplayedSearchQuery(BaseModel):
+class _ReplayedSearchQuery(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     query: str = ""
 
 
-class _ReplayedWebSearchResult(BaseModel):
+class _ReplayedWebSearchResult(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["web_search_result"]
@@ -1800,14 +1801,14 @@ class _ReplayedWebSearchResult(BaseModel):
     encrypted_content: str = ""
 
 
-class _ReplayedWebSearchToolResultError(BaseModel):
+class _ReplayedWebSearchToolResultError(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["web_search_tool_result_error"]
     error_code: str = ""
 
 
-class _ReplayedWebSearchToolResult(BaseModel):
+class _ReplayedWebSearchToolResult(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["web_search_tool_result"]
@@ -1815,7 +1816,7 @@ class _ReplayedWebSearchToolResult(BaseModel):
     content: tuple[_ReplayedWebSearchResult, ...] | _ReplayedWebSearchToolResultError
 
 
-class _ReplayedServerToolUse(BaseModel):
+class _ReplayedServerToolUse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["server_tool_use"]
@@ -1823,7 +1824,7 @@ class _ReplayedServerToolUse(BaseModel):
     input: _ReplayedSearchQuery = _ReplayedSearchQuery()
 
 
-class _TextBlock(BaseModel):
+class _TextBlock(LiteLLMBaseModel):
     type: Literal["text"] = "text"
     text: str
 

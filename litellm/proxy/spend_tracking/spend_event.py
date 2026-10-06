@@ -26,6 +26,7 @@ import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.types.interactions import InteractionsAPIResponse
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LiteLLMBatch, Usage
 
 SPEND_EVENT_VERSION: Final = 1
@@ -159,7 +160,7 @@ _OBJECT_MAPPING: Final = TypeAdapter(ObjectMapping)
 _COMPACT_RESPONSE: Final = TypeAdapter(CompactResponse)
 
 
-class SpendEvent(BaseModel):
+class SpendEvent(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     version: Literal[1]

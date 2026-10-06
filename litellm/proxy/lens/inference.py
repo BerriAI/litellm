@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import Final
 
 from fastapi import HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 import litellm
 from litellm.exceptions import ContextWindowExceededError, ModelNotMappedError
@@ -18,11 +18,12 @@ from litellm.proxy.lens.models import Job, Lens, ModelRequest, ModelResult, Step
 from litellm.proxy.lens.repository import LensRepository
 from litellm.proxy.lens.state import add_step, current_job, renew_budget, replace_job
 from litellm.types.integrations.anthropic_cache_control_hook import CacheControlMessageInjectionPoint
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CostPerToken, ModelResponse
 
 
-class DeploymentParams(BaseModel):
+class DeploymentParams(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     model: str
     input_cost_per_token: float | None = None
@@ -31,30 +32,30 @@ class DeploymentParams(BaseModel):
     max_completion_tokens: int | None = Field(default=None, gt=0)
 
 
-class ModelCapacity(BaseModel):
+class ModelCapacity(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     max_input_tokens: int | None = Field(default=None, gt=0)
     max_output_tokens: int | None = Field(default=None, gt=0)
 
 
-class Deployment(BaseModel):
+class Deployment(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     litellm_params: DeploymentParams
     model_info: ModelCapacity = ModelCapacity()
 
 
-class Message(BaseModel):
+class Message(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     content: str | None = None
 
 
-class Choice(BaseModel):
+class Choice(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     message: Message
     finish_reason: str | None = None
 
 
-class Completion(BaseModel):
+class Completion(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     choices: tuple[Choice, ...] = Field(min_length=1)
 
@@ -67,7 +68,7 @@ _SYSTEM: Final = (
 )
 
 
-class Prices(BaseModel):
+class Prices(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
     input_cost_per_token: float = Field(ge=0)
     output_cost_per_token: float = Field(ge=0)
@@ -331,13 +332,13 @@ async def analyze(
     )
 
 
-class Usage(BaseModel):
+class Usage(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
 
 
-class UsageEnvelope(BaseModel):
+class UsageEnvelope(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     model: str | None = None
     usage: Usage | None = None

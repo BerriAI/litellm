@@ -2,7 +2,6 @@ from typing import Any, Final, Literal, Optional, Union
 
 from fastapi import HTTPException
 from pydantic import (
-    BaseModel,
     ConfigDict,
     EmailStr,
     Field,
@@ -13,6 +12,8 @@ from pydantic import (
 )
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
 
+from litellm.types.llms.base import LiteLLMBaseModel
+
 SCIM_ENTERPRISE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
 SCIM_ENTERPRISE_METADATA_KEY: Final = "scim_enterprise"
 SCIM_ENTITLEMENTS_METADATA_KEY: Final = "scim_entitlements"
@@ -22,7 +23,7 @@ SCIM_MANAGED_TEAM_METADATA_KEY: Final = "scim_managed"
 SCIM_TEAM_DATA_METADATA_KEY: Final = "scim_data"
 
 
-class LiteLLM_UserScimMetadata(BaseModel):
+class LiteLLM_UserScimMetadata(LiteLLMBaseModel):
     """
     Scim metadata stored in LiteLLM_UserTable.metadata
     """
@@ -32,14 +33,14 @@ class LiteLLM_UserScimMetadata(BaseModel):
 
 
 # SCIM Resource Models
-class SCIMResource(BaseModel):
+class SCIMResource(LiteLLMBaseModel):
     schemas: list[str]
     id: str | None = None
     externalId: str | None = None
     meta: dict[str, object] | None = None
 
 
-class SCIMUserName(BaseModel):
+class SCIMUserName(LiteLLMBaseModel):
     familyName: str | None = None
     givenName: str | None = None
     formatted: str | None = None
@@ -48,19 +49,19 @@ class SCIMUserName(BaseModel):
     honorificSuffix: str | None = None
 
 
-class SCIMUserEmail(BaseModel):
+class SCIMUserEmail(LiteLLMBaseModel):
     value: EmailStr
     type: str | None = None
     primary: bool | None = None
 
 
-class SCIMUserGroup(BaseModel):
+class SCIMUserGroup(LiteLLMBaseModel):
     value: str  # Group ID
     display: str | None = None  # Group display name
     type: str | None = "direct"  # direct or indirect
 
 
-class SCIMMultiValuedAttribute(BaseModel):
+class SCIMMultiValuedAttribute(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     value: str | None = None
@@ -84,7 +85,7 @@ SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS: Final = {
 }
 
 
-class SCIMUserManager(BaseModel):
+class SCIMUserManager(LiteLLMBaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     value: str | None = None
@@ -92,7 +93,7 @@ class SCIMUserManager(BaseModel):
     ref: str | None = Field(default=None, alias="$ref")
 
 
-class SCIMEnterpriseUser(BaseModel):
+class SCIMEnterpriseUser(LiteLLMBaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     employeeNumber: str | None = None
@@ -133,7 +134,7 @@ class SCIMUser(SCIMResource):
         return dumped
 
 
-class SCIMMember(BaseModel):
+class SCIMMember(LiteLLMBaseModel):
     value: str  # User ID
     display: str | None = None  # Username or email
     type: str | None = None
@@ -152,15 +153,15 @@ class SCIMGroup(SCIMResource):
     members: list[SCIMMember] | None = None
 
 
-class SCIMPlaceholderMergeResult(BaseModel):
+class SCIMPlaceholderMergeResult(LiteLLMBaseModel):
     placeholder_user_id: str
     merged_into_user_id: str
     team_ids: tuple[str, ...]
 
 
 # SCIM List Response Models
-class SCIMListResponse(BaseModel):
-    schemas: list[str] = ["urn:ietf:params:scim:api:messages:2.0:ListResponse"]
+class SCIMListResponse(LiteLLMBaseModel):
+    schemas: list[str] = Field(default=["urn:ietf:params:scim:api:messages:2.0:ListResponse"])
     totalResults: int
     startIndex: int | None = 1
     itemsPerPage: int | None = 10
@@ -168,7 +169,7 @@ class SCIMListResponse(BaseModel):
 
 
 # SCIM PATCH Operation Models
-class SCIMPatchOperation(BaseModel):
+class SCIMPatchOperation(LiteLLMBaseModel):
     op: str
     path: str | None = None
     value: object | None = None
@@ -184,21 +185,21 @@ class SCIMPatchOperation(BaseModel):
         return v
 
 
-class SCIMPatchOp(BaseModel):
-    schemas: list[str] = ["urn:ietf:params:scim:api:messages:2.0:PatchOp"]
+class SCIMPatchOp(LiteLLMBaseModel):
+    schemas: list[str] = Field(default=["urn:ietf:params:scim:api:messages:2.0:PatchOp"])
     Operations: list[SCIMPatchOperation]
 
 
 # SCIM Service Provider Configuration Models
-class SCIMFeature(BaseModel):
+class SCIMFeature(LiteLLMBaseModel):
     supported: bool
     maxOperations: int | None = None
     maxPayloadSize: int | None = None
     maxResults: int | None = None
 
 
-class SCIMServiceProviderConfig(BaseModel):
-    schemas: list[str] = ["urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"]
+class SCIMServiceProviderConfig(LiteLLMBaseModel):
+    schemas: list[str] = Field(default=["urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"])
     patch: SCIMFeature = SCIMFeature(supported=True)
     bulk: SCIMFeature = SCIMFeature(supported=False)
     filter: SCIMFeature = SCIMFeature(supported=False)
@@ -210,7 +211,7 @@ class SCIMServiceProviderConfig(BaseModel):
 
 
 # SCIM ResourceType Models (RFC 7643 Section 6)
-class SCIMSchemaExtension(BaseModel):
+class SCIMSchemaExtension(LiteLLMBaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     schema_: str  # aliased to "schema" in serialization
@@ -222,10 +223,10 @@ class SCIMSchemaExtension(BaseModel):
         return d
 
 
-class SCIMResourceType(BaseModel):
+class SCIMResourceType(LiteLLMBaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    schemas: list[str] = ["urn:ietf:params:scim:schemas:core:2.0:ResourceType"]
+    schemas: list[str] = Field(default=["urn:ietf:params:scim:schemas:core:2.0:ResourceType"])
     id: str
     name: str
     description: str | None = None
@@ -244,7 +245,7 @@ class SCIMResourceType(BaseModel):
 
 
 # SCIM Schema Models (RFC 7643 Section 7)
-class SCIMSchemaAttribute(BaseModel):
+class SCIMSchemaAttribute(LiteLLMBaseModel):
     name: str
     type: str
     multiValued: bool = False
@@ -262,10 +263,10 @@ class SCIMSchemaAttribute(BaseModel):
         return d
 
 
-class SCIMSchema(BaseModel):
-    schemas: list[str] = ["urn:ietf:params:scim:schemas:core:2.0:Schema"]
+class SCIMSchema(LiteLLMBaseModel):
+    schemas: list[str] = Field(default=["urn:ietf:params:scim:schemas:core:2.0:Schema"])
     id: str
     name: str
     description: str | None = None
-    attributes: list[SCIMSchemaAttribute] = []
+    attributes: list[SCIMSchemaAttribute] = Field(default=[])
     meta: dict[str, object] | None = None

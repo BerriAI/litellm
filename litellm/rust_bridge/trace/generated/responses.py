@@ -5,10 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Annotated, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import ConfigDict, Field, JsonValue
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class TraceSQLResponse(BaseModel):
+class TraceSQLResponse(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,

@@ -1,12 +1,13 @@
 import enum
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm.proxy._types import WebhookEvent
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class EmailParams(BaseModel):
+class EmailParams(LiteLLMBaseModel):
     logo_url: str
     support_contact: str
     base_url: str
@@ -39,14 +40,14 @@ class EmailEvent(str, enum.Enum):
     soft_budget_crossed = "Soft Budget Crossed"
     max_budget_alert = "Max Budget Alert"
 
-class EmailEventSettings(BaseModel):
+class EmailEventSettings(LiteLLMBaseModel):
     event: EmailEvent
     enabled: bool
-class EmailEventSettingsUpdateRequest(BaseModel):
+class EmailEventSettingsUpdateRequest(LiteLLMBaseModel):
     settings: List[EmailEventSettings]
-class EmailEventSettingsResponse(BaseModel):
+class EmailEventSettingsResponse(LiteLLMBaseModel):
     settings: List[EmailEventSettings]
-class DefaultEmailSettings(BaseModel):
+class DefaultEmailSettings(LiteLLMBaseModel):
     """Default settings for email events"""
     settings: Dict[EmailEvent, bool] = Field(
         default_factory=lambda: {

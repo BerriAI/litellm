@@ -35,19 +35,20 @@ from litellm.proxy.spend_tracking.baseline_accounting import (
     advance_baseline_history,
 )
 from litellm.proxy.spend_tracking.savings import BaselineCosts, BaselineCostSnapshot, price_baseline_comparison
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 
-class DailyBaselineTarget(BaseModel):
+class DailyBaselineTarget(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     entity: DailySpendEntity
     entity_id: str | None
 
 
-class DailyBaselineAttribution(BaseModel):
+class DailyBaselineAttribution(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     date: str
@@ -77,7 +78,7 @@ class DailyBaselineAttribution(BaseModel):
         )
 
 
-class BaselineAccountingRecord(BaseModel):
+class BaselineAccountingRecord(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     scope: str = Field(pattern=r"^autorouter-baseline:v3:[a-f0-9]{64}$")
@@ -110,7 +111,7 @@ class BaselineAccountingRecord(BaseModel):
         return self
 
 
-class BaselinePublication(BaseModel):
+class BaselinePublication(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     version: Literal[3] = 3
@@ -154,7 +155,7 @@ def baseline_publication(
     )
 
 
-class _Comparison(BaseModel):
+class _Comparison(LiteLLMBaseModel):
     revision: int
     published_revision: int
     initial_equivalent: bool
@@ -162,14 +163,14 @@ class _Comparison(BaseModel):
     history: str | None
 
 
-class _StoredRecord(BaseModel):
+class _StoredRecord(LiteLLMBaseModel):
     data: str
     publication: str | None
     conflicted: bool
     started_at: float
 
 
-class _Change(BaseModel):
+class _Change(LiteLLMBaseModel):
     request_id: str
     publication: BaselinePublication
     api_key: str
@@ -618,7 +619,7 @@ class BaselineAccountingStore:
             return "unavailable"
 
 
-class _Scope(BaseModel):
+class _Scope(LiteLLMBaseModel):
     scope: str
 
 

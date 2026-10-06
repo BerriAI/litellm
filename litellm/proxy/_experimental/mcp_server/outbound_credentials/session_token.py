@@ -43,7 +43,9 @@ import jwt
 from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator, model_validator
+from pydantic import ConfigDict, Field, SecretStr, ValidationError, field_validator, model_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 SESSION_TOKEN_PREFIX: Final = "llm_session_"
 """Marker prefix on every serialized session ACCESS token so the admission edge can cheaply
@@ -97,7 +99,7 @@ is read only from the signed claims, never from the request, so a token of one a
 never be redeemed as the other."""
 
 
-class SessionPrincipal(BaseModel):
+class SessionPrincipal(LiteLLMBaseModel):
     """The litellm user a session token identifies and the DCR client it was issued to.
 
     ``user_id`` is the SSO-established litellm user subject, never a credential: admission
@@ -121,7 +123,7 @@ class SessionPrincipal(BaseModel):
     team_id: str | None = None
 
 
-class SessionKeys(BaseModel):
+class SessionKeys(LiteLLMBaseModel):
     """Injected key material: the HS256 signing key.
 
     ``signing_key`` must be at least 32 bytes: HS256's HMAC-SHA256 has a 256-bit security
@@ -133,7 +135,7 @@ class SessionKeys(BaseModel):
     signing_key: SecretStr = Field(min_length=32)
 
 
-class SessionRotatedPublicKey(BaseModel):
+class SessionRotatedPublicKey(LiteLLMBaseModel):
     """The public half of a retired signing key, kept verifiable under its ``kid`` during a
     rotation window so tokens minted before the rotation stay valid until they expire."""
 
@@ -155,7 +157,7 @@ class SessionRotatedPublicKey(BaseModel):
         return value
 
 
-class AsymmetricSessionKeys(BaseModel):
+class AsymmetricSessionKeys(LiteLLMBaseModel):
     """Injected RS256 key material: the issuer-held RSA private key and the stable ``kid``
     stamped into every minted token's JOSE header, plus the public halves of previously
     rotated keys that verification still accepts while their tokens age out. Downstream
@@ -212,7 +214,7 @@ def session_public_key_pem(keys: AsymmetricSessionKeys) -> str:
     return _public_key_pem_from_private(keys.private_key_pem.get_secret_value())
 
 
-class MintedSessionToken(BaseModel):
+class MintedSessionToken(LiteLLMBaseModel):
     """A minted session token: the client-held bearer value and when it expires."""
 
     model_config = ConfigDict(frozen=True)
@@ -220,7 +222,7 @@ class MintedSessionToken(BaseModel):
     expires_at: datetime
 
 
-class OpenedSessionToken(BaseModel):
+class OpenedSessionToken(LiteLLMBaseModel):
     """A validated session token of either kind: the principal it was minted for, the
     ``jti`` so the token endpoint can enforce single-use rotation on a refresh token, and
     the signed ``kind``/``iat``/``exp`` so an introspection response can report the
@@ -234,7 +236,7 @@ class OpenedSessionToken(BaseModel):
     exp: int
 
 
-class SessionTokenTooLarge(BaseModel):
+class SessionTokenTooLarge(LiteLLMBaseModel):
     """The serialized token exceeded ``MAX_SESSION_TOKEN_BYTES``; carries sizes only. Only
     reachable through an oversized ``client_id``, which registration should have bounded."""
 
@@ -247,28 +249,28 @@ class SessionTokenTooLarge(BaseModel):
 SessionTokenMintError: TypeAlias = SessionTokenTooLarge
 
 
-class NotASessionToken(BaseModel):
+class NotASessionToken(LiteLLMBaseModel):
     """The candidate does not carry the expected session prefix."""
 
     model_config = ConfigDict(frozen=True)
     tag: Literal["not_a_session_token"] = "not_a_session_token"
 
 
-class SessionBadSignature(BaseModel):
+class SessionBadSignature(LiteLLMBaseModel):
     """The JWT signature does not verify under the provided signing key."""
 
     model_config = ConfigDict(frozen=True)
     tag: Literal["session_bad_signature"] = "session_bad_signature"
 
 
-class SessionExpired(BaseModel):
+class SessionExpired(LiteLLMBaseModel):
     """The token's ``exp`` is not in the future relative to the provided ``now``."""
 
     model_config = ConfigDict(frozen=True)
     tag: Literal["session_expired"] = "session_expired"
 
 
-class SessionMalformed(BaseModel):
+class SessionMalformed(LiteLLMBaseModel):
     """The token is not a well-formed session token: undecodable JWT, wrong issuer, wrong
     ``kind``, or missing/mistyped/extra claims."""
 
@@ -279,7 +281,7 @@ class SessionMalformed(BaseModel):
 SessionTokenOpenError: TypeAlias = NotASessionToken | SessionBadSignature | SessionExpired | SessionMalformed
 
 
-class _SessionClaims(BaseModel):
+class _SessionClaims(LiteLLMBaseModel):
     """Decoded-claims boundary that pins the exact shape the mints emit.
 
     ``user_id``/``client_id`` mirror the ``min_length`` constraints of
@@ -469,7 +471,7 @@ def _open(
     )
 
 
-class _VerificationMaterial(BaseModel):
+class _VerificationMaterial(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     key: SecretStr
     algorithm: Literal["HS256", "RS256"]

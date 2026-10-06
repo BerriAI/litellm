@@ -32,6 +32,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import LITELLM_EXECUTED_B
 from litellm.proxy.openai_files_endpoints.storage_backend_service import StorageBackendFileService
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.managed_batch_repository import ManagedBatchRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest, OpenAIFileObject, OpenAIFilesPurpose
 from litellm.types.utils import LITELLM_EXECUTED_BATCH_PROVIDERS, ExtractedFileData, LiteLLMBatch, LlmProviders
 
@@ -103,7 +104,7 @@ class _ResultLine(TypedDict):
     error: ReadOnly[_LineError | None]
 
 
-class BatchInputLine(BaseModel):
+class BatchInputLine(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     custom_id: str

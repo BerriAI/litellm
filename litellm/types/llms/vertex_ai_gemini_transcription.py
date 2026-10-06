@@ -1,7 +1,9 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import ReadOnly, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class VertexGeminiTranscriptionInlineData(TypedDict):
@@ -31,32 +33,32 @@ class VertexGeminiTranscriptionRequest(TypedDict):
     generationConfig: ReadOnly[VertexGeminiTranscriptionGenerationConfig]
 
 
-class VertexGeminiTranscriptionResponsePart(BaseModel):
+class VertexGeminiTranscriptionResponsePart(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     text: str | None = None
 
 
-class VertexGeminiTranscriptionResponseContent(BaseModel):
+class VertexGeminiTranscriptionResponseContent(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     parts: tuple[VertexGeminiTranscriptionResponsePart, ...] = ()
 
 
-class VertexGeminiTranscriptionCandidate(BaseModel):
+class VertexGeminiTranscriptionCandidate(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     content: VertexGeminiTranscriptionResponseContent | None = None
 
 
-class VertexGeminiTranscriptionModalityTokens(BaseModel):
+class VertexGeminiTranscriptionModalityTokens(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     modality: str | None = None
     tokenCount: int = 0
 
 
-class VertexGeminiTranscriptionUsageMetadata(BaseModel):
+class VertexGeminiTranscriptionUsageMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     promptTokenCount: int = 0
@@ -65,7 +67,7 @@ class VertexGeminiTranscriptionUsageMetadata(BaseModel):
     promptTokensDetails: tuple[VertexGeminiTranscriptionModalityTokens, ...] = ()
 
 
-class VertexGeminiTranscriptionResponse(BaseModel):
+class VertexGeminiTranscriptionResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     candidates: tuple[VertexGeminiTranscriptionCandidate, ...] = ()

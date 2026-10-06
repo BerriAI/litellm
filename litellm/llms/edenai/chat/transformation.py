@@ -13,12 +13,13 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler, OpenAIGPTConfig
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
@@ -31,11 +32,11 @@ if TYPE_CHECKING:
 _OPTIONAL_MAPPING: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
-class _EdenAIModel(BaseModel):
+class _EdenAIModel(LiteLLMBaseModel):
     id: str
 
 
-class _EdenAIModelCatalog(BaseModel):
+class _EdenAIModelCatalog(LiteLLMBaseModel):
     data: tuple[_EdenAIModel, ...]
 
 

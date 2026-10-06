@@ -35,7 +35,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -43,13 +43,14 @@ from litellm.proxy.auth.auth_checks import (
     _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage]  # the zero-cost predicate the auth-time budget checks use; no public equivalent
 )
 from litellm.router import Router
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class _RequestMetadata(BaseModel):
+class _RequestMetadata(LiteLLMBaseModel):
     user_api_key_auth: UserAPIKeyAuth | None = None
 
 
-class _FallbackBudgetSettings(BaseModel):
+class _FallbackBudgetSettings(LiteLLMBaseModel):
     enforce_fallback_budget: bool = True
 
 

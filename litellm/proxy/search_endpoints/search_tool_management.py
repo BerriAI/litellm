@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Any, Final, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
@@ -21,6 +20,7 @@ from litellm.proxy.search_endpoints.search_tool_registry import (
     SearchToolRegistry,
     keep_loaded_search_tools_that_do_not_decrypt,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.search import (
     ListSearchToolsResponse,
     SearchTool,
@@ -277,7 +277,7 @@ async def list_search_tools(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class CreateSearchToolRequest(BaseModel):
+class CreateSearchToolRequest(LiteLLMBaseModel):
     search_tool: SearchTool
 
 
@@ -349,7 +349,7 @@ async def create_search_tool(request: CreateSearchToolRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class UpdateSearchToolRequest(BaseModel):
+class UpdateSearchToolRequest(LiteLLMBaseModel):
     search_tool: SearchTool
 
 
@@ -566,7 +566,7 @@ async def get_search_tool_info(search_tool_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class TestSearchToolConnectionRequest(BaseModel):
+class TestSearchToolConnectionRequest(LiteLLMBaseModel):
     litellm_params: dict[str, Any]
 
 

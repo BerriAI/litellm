@@ -1,10 +1,12 @@
 from collections.abc import Mapping
 from typing import Final
 
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class _LayaRouting(BaseModel):
+class _LayaRouting(LiteLLMBaseModel):
     model: str | None = None
 
 

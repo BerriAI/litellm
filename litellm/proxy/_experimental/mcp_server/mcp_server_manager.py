@@ -48,7 +48,7 @@ from mcp.types import (
     ResourceTemplate,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, BaseModel, TypeAdapter
+from pydantic import AnyUrl, BaseModel, Field, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -197,6 +197,7 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.integrations.slack_alerting import AlertType
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
@@ -223,13 +224,11 @@ try:
         validate_tool_name,  # pyright: ignore[reportAssignmentType]
     )
 except ImportError:
-    from pydantic import BaseModel
-
     SEP_986_URL = "https://github.com/modelcontextprotocol/protocol/blob/main/proposals/0001-tool-name-validation.md"
 
-    class _ToolNameValidationResult(BaseModel):
+    class _ToolNameValidationResult(LiteLLMBaseModel):
         is_valid: bool = True
-        warnings: list = []
+        warnings: list = Field(default=[])
 
     def validate_tool_name(name: str) -> _ToolNameValidationResult:
         return _ToolNameValidationResult()

@@ -3,7 +3,7 @@ from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.anthropic.prompt_cache_prediction import (
     TokenCounter,
@@ -23,6 +23,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # use the configured proxy limiter's shared capacity owner
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.prompt_cache_prediction import (
     CachePredictionArm,
     CachePredictionRequest,
@@ -33,7 +34,7 @@ router: Final = APIRouter()
 _REQUEST_DATA: Final = TypeAdapter(Mapping[str, object])
 
 
-class _CallerSettings(BaseModel):
+class _CallerSettings(LiteLLMBaseModel):
     config: Mapping[str, object] | None = None
 
 

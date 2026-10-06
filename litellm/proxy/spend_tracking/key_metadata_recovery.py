@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Final, Literal, TypeVar
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -24,6 +24,7 @@ from litellm.proxy.db.db_span import db_span, db_spanned
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 
 _T = TypeVar("_T")
 
@@ -118,7 +119,7 @@ class KeyMetadataDict(TypedDict, total=False):
     key_exists: ReadOnly[bool]
 
 
-class _TokenDigestRow(BaseModel):
+class _TokenDigestRow(LiteLLMBaseModel):
     digest: str
     key_alias: str | None = None
     team_id: str | None = None
@@ -131,7 +132,7 @@ def _unanimous(first: str | None, last: str | None) -> str | None:
     return first if last is None or first == last else None
 
 
-class _SpendLogDigestRow(BaseModel):
+class _SpendLogDigestRow(LiteLLMBaseModel):
     digest: str
     first_alias: str | None = None
     last_alias: str | None = None
@@ -148,7 +149,7 @@ class _SpendLogDigestRow(BaseModel):
         )
 
 
-class _DailyUserSpendOwnerRow(BaseModel):
+class _DailyUserSpendOwnerRow(LiteLLMBaseModel):
     api_key: str
     first_owner: str | None = None
     last_owner: str | None = None

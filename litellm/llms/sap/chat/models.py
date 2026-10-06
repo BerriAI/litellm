@@ -2,7 +2,9 @@ import warnings
 from enum import Enum
 from typing import Final, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 def validate_different_content(v: str | dict | list) -> str:
@@ -24,30 +26,30 @@ def validate_different_content(v: str | dict | list) -> str:
     raise ValueError("Content must be a string")
 
 
-class TextContent(BaseModel):
+class TextContent(LiteLLMBaseModel):
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str
 
 
-class ImageURLContent(BaseModel):
+class ImageURLContent(LiteLLMBaseModel):
     url: str
     detail: str = "auto"
 
 
-class ImageContent(BaseModel):
+class ImageContent(LiteLLMBaseModel):
     type_: Literal["image_url"] = Field(default="image_url", alias="type")
     image_url: ImageURLContent
 
 
-class FunctionObj(BaseModel):
+class FunctionObj(LiteLLMBaseModel):
     name: str
     arguments: str
 
 
-class FunctionTool(BaseModel):
+class FunctionTool(LiteLLMBaseModel):
     description: str = ""
     name: str
-    parameters: dict = {"type": "object", "properties": {}}
+    parameters: dict = Field(default={"type": "object", "properties": {}})
     strict: bool = False
 
     def model_dump(self, **kwargs) -> dict:
@@ -67,7 +69,7 @@ class FunctionTool(BaseModel):
         return v
 
 
-class ChatCompletionTool(BaseModel):
+class ChatCompletionTool(LiteLLMBaseModel):
     type_: Literal["function"] = Field(default="function", alias="type")
     function: FunctionTool
 
@@ -76,13 +78,13 @@ class ChatCompletionTool(BaseModel):
         return super().model_dump(**kwargs)
 
 
-class MessageToolCall(BaseModel):
+class MessageToolCall(LiteLLMBaseModel):
     id: str
     type_: Literal["function"] = Field(default="function", alias="type")
     function: FunctionObj
 
 
-class SAPMessage(BaseModel):
+class SAPMessage(LiteLLMBaseModel):
     """
     Model for SystemChatMessage and DeveloperChatMessage
     """
@@ -93,21 +95,21 @@ class SAPMessage(BaseModel):
     _content_validator = field_validator("content", mode="before")(validate_different_content)
 
 
-class SAPUserMessage(BaseModel):
+class SAPUserMessage(LiteLLMBaseModel):
     role: Literal["user"] = "user"
     content: str | TextContent | ImageContent | list[TextContent | ImageContent]
 
 
-class SAPAssistantMessage(BaseModel):
+class SAPAssistantMessage(LiteLLMBaseModel):
     role: Literal["assistant"] = "assistant"
     content: str = ""
     refusal: str = ""
-    tool_calls: list[MessageToolCall] = []
+    tool_calls: list[MessageToolCall] = Field(default=[])
 
     _content_validator = field_validator("content", mode="before")(validate_different_content)
 
 
-class SAPToolChatMessage(BaseModel):
+class SAPToolChatMessage(LiteLLMBaseModel):
     role: Literal["tool"] = "tool"
     tool_call_id: str
     content: str
@@ -118,23 +120,23 @@ class SAPToolChatMessage(BaseModel):
 ChatMessage = SAPMessage | SAPUserMessage | SAPAssistantMessage | SAPToolChatMessage
 
 
-class ResponseFormat(BaseModel):
+class ResponseFormat(LiteLLMBaseModel):
     type_: Literal["text", "json_object"] = Field(default="text", alias="type")
 
 
-class JSONResponseSchema(BaseModel):
+class JSONResponseSchema(LiteLLMBaseModel):
     description: str = ""
     name: str
     schema_: dict = Field(default_factory=dict, alias="schema")
     strict: bool = False
 
 
-class ResponseFormatJSONSchema(BaseModel):
+class ResponseFormatJSONSchema(LiteLLMBaseModel):
     type_: Literal["json_schema"] = Field(default="json_schema", alias="type")
     json_schema: JSONResponseSchema
 
 
-class KeyValueListPair(BaseModel):
+class KeyValueListPair(LiteLLMBaseModel):
     key: str
     value: list[str]
 
@@ -143,7 +145,7 @@ class DocumentMetadataKeyValueListPairs(KeyValueListPair):
     select_mode: list[Literal["ignoreIfKeyAbsent"]] | None = None
 
 
-class GroundingSearchConfig(BaseModel):
+class GroundingSearchConfig(LiteLLMBaseModel):
     max_chunk_count: int | None = Field(default=None, ge=0)
     max_document_count: int | None = Field(default=None, ge=0)
 
@@ -154,7 +156,7 @@ class GroundingSearchConfig(BaseModel):
         return self
 
 
-class DocumentGroundingFilter(BaseModel):
+class DocumentGroundingFilter(LiteLLMBaseModel):
     id_: str | None = Field(default=None, alias="id")
     data_repository_type: Literal["vector", "help.sap.com"]
     search_config: GroundingSearchConfig | None = None
@@ -164,36 +166,36 @@ class DocumentGroundingFilter(BaseModel):
     chunk_metadata: list[KeyValueListPair] | None = None
 
 
-class DocumentGroundingPlaceholders(BaseModel):
+class DocumentGroundingPlaceholders(LiteLLMBaseModel):
     input: list[str] = Field(min_length=1)
     output: str
 
 
-class DocumentGroundingConfig(BaseModel):
+class DocumentGroundingConfig(LiteLLMBaseModel):
     filters: list[DocumentGroundingFilter] | None = None
     placeholders: DocumentGroundingPlaceholders
     metadata_params: list[str] | None = None
 
 
-class GroundingModuleConfig(BaseModel):
+class GroundingModuleConfig(LiteLLMBaseModel):
     type_: Literal["document_grounding_service"] = Field(default="document_grounding_service", alias="type")
     config: DocumentGroundingConfig
 
 
-class Template(BaseModel):
+class Template(LiteLLMBaseModel):
     template: list[ChatMessage]
     defaults: dict[str, str] | None = None
     response_format: ResponseFormat | ResponseFormatJSONSchema | None = None
     tools: list[ChatCompletionTool] | None = None
 
 
-class LLMModelDetails(BaseModel):
+class LLMModelDetails(LiteLLMBaseModel):
     name: str
     version: str = "latest"
     params: dict | None = None
 
 
-class PromptTemplatingModuleConfig(BaseModel):
+class PromptTemplatingModuleConfig(LiteLLMBaseModel):
     prompt: Template
     model: LLMModelDetails
 
@@ -285,7 +287,7 @@ class SAPMaskingProfileEntity(str, Enum):
     ETHNICITY = "profile-ethnicity"
 
 
-class DPIMethodConstant(BaseModel):
+class DPIMethodConstant(LiteLLMBaseModel):
     """
     Replaces the entity with the specified value followed by an incrementing number
     """
@@ -294,7 +296,7 @@ class DPIMethodConstant(BaseModel):
     value: str
 
 
-class DPIMethodFabricatedData(BaseModel):
+class DPIMethodFabricatedData(LiteLLMBaseModel):
     """
     Replaces the entity with a randomly generated value appropriate to its type.
     """
@@ -302,7 +304,7 @@ class DPIMethodFabricatedData(BaseModel):
     method: Literal["fabricated_data"] = "fabricated_data"
 
 
-class DPICustomEntity(BaseModel):
+class DPICustomEntity(LiteLLMBaseModel):
     """
     regex: Regular expression to match the entity
     replacement_strategy: Replacement strategy to be used for the entity
@@ -312,7 +314,7 @@ class DPICustomEntity(BaseModel):
     replacement_strategy: DPIMethodConstant
 
 
-class DPIStandardEntity(BaseModel):
+class DPIStandardEntity(LiteLLMBaseModel):
     """
     type: Standard entity type to be masked
     replacement_strategy: Replacement strategy to be used for the entity
@@ -322,7 +324,7 @@ class DPIStandardEntity(BaseModel):
     replacement_strategy: DPIMethodConstant | DPIMethodFabricatedData | None = None
 
 
-class MaskGroundingInput(BaseModel):
+class MaskGroundingInput(LiteLLMBaseModel):
     """
     Controls whether the input to the grounding module will be masked with the configuration
     supplied in the masking module
@@ -331,7 +333,7 @@ class MaskGroundingInput(BaseModel):
     enabled: bool = False
 
 
-class MaskingProviderConfig(BaseModel):
+class MaskingProviderConfig(LiteLLMBaseModel):
     """
     SAP Data Privacy Integration provider for data masking.
 
@@ -356,7 +358,7 @@ class MaskingProviderConfig(BaseModel):
     mask_grounding_input: MaskGroundingInput | None = None
 
 
-class MaskingModuleConfig(BaseModel):
+class MaskingModuleConfig(LiteLLMBaseModel):
     """
     Configuration for the data masking module.
 
@@ -417,7 +419,7 @@ class AzureThreshold(int, Enum):
     ALLOW_ALL = 6
 
 
-class AzureContentFilter(BaseModel):
+class AzureContentFilter(LiteLLMBaseModel):
     """
     Specific filter configuration for Azure Content Safety.
 
@@ -481,7 +483,7 @@ class AzureContentSafetyOutput(AzureContentFilter):
     protected_material_code: bool | None = False
 
 
-class LlamaGuard38bFilter(BaseModel):
+class LlamaGuard38bFilter(LiteLLMBaseModel):
     """
     Specific implementation of ContentFilter for Llama Guard 3. Llama Guard 3 is a
     Llama-3.1-8B pretrained model, fine-tuned for content safety classification.
@@ -532,22 +534,22 @@ class LlamaGuard38bFilter(BaseModel):
     code_interpreter_abuse: bool = Field(default=False)
 
 
-class LlamaGuard38bFilterConfig(BaseModel):
+class LlamaGuard38bFilterConfig(LiteLLMBaseModel):
     type_: Literal["llama_guard_3_8b"] = Field(default="llama_guard_3_8b", alias="type")
     config: LlamaGuard38bFilter
 
 
-class AzureContentSafetyInputFilterConfig(BaseModel):
+class AzureContentSafetyInputFilterConfig(LiteLLMBaseModel):
     type_: Literal["azure_content_safety"] = Field(default="azure_content_safety", alias="type")
     config: AzureContentSafetyInput | None = None
 
 
-class AzureContentSafetyOutputFilterConfig(BaseModel):
+class AzureContentSafetyOutputFilterConfig(LiteLLMBaseModel):
     type_: Literal["azure_content_safety"] = Field(default="azure_content_safety", alias="type")
     config: AzureContentSafetyOutput | None = None
 
 
-class FilteringStreamOptions(BaseModel):
+class FilteringStreamOptions(LiteLLMBaseModel):
     """
     overlap: Number of characters that should be additionally sent to content filtering services
     from previous chunks as additional context.
@@ -556,7 +558,7 @@ class FilteringStreamOptions(BaseModel):
     overlap: int | None = Field(default=0, ge=0, le=10000)
 
 
-class InputFiltering(BaseModel):
+class InputFiltering(LiteLLMBaseModel):
     """Module for managing and applying input content filters.
 
     Args:
@@ -566,7 +568,7 @@ class InputFiltering(BaseModel):
     filters: list[AzureContentSafetyInputFilterConfig | LlamaGuard38bFilterConfig] = Field(min_length=1)
 
 
-class OutputFiltering(BaseModel):
+class OutputFiltering(LiteLLMBaseModel):
     """Module for managing and applying output content filters.
 
     Args:
@@ -579,7 +581,7 @@ class OutputFiltering(BaseModel):
     stream_options: FilteringStreamOptions | None = None
 
 
-class FilteringModuleConfig(BaseModel):
+class FilteringModuleConfig(LiteLLMBaseModel):
     """Module for managing and applying content filters.
 
     Args:
@@ -603,7 +605,7 @@ class FilteringModuleConfig(BaseModel):
         return self
 
 
-class SAPDocumentTranslationApplyToSelector(BaseModel):
+class SAPDocumentTranslationApplyToSelector(LiteLLMBaseModel):
     """
     This selector allows you to define the scope of translation, such as specific placeholders or
     messages with specific roles.
@@ -619,7 +621,7 @@ class SAPDocumentTranslationApplyToSelector(BaseModel):
     source_language: str
 
 
-class InputTranslationConfig(BaseModel):
+class InputTranslationConfig(LiteLLMBaseModel):
     """
     Configuration for input translation.
 
@@ -634,12 +636,12 @@ class InputTranslationConfig(BaseModel):
     apply_to: list[SAPDocumentTranslationApplyToSelector] | None = None
 
 
-class OutputTranslationConfig(BaseModel):
+class OutputTranslationConfig(LiteLLMBaseModel):
     source_language: str | None = None
     target_language: str | SAPDocumentTranslationApplyToSelector
 
 
-class SAPDocumentTranslationInput(BaseModel):
+class SAPDocumentTranslationInput(LiteLLMBaseModel):
     """
     Configuration for input translation
 
@@ -656,7 +658,7 @@ class SAPDocumentTranslationInput(BaseModel):
     config: InputTranslationConfig
 
 
-class SAPDocumentTranslationOutput(BaseModel):
+class SAPDocumentTranslationOutput(LiteLLMBaseModel):
     """
     Configuration for output translation
 
@@ -670,7 +672,7 @@ class SAPDocumentTranslationOutput(BaseModel):
     config: OutputTranslationConfig
 
 
-class TranslationModuleConfig(BaseModel):
+class TranslationModuleConfig(LiteLLMBaseModel):
     """
     Configuration for translation module
 
@@ -690,7 +692,7 @@ class TranslationModuleConfig(BaseModel):
         return self
 
 
-class ModuleConfig(BaseModel):
+class ModuleConfig(LiteLLMBaseModel):
     prompt_templating: PromptTemplatingModuleConfig
     filtering: FilteringModuleConfig | None = None
     masking: MaskingModuleConfig | None = None
@@ -698,17 +700,17 @@ class ModuleConfig(BaseModel):
     translation: TranslationModuleConfig | None = None
 
 
-class GlobalStreamOptions(BaseModel):
+class GlobalStreamOptions(LiteLLMBaseModel):
     enabled: bool = False
     chunk_size: int | None = Field(default=None, ge=1)
     delimiters: list[str] | None = None
 
 
-class OrchestrationConfig(BaseModel):
+class OrchestrationConfig(LiteLLMBaseModel):
     modules: ModuleConfig | list[ModuleConfig]
     stream: GlobalStreamOptions | None = None
 
 
-class OrchestrationRequest(BaseModel):
+class OrchestrationRequest(LiteLLMBaseModel):
     config: OrchestrationConfig
     placeholder_values: dict[str, str] | None = None

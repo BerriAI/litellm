@@ -5,10 +5,12 @@ Base model class for domain models.
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class DomainModel(BaseModel):
+class DomainModel(LiteLLMBaseModel):
     """Base class for all domain models."""
 
     model_config = ConfigDict(

@@ -16,6 +16,7 @@ from litellm.llms.openai.chat.gpt_transformation import (
 )
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -32,7 +33,7 @@ if TYPE_CHECKING:
 GROQ_COMPOUND_MODELS: Final = frozenset({"compound", "compound-mini"})
 
 
-class GroqExecutedToolIdentity(BaseModel):
+class GroqExecutedToolIdentity(LiteLLMBaseModel):
     name: str | None = None
     type: str | None = None
 

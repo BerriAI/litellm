@@ -36,6 +36,7 @@ from litellm.proxy.prompts.prompt_registry import (
     prompt_environment_or_default,
 )
 from litellm.repositories.table_repositories import PromptRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.prompts.init_prompts import (
     ListPromptsResponse,
     PromptInfo,
@@ -76,7 +77,7 @@ class _PromptRow(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-class _PromptRowData(BaseModel):
+class _PromptRowData(LiteLLMBaseModel):
     prompt_id: str
     version: int = 1
     environment: str = "development"
@@ -190,7 +191,7 @@ def create_versioned_prompt_spec(db_prompt: _PromptRow) -> PromptSpec:
     )
 
 
-class Prompt(BaseModel):
+class Prompt(LiteLLMBaseModel):
     prompt_id: str
     litellm_params: PromptLiteLLMParams
     prompt_info: PromptInfo | None = None
@@ -211,7 +212,7 @@ def is_ambiguous_keyed_prompt_data(litellm_params: PromptLiteLLMParams) -> bool:
     return bool(prompt_data) and "content" not in prompt_data
 
 
-class PatchPromptRequest(BaseModel):
+class PatchPromptRequest(LiteLLMBaseModel):
     litellm_params: PromptLiteLLMParams | None = None
     prompt_info: PromptInfo | None = None
 
@@ -1039,7 +1040,6 @@ async def test_prompt(
         }'
     ```
     """
-    from pydantic import BaseModel
 
     from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
     from litellm.integrations.dotprompt.prompt_manager import (

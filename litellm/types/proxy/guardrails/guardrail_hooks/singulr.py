@@ -1,34 +1,36 @@
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
 
-class ContentBlock(BaseModel):
+class ContentBlock(LiteLLMBaseModel):
     type: str | None = None
     text: str | None = None
 
 
-class ToolCallFunction(BaseModel):
+class ToolCallFunction(LiteLLMBaseModel):
     name: str
     arguments: str
 
 
-class ToolCall(BaseModel):
+class ToolCall(LiteLLMBaseModel):
     id: str
     type: str = "function"
     function: ToolCallFunction
 
 
-class AssistantMessage(BaseModel):
+class AssistantMessage(LiteLLMBaseModel):
     role: Literal["assistant"] = "assistant"
     content: str | Sequence[ContentBlock] | None = None
     tool_calls: Sequence[ToolCall] | None = None
 
 
-class SingulrGuardrailPayload(BaseModel):
+class SingulrGuardrailPayload(LiteLLMBaseModel):
     correlation_id: str | None = None
     model_name: str | None = None
     model_provider_name: str | None = None
@@ -40,7 +42,7 @@ class SingulrGuardrailPayload(BaseModel):
     metadata: Mapping[str, str] | None = None
 
 
-class SingulrMcpGuardrailPayload(BaseModel):
+class SingulrMcpGuardrailPayload(LiteLLMBaseModel):
     model_name: str | None = None
     guardrail_scope: str | None = None
     tool_name: str | None = None
@@ -50,7 +52,7 @@ class SingulrMcpGuardrailPayload(BaseModel):
     metadata: Mapping[str, str] | None = None
 
 
-class SingulrGuardrailResponse(BaseModel):
+class SingulrGuardrailResponse(LiteLLMBaseModel):
     """Response returned by the Singulr guardrail API."""
 
     should_block: bool = False
