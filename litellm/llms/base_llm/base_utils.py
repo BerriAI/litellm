@@ -6,7 +6,7 @@ import copy
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Final
 
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
@@ -21,12 +21,12 @@ class BaseTokenCounter(ABC):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: list[dict[str, Any]] | None,
-        contents: list[dict[str, Any]] | None,
-        deployment: dict[str, Any] | None = None,
+        messages: list[dict[str, object]] | None,
+        contents: list[dict[str, object]] | None,
+        deployment: dict[str, object] | None = None,
         request_model: str = "",
-        tools: list[dict[str, Any]] | None = None,
-        system: Any | None = None,
+        tools: list[dict[str, object]] | None = None,
+        system: object | None = None,
     ) -> TokenCountResponse | None:
         pass
 

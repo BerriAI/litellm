@@ -1017,6 +1017,32 @@ class TestOpenAIResponsesAPIConfig:
         assert len(request["input"]) == len(history) - 1
         assert all(item.get("type") != "reasoning" for item in request["input"])
 
+    @pytest.mark.parametrize(
+        ("reasoning_item", "expected"),
+        [
+            (
+                {"id": "rs_1", "type": "reasoning", "summary": [], "status": None, "note": None},
+                {"id": "rs_1", "type": "reasoning", "summary": []},
+            ),
+            (
+                {"id": "rs_1", "type": "reasoning", "summary": "not a list", "status": None, "note": None},
+                {"id": "rs_1", "type": "reasoning", "summary": "not a list", "note": None},
+            ),
+        ],
+    )
+    def test_a_reasoning_input_item_loses_its_null_status_whether_or_not_it_fits_the_openai_model(
+        self, reasoning_item: dict[str, object], expected: dict[str, object]
+    ):
+        request: Final = self.config.transform_responses_api_request(
+            model="gpt-5.6",
+            input=[reasoning_item, {"role": "user", "content": "And Berlin?"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [expected, {"role": "user", "content": "And Berlin?"}]
+
 
 class TestAzureResponsesAPIConfig:
     def setup_method(self):

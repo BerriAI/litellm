@@ -184,7 +184,7 @@ class AutoRouter(CustomLogger):
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None = None,
+        messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> Optional["PreRoutingHookResponse"]:

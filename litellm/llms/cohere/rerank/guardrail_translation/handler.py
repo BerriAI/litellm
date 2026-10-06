@@ -5,7 +5,7 @@ This module provides guardrail translation support for the rerank endpoint.
 The handler processes only the 'query' parameter for guardrails.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -44,7 +44,7 @@ class CohereRerankHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> Any:
+    ) -> object:
         """
         Process input text fields ('query' and 'instruction') by applying
         guardrails and writing the sanitized values back.
@@ -96,9 +96,9 @@ class CohereRerankHandler(BaseTranslation):
         response: "RerankResponse",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: object | None = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> "RerankResponse":
         """
         Process output response - not applicable for rerank.
 

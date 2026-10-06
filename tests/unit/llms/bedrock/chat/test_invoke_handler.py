@@ -725,8 +725,10 @@ def _event_stream_frame(event_type: str, payload: bytes) -> bytes:
     def header(name: str, value: str) -> bytes:
         return bytes([len(name)]) + name.encode() + bytes([7]) + struct.pack(">H", len(value)) + value.encode()
 
-    headers: Final = header(":event-type", event_type) + header(":content-type", "application/json") + header(
-        ":message-type", "event"
+    headers: Final = (
+        header(":event-type", event_type)
+        + header(":content-type", "application/json")
+        + header(":message-type", "event")
     )
     prelude: Final = struct.pack(">II", 12 + len(headers) + len(payload) + 4, len(headers))
     body: Final = prelude + struct.pack(">I", binascii.crc32(prelude)) + headers + payload
@@ -1151,3 +1153,25 @@ async def test_async_invoke_streaming_fails_at_the_request_timeout_not_the_upstr
 def test_sync_invoke_streaming_fails_at_the_request_timeout_not_the_upstreams_pace() -> None:
     with pytest.raises(litellm.Timeout):
         litellm.completion(client=slow_upstream_sync_client(), **_invoke_streaming_kwargs())
+
+
+def test_command_r_completion_sends_the_cohere_chat_body_with_only_the_callers_params() -> None:
+    sent_bodies: Final[list[object]] = []
+
+    def bedrock(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"text": "hello"})
+
+    response: Final = litellm.completion(
+        model="bedrock/cohere.command-r-plus-v1:0",
+        messages=[{"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}],
+        max_tokens=32,
+        p=0.9,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(bedrock))),
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+    assert sent_bodies == [{"message": "be brief\n\nhi", "max_tokens": 32, "p": 0.9, "chat_history": []}]
+    assert response.choices[0].message.content == "hello"

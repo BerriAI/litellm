@@ -357,8 +357,8 @@ class AnthropicMessagesHandler(BaseTranslation):
     def build_stream_error_items(
         self,
         exc: "HTTPException",
-        responses_so_far: Sequence[Any] | None = None,
-    ) -> Sequence[Any] | None:
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[object] | None:
         from litellm.proxy.common_request_processing import (
             serialize_http_exception_detail,
         )

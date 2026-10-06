@@ -105,7 +105,7 @@ class VertexAIRAGTransformation(VertexBase):
         self,
         gcs_uri: str,
         chunking_strategy: RAGChunkingStrategy | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Build the request payload for importing RAG files.
 

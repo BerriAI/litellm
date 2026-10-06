@@ -316,7 +316,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         metadata: dict | None = None,
         system: str | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -529,7 +529,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return params
 
     @staticmethod
-    def filter_anthropic_output_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    def filter_anthropic_output_schema(schema: dict[str, Any]) -> dict[str, object]:
         """
         Filter out unsupported fields from JSON schema for Anthropic's output_format API.
 
@@ -1417,8 +1417,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def map_openai_context_management_to_anthropic(
-        context_management: list[dict[str, Any]] | dict[str, Any],
-    ) -> dict[str, Any] | None:
+        context_management: Sequence[Mapping[str, object]] | Mapping[str, object],
+    ) -> dict[str, object] | None:
         """
         OpenAI format: [{"type": "compaction", "compact_threshold": 200000}]
         Anthropic format: {

@@ -35,7 +35,7 @@ def make_sync_call(
     fake_stream: bool = False,
     stream_chunk_size: int | None = None,
     timeout: float | httpx.Timeout | None = None,
-) -> tuple[Any, httpx.Headers]:
+) -> tuple[object, httpx.Headers]:
     if client is None:
         client = _get_httpx_client()  # Create a new client if none provided
 

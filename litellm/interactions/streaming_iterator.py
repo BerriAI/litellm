@@ -127,7 +127,7 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
         model: str | None,
         interactions_api_config: BaseInteractionsAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: dict[str, object] | None = None,
         custom_llm_provider: str | None = None,
     ):
         super().__init__(
@@ -194,7 +194,7 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
         model: str | None,
         interactions_api_config: BaseInteractionsAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: dict[str, object] | None = None,
         custom_llm_provider: str | None = None,
     ):
         super().__init__(

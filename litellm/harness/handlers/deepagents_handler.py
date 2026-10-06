@@ -154,7 +154,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
 
     async def history(
         self, ctx: SessionContext
-    ) -> list[dict[str, Any]]:  # mutable-ok: BaseHarnessHandler.history API returns OpenAI message dicts
+    ) -> list[dict[str, object]]:  # mutable-ok: BaseHarnessHandler.history API returns OpenAI message dicts
         agent, deps = self._require_agent()
         snapshot = await agent.aget_state(self._run_config(ctx, None))
         messages = (snapshot.values or MappingProxyType({})).get("messages") or ()
@@ -236,13 +236,13 @@ class DeepAgentsHandler(BaseHarnessHandler):
         return run_config
 
     @staticmethod
-    def _middleware(deps: DeepAgentsDeps, blocked: frozenset[str]) -> list[Any]:  # mutable-ok: deepagents API
+    def _middleware(deps: DeepAgentsDeps, blocked: frozenset[str]) -> list[object]:  # mutable-ok: deepagents API
         filters = (deps.backend.ToolFilterMiddleware(blocked),) if blocked else ()
         return list(filters)  # mutable-ok: deepagents create_deep_agent(middleware=) takes a list
 
     def _subagents(
         self, ctx: SessionContext, deps: DeepAgentsDeps, blocked: frozenset[str]
-    ) -> list[Any]:  # mutable-ok: deepagents create_deep_agent(subagents=) takes a list
+    ) -> list[object]:  # mutable-ok: deepagents create_deep_agent(subagents=) takes a list
         """User subagents, plus a general-purpose one that honours disable_tools when set."""
         options = ctx.options if isinstance(ctx.options, DeepAgentsOptions) else None
         user_subagents = tuple(options.subagents) if options is not None else ()

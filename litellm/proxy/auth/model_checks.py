@@ -2,7 +2,7 @@
 ## Common checks for /v1/models and `/model/info`
 import copy
 from collections.abc import Sequence
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -324,8 +324,8 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
 
 
 def expand_wildcard_deployments_for_model_info(
-    deployments: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+    deployments: list[dict[str, object]],
+) -> list[dict[str, object]]:
     """Expand wildcard deployments into one row per known provider model.
 
     PR #30025 changed /model/info to read from llm_router.model_list (correct,
@@ -333,11 +333,11 @@ def expand_wildcard_deployments_for_model_info(
     on top of that: a wildcard deployment like model_name="*" / litellm_params.model="openai/*"
     becomes one entry per known openai model, matching /v1/models behaviour.
     """
-    expanded: Final[list[dict[str, Any]]] = []
+    expanded: Final[list[dict[str, object]]] = []
     for deployment in deployments:
         model_name = str(deployment.get("model_name") or "")
         raw_params = deployment.get("litellm_params")
-        litellm_params_dict: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
+        litellm_params_dict: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
         litellm_model = str(litellm_params_dict.get("model") or "")
 
         # Determine the wildcard pattern to expand.

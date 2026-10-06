@@ -1,6 +1,6 @@
 from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Final, cast, get_type_hints
+from typing import TYPE_CHECKING, Final, cast, get_type_hints
 
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequestOptionalParams,
@@ -21,7 +21,7 @@ INCOMPLETE_STREAM_ERROR_MESSAGE: Final = (
 )
 
 
-def get_safeguard_refusal_stop_details(response: object) -> Mapping[str, Any] | None:
+def get_safeguard_refusal_stop_details(response: object) -> Mapping[str, object] | None:
     """
     Return the ``stop_details`` of an Anthropic Messages response refused by a
     safeguard (``stop_reason: "refusal"`` carrying ``stop_details``:
@@ -134,7 +134,7 @@ def _anthropic_messages_optional_param_keys() -> frozenset[str]:
 class AnthropicMessagesRequestUtils:
     @staticmethod
     def get_requested_anthropic_messages_optional_param(
-        params: dict[str, Any],
+        params: dict[str, object],
         *,
         model: str | None = None,
         drop_params: bool = False,

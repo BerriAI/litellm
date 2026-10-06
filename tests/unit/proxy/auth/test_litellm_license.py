@@ -1,10 +1,14 @@
 import asyncio
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import pytest
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 
 
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 
 
@@ -126,3 +130,28 @@ def test_valid_signed_wildcard_license_lifts_the_limit() -> None:
     assert license_check.verify_license_without_api_request(public_key=named_public_key, license_key=named_key) is True
     assert license_check.grants_feature("auto_router") is False
     assert license_check.auto_router_capability_limit() == 1
+
+
+@pytest.mark.parametrize(
+    ("reply", "premium"),
+    [
+        ({"verify": True}, True),
+        ({"verify": False}, False),
+        (["verify", True], False),
+    ],
+)
+def test_is_premium_follows_the_license_server_reply_for_an_unsigned_license(
+    monkeypatch: pytest.MonkeyPatch, reply: object, premium: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_LICENSE", "license-the-public-key-did-not-sign")
+    requested: Final[list[str]] = []
+
+    def license_server(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(200, json=reply)
+
+    license_check: Final = LicenseCheck()
+    license_check.http_handler = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(license_server)))
+
+    assert license_check.is_premium() is premium
+    assert set(requested) == {"https://license.litellm.ai/verify_license/license-the-public-key-did-not-sign"}

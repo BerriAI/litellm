@@ -8,7 +8,7 @@ Docs: https://openrouter.ai/docs/parameters
 
 from collections.abc import AsyncIterator, Iterator
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import httpx
 
@@ -241,7 +241,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> object:
         return OpenRouterChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,

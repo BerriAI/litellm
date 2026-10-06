@@ -1,5 +1,6 @@
 import json
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -79,7 +80,7 @@ class NLPCloudConfig(BaseConfig):
         num_beams: int | None = None,
         num_return_sequences: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

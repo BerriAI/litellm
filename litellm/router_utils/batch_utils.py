@@ -9,6 +9,8 @@ from litellm.types.utils import CallTypes
 
 
 class InMemoryFile(io.BytesIO):
+    name: str
+
     def __init__(self, content: bytes, name: str, content_type: str = "application/jsonl"):
         super().__init__(content)
         self.name = name

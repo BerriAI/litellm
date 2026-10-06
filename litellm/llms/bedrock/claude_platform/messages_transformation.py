@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm.llms.anthropic.pass_through.messages.transformation import (
@@ -24,7 +24,7 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: list[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

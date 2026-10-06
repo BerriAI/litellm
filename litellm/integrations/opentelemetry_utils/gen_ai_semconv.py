@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.opentelemetry import OpenTelemetryConfig
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 

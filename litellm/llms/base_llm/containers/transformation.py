@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -130,7 +131,7 @@ class BaseContainerConfig(ABC):
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, Any] | None = None,
+        extra_query: Mapping[str, object] | None = None,
     ) -> tuple[str, dict]:
         """Transform the container list request into a URL and params.
 
@@ -206,7 +207,7 @@ class BaseContainerConfig(ABC):
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, Any] | None = None,
+        extra_query: Mapping[str, object] | None = None,
     ) -> tuple[str, dict]:
         """Transform the container file list request into a URL and params.
 

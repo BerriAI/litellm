@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
-    Span = _Span | Any
+    Span = _Span
 else:
     Protocol = Any
     OpenTelemetryConfig = Any

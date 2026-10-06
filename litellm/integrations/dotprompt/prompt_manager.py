@@ -370,6 +370,6 @@ class PromptManager:
             }
         return result
 
-    def load_prompts_from_json_data(self, prompt_data: dict[str, dict[str, Any]]) -> None:
+    def load_prompts_from_json_data(self, prompt_data: dict[str, dict[str, object]]) -> None:
         """Load additional prompts from JSON data (merges with existing prompts)."""
         self._load_prompts_from_json(prompt_data)

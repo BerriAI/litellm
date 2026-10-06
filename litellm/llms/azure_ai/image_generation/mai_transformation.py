@@ -77,7 +77,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         return "maiimage" in model_normalized
 
     @staticmethod
-    def normalize_mai_image_usage(usage: dict[str, Any] | None) -> dict[str, Any]:
+    def normalize_mai_image_usage(usage: dict[str, Any] | None) -> dict[str, object]:
         """Map Azure MAI usage fields to OpenAI ImageUsage schema."""
         if usage is None:
             return {

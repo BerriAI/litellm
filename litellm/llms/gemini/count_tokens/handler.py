@@ -13,7 +13,7 @@ else:
 
 
 class GoogleAIStudioTokenCounter:
-    def _clean_contents_for_gemini_api(self, contents: Any) -> Any:
+    def _clean_contents_for_gemini_api(self, contents: Any) -> object:
         """
         Clean up contents to remove unsupported fields for the Gemini API.
 
@@ -61,7 +61,7 @@ class GoogleAIStudioTokenCounter:
         headers: dict[str, object] | None = None,
         model: str = "",
         litellm_params: dict[str, object] | None = None,
-    ) -> tuple[dict[str, Any], str]:
+    ) -> tuple[dict[str, object], str]:
         """
         Returns a Tuple of headers and url for the Google Gen AI Studio countTokens endpoint.
         """

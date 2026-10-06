@@ -966,7 +966,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     def maybe_inject_cache_control(
         messages: list[dict],
         system: str | list | None,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, object],
         model: str | None = None,
         custom_llm_provider: str | None = None,
         tools: list[dict] | None = None,

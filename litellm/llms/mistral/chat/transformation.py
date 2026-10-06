@@ -6,8 +6,8 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import TYPE_CHECKING, Any, Final, Literal, cast, get_type_hints, overload
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 import httpx
 
@@ -99,7 +99,7 @@ class MistralConfig(OpenAIGPTConfig):
         response_format: dict | None = None,
         stop: str | list | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -229,7 +229,7 @@ class MistralConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: 
+    ) -> Coroutine[object, object, list[AllMessageValues]]: 
         ...
 
     @overload
@@ -244,7 +244,7 @@ class MistralConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         - handles scenario where content is list and not string
         - content list is just text, and no images

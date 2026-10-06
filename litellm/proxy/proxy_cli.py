@@ -497,7 +497,7 @@ class ProxyInitializationHelpers:
         if ciphers is not None:
             print("\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n")
 
-        kwargs: Final[dict[str, Any]] = {
+        kwargs: Final[dict[str, object]] = {
             "target": "litellm.proxy.proxy_server:app",
             "address": host,
             "port": port,

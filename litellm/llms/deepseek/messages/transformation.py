@@ -46,7 +46,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: list[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -94,7 +94,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         return f"{base_url}/v1/messages"
 
     @staticmethod
-    def _sanitize_tools_for_deepseek(tools: Any) -> Any:
+    def _sanitize_tools_for_deepseek(tools: Any) -> object:
         if not isinstance(tools, list):
             return tools
 

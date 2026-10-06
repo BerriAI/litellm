@@ -152,7 +152,7 @@ class GcsPubSubLogger(CustomBatchLogger):
         finally:
             self.log_queue.clear()
 
-    async def publish_message(self, message: SpendLogsPayload | StandardLoggingPayload) -> dict[str, Any] | None:
+    async def publish_message(self, message: SpendLogsPayload | StandardLoggingPayload) -> dict[str, object] | None:
         """
         Publish message to Google Cloud Pub/Sub using REST API
 

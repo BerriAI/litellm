@@ -18,7 +18,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -172,8 +172,8 @@ class AdaptiveRouter:
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: dict[str, Any],
-        messages: list[dict[str, Any]] | None = None,
+        request_kwargs: dict[str, object],
+        messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse | None:

@@ -2,7 +2,7 @@ import re
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Final
+from typing import Final
 
 from litellm.types.utils import OTEL_SPAN_SCOPES, TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
 
@@ -22,8 +22,8 @@ def inherit_message_logging_privacy(disabled: bool) -> Generator[None]:
 
 
 def iter_client_callback_metadata_dicts(
-    kwargs: dict[str, Any],
-) -> Iterator[tuple[str, dict[str, Any]]]:
+    kwargs: dict[str, object],
+) -> Iterator[tuple[str, dict[str, object]]]:
     litellm_params: Final = kwargs.get("litellm_params")
     if isinstance(litellm_params, dict):
         nested: Final = litellm_params.get("metadata")
@@ -148,7 +148,7 @@ _trusted_overlay_callback_params: Final = frozenset(
 )
 
 
-def get_trusted_callback_params(kwargs: Mapping[str, Any] | None) -> tuple[tuple[str, str], ...]:
+def get_trusted_callback_params(kwargs: Mapping[str, object] | None) -> tuple[tuple[str, str], ...]:
     """
     Read callback params the proxy itself stamped from admin-configured team/key callback settings.
 

@@ -562,7 +562,7 @@ def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
 
 
 def _strip_client_callback_credentials(
-    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
     """Drop callback credentials and destinations supplied by the caller.
 
@@ -626,7 +626,7 @@ def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
 
 
 def _strip_router_reserved_metadata(
-    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
     """Drop the router-owned fallback stamps from any client-supplied metadata bucket."""
     for metadata_key in ("metadata", "litellm_metadata"):
@@ -1393,7 +1393,9 @@ class LiteLLMProxyRequestSetup:
         return user
 
     @staticmethod
-    def get_openai_org_id_from_headers(headers: dict, general_settings: dict | None = None) -> str | None:
+    def get_openai_org_id_from_headers(
+        headers: dict, general_settings: Mapping[str, object] | None = None
+    ) -> str | None:
         """
         Get the OpenAI Org ID from the headers.
         """
@@ -1484,7 +1486,7 @@ class LiteLLMProxyRequestSetup:
         headers: dict,
         request_data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        general_settings: dict[str, Any] | None = None,
+        general_settings: Mapping[str, object] | None = None,
     ) -> LitellmDataForBackendLLMCall:
         """
         - Adds user from headers

@@ -196,7 +196,7 @@ class IPAddressUtils:
     @staticmethod
     def is_request_https(
         request: Request,
-        general_settings: Mapping[str, Any] | None = None,
+        general_settings: Mapping[str, object] | None = None,
     ) -> bool:
         """
         Whether this request's PUBLIC-facing origin is HTTPS, for deciding

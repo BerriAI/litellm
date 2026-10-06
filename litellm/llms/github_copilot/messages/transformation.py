@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Final
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.pass_through.messages.transformation import (
@@ -51,7 +51,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: list[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

@@ -207,14 +207,14 @@ class RouterBudgetLimiting(CustomLogger):
 
     def _filter_out_deployments_above_budget(
         self,
-        potential_deployments: list[dict[str, Any]],
+        potential_deployments: list[dict[str, object]],
         healthy_deployments: list[dict[str, Any]],
         provider_configs: dict[str, GenericBudgetInfo],
         deployment_configs: dict[str, GenericBudgetInfo],
         deployment_providers: list[str | None],
         spend_map: dict[str, float],
         request_tags: list[str],
-    ) -> tuple[list[dict[str, Any]], str]:
+    ) -> tuple[list[dict[str, object]], str]:
         """
         Filter out deployments that have exceeded their budget limit.
         Follow budget checks are run here:
@@ -905,7 +905,7 @@ class RouterBudgetLimiting(CustomLogger):
 
     def register_deployment_budget(
         self,
-        deployment: dict[str, Any] | DeploymentTypedDict,
+        deployment: dict[str, object] | DeploymentTypedDict,
     ) -> None:
         """
         Register or refresh deployment-level budget config for a runtime-added deployment.

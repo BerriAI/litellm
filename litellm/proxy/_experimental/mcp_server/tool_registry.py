@@ -1,6 +1,6 @@
 import json
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
 from litellm.proxy.types_utils.utils import get_instance_fn
@@ -28,7 +28,7 @@ class MCPToolRegistry:
         self,
         name: str,
         description: str,
-        input_schema: dict[str, Any],
+        input_schema: dict[str, object],
         handler: Callable,
     ) -> None:
         """
@@ -86,7 +86,7 @@ class MCPToolRegistry:
 
     def load_tools_from_config(
         self,
-        mcp_tools_config: dict[str, Any] | None = None,
+        mcp_tools_config: dict[str, object] | None = None,
         config_file_path: str | None = None,
     ) -> None:
         """

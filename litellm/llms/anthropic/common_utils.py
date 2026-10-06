@@ -1631,7 +1631,7 @@ def strip_encrypted_reasoning_blocks_from_anthropic_messages(
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
-    data: dict[str, Any],
+    data: dict[str, object],
 ) -> None:
     """
     Mutate an Anthropic Messages-style request dict: strip thinking blocks from
@@ -1644,7 +1644,7 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
 
 
 def strip_empty_content_blocks_from_anthropic_messages(
-    messages: list[Any],
+    messages: Sequence[object],
 ) -> list[Any]:
     """
     Return a new message list with empty or whitespace-only ``{"type": "text"}``
@@ -1759,7 +1759,7 @@ def _sanitize_tool_use_id_content_block(block: object) -> object:
     return block
 
 
-def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any]:
+def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> list[Any]:
     """
     Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
     ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
@@ -1933,7 +1933,7 @@ def _flatten_web_search_results_in_message(message: object) -> object:
 
 
 def flatten_unencrypted_web_search_results_in_anthropic_messages(
-    messages: list[Any],
+    messages: Sequence[object],
 ) -> list[Any]:
     """
     Return a new message list with replayed ``web_search_tool_result`` blocks that

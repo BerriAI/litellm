@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
@@ -36,7 +36,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict[str, str],
         model: str,
-        messages: list[Any],
+        messages: list[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -141,7 +141,7 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         self,
         headers: dict[str, str],
         model: str,
-        messages: list[Any],
+        messages: list[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

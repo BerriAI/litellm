@@ -1,11 +1,14 @@
 import base64
+from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.mistral.audio_speech.transformation import (
     MistralTextToSpeechConfig,
@@ -14,6 +17,8 @@ from litellm.llms.mistral.audio_speech.transformation import (
 from litellm.utils import ProviderConfigManager
 
 SPEECH_URL: Final = "https://api.mistral.ai/v1/audio/speech"
+SPEECH_MODEL: Final = "voxtral-mini-tts-2603"
+ENCODED_AUDIO: Final = "UklGRg=="
 
 
 def test_mistral_text_to_speech_config_installed():
@@ -195,3 +200,73 @@ def test_transform_response_invalid_base64_raises():
             raw_response=raw_response,
             logging_obj=MagicMock(),
         )
+
+
+def _speech_logging() -> Logging:
+    return Logging(
+        model=SPEECH_MODEL,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="speech",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="mistral-speech-call",
+        function_id="mistral-speech-function",
+    )
+
+
+@pytest.mark.parametrize(
+    ("request_body", "expected_content_type"),
+    [
+        ({"model": SPEECH_MODEL, "input": "hi"}, "audio/mpeg"),
+        ({"model": SPEECH_MODEL, "input": "hi", "response_format": "opus"}, "audio/ogg"),
+        ({"model": SPEECH_MODEL, "input": "hi", "response_format": "flac"}, "audio/flac"),
+        ({"model": SPEECH_MODEL, "input": "hi", "response_format": "aiff"}, "audio/mpeg"),
+    ],
+)
+def test_transform_response_content_type_follows_the_requested_format(
+    request_body: dict[str, str], expected_content_type: str
+):
+    raw_response: Final = httpx.Response(
+        200,
+        json={"audio_data": ENCODED_AUDIO},
+        request=httpx.Request("POST", SPEECH_URL, json=request_body),
+    )
+    result: Final = MistralTextToSpeechConfig().transform_text_to_speech_response(
+        model=SPEECH_MODEL,
+        raw_response=raw_response,
+        logging_obj=_speech_logging(),
+    )
+    assert result.content == b"RIFF"
+    assert result.response.headers["content-type"] == expected_content_type
+
+
+def test_transform_response_missing_audio_data_reports_the_response_keys():
+    raw_response: Final = httpx.Response(
+        200,
+        json={"detail": "unexpected", "id": "req-9"},
+        request=httpx.Request("POST", SPEECH_URL, json={"model": SPEECH_MODEL, "input": "hi"}),
+    )
+    with pytest.raises(MistralTextToSpeechException) as exc_info:
+        MistralTextToSpeechConfig().transform_text_to_speech_response(
+            model=SPEECH_MODEL,
+            raw_response=raw_response,
+            logging_obj=_speech_logging(),
+        )
+    assert exc_info.value.message == "No audio_data in Mistral speech response. Response keys: ('detail', 'id')"
+    assert exc_info.value.status_code == 500
+
+
+@pytest.mark.parametrize("payload", [ENCODED_AUDIO, [ENCODED_AUDIO], [{"audio_data": ENCODED_AUDIO}]])
+def test_transform_response_rejects_non_object_bodies(payload: object):
+    raw_response: Final = httpx.Response(
+        200,
+        json=payload,
+        request=httpx.Request("POST", SPEECH_URL, json={"model": SPEECH_MODEL, "input": "hi"}),
+    )
+    with pytest.raises(ValidationError) as exc_info:
+        MistralTextToSpeechConfig().transform_text_to_speech_response(
+            model=SPEECH_MODEL,
+            raw_response=raw_response,
+            logging_obj=_speech_logging(),
+        )
+    assert ENCODED_AUDIO not in str(exc_info.value)

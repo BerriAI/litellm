@@ -11,7 +11,7 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
 """
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -128,10 +128,10 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator[str] | AsyncIterator[str] | Any,
+        streaming_response: Iterator[str] | AsyncIterator[str] | object,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> object:
         from litellm.llms.openai.chat.gpt_transformation import (
             OpenAIChatCompletionStreamingHandler,
         )

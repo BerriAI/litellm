@@ -122,7 +122,7 @@ class UserApiKeyCache(DualCache):
         local_only: bool = False,
         model_type: None = None,
         **kwargs: object,
-    ) -> Any: ...
+    ) -> object: ...
 
     def get_cache(
         self,

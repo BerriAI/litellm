@@ -155,7 +155,7 @@ class ArizeLogger(OpenTelemetry):
         primary ``otel`` callback which handles proxy-level parent spans.
         """
 
-    def set_attributes(self, span: Span, kwargs, response_obj: Any | None):
+    def set_attributes(self, span: Span, kwargs, response_obj: object | None):
         ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
 
     @staticmethod

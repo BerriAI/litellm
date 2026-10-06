@@ -73,7 +73,7 @@ _APPROVAL_DECISIONS: Final = ("approve", "reject")
 
 def chat_model_kwargs(
     ctx: SessionContext,
-) -> dict[str, Any]:  # mutable-ok: ChatLiteLLM constructor kwargs, splatted as **kwargs
+) -> dict[str, object]:  # mutable-ok: ChatLiteLLM constructor kwargs, splatted as **kwargs
     """ChatLiteLLM constructor kwargs for gateway or SDK mode."""
     if not ctx.model:
         raise ValueError("Harness.DEEPAGENTS needs model=")
@@ -107,7 +107,7 @@ def blocked_tools(permissions: str, disable_tools: Sequence[str]) -> frozenset[s
 
 def interrupt_config(
     permissions: str, blocked: frozenset[str]
-) -> dict[str, Any] | None:  # mutable-ok: deepagents create_deep_agent(interrupt_on=) takes a dict
+) -> dict[str, object] | None:  # mutable-ok: deepagents create_deep_agent(interrupt_on=) takes a dict
     """interrupt_on for permissions='ask': approve/reject every mutating built-in."""
     if permissions != "ask":
         return None
@@ -223,7 +223,7 @@ def _message_events(message: object, skip_tools: frozenset[str]) -> tuple[Event,
 
 def interrupts_in(
     update: object,
-) -> list[Any]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
+) -> list[object]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     if not isinstance(update, Mapping):
         return []  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     found = update.get("__interrupt__")

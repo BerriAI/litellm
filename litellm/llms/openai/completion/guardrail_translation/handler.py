@@ -5,7 +5,7 @@ This module provides guardrail translation support for OpenAI's text completion 
 The handler processes the 'prompt' parameter for guardrails.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -35,7 +35,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> Any:
+    ) -> object:
         """
         Process input prompt by applying guardrails to text content.
 
@@ -122,9 +122,9 @@ class OpenAITextCompletionHandler(BaseTranslation):
         response: "TextCompletionResponse",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: object | None = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> "TextCompletionResponse":
         """
         Process output response by applying guardrails to completion text.
 

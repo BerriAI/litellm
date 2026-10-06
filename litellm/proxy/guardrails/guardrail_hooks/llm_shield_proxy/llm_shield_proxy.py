@@ -322,7 +322,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         data: MutableRequest,
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
-    ) -> Any:
+    ) -> object:
         """Restores the original values in a copy of a non-streaming response.
 
         The copy is what keeps plaintext out of the response cache. LiteLLM caches the
@@ -430,7 +430,9 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             collect_response_item(item, slots)
         return tuple(slots)
 
-    async def _restore_responses_api_response(self, response: Any, slots: Sequence[Slot], data: MutableRequest) -> Any:
+    async def _restore_responses_api_response(
+        self, response: object, slots: Sequence[Slot], data: MutableRequest
+    ) -> object:
         """Puts the original values back into a Responses API reply."""
         await rehydrate_slots(slots, functools.partial(self._rehydrate, session_id=self._session_id(data)))
         return response
@@ -559,7 +561,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
     async def _restore_tool_call_window(
         self,
-        tool_call: Any,
+        tool_call: object,
         choice_index: int,
         carries: CarryWindows,
         session_id: str,
@@ -620,8 +622,8 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             delta.tool_calls = [*existing, *continuations]
 
     async def _flush_trailing(
-        self, last_chunk: Any, carries: CarryWindows, session_id: str
-    ) -> AsyncGenerator[Any, None]:
+        self, last_chunk: object, carries: CarryWindows, session_id: str
+    ) -> AsyncGenerator[object, None]:
         """Empties every window still holding text, one chunk per window.
 
         This is the net for a stream that ended with no finish_reason at all; a stream

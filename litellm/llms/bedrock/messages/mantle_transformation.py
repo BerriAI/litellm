@@ -83,7 +83,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: list[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

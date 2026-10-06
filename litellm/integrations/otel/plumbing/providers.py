@@ -6,7 +6,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from opentelemetry import _logs, baggage, metrics, trace
 from opentelemetry._logs import Logger, LoggerProvider, NoOpLoggerProvider
@@ -918,7 +918,7 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
         )
 
         tls: Final = resolve_otlp_http_tls("METRICS")
-        exporter: Any = HTTPMetricExporter(
+        exporter: object = HTTPMetricExporter(
             endpoint=_otlp_metrics_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
             certificate_file=tls.certificate_file,

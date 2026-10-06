@@ -118,7 +118,7 @@ class OpenAICountTokensConfig:
         self,
         model: str,
         input: str | Sequence[object],
-        tools: list[dict[str, Any]] | None = None,
+        tools: list[dict[str, object]] | None = None,
         instructions: str | None = None,
     ) -> dict[str, object]:
         """

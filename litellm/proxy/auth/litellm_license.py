@@ -3,10 +3,12 @@
 import base64
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import NON_LLM_CONNECTION_TIMEOUT
@@ -19,6 +21,7 @@ if TYPE_CHECKING:
 AUTO_ROUTER_LICENSE_FEATURE: Final = "auto_router"
 LICENSE_ALL_FEATURES: Final = "*"
 AUTO_ROUTER_LICENSE_REMEDY: Final = "A LiteLLM license with the 'auto_router' feature lifts the limit."
+_LICENSE_SERVER_REPLY: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class LicenseCheck:
@@ -79,7 +82,7 @@ class LicenseCheck:
             if response is None:
                 raise Exception("No response from license server")
 
-            response_json: Final = response.json()
+            response_json: Final = _LICENSE_SERVER_REPLY.validate_python(response.json())
 
             premium: Final = response_json["verify"]
 
