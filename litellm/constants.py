@@ -936,6 +936,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES: Final = {
 }
 
 openai_compatible_endpoints: Final[list] = [
+    "https://api.acedata.cloud/openai",
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
@@ -993,6 +994,7 @@ openai_compatible_endpoints: Final[list] = [
 
 
 openai_compatible_providers: Final[list] = [
+    "acedatacloud",
     "anyscale",
     "groq",
     "nvidia_nim",
