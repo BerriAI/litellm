@@ -716,6 +716,9 @@ class ShadowEvalJobResponse(BaseModel):
     baseline_model: str | None = None
     judge_model: str
     shadow_percentage: float
+    created_by: str | None = Field(
+        default=None, description="The initiating admin whose account pays for evaluation calls"
+    )
     created_at: datetime
     ends_at: datetime
     stopped_by: str | None = Field(

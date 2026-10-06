@@ -196,8 +196,8 @@ def _team_rows(prisma_client: "PrismaClient") -> _TeamRowsTable:
     return TeamRepository(prisma_client).table
 
 
-def _user_rows(prisma_client: "PrismaClient") -> _UserRowsTable:
-    return UserRepository(prisma_client).table
+def _user_rows(prisma_client: "PrismaClient", *, use_writer: bool = False) -> _UserRowsTable:
+    return UserRepository(prisma_client, use_writer=use_writer).table
 
 
 def _shadow_eval_jobs(prisma_client: "PrismaClient") -> _ShadowEvalJobTable:
@@ -1450,6 +1450,7 @@ class _LegRow(BaseModel):
     shadow_percentage: float
     max_turns: int
     max_budget: float | None = None
+    created_by: str | None = None
     created_at: datetime
     ends_at: datetime
     stopped_at: datetime | None = None
@@ -1518,6 +1519,7 @@ def _group_response(
         baseline_model=first.baseline_model,
         judge_model=first.judge_model,
         shadow_percentage=first.shadow_percentage,
+        created_by=first.created_by,
         created_at=first.created_at,
         ends_at=first.ends_at,
         stopped_by=next((leg.stopped_by for leg in legs if leg.stopped_by is not None), None),
@@ -1689,12 +1691,14 @@ async def start_shadow_eval(
     eval spend, the shadow and judge calls' own cost, reaches max_budget dollars, the
     job's window ends, or the job is stopped, so one target running out of budget does
     not end sampling for the others; sampling changes propagate to pods within about 10
-    seconds. Shadow and judge calls bill to the sampled request's own identity but are
+    seconds. Evaluation calls bill to the admin who starts the job and are
     excluded from request counts and auto-router adoption metrics.
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
     _require_admin_writer(user_api_key_dict, "start a shadow eval")
+    if not user_api_key_dict.user_id:
+        raise HTTPException(status_code=400, detail="Starting a shadow eval requires an identified billing owner")
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     unconfigured: Final = tuple(
@@ -1716,14 +1720,18 @@ async def start_shadow_eval(
         if data.team_ids
         else ()
     )
-    user_rows: Final = (
-        await _user_rows(prisma_client).find_many(where={"user_id": {"in": list(data.user_ids)}})
-        if data.user_ids
-        else ()
+    user_rows: Final = await _user_rows(prisma_client, use_writer=True).find_many(
+        where={"user_id": {"in": [*data.user_ids, user_api_key_dict.user_id]}}
     )
+    known_user_ids: Final = frozenset(row.user_id for row in user_rows or ())
+    if user_api_key_dict.user_id not in known_user_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Starting a shadow eval requires a billing owner in the user table; create this user via /user/new first",
+        )
     unknown_keys: Final = sorted(frozenset(data.api_key_ids) - frozenset(row.token for row in token_rows or ()))
     unknown_teams: Final = sorted(frozenset(data.team_ids) - frozenset(row.team_id for row in team_rows or ()))
-    unknown_users: Final = sorted(frozenset(data.user_ids) - frozenset(row.user_id for row in user_rows or ()))
+    unknown_users: Final = sorted(frozenset(data.user_ids) - known_user_ids)
     unknown_parts: Final = tuple(
         part
         for part in (
@@ -1870,6 +1878,7 @@ async def start_shadow_eval(
         baseline_model=data.baseline_model,
         judge_model=data.judge_model,
         shadow_percentage=data.shadow_percentage,
+        created_by=user_api_key_dict.user_id,
         created_at=now,
         ends_at=ends_at,
     )

@@ -1,9 +1,9 @@
 """Metadata a request forwards to the internal LLM sub-calls it triggers.
 
 Internal features (the auto-router's classifier and embeddings, shadow eval's shadow and
-judge calls) bill real provider spend that nobody typed a prompt for. That spend must land
-on the same key/team/org/user as the request that caused it, so the sub-call carries the
-caller's identity metadata, minus two things that must never be forwarded as-is:
+judge calls) bill real provider spend that nobody typed a prompt for. Sub-calls retain the
+caller's runtime identity; an evaluation's billing owner is projected only at financial
+consumers. Two things must never be forwarded as-is:
 
 * ``user_api_key_budget_reservation`` (and the reservation nested inside
   ``user_api_key_auth``) belongs to the parent completion. If a sub-call's cost callback
@@ -21,11 +21,33 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, NON_INFERENCE_CALL_TYPES
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, InternalCallOrigin
 
 BUDGET_RESERVATION_METADATA_KEYS: Final = frozenset({"user_api_key_budget_reservation"})
+BILLING_USER_ID_METADATA_KEY: Final = "user_api_key_billing_user_id"
+BILLING_MODEL_MAX_BUDGET_METADATA_KEY: Final = "user_api_key_billing_model_max_budget"
+_METADATA_BUCKETS: Final = ("metadata", "litellm_metadata")
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
+_BILLING_IDENTITY_FIELDS: Final = frozenset(
+    {
+        "user_api_key",
+        "user",
+        "end_user",
+        "agent_id",
+        "billing_agent_id",
+        "tags",
+        "request_tags",
+        "team_id",
+        "team_alias",
+        "user_api_end_user_max_budget",
+        "request_model_access_groups",
+    }
+)
 
 MODEL_ACCESS_GROUP_METADATA_KEY: Final = "user_api_key_matched_model_access_groups"
 """Where auth records the model access groups that authorized the request, for the spend writer.
@@ -45,6 +67,8 @@ FORWARDABLE_IDENTITY_METADATA_KEYS: Final = frozenset(
         "user_api_key_org_id",
         "user_api_key_user_id",
         "user_api_key_end_user_id",
+        BILLING_USER_ID_METADATA_KEY,
+        BILLING_MODEL_MAX_BUDGET_METADATA_KEY,
         _USER_API_KEY_AUTH_KEY,
     }
 )
@@ -52,6 +76,84 @@ FORWARDABLE_IDENTITY_METADATA_KEYS: Final = frozenset(
 budget-checked like the request that spawned it. Everything else on the parent's metadata
 (routing decision, guardrail state, logging payload) describes the parent call and would
 be a lie on a sub-call that runs after it returned."""
+
+
+def _mapping(value: object) -> Mapping[str, object]:
+    return _OBJECT_MAPPING.validate_python(value) if isinstance(value, Mapping) else _EMPTY_METADATA
+
+
+def _without_billing_identity(value: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        key: item
+        for key, item in value.items()
+        if not key.startswith("user_api_key_") and key not in _BILLING_IDENTITY_FIELDS
+    }
+
+
+def _billing_metadata(value: object, user_id: str, model_max_budget: object) -> Mapping[str, object]:
+    return {
+        **_without_billing_identity(_mapping(value)),
+        "user_api_key_user_id": user_id,
+        "user_api_key_user_model_max_budget": model_max_budget,
+        BILLING_USER_ID_METADATA_KEY: user_id,
+        BILLING_MODEL_MAX_BUDGET_METADATA_KEY: model_max_budget,
+    }
+
+
+def _billing_request(value: object) -> object:
+    request: Final = _mapping(value)
+    body: Final = _mapping(request.get("body"))
+    if not isinstance(request.get("body"), Mapping):
+        return value
+    return {**request, "body": {key: item for key, item in body.items() if key != "user"}}
+
+
+def billing_kwargs(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    """A financial receipt for a server-stamped payer, leaving the shared runtime context intact."""
+    params: Final = _mapping(kwargs.get("litellm_params"))
+    owner_metadata: Final = next(
+        (
+            metadata
+            for key in reversed(_METADATA_BUCKETS)
+            if isinstance((metadata := _mapping(params.get(key))).get(BILLING_USER_ID_METADATA_KEY), str)
+            and metadata.get(BILLING_USER_ID_METADATA_KEY)
+        ),
+        _EMPTY_METADATA,
+    )
+    user_id: Final = owner_metadata.get(BILLING_USER_ID_METADATA_KEY)
+    if not isinstance(user_id, str) or not user_id:
+        return kwargs
+    model_max_budget: Final = owner_metadata.get(BILLING_MODEL_MAX_BUDGET_METADATA_KEY)
+    metadata_updates: Final = {
+        key: _billing_metadata(params[key], user_id, model_max_budget) for key in _METADATA_BUCKETS if params.get(key)
+    }
+    payload: Final = _mapping(kwargs.get("standard_logging_object"))
+    projected_payload: Final[Mapping[str, object]] = (
+        {
+            "standard_logging_object": {
+                **_without_billing_identity(payload),
+                "metadata": _billing_metadata(payload.get("metadata"), user_id, model_max_budget),
+                "end_user": None,
+                "request_tags": [],
+                "request_model_access_groups": [],
+            }
+        }
+        if isinstance(kwargs.get("standard_logging_object"), Mapping)
+        else {}
+    )
+    return {
+        **_without_billing_identity(kwargs),
+        "litellm_params": {
+            **{key: item for key, item in params.items() if key != "user_api_key_end_user_id"},
+            **metadata_updates,
+            **(
+                {"proxy_server_request": _billing_request(params["proxy_server_request"])}
+                if "proxy_server_request" in params
+                else {}
+            ),
+        },
+        **projected_payload,
+    }
 
 
 def is_background_response(response: object) -> bool:

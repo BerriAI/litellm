@@ -17,6 +17,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.pointfive.payload import chunk_lines, encode_lines, serialize_records
 from litellm.integrations.pointfive.upload_client import PointFiveUploadClient, PointFiveUploadError
+from litellm.litellm_core_utils.internal_call_metadata import billing_kwargs
 from litellm.litellm_core_utils.redact_messages import (
     redacted_standard_logging_payload,
     should_redact_message_logging,
@@ -207,7 +208,7 @@ class PointFiveLogger(CustomBatchLogger):
         the excluded-field list and this callback's own setting are applied here, then the
         global, per-request and header settings that only the framework's predicate knows.
         """
-        details: Final = self.redact_standard_logging_payload_from_model_call_details(dict(kwargs))
+        details: Final = self.redact_standard_logging_payload_from_model_call_details(dict(billing_kwargs(kwargs)))
         payload: Final = details.get("standard_logging_object")
         if not isinstance(payload, dict):
             return None

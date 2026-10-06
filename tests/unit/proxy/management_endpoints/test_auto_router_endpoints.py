@@ -1495,6 +1495,7 @@ def _leg_record(**overrides: object) -> MagicMock:
         "shadow_percentage": 10.0,
         "max_turns": 200,
         "max_budget": None,
+        "created_by": None,
         "created_at": datetime(2026, 8, 11, tzinfo=timezone.utc),
         "ends_at": datetime.now(timezone.utc) + timedelta(days=7),
         "stopped_at": None,
@@ -1552,7 +1553,8 @@ def _shadow_prisma(
     prisma = MagicMock()
     teams: Final = key_teams or {}
     team_aliases: Final = known_teams or {}
-    user_emails: Final = known_users or {}
+    user_emails: Final = {"admin": None, **(known_users or {})}
+    prisma.writer_db = prisma.db
 
     async def find_tokens(*, where):
         """Honours the token filter, like the job-table fake below: the endpoint derives the
@@ -1647,6 +1649,7 @@ def _shadow_prisma(
             "shadow_percentage",
             "max_turns",
             "max_budget",
+            "created_by",
             "created_at",
             "ends_at",
             "stopped_at",
@@ -1707,6 +1710,35 @@ def _configure_anthropic_sdk_judge(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("owner", ["missing-admin", "default_user_id"])
+@pytest.mark.parametrize("present", [False, True])
+async def test_start_shadow_eval_requires_billing_owner_on_writer(
+    monkeypatch: pytest.MonkeyPatch, owner: str, present: bool
+) -> None:
+    _configure_anthropic_sdk_judge(monkeypatch)
+    writer: Final = _shadow_prisma(known_users={owner: None} if present else {})
+    prisma: Final = _shadow_prisma(known_users={} if present else {owner: None})
+    prisma.writer_db = writer.db
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    caller: Final = ADMIN.model_copy(update={"user_id": owner})
+
+    if present:
+        response: Final = await start_shadow_eval(_start_request(), caller)
+        assert response.created_by == owner
+        assert prisma.db.litellm_shadowevaljob.create_many.await_args.kwargs["data"][0]["created_by"] == owner
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await start_shadow_eval(_start_request(), caller)
+        assert exc.value.status_code == 400
+        assert "billing owner" in exc.value.detail
+        prisma.db.execute_raw.assert_not_awaited()
+        prisma.db.litellm_shadowevaljob.create_many.assert_not_awaited()
+    writer.db.litellm_usertable.find_many.assert_awaited_once_with(where={"user_id": {"in": [owner]}})
+    prisma.db.litellm_usertable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeypatch: pytest.MonkeyPatch):
     """N keys become N sibling rows sharing group_id and identical config, written by a
     single create_many so a unique-index loser rolls back the whole claim, and expiry or
@@ -1718,7 +1750,9 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
 
-    response = await start_shadow_eval(_start_request(api_key_ids=("key-hash", "key-hash-2")), ADMIN)
+    response = await start_shadow_eval(
+        _start_request(api_key_ids=("key-hash", "key-hash-2"), created_by="untrusted-user"), ADMIN
+    )
 
     sweep_sql, sweep_ids, sweep_type = prisma.db.execute_raw.call_args.args
     assert "stopped_at IS NULL" in sweep_sql
@@ -1751,6 +1785,7 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
     assert all(row["max_budget"] == 5.0 for row in rows)
     assert all("status" not in row for row in rows)
     assert response.job_id == rows[0]["group_id"]
+    assert response.created_by == ADMIN.user_id
     assert response.status == "running"
     assert response.judged_count is None
     assert [(target.target_id, target.max_budget, target.target_alias) for target in response.targets] == [
@@ -1925,6 +1960,8 @@ async def test_start_shadow_eval_accepts_a_configured_judge_without_anthropic_cr
     [
         (NON_ADMIN, {}, (), 403),
         (VIEWER, {}, (), 403),
+        (ADMIN.model_copy(update={"user_id": None}), {}, (), 400),
+        (ADMIN.model_copy(update={"user_id": ""}), {}, (), 400),
         (ADMIN, {"router_name": "not-a-router"}, (), 400),
         (ADMIN, {"judge_model": "not/a real model!"}, (), 400),
         (ADMIN, {"judge_model": "my-router"}, (), 400),
@@ -1942,6 +1979,8 @@ async def test_start_shadow_eval_accepts_a_configured_judge_without_anthropic_cr
     ids=[
         "non-admin",
         "view-only",
+        "missing-billing-owner",
+        "empty-billing-owner",
         "unknown-router",
         "unresolvable-judge",
         "router-as-judge",
@@ -2615,6 +2654,22 @@ async def test_job_responses_resolve_router_names_with_legacy_fallback(monkeypat
 
     assert response.router_names == ("my-router",)
     assert response.router_name == "my-router"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("created_by", ["initiating-admin", None])
+async def test_shadow_eval_responses_preserve_the_creator_when_another_admin_stops_it(
+    monkeypatch: pytest.MonkeyPatch, created_by: str | None
+) -> None:
+    prisma: Final = _shadow_prisma(legs=[_leg_record(created_by=created_by)])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    listed: Final = await list_shadow_eval_jobs(VIEWER, target_type=None, target_id=None, limit=50)
+    detail: Final = await get_shadow_eval_job("job-1", VIEWER)
+    stopped: Final = await stop_shadow_eval_job("job-1", ADMIN)
+
+    assert [response.model_dump()["created_by"] for response in (listed[0], detail, stopped)] == [created_by] * 3
+    assert stopped.stopped_by == ADMIN.user_id
 
 
 @pytest.mark.asyncio

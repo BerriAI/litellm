@@ -9,6 +9,8 @@ import httpx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.internal_call_metadata import billing_kwargs
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
@@ -51,7 +53,8 @@ class OpenMeterLogger(CustomLogger):
     def _common_logic(self, kwargs: dict, response_obj):
         call_id: Final = response_obj.get("id", kwargs.get("litellm_call_id"))
         dt: Final = get_utc_datetime().isoformat()
-        cost: Final = kwargs.get("response_cost", None)
+        financial_kwargs: Final = billing_kwargs(kwargs)
+        cost: Final = financial_kwargs.get("response_cost", None)
         model: Final = kwargs.get("model")
         usage = {}
         if (
@@ -69,13 +72,12 @@ class OpenMeterLogger(CustomLogger):
         # serving multi-tenant traffic enable this to prevent clients from
         # forging attribution by setting `user` in the request body.
         trust_request_user: Final = os.getenv("OPENMETER_TRUST_REQUEST_USER", "true").lower() != "false"
-        user_param = kwargs.get("user", None) if trust_request_user else None
+        user_param = financial_kwargs.get("user", None) if trust_request_user else None
 
         # If no user provided directly, try to get it from token user_id
         if user_param is None:
             # Check if user_id is available from the API key metadata
-            litellm_params: Final = kwargs.get("litellm_params", {})
-            metadata: Final = litellm_params.get("metadata", {})
+            metadata: Final = get_litellm_metadata_from_kwargs(dict(financial_kwargs))
             user_api_key_user_id: Final = metadata.get("user_api_key_user_id", None)
 
             if user_api_key_user_id is not None:

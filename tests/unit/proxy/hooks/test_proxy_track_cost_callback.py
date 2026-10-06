@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2598,7 +2599,11 @@ async def _no_fallback(line: bytes) -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_skips_the_pipeline(tmp_path):
+@pytest.mark.parametrize("evaluation", [False, True])
+async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_skips_the_pipeline(
+    tmp_path: Path,
+    evaluation: bool,
+) -> None:
     handler = _RecordingHandler()
     consumer = SpendEventConsumer(handler)
     address = UnixAddress(path=str(tmp_path / "spend.sock"))
@@ -2607,6 +2612,17 @@ async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_ski
         address=address, on_unavailable="fallback", buffer_size=10, connect_timeout=1.0, fallback=_no_fallback
     )
     logger = _ProxyDBLogger(producer)
+    source: Final = _offload_kwargs()
+    kwargs: Final = {
+        **source,
+        "litellm_params": {
+            **source["litellm_params"],
+            "metadata": {
+                **source["litellm_params"]["metadata"],
+                **({"user_api_key_billing_user_id": "admin"} if evaluation else {}),
+            },
+        },
+    }
 
     with (
         patch(  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
@@ -2617,7 +2633,7 @@ async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_ski
         ) as counters,
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
-        await logger.async_log_success_event(_offload_kwargs(), _offload_response(), datetime.now(), datetime.now())
+        await logger.async_log_success_event(kwargs, _offload_response(), datetime.now(), datetime.now())
         await producer.close(drain_timeout=5.0)
         server.close()
         assert await consumer.drain(timeout=5.0) == 0
@@ -2629,7 +2645,9 @@ async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_ski
     assert len(handler.lines[0]) < 4_000
     event = decode_spend_event(handler.lines[0])
     assert not isinstance(event, SpendEventDecodeError)
-    assert event.litellm_params["metadata"]["user_api_key_team_id"] == "team-1"
+    assert event.litellm_params["metadata"].get("user_api_key_team_id") == (None if evaluation else "team-1")
+    assert event.litellm_params["metadata"]["user_api_key_user_id"] == ("admin" if evaluation else "user-1")
+    assert kwargs["litellm_params"]["metadata"]["user_api_key_team_id"] == "team-1"
     assert event.response_cost == 0.0125
 
 

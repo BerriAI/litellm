@@ -10,7 +10,7 @@ import re
 from collections.abc import Iterator, Mapping
 from math import isfinite
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
@@ -19,6 +19,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
 from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
+from litellm.litellm_core_utils.internal_call_metadata import billing_kwargs
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.tracing.types import SpendLogRecord
 from litellm.types.utils import StandardLoggingPayload
@@ -125,7 +126,15 @@ def _is_trace_ingest(payload: StandardLoggingPayload) -> bool:
     return str(payload.get("call_type") or "").startswith(TRACE_INGEST_ROUTE)
 
 
-def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> SpendLogRecord:
+def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[str, object]) -> SpendLogRecord:
+    financial_kwargs: Final = billing_kwargs({**kwargs, "standard_logging_object": payload})
+    financial_payload: Final = cast(  # cast-ok: identity projection preserves the supplied logging payload
+        StandardLoggingPayload, financial_kwargs["standard_logging_object"]
+    )
+    return _spend_log_row_for_billing(financial_payload, financial_kwargs)
+
+
+def _spend_log_row_for_billing(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> SpendLogRecord:
     metadata: Mapping[str, Any] = payload.get("metadata") or MappingProxyType({})
     hidden_params: Mapping[str, Any] = payload.get("hidden_params") or MappingProxyType({})
     usage: Mapping[str, Any] = metadata.get("usage_object") or hidden_params.get("usage_object") or MappingProxyType({})

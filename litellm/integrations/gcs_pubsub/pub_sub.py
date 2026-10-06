@@ -10,7 +10,7 @@ import asyncio
 import json
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm.types.utils import StandardLoggingPayload
 
@@ -22,6 +22,7 @@ else:
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.internal_call_metadata import billing_kwargs
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -113,18 +114,21 @@ class GcsPubSubLogger(CustomBatchLogger):
 
         try:
             verbose_logger.debug("PubSub: Logging - Enters logging function for model %s", kwargs)
-            standard_logging_payload: Final = kwargs.get("standard_logging_object", None)
+            financial_kwargs: Final = billing_kwargs(kwargs)
+            standard_logging_payload: Final = cast(  # cast-ok: identity projection preserves the logging payload
+                StandardLoggingPayload | None, financial_kwargs.get("standard_logging_object")
+            )
 
             # Backwards compatibility with old logging payload
             if litellm.gcs_pub_sub_use_v1 is True:
                 spend_logs_payload: Final = get_logging_payload(
-                    kwargs=kwargs,
+                    kwargs=financial_kwargs,
                     response_obj=response_obj,
                     start_time=start_time,
                     end_time=end_time,
                 )
                 self.log_queue.append(spend_logs_payload)
-            else:
+            elif standard_logging_payload is not None:
                 # New logging payload, StandardLoggingPayload
                 self.log_queue.append(standard_logging_payload)
 

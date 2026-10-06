@@ -1,11 +1,45 @@
 import json
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
 from litellm.integrations.openmeter import OpenMeterLogger
+
+
+@pytest.mark.parametrize("charge_by", [None, "end_user_id", "team_id", "user_id"])
+def test_evaluation_metering_charges_creator_for_every_customer_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    charge_by: str | None,
+) -> None:
+    from litellm.integrations.lago import LagoLogger
+
+    monkeypatch.setenv("OPENMETER_API_KEY", "test")
+    monkeypatch.setenv("LAGO_API_KEY", "test")
+    monkeypatch.setenv("LAGO_API_BASE", "https://example.test")
+    monkeypatch.setenv("LAGO_API_EVENT_CODE", "usage")
+    if charge_by is not None:
+        monkeypatch.setenv("LAGO_API_CHARGE_BY", charge_by)
+    logger: Final = OpenMeterLogger() if charge_by is None else LagoLogger()
+    kwargs: Final = {
+        "user": "sampled-end-user",
+        "response_cost": 0.25,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_user_id": "sampled",
+                "user_api_key_team_id": "sampled-team",
+                "user_api_key_billing_user_id": "admin",
+            },
+            "proxy_server_request": {"body": {"user": "sampled-end-user"}},
+        },
+    }
+
+    payload: Final = logger._common_logic(kwargs, litellm.ModelResponse(id="eval", choices=[]))
+
+    assert (payload["subject"] if charge_by is None else payload["event"]["external_subscription_id"]) == "admin"
+    assert kwargs["user"] == "sampled-end-user"
 
 
 class TestOpenMeterIntegration:

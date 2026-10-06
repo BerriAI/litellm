@@ -37,7 +37,7 @@ from litellm.litellm_core_utils.core_helpers import (
     reconstruct_model_name,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
-from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+from litellm.litellm_core_utils.internal_call_metadata import billing_kwargs, is_unbilled_non_inference_call
 from litellm.litellm_core_utils.litellm_logging import (
     coerce_model_access_groups,
     is_valid_sha256_hash,
@@ -499,6 +499,18 @@ def _scrub_raw_model_from_error_information(
 
 
 def get_logging_payload(
+    kwargs: Mapping[str, object] | None,
+    response_obj: object,
+    start_time: datetime,
+    end_time: datetime,
+    llm_router: "Router | None" = None,
+) -> SpendLogsPayload:
+    return _logging_payload_for_billing(
+        dict(billing_kwargs(kwargs or {})), response_obj, start_time, end_time, llm_router
+    )
+
+
+def _logging_payload_for_billing(
     kwargs: dict | None,
     response_obj: object,
     start_time: datetime,
@@ -523,10 +535,8 @@ def get_logging_payload(
     # Convert response_obj to dict first
     if isinstance(response_obj, dict):
         response_obj_dict = response_obj
-    elif isinstance(response_obj, BaseModel):
-        response_obj_dict = response_obj.model_dump()
     else:
-        response_obj_dict = {}
+        response_obj_dict = response_obj.model_dump()
 
     # Handle OCR responses which use usage_info instead of usage
     usage: dict = {}
