@@ -1,6 +1,5 @@
 """Exercise an installed SDK against a local HTTP server, without test dependencies."""
 
-from litellm._version import get_distribution_name
 import asyncio
 import importlib.util
 import json
@@ -16,6 +15,7 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 
 import litellm
+from litellm._version import get_distribution_name
 
 REPLIES: Final[Queue[tuple[int, bytes, str]]] = Queue()
 REQUESTS: Final[Queue[tuple[str, dict[str, str], bytes]]] = Queue()

@@ -1,4 +1,6 @@
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import ModuleType
 from typing import Final
 
 import pytest
@@ -86,3 +88,31 @@ def test_core_build_command_stages_a_buildable_profile(tmp_path: Path, monkeypat
     selected: Final = tomllib.loads(path.read_text())
     assert selected["project"]["name"] == "litellm-core"
     assert selected["project"]["optional-dependencies"]["sdk-extras"] == ["litellm-core[aws]"]
+
+
+def test_http_checker_configures_offline_environment_before_sdk_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+    import os
+    import runpy
+
+    original_import: Final = builtins.__import__
+    observed: Final[dict[str, str | None]] = {}
+
+    def stop_at_sdk_import(
+        name: str,
+        globals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object] | None = None,
+        fromlist: Sequence[str] = (),
+        level: int = 0,
+    ) -> ModuleType:
+        if name == "litellm" or name.startswith("litellm."):
+            observed.update({key: os.getenv(key) for key in ("LITELLM_LOCAL_MODEL_COST_MAP", "PYTHON_DOTENV_DISABLED")})
+            raise RuntimeError("SDK initialization boundary")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+    monkeypatch.delenv("PYTHON_DOTENV_DISABLED", raising=False)
+    monkeypatch.setattr(builtins, "__import__", stop_at_sdk_import)
+    with pytest.raises(RuntimeError, match="SDK initialization boundary"):
+        runpy.run_path(str(Path(__file__).with_name("check_sdk_http.py")))
+    assert observed == {"LITELLM_LOCAL_MODEL_COST_MAP": "True", "PYTHON_DOTENV_DISABLED": "1"}
