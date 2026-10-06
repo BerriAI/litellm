@@ -39256,6 +39256,48 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "mistral/mistral-large-4": {
+        "cache_read_input_token_cost": 6.8e-08,
+        "input_cost_per_token": 6.8e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 524288,
+        "max_tokens": 524288,
+        "mode": "chat",
+        "output_cost_per_token": 2.09e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
+        "source": "https://docs.mistral.ai/models/mistral-large-4",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/mistral-large-4-0": {
+        "cache_read_input_token_cost": 6.8e-08,
+        "input_cost_per_token": 6.8e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 524288,
+        "max_tokens": 524288,
+        "mode": "chat",
+        "output_cost_per_token": 2.09e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
+        "source": "https://docs.mistral.ai/models/mistral-large-4",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "mistral/mistral-large-2512": {
         "cache_read_input_token_cost": 5e-08,
         "input_cost_per_token": 5e-07,
@@ -75222,6 +75264,23 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": false
+    },
+    "openrouter/mistralai/mistral-large-4-0": {
+        "cache_read_input_token_cost": 7e-08,
+        "input_cost_per_token": 6.8e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 524288,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.09e-06,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "openrouter/mistralai/mistral-large-2512:batch": {
         "cache_read_input_token_cost": 2.5e-08,
