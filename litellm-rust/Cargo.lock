@@ -3698,50 +3698,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-core"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "futures-util",
- "litellm-auth",
- "litellm-auth-aws",
- "litellm-auth-gcp",
- "litellm-cache",
- "litellm-cache-memory",
- "litellm-cache-response",
- "litellm-core-utils",
- "litellm-framer",
- "litellm-host",
- "litellm-host-native",
- "litellm-http",
- "litellm-llms",
- "litellm-llms-types",
- "litellm-secrets",
- "litellm-tracing",
- "mime_guess",
- "moka",
- "rand 0.8.7",
- "reqwest 0.12.28",
- "rstest",
- "rstest_reuse",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "strum",
- "subtle",
- "thiserror 2.0.19",
- "time",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "url",
- "veil",
- "wiremock",
-]
-
-[[package]]
 name = "litellm-core-utils"
 version = "0.1.0"
 dependencies = [
@@ -3821,12 +3777,12 @@ dependencies = [
  "http-body-util",
  "litellm-auth-types",
  "litellm-config",
- "litellm-core",
  "litellm-gateway-auth",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
  "litellm-gateway-ui",
  "litellm-http",
+ "litellm-inference",
  "litellm-llms",
  "litellm-secrets",
  "litellm-tracing",
@@ -3875,11 +3831,11 @@ dependencies = [
  "litellm-auth",
  "litellm-cache-memory",
  "litellm-cache-response",
- "litellm-core",
  "litellm-gateway-auth",
  "litellm-host",
  "litellm-host-http",
  "litellm-http",
+ "litellm-inference",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-router",
@@ -4039,6 +3995,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-inference"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-util",
+ "litellm-auth",
+ "litellm-auth-aws",
+ "litellm-auth-gcp",
+ "litellm-cache",
+ "litellm-cache-memory",
+ "litellm-cache-response",
+ "litellm-core-utils",
+ "litellm-framer",
+ "litellm-host",
+ "litellm-host-native",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "litellm-tracing",
+ "mime_guess",
+ "moka",
+ "rand 0.8.7",
+ "reqwest 0.12.28",
+ "rstest",
+ "rstest_reuse",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "strum",
+ "subtle",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "url",
+ "veil",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-llms"
 version = "0.1.0"
 dependencies = [
@@ -4116,11 +4117,11 @@ dependencies = [
  "litellm-cache-redis",
  "litellm-cache-response",
  "litellm-callbacks-legacy-python",
- "litellm-core",
  "litellm-core-utils",
  "litellm-host",
  "litellm-host-python",
  "litellm-http",
+ "litellm-inference",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
@@ -4171,7 +4172,7 @@ name = "litellm-router"
 version = "0.1.0"
 dependencies = [
  "litellm-config",
- "litellm-core",
+ "litellm-inference",
  "rstest",
 ]
 
