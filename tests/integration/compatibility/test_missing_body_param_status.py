@@ -1642,9 +1642,7 @@ def test_eval_create_and_run_forward_client_metadata(gateway: Gateway) -> None:
         return Reply(status=404, body=b'{"error":"unexpected upstream request"}')
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        alias: Final = scenario.model(
-            model="openai/gpt-4o-mini", api_base=wire.url, api_key="synthetic-openai-key"
-        )
+        alias: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url, api_key="synthetic-openai-key")
         eventually(
             lambda: gateway.request(
                 "POST",
@@ -1715,5 +1713,4 @@ def test_eval_create_and_run_forward_client_metadata(gateway: Gateway) -> None:
         assert isinstance(create_raw.parse(), _Eval), response_text
         assert json.loads(create_raw.http_response.text) == _EVAL_CREATE_RESPONSE, response_text
         assert isinstance(run_raw.parse(), _EvalRun), response_text
-        expected_run_response: Final = {**_EVAL_RUN_RESPONSE, "model": alias}
-        assert json.loads(run_raw.http_response.text) == expected_run_response, response_text
+        assert json.loads(run_raw.http_response.text) == _EVAL_RUN_RESPONSE, response_text

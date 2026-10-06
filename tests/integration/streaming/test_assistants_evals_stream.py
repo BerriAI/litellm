@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+import threading
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
 import yaml
 from integration._support.client import Gateway
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
-from openai import OpenAI
+from openai import APITimeoutError, OpenAI
 from pydantic import JsonValue
 
 _QUEUED_RUN: Final[dict[str, JsonValue]] = {
@@ -84,6 +87,7 @@ _RUN_REQUEST: Final[dict[str, JsonValue]] = {
     "tool_choice": "auto",
     "response_format": {"type": "json_object"},
     "parallel_tool_calls": False,
+    "reasoning_effort": "low",
 }
 
 
@@ -129,6 +133,54 @@ def _parse_frames(body: str) -> tuple[tuple[str, JsonValue], ...]:
     return tuple(_parse_frame(frame) for frame in body.strip().split("\n\n"))
 
 
+_EXPECTED_FRAMES: Final = (
+    ("thread.run.created", _QUEUED_RUN),
+    ("thread.message.created", _MESSAGE_CREATED),
+    ("thread.message.delta", _MESSAGE_DELTA),
+    ("thread.run.completed", _COMPLETED_RUN),
+    ("done", "[DONE]"),
+)
+
+
+class _RecordingStream(httpx.SyncByteStream):
+    def __init__(self, inner: httpx.SyncByteStream, sink: list[bytes]) -> None:
+        self._inner: Final = inner
+        self._sink: Final = sink
+
+    def __iter__(self) -> Iterator[bytes]:
+        for chunk in self._inner:
+            self._sink.append(chunk)
+            yield chunk
+
+    def close(self) -> None:
+        self._inner.close()
+
+
+class _RecordingTransport(httpx.BaseTransport):
+    """Records the bytes the SDK client read off the proxy socket, so the done frame the SDK swallows is visible."""
+
+    def __init__(self) -> None:
+        self.received: Final[list[bytes]] = []
+        self._inner: Final = httpx.HTTPTransport()
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        response: Final = self._inner.handle_request(request)
+        assert isinstance(response.stream, httpx.SyncByteStream)
+        return httpx.Response(
+            status_code=response.status_code,
+            headers=response.headers,
+            stream=_RecordingStream(response.stream, self.received),
+            extensions=response.extensions,
+            request=request,
+        )
+
+    def close(self) -> None:
+        self._inner.close()
+
+    def text(self) -> str:
+        return b"".join(self.received).decode()
+
+
 @pytest.mark.parametrize("prefix", ("", "/v1"), ids=("root-alias", "v1-alias"))
 def test_run_stream_relays_upstream_events(gateway: Gateway, tmp_path: Path, prefix: str) -> None:
     pytest.skip(
@@ -141,13 +193,7 @@ def test_run_stream_relays_upstream_events(gateway: Gateway, tmp_path: Path, pre
             response: Final = candidate.request("POST", f"{prefix}/threads/thread_abc/runs", body)
             assert response.status_code == 200, response.text
             assert response.headers["content-type"].startswith("text/event-stream"), response.text
-            assert _parse_frames(response.text) == (
-                ("thread.run.created", _QUEUED_RUN),
-                ("thread.message.created", _MESSAGE_CREATED),
-                ("thread.message.delta", _MESSAGE_DELTA),
-                ("thread.run.completed", _COMPLETED_RUN),
-                ("done", "[DONE]"),
-            ), response.text
+            assert _parse_frames(response.text) == _EXPECTED_FRAMES, response.text
             requests: Final = wire.drain()
             assert [(request.method, request.target) for request in requests] == [
                 ("POST", "/v1/threads/thread_abc/runs")
@@ -156,15 +202,18 @@ def test_run_stream_relays_upstream_events(gateway: Gateway, tmp_path: Path, pre
             assert json.loads(requests[0].body) == body, response.text
 
 
-def test_sdk_run_stream_event_handler_sees_events(gateway: Gateway, tmp_path: Path) -> None:
+@pytest.mark.parametrize("prefix", ("", "/v1"), ids=("root-alias", "v1-alias"))
+def test_sdk_run_stream_event_handler_sees_events(gateway: Gateway, tmp_path: Path, prefix: str) -> None:
     pytest.skip("BUG: runs.stream drops additional_messages, sampling, token caps and other run options upstream")
     with wire_server(_respond) as wire:
         config: Final = _assistant_config(tmp_path, f"{wire.url}/v1")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            transport: Final = _RecordingTransport()
             with OpenAI(
-                base_url=f"{str(candidate.client.base_url).rstrip('/')}/v1",
+                base_url=f"{str(candidate.client.base_url).rstrip('/')}{prefix}",
                 api_key=candidate.key,
                 max_retries=0,
+                http_client=httpx.Client(transport=transport),
             ) as client:
                 with client.beta.threads.runs.stream(
                     thread_id="thread_abc",
@@ -183,15 +232,12 @@ def test_sdk_run_stream_event_handler_sees_events(gateway: Gateway, tmp_path: Pa
                     tool_choice="auto",
                     response_format={"type": "json_object"},
                     parallel_tool_calls=False,
+                    reasoning_effort="low",
                 ) as stream:
                     events: Final = tuple((event.event, event.data.to_dict(mode="json")) for event in stream)
-            response_text: Final = json.dumps(events)
-            assert events == (
-                ("thread.run.created", _QUEUED_RUN),
-                ("thread.message.created", _MESSAGE_CREATED),
-                ("thread.message.delta", _MESSAGE_DELTA),
-                ("thread.run.completed", _COMPLETED_RUN),
-            ), response_text
+            response_text: Final = transport.text()
+            assert events == _EXPECTED_FRAMES[:-1], response_text
+            assert _parse_frames(response_text) == _EXPECTED_FRAMES, response_text
             requests: Final = wire.drain()
             assert [(request.method, request.target) for request in requests] == [
                 ("POST", "/v1/threads/thread_abc/runs")
@@ -200,15 +246,18 @@ def test_sdk_run_stream_event_handler_sees_events(gateway: Gateway, tmp_path: Pa
             assert json.loads(requests[0].body) == {**_RUN_REQUEST, "stream": True}, response_text
 
 
-def test_sdk_run_create_stream_yields_events(gateway: Gateway, tmp_path: Path) -> None:
+@pytest.mark.parametrize("prefix", ("", "/v1"), ids=("root-alias", "v1-alias"))
+def test_sdk_run_create_stream_yields_events(gateway: Gateway, tmp_path: Path, prefix: str) -> None:
     pytest.skip("BUG: runs.create(stream=True) yields null event names and drops run options upstream")
     with wire_server(_respond) as wire:
         config: Final = _assistant_config(tmp_path, f"{wire.url}/v1")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            transport: Final = _RecordingTransport()
             with OpenAI(
-                base_url=f"{str(candidate.client.base_url).rstrip('/')}/v1",
+                base_url=f"{str(candidate.client.base_url).rstrip('/')}{prefix}",
                 api_key=candidate.key,
                 max_retries=0,
+                http_client=httpx.Client(transport=transport),
             ) as client:
                 with client.beta.threads.runs.create(
                     "thread_abc",
@@ -227,19 +276,111 @@ def test_sdk_run_create_stream_yields_events(gateway: Gateway, tmp_path: Path) -
                     tool_choice="auto",
                     response_format={"type": "json_object"},
                     parallel_tool_calls=False,
+                    reasoning_effort="low",
                     stream=True,
                 ) as stream:
                     events: Final = tuple((event.event, event.data.to_dict(mode="json")) for event in stream)
-            response_text: Final = json.dumps(events)
-            assert events == (
-                ("thread.run.created", _QUEUED_RUN),
-                ("thread.message.created", _MESSAGE_CREATED),
-                ("thread.message.delta", _MESSAGE_DELTA),
-                ("thread.run.completed", _COMPLETED_RUN),
-            ), response_text
+            response_text: Final = transport.text()
+            assert events == _EXPECTED_FRAMES[:-1], response_text
+            assert _parse_frames(response_text) == _EXPECTED_FRAMES, response_text
             requests: Final = wire.drain()
             assert [(request.method, request.target) for request in requests] == [
                 ("POST", "/v1/threads/thread_abc/runs")
             ], response_text
             assert requests[0].headers["authorization"] == "Bearer synthetic-openai-key", response_text
             assert json.loads(requests[0].body) == {**_RUN_REQUEST, "stream": True}, response_text
+
+
+_THREAD: Final[dict[str, JsonValue]] = {
+    "id": "thread_abc",
+    "object": "thread",
+    "created_at": 1700000000,
+    "metadata": {},
+    "tool_resources": None,
+}
+_HELD_FRAME: Final = b":" + b"x" * 4_000_000 + b"\n\n"
+
+
+def _held_respond(gate: threading.Event, run_reply: Reply) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if request.method == "POST" and request.target == "/v1/threads/thread_abc/runs":
+            return run_reply
+        if request.method == "GET" and request.target == "/v1/threads/thread_abc/runs/run_abc":
+            return Reply(body=json.dumps(_QUEUED_RUN).encode())
+        if request.method == "GET" and request.target == "/v1/threads/thread_abc":
+            return Reply(body=json.dumps(_THREAD).encode())
+        return Reply(status=404, body=b'{"error":"unexpected upstream request"}')
+
+    assert run_reply.gate_after_first is gate
+    return respond
+
+
+def _marker_thread(base_url: str, key: str) -> str:
+    with OpenAI(base_url=base_url, api_key=key, max_retries=0) as client:
+        raw: Final = client.beta.threads.with_raw_response.retrieve("thread_abc")
+    assert json.loads(raw.http_response.text) == _THREAD, raw.http_response.text
+    return raw.http_response.text
+
+
+def test_run_stream_client_disconnect_releases_upstream_without_polling(gateway: Gateway, tmp_path: Path) -> None:
+    pytest.skip(
+        "BUG: runs.create(stream=True) yields null event names, so the first SDK event is not thread.run.created"
+    )
+    gate: Final = threading.Event()
+    run_reply: Final = Reply(
+        content_type="text/event-stream",
+        chunks=(
+            _frame("thread.run.created", _QUEUED_RUN),
+            _HELD_FRAME,
+            _frame("thread.message.created", _MESSAGE_CREATED),
+            _frame("thread.run.completed", _COMPLETED_RUN),
+            _frame("done", "[DONE]"),
+        ),
+        gate_after_first=gate,
+    )
+    with wire_server(_held_respond(gate, run_reply)) as wire:
+        config: Final = _assistant_config(tmp_path, f"{wire.url}/v1")
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            base_url: Final = f"{str(candidate.client.base_url).rstrip('/')}/v1"
+            try:
+                with OpenAI(base_url=base_url, api_key=candidate.key, max_retries=0) as client:
+                    with client.beta.threads.runs.create("thread_abc", assistant_id="asst_abc", stream=True) as stream:
+                        first: Final = next(iter(stream))
+            finally:
+                gate.set()
+            response_text: Final = json.dumps({"event": first.event, "data": first.data.to_dict(mode="json")})
+            assert (first.event, first.data.to_dict(mode="json")) == ("thread.run.created", _QUEUED_RUN), response_text
+            assert wire.disconnected.get(timeout=10) == "/v1/threads/thread_abc/runs", response_text
+            marker_text: Final = _marker_thread(base_url, candidate.key)
+            requests: Final = wire.drain()
+            assert [(request.method, request.target) for request in requests] == [
+                ("POST", "/v1/threads/thread_abc/runs"),
+                ("GET", "/v1/threads/thread_abc"),
+            ], f"{response_text}\n{marker_text}"
+            assert json.loads(requests[0].body) == {"assistant_id": "asst_abc", "stream": True}, response_text
+
+
+def test_run_client_disconnect_does_not_leave_the_proxy_polling(gateway: Gateway, tmp_path: Path) -> None:
+    pytest.skip("BUG: after the client of a non-stream runs.create disconnects, the proxy keeps polling GET /runs/{id}")
+    gate: Final = threading.Event()
+    queued_body: Final = json.dumps(_QUEUED_RUN).encode()
+    run_reply: Final = Reply(chunks=(queued_body[:20], queued_body[20:]), gate_after_first=gate)
+    with wire_server(_held_respond(gate, run_reply)) as wire:
+        config: Final = _assistant_config(tmp_path, f"{wire.url}/v1")
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            base_url: Final = f"{str(candidate.client.base_url).rstrip('/')}/v1"
+            try:
+                with OpenAI(
+                    base_url=base_url, api_key=candidate.key, max_retries=0, timeout=httpx.Timeout(30, read=2)
+                ) as client:
+                    with pytest.raises(APITimeoutError):
+                        client.beta.threads.runs.create("thread_abc", assistant_id="asst_abc")
+            finally:
+                gate.set()
+            marker_text: Final = _marker_thread(base_url, candidate.key)
+            requests: Final = wire.drain()
+            assert [(request.method, request.target) for request in requests] == [
+                ("POST", "/v1/threads/thread_abc/runs"),
+                ("GET", "/v1/threads/thread_abc"),
+            ], marker_text
+            assert json.loads(requests[0].body) == {"assistant_id": "asst_abc"}, marker_text

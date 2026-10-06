@@ -94,6 +94,7 @@ _RUN_REQUEST: Final[dict[str, JsonValue]] = {
     "tool_choice": "auto",
     "response_format": {"type": "json_object"},
     "parallel_tool_calls": False,
+    "reasoning_effort": "low",
 }
 
 
@@ -233,6 +234,7 @@ def test_run_forwards_every_sdk_field(gateway: Gateway, tmp_path: Path, prefix: 
                         tool_choice="auto",
                         response_format={"type": "json_object"},
                         parallel_tool_calls=False,
+                        reasoning_effort="low",
                     )
                 except APIStatusError as error:
                     failure_text: Final = error.response.text
