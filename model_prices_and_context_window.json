@@ -80408,5 +80408,26 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
         "supports_audio_input": true,
         "supports_audio_output": true
+    },
+    "azure/model-router": {
+        "comment": "The flat $0.14 per M input tokens is the router's own fee, the routed model is priced on top of it",
+        "deprecation_date": "2027-05-20",
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "azure",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/model-router/",
+        "supports_vision": true
+    },
+    "azure/whisper": {
+        "deprecation_date": "2026-12-15",
+        "input_cost_per_second": 0.0001,
+        "litellm_provider": "azure",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0001,
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     }
 }
