@@ -135,6 +135,32 @@ describe("buildThread", () => {
     expect(turns.map((t) => t.reply?.content)).toEqual(["yes", "still yes"]);
   });
 
+  it("keeps a failure that happened after the reply in the work and marks the turn failed", () => {
+    const turns = buildThread([
+      item("u", "agent", 0, [ask("deploy")]),
+      item("llm", "llm", 10, [say("Deployed")]),
+      tool("cleanup", 200, "error"),
+    ]);
+    expect(turns[0].reply?.content).toBe("Deployed");
+    expect(turns[0].work.map((w) => (w.kind === "step" ? w.item.id : w.id))).toEqual(["cleanup"]);
+    expect(turns[0].failed).toBe(true);
+  });
+
+  it("uses a subagent's answer as the reply when the root only forwarded it", () => {
+    const turns = buildThread([
+      item("u", "agent", 0, [ask("research")]),
+      {
+        kind: "branch",
+        id: "sub",
+        name: "Explore",
+        children: [item("s1", "llm", 50, [plan("searching")]), item("s2", "llm", 90, [say("Found the answer")])],
+      },
+    ]);
+    expect(turns[0].reply?.content).toBe("Found the answer");
+    expect(turns[0].replyItem?.id).toBe("s2");
+    expect(turns[0].work[0]).toMatchObject({ kind: "subagent", name: "Explore" });
+  });
+
   it("returns no turns for an empty conversation", () => {
     expect(buildThread([])).toEqual([]);
   });
