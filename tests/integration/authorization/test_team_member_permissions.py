@@ -175,30 +175,36 @@ def test_permissions_update_persists_requested_member_permissions(gateway: Gatew
         assert observed == (), repr(observed)
 
 
-def test_permissions_update_grants_and_revokes_key_generate_for_a_warmed_member_on_both_proxies(
+def test_permissions_update_grants_and_revokes_key_generate_and_key_update_for_a_warmed_member_on_both_proxies(
     gateway: Gateway, peer: Gateway, upstream: httpx.Client
 ) -> None:
     with gateway.scenario() as scenario:
         team: Final = scenario.team()
         member: Final = scenario.member(team)
         member_key: Final = scenario.key(user_id=member)
+        team_key: Final = scenario.key(team_id=team, metadata={"owner": "team"})
+        holder: Final = Member(team, team_key, member_key)
         denied_gateway: Final = gateway.request("POST", "/key/generate", {"team_id": team}, key=member_key)
         _refused(denied_gateway, 401, PERMISSION_ERROR)
         denied_peer: Final = peer.request("POST", "/key/generate", {"team_id": team}, key=member_key)
         _refused(denied_peer, 401, PERMISSION_ERROR)
+        _refused(_update_team_key(gateway, holder, "member before grant"), 401, PERMISSION_ERROR)
+        _refused(_update_team_key(peer, holder, "member before grant"), 401, PERMISSION_ERROR)
+        assert _team_key_row(team_key) == [{"team_id": team, "metadata": {"owner": "team"}}]
 
+        granted_permissions: Final = ["/key/generate", "/key/info", "/key/update"]
         granted: Final = gateway.request(
             "POST",
             "/team/permissions_update",
-            {"team_id": team, "team_member_permissions": ["/key/generate", "/key/info"]},
+            {"team_id": team, "team_member_permissions": granted_permissions},
         )
         assert granted.status_code == 200, granted.text
         added: Final = _permissions(gateway, team)
-        assert added.team_member_permissions == ["/key/generate", "/key/info"], repr(added)
+        assert added.team_member_permissions == granted_permissions, repr(added)
         assert read_rows(
             'SELECT team_member_permissions FROM "LiteLLM_TeamTable" WHERE team_id = %s',
             (team,),
-        ) == [{"team_member_permissions": ["/key/generate", "/key/info"]}], granted.text
+        ) == [{"team_member_permissions": granted_permissions}], granted.text
         generated_gateway: Final = gateway.request("POST", "/key/generate", {"team_id": team}, key=member_key)
         assert generated_gateway.status_code == 200, generated_gateway.text
         gateway_key: Final = _GeneratedKey.model_validate_json(generated_gateway.text).key
@@ -207,19 +213,29 @@ def test_permissions_update_grants_and_revokes_key_generate_for_a_warmed_member_
         assert generated_peer.status_code == 200, generated_peer.text
         peer_key: Final = _GeneratedKey.model_validate_json(generated_peer.text).key
         scenario.cleanups.callback(delete_key_if_present, gateway, peer_key)
+        updated_gateway: Final = _update_team_key(gateway, holder, "member via gateway")
+        assert updated_gateway.status_code == 200, updated_gateway.text
+        assert _team_key_row(team_key) == [{"team_id": team, "metadata": {"owner": "member via gateway"}}]
+        updated_peer: Final = _update_team_key(peer, holder, "member via peer")
+        assert updated_peer.status_code == 200, updated_peer.text
+        assert _team_key_row(team_key) == [{"team_id": team, "metadata": {"owner": "member via peer"}}]
 
+        revoked_permissions: Final = ["/key/info"]
         revoked: Final = gateway.request(
             "POST",
             "/team/permissions_update",
-            {"team_id": team, "team_member_permissions": ["/key/info"]},
+            {"team_id": team, "team_member_permissions": revoked_permissions},
         )
         assert revoked.status_code == 200, revoked.text
         revoked_readback: Final = _permissions(gateway, team)
-        assert revoked_readback.team_member_permissions == ["/key/info"], repr(revoked_readback)
+        assert revoked_readback.team_member_permissions == revoked_permissions, repr(revoked_readback)
         assert read_rows(
             'SELECT team_member_permissions FROM "LiteLLM_TeamTable" WHERE team_id = %s',
             (team,),
-        ) == [{"team_member_permissions": ["/key/info"]}], revoked.text
+        ) == [{"team_member_permissions": revoked_permissions}], revoked.text
+        _refused(_update_team_key(gateway, holder, "member after revoke"), 401, PERMISSION_ERROR)
+        _refused(_update_team_key(peer, holder, "member after revoke"), 401, PERMISSION_ERROR)
+        assert _team_key_row(team_key) == [{"team_id": team, "metadata": {"owner": "member via peer"}}]
         revoked_gateway: Final = gateway.request("POST", "/key/generate", {"team_id": team}, key=member_key)
         _refused(revoked_gateway, 401, PERMISSION_ERROR)
         revoked_peer: Final = peer.request("POST", "/key/generate", {"team_id": team}, key=member_key)

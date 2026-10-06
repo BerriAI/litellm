@@ -1,6 +1,6 @@
 import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
@@ -10,6 +10,14 @@ from integration._support.client import Gateway, Scenario, eventually, object_va
 from integration._support.database import read_rows
 from pydantic import BaseModel, JsonValue
 from redis import Redis
+
+
+def _python_isoformat(value: datetime) -> str:
+    return value.isoformat()
+
+
+def _javascript_iso_string(value: datetime) -> str:
+    return value.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 class _ObservedRequest(BaseModel):
@@ -401,7 +409,16 @@ def test_member_update_lowering_the_budget_below_spend_blocks_the_next_call(
         assert member_info.litellm_budget_table.budget_duration == "30d", repr(member_info)
 
 
-def test_member_update_temp_budget_increase_readmits_a_blocked_member(gateway: Gateway, upstream: httpx.Client) -> None:
+@pytest.mark.parametrize(
+    "spell_expiry",
+    [
+        pytest.param(_python_isoformat, id="python-isoformat"),
+        pytest.param(_javascript_iso_string, id="javascript-toisostring"),
+    ],
+)
+def test_member_update_temp_budget_increase_readmits_a_blocked_member(
+    gateway: Gateway, upstream: httpx.Client, spell_expiry: Callable[[datetime], str]
+) -> None:
     with gateway.scenario() as scenario:
         model, provider_model = _priced_model(scenario)
         team: Final = scenario.team(models=[model])
@@ -440,7 +457,7 @@ def test_member_update_temp_budget_increase_readmits_a_blocked_member(gateway: G
                 "team_id": team,
                 "user_id": user,
                 "temp_budget_increase": 1.0,
-                "temp_budget_expiry": expiry.isoformat(),
+                "temp_budget_expiry": spell_expiry(expiry),
             },
         )
         assert updated.temp_budget_expiry is not None, repr(updated)

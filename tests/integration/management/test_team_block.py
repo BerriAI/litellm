@@ -125,7 +125,7 @@ def test_team_block_and_unblock_update_endpoint_info_and_db_state(
 def test_unblocking_a_team_restores_warmed_keys_on_both_proxies(
     gateway: Gateway, peer: Gateway, upstream: httpx.Client
 ) -> None:
-    pytest.skip("BUG: /team/unblock does not restore warmed team-key access after blocked auth is cached")
+    pytest.skip("BUG: LIT-9257 /team/unblock does not restore warmed team-key access after blocked auth is cached")
 
     with gateway.scenario() as scenario:
         provider_model: Final = f"team-block-{uuid.uuid4().hex}"
@@ -163,7 +163,7 @@ def test_unblocking_a_team_restores_warmed_keys_on_both_proxies(
 def test_warmed_team_keys_are_refused_on_both_proxies_after_block(
     gateway: Gateway, peer: Gateway, upstream: httpx.Client
 ) -> None:
-    pytest.skip("BUG: blocking a team does not refresh warmed team-key auth state")
+    pytest.skip("BUG: LIT-9257 blocking a team does not refresh warmed team-key auth state")
 
     with gateway.scenario() as scenario:
         provider_model: Final = f"team-block-{uuid.uuid4().hex}"
@@ -198,7 +198,7 @@ def test_warmed_team_keys_are_refused_on_both_proxies_after_block(
 def test_a_new_team_key_is_refused_on_a_peer_that_cached_the_team_before_block(
     gateway: Gateway, peer: Gateway, upstream: httpx.Client
 ) -> None:
-    pytest.skip("BUG: a peer proxy that cached the team before /team/block admits a never-seen team key")
+    pytest.skip("BUG: LIT-9257 a peer proxy that cached the team before /team/block admits a never-seen team key")
 
     with gateway.scenario() as scenario:
         provider_model: Final = f"team-block-{uuid.uuid4().hex}"
