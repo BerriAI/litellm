@@ -98,6 +98,22 @@ impl Actors {
                 .and_then(|set| set.first().copied())
                 .map(str::to_owned)
         };
+        let candidates: Vec<_> = (0..rows.len())
+            .map(|index| unique(boundaries.get(&index)).or_else(|| direct[index].clone()))
+            .collect();
+        let inherited =
+            graph.nearest_ancestors(&candidates.iter().map(Option::is_some).collect::<Vec<_>>());
+        let inherited_child = graph.nearest_ancestors(
+            &candidates
+                .iter()
+                .enumerate()
+                .map(|(index, candidate)| {
+                    candidate
+                        .as_ref()
+                        .is_some_and(|candidate| candidate != &root(&rows[index]))
+                })
+                .collect::<Vec<_>>(),
+        );
         let owners: Vec<_> = rows
             .iter()
             .enumerate()
@@ -110,11 +126,12 @@ impl Actors {
                     .or_else(|| unique(boundaries.get(&index)))
                     .or_else(|| unique(tools.get(row.tool_call_id.as_str())))
                     .or_else(|| {
-                        graph.ancestors(index).into_iter().find_map(|ancestor| {
-                            let candidate = unique(boundaries.get(&ancestor))
-                                .or_else(|| direct[ancestor].clone())?;
-                            (!child_source(row) || candidate != root(row)).then_some(candidate)
-                        })
+                        let ancestor = if child_source(row) {
+                            inherited_child[index]
+                        } else {
+                            inherited[index]
+                        }?;
+                        candidates[ancestor].clone()
                     })
             })
             .collect();

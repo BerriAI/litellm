@@ -1742,3 +1742,41 @@ fn inherited_native_actor_identity_and_labels_have_bounded_size() {
     }));
     assert!(serde_json::to_vec(&trace).unwrap().len() < 3_000_000);
 }
+
+#[rstest]
+#[case::unassigned(false)]
+#[case::owned(true)]
+fn deep_native_chains_resolve_owned_and_unassigned_spans(#[case] owned: bool) {
+    let rows: Vec<_> = (0..50_000)
+        .rev()
+        .map(|index| TraceSpansRow {
+            framework: "claude-code".into(),
+            session_id: "session".into(),
+            query_source: if owned && index == 0 {
+                "repl_main_thread".into()
+            } else {
+                String::new()
+            },
+            ..row(
+                &index.to_string(),
+                &if index == 0 {
+                    String::new()
+                } else {
+                    (index - 1).to_string()
+                },
+                "native",
+                "framework",
+                "assistant",
+            )
+        })
+        .collect();
+    let trace = resolve_trace("trace", "ref", &rows, &[]).unwrap();
+    assert_eq!(trace.spans.len(), rows.len());
+    assert!(
+        trace
+            .spans
+            .iter()
+            .all(|span| span.actor_id.is_some() == owned && span.actor_unassigned != owned)
+    );
+    assert_eq!(trace.summary.agent_count, u64::from(owned));
+}
