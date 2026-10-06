@@ -15,13 +15,13 @@ use axum::{
 use http_body_util::BodyExt;
 
 use litellm_config::Config;
-use litellm_core::resources::CoreResources;
 use litellm_gateway_auth::Auth;
 use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
     media::PublicDnsResolver,
 };
+use litellm_inference::resources::CoreResources;
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
