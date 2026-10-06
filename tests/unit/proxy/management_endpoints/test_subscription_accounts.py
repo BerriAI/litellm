@@ -3,12 +3,16 @@ from datetime import datetime, timezone
 from typing import Final
 from uuid import uuid4
 
+from unittest.mock import MagicMock
+
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from litellm.models.subscription_account import LiteLLM_SubscriptionAccountTable
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_JWTAuth, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import allowed_routes_check
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.subscription_accounts import (
     SubscriptionDeployment,
@@ -254,6 +258,7 @@ def test_rejects_a_fee_on_a_metered_provider(client):
     "payload",
     [
         {**_TEST_FEE, "monthly_fee": 0},
+        {**_TEST_FEE, "account_id": ""},
         {**_TEST_FEE, "currency": "usd"},
         {**_TEST_FEE, "currency": "$"},
         {**_TEST_FEE, "billing_period_start": "10/01/2026"},
@@ -288,6 +293,39 @@ def test_viewer_reads_usage_but_cannot_write(client):
     assert _usage(test_client, "2026-10-01", "2026-10-07", **viewer)["accounts"][0]["account_id"] == _ACCOUNT
     assert test_client.post("/subscription_accounts/new", json=_TEST_FEE, headers=viewer).status_code == 403
     assert store.rows == {}
+
+
+_SUBSCRIPTION_ROUTES: Final = (
+    "/subscription_accounts/usage",
+    "/subscription_accounts/new",
+    "/subscription_accounts/update",
+    "/subscription_accounts/delete",
+)
+
+
+def test_routes_follow_the_admin_route_policy():
+    jwt_admin_defaults = LiteLLM_JWTAuth()
+
+    for route in _SUBSCRIPTION_ROUTES:
+        assert allowed_routes_check(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_route=route, litellm_proxy_roles=jwt_admin_defaults
+        )
+        assert RouteChecks.is_management_route(route)
+
+
+def test_viewer_route_gate_reads_usage_and_blocks_writes():
+    viewer_role: Final = LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    get_usage = MagicMock(spec=Request, method="GET", query_params={})
+    post_new = MagicMock(spec=Request, method="POST", query_params={})
+
+    RouteChecks._check_proxy_admin_viewer_access(
+        route="/subscription_accounts/usage", _user_role=viewer_role, request_data={}, request=get_usage
+    )
+    with pytest.raises(HTTPException) as denied:
+        RouteChecks._check_proxy_admin_viewer_access(
+            route="/subscription_accounts/new", _user_role=viewer_role, request_data=_TEST_FEE, request=post_new
+        )
+    assert denied.value.status_code == 403
 
 
 def test_internal_user_cannot_read_subscription_accounts(client):

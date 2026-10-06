@@ -9,8 +9,8 @@ CURRENCY_CODE_PATTERN: Final = r"^[A-Z]{3}$"
 
 
 class SubscriptionAccountFeeRequest(BaseModel):
-    custom_llm_provider: str
-    account_id: str
+    custom_llm_provider: str = Field(min_length=1)
+    account_id: str = Field(min_length=1)
     monthly_fee: float = Field(gt=0)
     currency: str = Field(pattern=CURRENCY_CODE_PATTERN)
     billing_period_start: date
