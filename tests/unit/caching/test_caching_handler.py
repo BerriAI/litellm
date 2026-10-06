@@ -2657,7 +2657,7 @@ async def test_async_get_cache_forgets_the_worker_copy_of_a_stored_response_with
     kwargs = {"messages": _unique_messages()}
     key = litellm.cache.get_cache_key(**kwargs)
     poisoned = litellm.ModelResponse(choices=[]).model_dump_json()
-    await handler.dual_cache.async_set_cache(key, {"timestamp": time.time(), "response": poisoned})
+    await handler.dual_cache.async_set_cache(key, {"timestamp": _FIXED_START.timestamp(), "response": poisoned})
     assert await handler.dual_cache.async_get_cache(key) is not None
 
     lookup = await handler._async_get_cache(
