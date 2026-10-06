@@ -27,3 +27,11 @@ Test each contract in its owner: storage capabilities in backend tests, envelope
 `ScopedCache` requires an explicit shared or isolated scope at construction. Per-call `CachePolicy` controls reads, writes, expiry, and freshness without replacing the attached scope or service. `CacheOptions` binds that policy to an explicit scope for storage requests and has no default sharing policy. Versioned native envelopes reject incompatible API surfaces and versions as misses; this envelope is distinct from the legacy Python response codec
 
 Response storage is not the source of budget or rate-limit coordination dependencies. Keep counters, reservations, and atomic admission operations out of `ResponseCacheService`, including when both services happen to use Redis
+
+## Boundary
+
+- Owns `ResponseCache<B>`, key derivation, scope and per-call policy, envelopes, entry freshness, the Python-compatible response codec, deferred writes, and the object-safe views over `ResponseCache<B>` (`ResponseCacheService`, the exact-only `ExactResponseCache`, `ConnectionProbe`)
+- Having only one consumer today, such as the Python bridge, is not a reason to move code out. This crate serves both the SDK and the gateway
+- Python wire shapes stay out: decoding the legacy key flags (`api_parameter`, `internal_parameter`) and the legacy activation flags (`supported_call_type`, `configured`, `default_on`, `use_cache`) is configuration translation owned by `python-bridge/src/cache/native`
+- A request carries one resolved read/write policy. The gateway and the Python bridge each translate their inputs into it; don't add parallel control types alongside `CachePolicy`
+- The gateway's keying layout stays in `scope.rs`; changing it is a key migration, not a refactor
