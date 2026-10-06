@@ -29,16 +29,19 @@ def check_environment_is_base_only() -> str:
 
 
 def check_import() -> str:
+    from importlib.metadata import distributions as installed_distributions
     from importlib.metadata import version
 
     import litellm
 
     _require(bool(litellm.__file__), "litellm has no __file__")
-    from importlib.metadata import packages_distributions
-
     from litellm._version import version as sdk_version
 
-    distributions = tuple(name for name in packages_distributions().get("litellm", ()) if name in ("litellm", "litellm-core"))
+    distributions = tuple(
+        distribution.metadata["Name"]
+        for distribution in installed_distributions()
+        if distribution.metadata["Name"] in ("litellm", "litellm-core")
+    )
     _require(len(distributions) == 1, f"expected one SDK distribution, found {distributions}")
     distribution = distributions[0]
     _require(sdk_version == version(distribution), "SDK version does not match installed metadata")
