@@ -8,6 +8,9 @@ on:
     paths:
       - "**/pyproject.toml"
       - "uv.lock"
+      - "uv.core.lock"
+      - "scripts/prepare_core_distribution.py"
+      - "litellm/_version.py"
       - "uv.toml"
       - ".python-version"
       - "rust-toolchain.toml"
@@ -97,7 +100,27 @@ jobs:
 
       - name: Build the legacy distribution before selecting core metadata
         if: steps.changes.outputs.decision != 'skip'
-        run: uv build --wheel --out-dir dist/legacy-check
+        run: uv build --out-dir dist/legacy-check
+
+      - name: Verify legacy installs and ordinary upgrades
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          wheel=$(realpath dist/legacy-check/litellm-[0-9]*.whl)
+          for installer in pip uv; do
+            uv venv --seed --python ${{ matrix.python-version }} ".venv-legacy-$installer"
+            python="$GITHUB_WORKSPACE/.venv-legacy-$installer/bin/python"
+            if [ "$installer" = pip ]; then
+              "$python" -m pip install 'litellm==1.104.0'
+              "$python" -m pip install --upgrade "$wheel"
+              "$python" -m pip check
+            else
+              uv pip install --python "$python" 'litellm==1.104.0'
+              uv pip install --python "$python" --upgrade "$wheel"
+              uv pip check --python "$python"
+            fi
+            (cd "$RUNNER_TEMP" && "$python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_distribution_install.py" litellm)
+            (cd "$RUNNER_TEMP" && "$python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_sdk_http.py")
+          done
 
       - name: Select the independent core dependency profile
         if: steps.changes.outputs.decision != 'skip'
@@ -132,7 +155,10 @@ jobs:
 
       - name: Build the public wheel
         if: steps.changes.outputs.decision != 'skip'
-        run: uv build --all-packages --wheel --out-dir dist/mcp-check
+        run: |
+          uv build --all-packages --out-dir dist/mcp-check
+          cp dist/legacy-check/*.whl dist/mcp-check/
+          python tests/base_sdk_tests/check_distribution_pair.py dist/mcp-check
 
       - name: Check lowest direct runtime installations
         if: steps.changes.outputs.decision != 'skip'

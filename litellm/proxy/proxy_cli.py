@@ -1107,7 +1107,9 @@ def run_server(
             save_worker_config,
         )
     except ModuleNotFoundError as e:
-        raise ModuleNotFoundError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`") from e
+        raise ModuleNotFoundError(
+            f"Missing dependency {e}. Run `pip install '{get_distribution_name()}[proxy]'`"
+        ) from e
     if version is True:
         ProxyInitializationHelpers._echo_litellm_version()
         return

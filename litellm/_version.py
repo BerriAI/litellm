@@ -1,22 +1,24 @@
 from collections.abc import Callable
 from importlib.metadata import Distribution, PackageNotFoundError, distribution
+from typing import Final
 
 
-def get_distribution(lookup: Callable[[str], Distribution] = distribution) -> Distribution:
+def get_distribution(lookup: Callable[[str], Distribution] | None = None) -> Distribution:
+    find: Final = distribution if lookup is None else lookup
     try:
-        return lookup("litellm-core")
+        return find("litellm-core")
     except PackageNotFoundError:
-        return lookup("litellm")
+        return find("litellm")
 
 
-def get_distribution_name(lookup: Callable[[str], Distribution] = distribution) -> str:
+def get_distribution_name(lookup: Callable[[str], Distribution] | None = None) -> str:
     try:
         return get_distribution(lookup).metadata["Name"] or "litellm"
     except PackageNotFoundError:
         return "litellm"
 
 
-def get_version(lookup: Callable[[str], Distribution] = distribution) -> str:
+def get_version(lookup: Callable[[str], Distribution] | None = None) -> str:
     try:
         return get_distribution(lookup).version
     except PackageNotFoundError:

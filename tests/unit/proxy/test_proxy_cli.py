@@ -38,17 +38,17 @@ def fork_reservation():
 
 @pytest.mark.xdist_group("proxy_cli")
 class TestProxyInitializationHelpers:
-    @patch("importlib.metadata.version")
+    @patch("litellm._version.distribution")
     @patch("click.echo")
     def test_echo_litellm_version(self, mock_echo, mock_version):
         # Setup
-        mock_version.return_value = "1.0.0"
+        mock_version.return_value.version = "1.0.0"
 
         # Execute
         ProxyInitializationHelpers._echo_litellm_version()
 
         # Assert
-        mock_version.assert_called_once_with("litellm")
+        mock_version.assert_called_once_with("litellm-core")
         mock_echo.assert_called_once_with("\nLiteLLM: Current Version = 1.0.0\n")
 
     @patch("httpx.get")

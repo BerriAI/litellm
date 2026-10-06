@@ -1043,7 +1043,7 @@ class TestGetLitellmVersion:
         self.logger = make_logger()
 
     def test_returns_unknown_on_exception(self):
-        with patch("importlib.metadata.version", side_effect=Exception("no package")):
+        with patch("litellm._version.distribution", side_effect=Exception("no package")):
             result = self.logger._get_litellm_version()
         assert result == "unknown"
 
