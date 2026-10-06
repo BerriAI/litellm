@@ -65,6 +65,9 @@ from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(240)
 
+# $0 comes from litellm's own cost-map row (model_prices_and_context_window.json, added 2025-10-14 in 900a57f5b1f):
+# Lemonade is a local inference server, so there is no vendor price for the row to drift from. A row that gains a
+# price is stale, not a regression: pick another chat row the map prices at $0 and serves over the OpenAI wire
 UNPRICED_FREE_PROVIDER_MODEL: Final = "lemonade/Gemma-3-4b-it-GGUF"
 
 
@@ -1003,6 +1006,9 @@ def test_unauthenticated_request_to_a_shadowing_alias_is_rejected(rig: AliasRig)
         assert upstream_hits(upstream_requests(rig.gateway.upstream_url), marker) == 0
 
 
+# $0 comes from litellm's own cost-map row (model_prices_and_context_window.json, added 2025-12-08 in #17692). The cell
+# needs an embedding row priced $0 only by the map and served over the OpenAI wire; a row that gains a price is stale,
+# not a regression: pick another such row
 UNPRICED_FREE_EMBEDDING_MODEL: Final = "fireworks_ai/accounts/fireworks/models/qwen3-embedding-0p6b"
 
 
