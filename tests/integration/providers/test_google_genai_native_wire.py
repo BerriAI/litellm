@@ -57,7 +57,8 @@ _REPLY_BODY: Final = {
 
 _STREAM_FRAMES: Final = (
     b'data: {"candidates":[{"content":{"parts":[{"text":"gre"}],"role":"model"},"index":0}]}\n\n',
-    b'data: {"candidates":[{"content":{"parts":[{"text":"en"}],"role":"model"},"index":0}]}\n\n',
+    b'id: gemini-frame-2\ndata: {"candidates":[{"content":{"parts":[{"text":"en"}],"role":"model"},"index":0}]}\n\n',
+    b"retry: 3000\n\n",
     b'data: {"candidates":[{"content":{"parts":[],"role":"model"},"finishReason":"STOP","index":0}],'
     b'"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":7,"totalTokenCount":18}}\n\n',
 )
@@ -152,12 +153,14 @@ def test_stream_generate_content_relays_gemini_sse_frames(
     stream_bytes: Final = b"".join(_STREAM_FRAMES)
     json_boundary: Final = stream_bytes.index(b'"gre"') + 2
     delimiter_boundary: Final = stream_bytes.index(b"\n\n") + 1
+    id_boundary: Final = stream_bytes.index(b"id: gemini-frame-2") + len(b"id:")
     chunks: Final = {
         "whole": _STREAM_FRAMES,
         "split": (
             stream_bytes[:json_boundary],
             stream_bytes[json_boundary:delimiter_boundary],
-            stream_bytes[delimiter_boundary:],
+            stream_bytes[delimiter_boundary:id_boundary],
+            stream_bytes[id_boundary:],
         ),
         "packed": (stream_bytes,),
     }[chunking]

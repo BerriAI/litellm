@@ -23,7 +23,9 @@ def _template(params: dict) -> str:
     "method,path",
     [
         ("POST", "/v1beta/agents"),
+        ("GET", "/v1beta/agents"),
         ("GET", f"/v1beta/agents/{_AGENT_NAME}"),
+        ("GET", f"/v1beta/agents/{_AGENT_NAME}/versions"),
         ("DELETE", f"/v1beta/agents/{_AGENT_NAME}"),
     ],
 )
@@ -63,7 +65,7 @@ def test_agents_rejects_api_base_without_caller_key(
             else:
                 assert response.status_code == 401, response.text
                 assert "caller-supplied" in response.json()["detail"], response.text
-            assert wire.drain() == ()
+            assert wire.drain() == (), response.text
 
 
 def test_agents_forwards_caller_supplied_key_to_chosen_api_base(gateway: Gateway, tmp_path: Path) -> None:
