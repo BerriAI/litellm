@@ -126,6 +126,35 @@ class LangfuseOtelLogger(OpenTelemetry):
                 safe_set_attribute(span, enum_attr.value, value)
 
     @staticmethod
+    def _message_observation_output(item) -> dict:
+        """Flatten a Responses API message item into an observation output dict.
+
+        Joins every ``output_text`` part (multi-part messages previously lost
+        everything past the first), maps ``refusal`` parts to a ``refusal`` key
+        (previously dropped entirely), and tolerates an empty content list
+        (previously raised IndexError). Mirrors the OTel v2 path's
+        ``_responses_parts_text`` in ``litellm/integrations/otel/model/payloads.py``.
+        """
+        text_parts: Final[list[str]] = []
+        refusal_parts: Final[list[str]] = []
+        for part in getattr(item, "content", None) or []:
+            part_type = getattr(part, "type", None)
+            if part_type == "output_text":
+                text = getattr(part, "text", None)
+                if isinstance(text, str):
+                    text_parts.append(text)
+            elif part_type == "refusal":
+                refusal = getattr(part, "refusal", None)
+                if isinstance(refusal, str):
+                    refusal_parts.append(refusal)
+        message_output: dict = {"role": getattr(item, "role", "assistant")}
+        if text_parts:
+            message_output["content"] = "".join(text_parts)
+        if refusal_parts:
+            message_output["refusal"] = "".join(refusal_parts)
+        return message_output
+
+    @staticmethod
     def _set_observation_output(span: Span, response_obj):
         """Helper to set observation output attributes."""
         from litellm.integrations.arize._utils import safe_set_attribute
@@ -190,12 +219,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                                     }
                                 )
                     elif item_type == "message":
-                        output_items_data.append(
-                            {
-                                "role": getattr(item, "role", "assistant"),
-                                "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
-                            }
-                        )
+                        output_items_data.append(LangfuseOtelLogger._message_observation_output(item))
                     elif item_type == "function_call":
                         arguments_str = getattr(item, "arguments", "{}")
                         arguments_obj = (
