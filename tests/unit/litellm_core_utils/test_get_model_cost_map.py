@@ -4,6 +4,7 @@ count actual model entries, not reserved meta keys) and the extraction of the
 ``fallback_generalizations`` block out of the raw map.
 """
 
+import importlib.util
 import json
 import os
 import sys
@@ -557,6 +558,43 @@ def test_boot_load_success_does_not_start_background_retry():
     assert _retry_threads() == []
     assert cost_map.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
     assert get_model_cost_map_source_info()["source"] == "remote"
+
+
+@pytest.mark.parametrize("packaged_backup", [b"[]", b'"damaged"'])
+def test_packaged_backup_that_is_not_a_json_object_loads_as_written(monkeypatch, tmp_path, packaged_backup):
+    from litellm.litellm_core_utils import get_model_cost_map as module
+
+    (tmp_path / "model_prices_and_context_window_backup.json").write_bytes(packaged_backup)
+    monkeypatch.setattr(module, "files", lambda _package: tmp_path)
+
+    loaded = GetModelCostMap.load_local_model_cost_map_with_revision()
+
+    assert loaded.model_cost_map == json.loads(packaged_backup)
+    assert loaded.revision == git_blob_id(packaged_backup)
+
+
+def _loader_module_as_a_new_process_imports_it():
+    from litellm.litellm_core_utils import get_model_cost_map as module
+
+    spec = importlib.util.spec_from_file_location(module.__name__, module.__file__)
+    loader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loader)
+    return loader
+
+
+@pytest.mark.parametrize("packaged_backup", [b"[]", b'"damaged"'])
+def test_first_boot_load_serves_the_fetched_map_when_the_packaged_backup_is_not_a_json_object(
+    monkeypatch, tmp_path, packaged_backup
+):
+    loader = _loader_module_as_a_new_process_imports_it()
+    (tmp_path / "model_prices_and_context_window_backup.json").write_bytes(packaged_backup)
+    monkeypatch.setattr(loader, "files", lambda _package: tmp_path)
+    client, _ = _mock_client([httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client)
+
+    cost_map = loader.get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=client)
+
+    assert loader.get_model_cost_map_source_info()["source"] == "remote"
+    assert cost_map.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
 
 
 def test_boot_load_transient_failure_returns_local_then_background_retry_adopts_remote(monkeypatch):

@@ -2,7 +2,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from litellm.llms.gemini.common_utils import GeminiModelInfo, GoogleAIStudioTokenCounter
+from litellm.llms.gemini.common_utils import (
+    GeminiModelInfo,
+    GoogleAIStudioTokenCounter,
+    map_openai_image_params_to_gemini,
+)
 
 
 class TestGeminiModelInfo:
@@ -221,3 +225,25 @@ class TestGoogleAIStudioTokenCounter:
 
         # Verify the contents are unchanged
         assert cleaned_contents == contents_without_function_response
+
+
+@pytest.mark.parametrize(
+    ("raw_image_config", "expected"),
+    [
+        ('{"aspectRatio": "1:1"}', {"imageConfig": {"aspectRatio": "1:1"}}),
+        ("[1, 2]", {}),
+        ('"16:9"', {}),
+        ("null", {}),
+    ],
+)
+def test_map_openai_image_params_to_gemini_forwards_only_a_json_object_image_config(
+    raw_image_config: str, expected: dict[str, object]
+):
+    mapped = map_openai_image_params_to_gemini(
+        {"imageConfig": raw_image_config},
+        "gemini-2.5-flash-image",
+        ["imageConfig"],
+        parse_image_config_string=True,
+    )
+
+    assert mapped == expected
