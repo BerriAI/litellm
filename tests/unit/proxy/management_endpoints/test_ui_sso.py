@@ -9698,7 +9698,7 @@ async def _sso_key_generate_on_ui_disabled_node(*, source, key, google_sso_confi
         patch.dict(os.environ, env, clear=True),
         patch("litellm.proxy.proxy_server.premium_user", True),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.cli_sso_session_cache", cli_cache),
