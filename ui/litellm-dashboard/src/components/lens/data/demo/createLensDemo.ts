@@ -2,6 +2,7 @@ import { ApiError } from "@/lib/http/client";
 import type { TracesApi } from "@/components/lens/traces/api";
 import type { LensServices } from "../LensServices";
 import type { LensApi } from "../service";
+import { demoDatasetsApi } from "./demoDatasets";
 import { createLensDemoData, type LensDemoData } from "./fixtures";
 
 const notInDemo = (): Promise<never> =>
@@ -14,6 +15,7 @@ function demoLensApi(data: LensDemoData): LensApi {
   const jobs = (lensId: string) => data.lenses.find((lens) => lens.id === lensId)?.jobs;
   return {
     scope: "demo",
+    datasets: demoDatasetsApi(data),
     lenses: async () => ({ lenses: data.lenses, workers: [], tracing_enabled: true }),
     activity: async () => ({ traces: true, requests: false }),
     runs: (lensId, offset) => found(jobs(lensId)?.slice(offset)),

@@ -9,6 +9,7 @@ import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
+import { AddToDatasetButton } from "../../../datasets/AddToDatasetDialog";
 import type { TraceHandoff } from "../../api";
 import { runCost } from "../../list/AgentTracesTable";
 import { traceRefOf, traceShareUrl } from "../../routing";
@@ -143,6 +144,10 @@ export function RunHeader({
               <RefreshCw className={cn("size-3", refreshing && "animate-spin")} />
               Refresh
             </Button>
+            <AddToDatasetButton
+              sources={[{ kind: "trace", trace_id: summary.trace_id, trace_ref: summary.trace_ref ?? "", span_id: "" }]}
+              agentName={traceAgentNames(summary)[0]}
+            />
             <CopyButton
               label="Copy link"
               icon={Link}

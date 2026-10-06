@@ -11,6 +11,7 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { LensServicesProvider, useLensAccessToken, useLensApi, useLiveLensServices } from "./data/LensServices";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
+import { DatasetsView } from "./datasets/DatasetsView";
 import { LensSettings } from "./settings/LensSettings";
 import { createLensDemo } from "./data/demo/createLensDemo";
 import { lensQueries } from "./data/queries";
@@ -213,6 +214,9 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                     </p>
                   )}
                 </TabsContent>
+                <TabsContent value="datasets" className={PANEL}>
+                  <DatasetsPanel canView={canViewInvestigations} isAdmin={isAdmin} readOnly={readOnly} />
+                </TabsContent>
               </>
             )}
             {workers && list && (
@@ -237,6 +241,12 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
   );
 }
 
+function DatasetsPanel({ canView, isAdmin, readOnly }: { canView: boolean; isAdmin: boolean; readOnly: boolean }) {
+  if (!canView)
+    return <p className="py-6 text-sm text-muted-foreground">Datasets require proxy administrator access.</p>;
+  return <DatasetsView readOnly={readOnly || !isAdmin} />;
+}
+
 function needsSetup(
   state: LensReadiness,
   location: {
@@ -249,7 +259,7 @@ function needsSetup(
     issueKey: string | null;
   },
 ) {
-  if (location.tab === "settings") return false;
+  if (location.tab === "settings" || location.tab === "datasets") return false;
   if (location.requested) return true;
   const selected = location.tab === "traces" ? location.trace : location.lensId || location.dialog || location.issueKey;
   if (!state.missingTraces || selected) return false;
