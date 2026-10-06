@@ -7336,7 +7336,6 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
 
 
 def _v1_histogram_bounds(config: OpenTelemetryConfig) -> dict[str, tuple[float, ...]]:
-    """Run one streaming success through v1 and return each histogram's exported bounds."""
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "open_telemetry", "data", "captured_kwargs.json")) as f:
         kwargs = json.load(f)
@@ -7350,15 +7349,12 @@ def _v1_histogram_bounds(config: OpenTelemetryConfig) -> dict[str, tuple[float, 
         tracer_provider=TracerProvider(),
         meter_provider=MeterProvider(metric_readers=[metric_reader]),
     )
-    start = datetime.now()
+    start = datetime(2026, 6, 12, 12, 0, 0)
     otel._handle_success(kwargs, response_obj, start, start + timedelta(seconds=1))
     return {name: tuple(points[0].explicit_bounds) for name, points in _metrics_by_name(metric_reader).items()}
 
 
 def test_v1_histograms_use_semconv_bucket_boundaries_when_flag_on():
-    """v1 and v2 must emit the same bucket layout for the same metric, so a dashboard
-    keeps working when an operator switches engines. Expected values are the literal
-    semconv boundaries, not the MetricBuckets constants under test."""
     bounds = _v1_histogram_bounds(
         OpenTelemetryConfig(exporter="console", enable_metrics=True, semconv_histogram_buckets=True)
     )
@@ -7366,8 +7362,9 @@ def test_v1_histograms_use_semconv_bucket_boundaries_when_flag_on():
     assert {name: bounds.get(name) for name in EXPECTED_BOUNDARIES} == EXPECTED_BOUNDARIES
 
 
-def test_v1_histograms_keep_sdk_default_boundaries_when_flag_off():
-    """Without the opt-in, v1 creates every histogram as it did before the flag existed."""
+def test_v1_histograms_keep_sdk_default_boundaries_when_flag_off(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS", raising=False)
+
     bounds = _v1_histogram_bounds(OpenTelemetryConfig(exporter="console", enable_metrics=True))
 
     assert len(bounds) == 6
@@ -7377,3 +7374,16 @@ def test_v1_histograms_keep_sdk_default_boundaries_when_flag_off():
 def test_v1_semconv_histogram_buckets_flag_reads_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS", "true")
     assert OpenTelemetryConfig.from_env().semconv_histogram_buckets is True
+
+
+def test_v1_directly_built_config_honors_semconv_histogram_buckets_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS", "true")
+
+    bounds = _v1_histogram_bounds(OpenTelemetryConfig(exporter="console", enable_metrics=True))
+
+    assert {name: bounds.get(name) for name in EXPECTED_BOUNDARIES} == EXPECTED_BOUNDARIES
+
+
+def test_v1_explicit_semconv_histogram_buckets_overrides_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS", "true")
+    assert OpenTelemetryConfig(semconv_histogram_buckets=False).semconv_histogram_buckets is False
