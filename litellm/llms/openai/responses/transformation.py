@@ -26,6 +26,7 @@ from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_serie
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
@@ -51,7 +52,7 @@ _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE,
 _PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS
 
 
-class _ReasoningSupportEntry(BaseModel):
+class _ReasoningSupportEntry(LiteLLMBaseModel):
     litellm_provider: str | None = None
     supports_reasoning: bool | None = None
 
