@@ -110,7 +110,7 @@ where
                     .call(|reply| CacheCall::GetCacheKey { reply })
                     .await
                     .map_err(|_| Error::Unavailable)?
-                    .map(CacheKey::delegated),
+                    .map(CacheKey::External),
             }
         })
     }

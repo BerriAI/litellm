@@ -146,11 +146,7 @@ async fn entry_limit_applies_to_sync_async_and_batch_writes() {
     for key in ["batch-small", "service"] {
         assert_eq!(
             service
-                .lookup(
-                    &CacheKey::delegated(key.into()),
-                    &request(key),
-                    Duration::ZERO
-                )
+                .lookup(&CacheKey::Native(key.into()), &request(key), Duration::ZERO)
                 .await
                 .unwrap(),
             Some(small.clone())
@@ -173,7 +169,7 @@ impl ResponseCacheService for SingleLookupService {
     ) -> BoxFuture<'a, Result<CacheKey, Error>> {
         Box::pin(async move {
             match &request.key {
-                CacheKeyInput::Preset(key) => Ok(CacheKey::delegated(key.clone())),
+                CacheKeyInput::Preset(key) => Ok(CacheKey::External(key.clone())),
                 CacheKeyInput::Request { .. } => Err(Error::Unavailable),
             }
         })

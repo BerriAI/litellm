@@ -75,7 +75,7 @@ async fn all_inference_endpoints_share_native_cache(
     assert!(!cache_key.as_bytes().is_empty());
     let stored = cache
         .lookup(
-            &CacheKey::delegated(cache_key.to_str().unwrap().into()),
+            &CacheKey::Native(cache_key.to_str().unwrap().into()),
             &ResponseCacheRequest::new(CacheKeyInput::Preset(cache_key.to_str().unwrap().into())),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
