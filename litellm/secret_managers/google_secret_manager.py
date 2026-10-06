@@ -8,8 +8,9 @@ from litellm.caching.caching import InMemoryCache
 from litellm.constants import SECRET_MANAGER_REFRESH_INTERVAL
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
-from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem
+from litellm.proxy._types import CommonProxyErrors
 from litellm.rust_bridge.secret_manager import resolve_native_provider_reader
+from litellm.types.secret_managers.main import KeyManagementSystem
 
 
 class GoogleSecretManager(GCSBucketBase):

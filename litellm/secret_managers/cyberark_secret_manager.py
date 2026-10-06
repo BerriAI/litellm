@@ -16,8 +16,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import KeyManagementSystem
 from litellm.rust_bridge.secret_manager import resolve_native_provider_reader, resolve_native_provider_writer
+from litellm.types.secret_managers.main import KeyManagementSystem
 
 from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 from .main import str_to_bool

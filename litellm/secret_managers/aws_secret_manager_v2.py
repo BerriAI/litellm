@@ -30,11 +30,10 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.proxy._types import KeyManagementSystem
 from litellm.rust_bridge.secret_manager import resolve_native_provider_reader
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.secret_managers.main import KeyManagementSettings
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 from .base_secret_manager import BaseSecretManager
 
