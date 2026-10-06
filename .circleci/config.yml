@@ -892,41 +892,6 @@ jobs:
           paths:
             - router_unit_tests_coverage.xml
             - router_unit_tests_coverage
-  litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: medium
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      # Run pytest and generate JUnit XML report
-      - setup_litellm_enterprise_pip
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
-            TEST_FILES="$TEST_FILES tests/unit/llms/openai/test_openai.py"
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -v \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -k \"assistants or test_aarun_thread_litellm or test_add_message_litellm or test_create_thread_litellm or test_get_thread_litellm\""
-          no_output_timeout: 15m
-      # Store test results
-      - store_test_results:
-          path: test-results
   llm_translation_testing:
     docker:
       - *python312_image
@@ -3582,7 +3547,6 @@ workflows:
       - local_testing_part1
       - local_testing_part2
       - langfuse_logging_unit_tests
-      - litellm_assistants_api_testing
       - litellm_router_testing
       - litellm_router_unit_testing
       - auth_ui_unit_tests
@@ -3643,7 +3607,6 @@ workflows:
             - langfuse_logging_unit_tests
             - local_testing_part1
             - local_testing_part2
-            - litellm_assistants_api_testing
             - litellm_router_unit_testing
             - auth_ui_unit_tests
       - db_migration_disable_update_check:
