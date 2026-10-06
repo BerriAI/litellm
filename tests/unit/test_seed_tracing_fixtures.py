@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import re
@@ -15,13 +16,13 @@ from pydantic import InstanceOf, TypeAdapter
 from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
 from litellm.rust_bridge.trace.storage import Tenant, span_rows
 from litellm.tracing.types import SpendLogRecord
-from tests._master_key import MASTER_KEY
 from scripts.seed_tracing_fixtures import (
     JSON,
     TRACE_FIXTURES,
     bulk_span_rows,
     fixture_capture,
     fixture_replays,
+    managed_response,
     postgres_row,
     rebase,
     rebase_spend,
@@ -33,6 +34,7 @@ from scripts.seed_tracing_fixtures import (
     spend_fixtures,
     timestamps,
 )
+from tests._master_key import MASTER_KEY
 
 CALL_KEYS: Final = TypeAdapter(tuple[str, ...])
 DATETIMES: Final = TypeAdapter(tuple[datetime, datetime])
@@ -269,3 +271,16 @@ def test_replay_rebases_provider_request_evidence_with_the_spend_row() -> None:
     assert export == {"request_id": replayed["provider_request_id"]}
     assert replayed["provider_request_id"] != spend["provider_request_id"]
     assert replayed["provider_request_id"].startswith("req_")
+
+
+@pytest.mark.parametrize("upstream", ("msg_response", "req_response", "chatcmpl-response"))
+def test_replay_preserves_identity_between_managed_and_plain_response_ids(upstream: str) -> None:
+    payload: Final = f"model:example;response_id:{upstream}"
+    managed: Final = "resp_" + base64.b64encode(payload.encode()).decode()
+    spend: Final = {**dict(spend_fixtures())["deepagents_swarm"][0], "response_id": managed}
+    pattern: Final = response_pattern((spend,))
+    replayed: Final = rebase_spend((spend,), 0, "managed-replay", pattern)[0]
+    plain: Final = rebase(upstream, 0, "managed-replay", pattern)
+
+    assert plain != upstream
+    assert managed_response(replayed["response_id"]) == f"model:example;response_id:{plain}"
