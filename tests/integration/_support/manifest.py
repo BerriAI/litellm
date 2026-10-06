@@ -12,6 +12,7 @@ OWNED_DIRECTORIES: Final = frozenset(
         "streaming",
         "messages_endpoint",
         "caching",
+        "translation",
         "configuration",
         "mcp",
         "observability",

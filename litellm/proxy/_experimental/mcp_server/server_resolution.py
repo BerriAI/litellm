@@ -120,3 +120,42 @@ async def authorize_mcp_server(
         )
 
     return resolved
+
+
+@dataclass(frozen=True, slots=True)
+class MCPServerTargetCatalog:
+    manager: MCPServerRegistry
+    db_lookup: Callable[[str], Awaitable[LiteLLM_MCPServerTable | None]] | None = None
+    temp_lookup: Callable[[str], Awaitable[MCPServer | None]] | None = None
+    id_client_ip: str | None = None
+    name_client_ip: str | None = None
+    match_name: bool = False
+
+    async def resolve(
+        self,
+        server_id: str,
+        caller: UserAPIKeyAuth,
+        *,
+        is_admin_view: bool,
+        not_found_detail: Mapping[str, str],
+        forbidden_detail: Mapping[str, str],
+        non_admin_missing: Literal["not_found", "forbidden"],
+    ) -> ResolvedMCPServer:
+        resolved: Final = await resolve_mcp_server(
+            server_id,
+            manager=self.manager,
+            db_lookup=self.db_lookup,
+            temp_lookup=self.temp_lookup,
+            id_client_ip=self.id_client_ip,
+            name_client_ip=self.name_client_ip,
+            match_name=self.match_name,
+        )
+        return await authorize_mcp_server(
+            resolved,
+            caller,
+            manager=self.manager,
+            is_admin_view=is_admin_view,
+            not_found_detail=not_found_detail,
+            forbidden_detail=forbidden_detail,
+            non_admin_missing=non_admin_missing,
+        )

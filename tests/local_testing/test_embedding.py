@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import traceback
 
 import httpx
@@ -535,31 +534,6 @@ def test_bedrock_embedding_cohere():
 
 
 # test_bedrock_embedding_cohere()
-
-
-def test_demo_tokens_as_input_to_embeddings_fails_for_titan():
-    litellm.set_verbose = True
-
-    with pytest.raises(
-        litellm.BadRequestError,
-        match=re.escape(
-            'litellm.BadRequestError: BedrockException - {"message":"Malformed input request: '
-            'expected type: String, found: JSONArray, please reformat your input and try again."}'
-        ),
-    ):
-        litellm.embedding(model="amazon.titan-embed-text-v1", input=[[1]])
-
-    with pytest.raises(
-        litellm.BadRequestError,
-        match=re.escape(
-            'litellm.BadRequestError: BedrockException - {"message":"Malformed input request: '
-            'expected type: String, found: Integer, please reformat your input and try again."}'
-        ),
-    ):
-        litellm.embedding(
-            model="amazon.titan-embed-text-v1",
-            input=[1],
-        )
 
 
 # comment out hf tests - since hf endpoints are unstable

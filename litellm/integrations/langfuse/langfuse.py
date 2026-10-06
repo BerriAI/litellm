@@ -868,10 +868,8 @@ class LangFuseLogger:
                 "id": clean_metadata.pop("generation_id", generation_id),
                 "input": masked_input if not mask_input else "redacted-by-litellm",
                 "output": masked_output if not mask_output else "redacted-by-litellm",
-                "cost_details": {"total": cost}  # mutable-ok: langfuse serializes this payload
-                if usage is not None and isinstance(cost, (int, float))
-                else None,
-                "metadata": {  # mutable-ok: langfuse serializes this payload, a proxy is not json-encodable
+                "cost_details": {"total": cost} if usage is not None and isinstance(cost, (int, float)) else None,
+                "metadata": {
                     **log_requester_metadata(redact_user_api_key_info(metadata=allowlisted_metadata)),  # pyright: ignore[reportArgumentType]  # TypedDict in, plain metadata dict out
                     **enrichments,
                     **_lookup_ids(litellm_call_id, response_obj),

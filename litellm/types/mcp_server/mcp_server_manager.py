@@ -13,13 +13,14 @@ from litellm.types.mcp import (
     MCPTransportType,
     MCPUpstreamProtocol,
     normalize_upstream_header_name,
+    validate_mcp_protocol_transport,
 )
 
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
 def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, object]:
     if "protocol_version" in value:
-        TypeAdapter(MCPUpstreamProtocol).validate_python(value["protocol_version"])
+        TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(value["protocol_version"])
     return value
 
 
@@ -37,6 +38,7 @@ class MCPOAuthMetadata(BaseModel):
     authorization_url: str | None = None
     token_url: str | None = None
     registration_url: str | None = None
+    authorization_response_iss_parameter_supported: bool = False
     discovered_issuer: str | None = None
     """The ``issuer`` the authorization-server metadata document self-attests (RFC 8414). Persisted
     trust-on-first-use as the server's ``issuer`` when none is configured, so that later rebuilds
@@ -117,6 +119,9 @@ class MCPServer(BaseModel):
     client_secret: str | None = None
     issuer: str | None = None
     issuer_is_anchored: bool = False
+    authorization_response_iss_parameter_supported: bool = False
+    dcr_issuer: str | None = None
+    dcr_server_url: str | None = None
     scopes: list[str] | None = None
     authorization_url: str | None = None
     token_url: str | None = None
@@ -277,9 +282,10 @@ class MCPServer(BaseModel):
     @model_validator(mode="after")
     def resolve_protocol_version(self) -> Self:
         if "protocol_version" not in self.model_fields_set and self.mcp_info is not None:
-            self.protocol_version = TypeAdapter(MCPUpstreamProtocol).validate_python(
+            self.protocol_version = TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
                 self.mcp_info.get("protocol_version", "auto")
             )
+        validate_mcp_protocol_transport(self.protocol_version, self.transport)
         return self
 
     @model_validator(mode="after")

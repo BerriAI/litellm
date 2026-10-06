@@ -2,9 +2,11 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
+from collections.abc import Iterable, Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.embedding.transformation import (
     BaseEmbeddingConfig,
@@ -15,6 +17,9 @@ from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from ..common_utils import IBMWatsonXMixin, _get_api_params
+
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_TOKEN_COUNT: Final = TypeAdapter(int)
 
 
 class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
@@ -95,7 +100,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         json_resp: Final = raw_response.json()
         if model_response is None:
             model_response = EmbeddingResponse(model=json_resp.get("model_id", None))
-        results: Final = json_resp.get("results", [])
+        results: Final = _JSON_OBJECTS.validate_python(json_resp.get("results", []))
         embedding_response: Final = []
         for idx, result in enumerate(results):
             embedding_response.append(
@@ -107,7 +112,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
             )
         model_response.object = "list"
         model_response.data = embedding_response
-        input_tokens: Final = json_resp.get("input_token_count", 0)
+        input_tokens: Final = _TOKEN_COUNT.validate_python(json_resp.get("input_token_count", 0) or 0)
         setattr(
             model_response,
             "usage",

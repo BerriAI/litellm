@@ -38,6 +38,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.mcp_oauth_live, pytest.mark.provider_
 
 
 class OAuthMetadata(BaseModel):
+    issuer: str
     authorization_endpoint: str
     token_endpoint: str
     registration_endpoint: str
@@ -135,6 +136,7 @@ class TestMcpOauthHappyPath:
                 auth_type="oauth2",
                 oauth2_flow="authorization_code",
                 per_server_oauth_discovery=route == "explicit_header_jwt",
+                issuer=metadata.issuer if metadata else None,
                 authorization_url=metadata.authorization_endpoint if metadata else None,
                 token_url=metadata.token_endpoint if metadata else None,
                 registration_url=metadata.registration_endpoint if metadata else None,
