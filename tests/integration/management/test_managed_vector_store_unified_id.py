@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 import httpx
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows, write_rows
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import OpenAI
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
@@ -112,6 +112,19 @@ def _search_reply() -> Reply:
     return Reply(body=json.dumps(_SEARCH_RESPONSE).encode())
 
 
+def _models_reply() -> Reply:
+    return Reply(body=json.dumps({"object": "list", "data": []}).encode())
+
+
+def _store_creation_requests(wire: Wire) -> tuple[Request, ...]:
+    requests: Final = wire.drain()
+    assert all(
+        (request.method, request.target) in {("GET", "/v1/models"), ("POST", "/v1/vector_stores")}
+        for request in requests
+    ), requests
+    return tuple(request for request in requests if request.method == "POST")
+
+
 def _create_request_body(name: str) -> dict[str, JsonValue]:
     return {
         "name": name,
@@ -143,6 +156,8 @@ def test_managed_vector_store_id_routes_to_creator_deployment_and_enforces_owner
     def respond_a(request: Request) -> Reply:
         path: Final = urlsplit(request.target).path
         assert request.headers["authorization"] == f"Bearer {provider_key_a}"
+        if request.method == "GET" and path == "/v1/models":
+            return _models_reply()
         if request.method == "POST" and path == "/v1/vector_stores":
             _assert_create_request(request, store_name)
             return _create_reply(provider_id_a, store_name)
@@ -152,9 +167,11 @@ def test_managed_vector_store_id_routes_to_creator_deployment_and_enforces_owner
         return _search_reply()
 
     def respond_b(request: Request) -> Reply:
+        assert request.headers["authorization"] == f"Bearer {provider_key_b}"
+        if request.method == "GET" and request.target == "/v1/models":
+            return _models_reply()
         assert request.method == "POST"
         assert urlsplit(request.target).path == "/v1/vector_stores", request.target
-        assert request.headers["authorization"] == f"Bearer {provider_key_b}"
         _assert_create_request(request, store_name)
         return _create_reply(provider_id_b, store_name)
 
@@ -193,10 +210,10 @@ def test_managed_vector_store_id_routes_to_creator_deployment_and_enforces_owner
         scenario.cleanups.callback(_delete_managed_store_row, unified_id)
         created_rows: Final = read_rows(_MANAGED_STORE_ROW, (unified_id,))
         assert created_rows == [{"created_by": creator_user, "team_id": creator_team}]
-        assert [(request.method, request.target) for request in wire_a.drain()] == [
+        assert [(request.method, request.target) for request in _store_creation_requests(wire_a)] == [
             ("POST", "/v1/vector_stores")
         ]
-        assert [(request.method, request.target) for request in wire_b.drain()] == [
+        assert [(request.method, request.target) for request in _store_creation_requests(wire_b)] == [
             ("POST", "/v1/vector_stores")
         ]
 

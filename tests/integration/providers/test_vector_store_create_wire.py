@@ -84,7 +84,6 @@ def _assert_create_request(
     assert parse_qs(urlsplit(request.target).query) == {}, request.target
     assert request.headers["authorization"] == f"Bearer {provider_key}"
     body: Final = JSON_OBJECT.validate_json(request.body)
-    # Metadata is asserted separately by the caller-metadata BUG test.
     assert {key: value for key, value in body.items() if key != "metadata"} == {
         "name": _CREATE_FIELDS["name"],
         "file_ids": expected_file_ids,
@@ -156,8 +155,7 @@ def test_vector_store_create_forwards_chunking_strategy_on_sdk_and_alias_routes(
         "metadata": _CREATE_FIELDS["metadata"],
     }
 
-    def respond(request: Request) -> Reply:
-        _assert_create_request(request, ["file-wire-create"], provider_key)
+    def respond(_: Request) -> Reply:
         return _vector_store_reply("vs_created")
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -194,6 +192,13 @@ def test_vector_store_create_forwards_chunking_strategy_on_sdk_and_alias_routes(
             ("POST", "/v1/vector_stores"),
             ("POST", "/v1/vector_stores"),
         ]
+        for request in requests:
+            _assert_create_request(request, ["file-wire-create"], provider_key)
+            body: Final = JSON_OBJECT.validate_json(request.body)
+            metadata_value: Final = body.get("metadata")
+            assert metadata_value is not None, request.body.decode()
+            metadata: Final = object_value(metadata_value)
+            assert metadata.get("team") == "blue", request.body.decode()
 
 
 def test_vector_store_create_translates_managed_file_ids(gateway: Gateway) -> None:
@@ -237,9 +242,7 @@ def test_vector_store_create_translates_managed_file_ids(gateway: Gateway) -> No
         team: Final = scenario.team(models=[model])
         user: Final = scenario.member(team)
         key: Final = scenario.key(team_id=team, user_id=user, models=[model])
-        managed_file_id: Final = _upload_managed_file(
-            gateway, key, model, filename, file_content
-        )
+        managed_file_id: Final = _upload_managed_file(gateway, key, model, filename, file_content)
         file_ids: Final = [raw_file_id, managed_file_id]
         with OpenAI(
             base_url=f"{str(gateway.client.base_url).rstrip('/')}/v1",
