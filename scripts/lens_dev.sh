@@ -7,12 +7,14 @@
 #                         (default: random, generated once into .lens-dev/master_key)
 #   LENS_DEV_CONFIG       proxy config to use instead of the generated one
 #   LENS_DEV_DATABASE_URL Postgres URL (default: the tracing stack's litellm DB on :15432)
-#   LENS_DEV_REBUILD_RUST=1  rebuild the Rust bridge even if it imports
+#   LENS_DEV_SEED         trace seed profile (default|large), same as --seed
+#   LENS_DEV_SEED_LOGS    request-log seed profile (default|large), same as --seed-logs
 #
 # State (master key, worker token, generated config, logs) lives in .lens-dev/ (gitignored).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source_release_tag="sha-$(git -C "$repo_root" rev-parse HEAD)"
 proxy_port="${LENS_DEV_PROXY_PORT:-4000}"
 ui_port="${LENS_DEV_UI_PORT:-3000}"
 state_dir="${LENS_DEV_STATE_DIR:-$repo_root/.lens-dev}"
@@ -24,6 +26,8 @@ py="${LENS_DEV_PYTHON:-$repo_root/.venv/bin/python}"
 database_url="${LENS_DEV_DATABASE_URL:-postgresql://litellm:litellm@127.0.0.1:15432/litellm}"
 clickhouse_url=http://default:local-tracing@127.0.0.1:18123
 master_key=""
+startup_timeout="${LENS_DEV_STARTUP_TIMEOUT_SECONDS:-300}"
+readiness_request_timeout="${LENS_DEV_READINESS_REQUEST_TIMEOUT_SECONDS:-5}"
 pids=()
 
 die() { echo "lens-dev: $*" >&2; exit 1; }
@@ -108,9 +112,10 @@ proxy_env() {
   unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_CUSTOM_HEADERS OPENAI_BASE_URL OPENAI_API_BASE
   for var in $(compgen -e | grep '^REDIS_' || true); do unset "$var"; done
   eval "$1"
+  export LITELLM_RELEASE_TAG="$source_release_tag"
+  export LENS_WORKER_IMAGE=litellm-lens-worker:local
   export LITELLM_MODE=PRODUCTION
   export LITELLM_MASTER_KEY="$master_key"
-  if [ "$master_key" = sk-1234 ]; then export LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true; fi
   export LITELLM_SALT_KEY=sk-local-tracing-salt-key
   export DATABASE_URL="$database_url"
   export STORE_MODEL_IN_DB=True
@@ -118,6 +123,7 @@ proxy_env() {
   export CLICKHOUSE_DATABASE=litellm
   export LITELLM_LOCAL_MODEL_COST_MAP=True
   export PROXY_BASE_URL="$proxy_url"
+  export LITELLM_UI_PATH="$repo_root/ui/litellm-dashboard/out"
   export UI_USERNAME=admin
   export UI_PASSWORD="$master_key"
 }
@@ -158,12 +164,26 @@ ensure_worker_token() {
 wait_for_proxy() {
   local proxy_pid="$1"
   echo "lens-dev: waiting for the proxy (log: $log_dir/proxy.log)"
-  for _ in $(seq 1 300); do
+  for _ in $(seq 1 "$startup_timeout"); do
     kill -0 "$proxy_pid" 2>/dev/null || die "proxy exited; see $log_dir/proxy.log"
-    curl -fsS "$proxy_url/health/readiness" -H "Authorization: Bearer $master_key" >/dev/null 2>&1 && return
+    curl -fsS --max-time "$readiness_request_timeout" "$proxy_url/health/readiness" -H "Authorization: Bearer $master_key" >/dev/null 2>&1 && return
     sleep 1
   done
-  die "proxy not ready after 300s; see $log_dir/proxy.log"
+  die "proxy not ready after ${startup_timeout}s; see $log_dir/proxy.log"
+}
+
+wait_for_ui() {
+  local ui_pid="$1"
+  echo "lens-dev: waiting for the UI (log: $log_dir/ui.log)"
+  for _ in $(seq 1 "$startup_timeout"); do
+    kill -0 "$ui_pid" 2>/dev/null || die "UI exited; see $log_dir/ui.log"
+    if curl -fsS --max-time "$readiness_request_timeout" "http://localhost:$ui_port/ui/login/" >/dev/null 2>&1; then
+      kill -0 "$ui_pid" 2>/dev/null || die "UI exited; see $log_dir/ui.log"
+      return
+    fi
+    sleep 1
+  done
+  die "UI not ready after ${startup_timeout}s; see $log_dir/ui.log"
 }
 
 # Children run in their own process groups (set -m), so killing -pid takes their trees too.
@@ -182,14 +202,90 @@ cleanup() {
   for pid in "${pids[@]}"; do kill -KILL -- "-$pid" 2>/dev/null || true; done
 }
 
+build_dashboard() {
+  local dashboard_dir="$repo_root/ui/litellm-dashboard"
+  case "${LENS_DEV_BUILD_UI:-0}" in
+    0) return ;;
+    1) ;;
+    *) die "LENS_DEV_BUILD_UI must be 0 or 1" ;;
+  esac
+  echo "lens-dev: building the proxy dashboard (log: $log_dir/ui-build.log)"
+  (
+    cd "$dashboard_dir"
+    NEXT_PUBLIC_BASE_URL="" LENS_DEV_PROXY_URL="" "$repo_root/scripts/with_dashboard_node.sh" npm run build
+  ) > "$log_dir/ui-build.log" 2>&1 || die "UI build failed; see $log_dir/ui-build.log"
+}
+
+# Trace fixtures feed Lens (ClickHouse + spend rows); request logs feed the Logs page
+# (Postgres only) with rows sized to stress the log detail drawer.
+seed_data() {
+  (
+    proxy_env ""
+    export LENS_DEV_UI_URL="http://localhost:$ui_port"
+    if [ -n "$seed_profile" ]; then
+      "$py" -m scripts.seed_tracing_fixtures --profile "$seed_profile" ${seed_options[@]+"${seed_options[@]}"}
+    fi
+    if [ -n "$seed_logs_profile" ]; then
+      "$py" -m scripts.seed_request_logs --profile "$seed_logs_profile"
+    fi
+  )
+}
+
+# --seed and --seed-logs take an optional profile; a bare flag means default.
+seed_profile_arg() {
+  if [ "${1:-}" = default ] || [ "${1:-}" = large ]; then echo "$1"; else echo default; fi
+}
+
+parse_args() {
+  seed_profile="${LENS_DEV_SEED:-}"
+  seed_logs_profile="${LENS_DEV_SEED_LOGS:-}"
+  seed_only=0
+  seed_options=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --seed)
+        seed_profile="$(seed_profile_arg "${2:-}")"
+        [ "$seed_profile" = "${2:-}" ] && shift
+        ;;
+      --seed-logs)
+        seed_logs_profile="$(seed_profile_arg "${2:-}")"
+        [ "$seed_logs_profile" = "${2:-}" ] && shift
+        ;;
+      --copies)
+        [ "$#" -ge 2 ] && [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "--copies requires a positive integer"
+        seed_options=(--copies "$2"); shift ;;
+      --seed-only) seed_only=1 ;;
+      --help)
+        echo "Usage: $0 [--seed [default|large]] [--seed-logs [default|large]] [--copies N] [--seed-only]"
+        exit 0 ;;
+      *) die "unknown argument: $1 (use --help)" ;;
+    esac
+    shift
+  done
+  if [ "$seed_only" = 1 ] && [ -z "$seed_profile" ] && [ -z "$seed_logs_profile" ]; then seed_profile=default; fi
+  case "$seed_profile" in ""|default|large) ;; *) die "seed profile must be default or large" ;; esac
+  case "$seed_logs_profile" in ""|default|large) ;; *) die "seed-logs profile must be default or large" ;; esac
+  [ "${#seed_options[@]}" = 0 ] || [ -n "$seed_profile" ] || die "--copies requires --seed"
+}
+
 main() {
-  local config_file exports proxy_pid pid key_hint
+  local config_file exports proxy_pid ui_pid pid key_hint
+  parse_args "$@"
   if [ -n "${LENS_DEV_CONFIG:-}" ]; then
     [ -f "$LENS_DEV_CONFIG" ] || die "LENS_DEV_CONFIG not found: $LENS_DEV_CONFIG"
     config_file="$(cd "$(dirname "$LENS_DEV_CONFIG")" && pwd)/$(basename "$LENS_DEV_CONFIG")"
   fi
   cd "$repo_root"
 
+  if [ "$seed_only" = 1 ]; then
+    [ -s "$key_file" ] || [ -n "${LENS_DEV_MASTER_KEY:-}" ] || die "start make lens-dev before --seed-only"
+    load_master_key
+    seed_data
+    return
+  fi
+
+  [[ "$startup_timeout" =~ ^[1-9][0-9]*$ ]] || die "LENS_DEV_STARTUP_TIMEOUT_SECONDS must be a positive integer"
+  [[ "$readiness_request_timeout" =~ ^[1-9][0-9]*$ ]] || die "LENS_DEV_READINESS_REQUEST_TIMEOUT_SECONDS must be a positive integer"
   listening "$proxy_port" && die "port $proxy_port is in use; set LENS_DEV_PROXY_PORT"
   listening "$ui_port" && die "port $ui_port is in use; set LENS_DEV_UI_PORT"
   [ "$proxy_port" != "$ui_port" ] || die "proxy and UI ports must differ"
@@ -200,15 +296,20 @@ main() {
   ensure_services
   "$py" scripts/prisma_generate_if_needed.py
 
-  if [ "${LENS_DEV_REBUILD_RUST:-0}" = "1" ] || ! "$py" -c "import litellm.rust_bridge._native" >/dev/null 2>&1; then
-    echo "lens-dev: building the Rust bridge (litellm.rust_bridge._native); the ClickHouse trace store uses it"
-    VIRTUAL_ENV="$repo_root/.venv" uvx --from maturin==1.15.0 maturin develop \
-      --release --manifest-path litellm-rust/crates/python-bridge/Cargo.toml --features extension-module
-  fi
+  # cargo/maturin already fingerprint every crate's sources, so re-running this on each
+  # start is a no-op (a couple seconds) when nothing changed and only rebuilds the
+  # subset that did. An import check can't tell content-stale from content-fresh: a
+  # `.so` built from an older commit still imports fine, it just no longer matches
+  # what the current Python bindings (e.g. the trace store protocol) expect.
+  echo "lens-dev: checking the Rust bridge (litellm.rust_bridge._native) is current; the ClickHouse trace store uses it"
+  PYO3_PYTHON="$py" VIRTUAL_ENV="$repo_root/.venv" uvx --from maturin==1.15.0 maturin develop \
+    --release --manifest-path litellm-rust/crates/python-bridge/Cargo.toml --features extension-module
 
   if [ ! -x ui/litellm-dashboard/node_modules/.bin/next ]; then
     (cd ui/litellm-dashboard && "$repo_root/scripts/with_dashboard_node.sh" npm ci)
   fi
+
+  build_dashboard
 
   if [ -z "${config_file:-}" ]; then
     config_file="$state_dir/config.yaml"
@@ -222,6 +323,7 @@ main() {
 
   (
     proxy_env "$exports"
+    export PROXY_BASE_URL="http://localhost:$ui_port"
     exec "$py" litellm/proxy/proxy_cli.py --config "$config_file" --host 127.0.0.1 --port "$proxy_port"
   ) < /dev/null > "$log_dir/proxy.log" 2>&1 &
   proxy_pid=$!
@@ -229,14 +331,18 @@ main() {
 
   (
     cd ui/litellm-dashboard
-    NEXT_PUBLIC_BASE_URL="$proxy_url" exec "$repo_root/scripts/with_dashboard_node.sh" npx next dev -p "$ui_port"
+    NEXT_PUBLIC_BASE_URL="" LENS_DEV_PROXY_URL="$proxy_url" exec "$repo_root/scripts/with_dashboard_node.sh" npx next dev -p "$ui_port"
   ) < /dev/null > "$log_dir/ui.log" 2>&1 &
-  pids+=("$!")
+  ui_pid=$!
+  pids+=("$ui_pid")
 
+  wait_for_ui "$ui_pid"
   wait_for_proxy "$proxy_pid"
   ensure_worker_token
+  if [ -n "$seed_profile" ] || [ -n "$seed_logs_profile" ]; then seed_data; fi
 
-  LITELLM_MODE=PRODUCTION LITELLM_URL="$proxy_url" LENS_WORKER_TOKEN="$(cat "$token_file")" \
+  LITELLM_RELEASE_TAG="$source_release_tag" \
+    LITELLM_MODE=PRODUCTION LITELLM_URL="$proxy_url" LENS_WORKER_TOKEN="$(cat "$token_file")" \
     "$py" -c "import asyncio, logging; from litellm.proxy.lens.worker import main; logging.basicConfig(level=logging.INFO); asyncio.run(main())" \
     < /dev/null > "$log_dir/worker.log" 2>&1 &
   pids+=("$!")
@@ -246,12 +352,14 @@ main() {
   cat <<EOF
 
 Lens dev is up. Ctrl-C stops everything.
-  Log in:   $proxy_url/ui/login  (admin / $key_hint)
-  Lens:     http://localhost:$ui_port/lens
+  Log in:   http://localhost:$ui_port/ui/login/  (admin / $key_hint)
+  Lens:     http://localhost:$ui_port/ui/lens/  (hot-reloads)
+  Logs:     http://localhost:$ui_port/ui/?page=logs
+  API:      $proxy_url
   Logs:     $log_dir/proxy.log
             $log_dir/worker.log
             $log_dir/ui.log
-Restart (Ctrl-C, make lens-dev) to pick up backend or worker edits; the UI hot-reloads.
+Restart for backend or worker edits; UI edits hot-reload.
 EOF
 
   while :; do

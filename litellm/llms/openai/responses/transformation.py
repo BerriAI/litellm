@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -26,15 +26,18 @@ from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_serie
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
 from ..common_utils import OpenAIError
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
+_RAW_RESPONSE_JSON: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -50,7 +53,7 @@ _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE,
 _PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS
 
 
-class _ReasoningSupportEntry(BaseModel):
+class _ReasoningSupportEntry(LiteLLMBaseModel):
     litellm_provider: str | None = None
     supports_reasoning: bool | None = None
 
@@ -546,7 +549,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     )
 
                 # Create ResponseReasoningItem object from the item data
-                reasoning_item: Final = ResponseReasoningItem(**item_data)
+                reasoning_item: Final = ResponseReasoningItem.model_validate(item_data)
 
                 # Convert back to dict with exclude_none=True to exclude None fields
                 dict_reasoning_item: Final = reasoning_item.model_dump(exclude_none=True)
@@ -575,7 +578,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _RAW_RESPONSE_JSON.validate_python(raw_response.json())
             raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
@@ -599,7 +602,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_key = litellm_params.api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
         headers.setdefault("Content-Type", "application/json")
         workload_identity_config: Final = (
-            resolve_openai_workload_identity_config(api_key=api_key, api_base=litellm_params.api_base)
+            resolve_openai_workload_identity_config(
+                api_key=api_key,
+                api_base=litellm_params.api_base,
+                litellm_params=litellm_params.model_dump(include=set(OPENAI_WIF_KWARGS_KEYS)),
+            )
             if self.custom_llm_provider is LlmProviders.OPENAI
             else None
         )
@@ -971,7 +978,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _RAW_RESPONSE_JSON.validate_python(raw_response.json())
             raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)

@@ -6,10 +6,10 @@ from typing import Final, Protocol, TypeAlias
 from pydantic import TypeAdapter
 
 from litellm.proxy.lens.models import (
+    ActivitySelection,
     Evidence,
     Execution,
     ExecutionContent,
-    LensSettings,
     MetadataFilter,
     Sample,
     Scope,
@@ -73,7 +73,7 @@ class SourceReader:
     async def sample(
         self,
         scope: Scope,
-        settings: LensSettings,
+        settings: ActivitySelection,
         start: int,
         end: int,
         offset: int = 0,
@@ -155,6 +155,8 @@ class SourceReader:
                     parent_span_id=row.parent_span_id,
                     name=row.name,
                     kind=row.kind,
+                    start_time=row.start_time,
+                    end_time=row.end_time,
                     content=row.content,
                     truncated=bool(row.truncated),
                 )

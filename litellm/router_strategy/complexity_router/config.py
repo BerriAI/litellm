@@ -15,7 +15,6 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, NamedTuple
 
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Field,
     SkipValidation,
@@ -25,6 +24,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
@@ -96,7 +97,7 @@ DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: Final[int] = 3
 DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS: Final[int] = 8000
 
 
-class KeywordTierRule(BaseModel):
+class KeywordTierRule(LiteLLMBaseModel):
     """A deterministic override: if any keyword matches, route to this tier."""
 
     keywords: list[str] = Field(
@@ -173,7 +174,7 @@ def normalize_classification_examples(value: str | None) -> str | None:
 _BUILT_IN_TIER_NAMES: Final[str] = ", ".join(ComplexityTier.__members__)
 
 
-class TierDefinition(BaseModel):
+class TierDefinition(LiteLLMBaseModel):
     """An operator-defined tier: the name the LLM classifier must return and its rubric description."""
 
     name: str = Field(
@@ -217,7 +218,7 @@ class TierDefinition(BaseModel):
         return self
 
 
-class ReminderMarkerPair(BaseModel):
+class ReminderMarkerPair(LiteLLMBaseModel):
     """One open/close delimiter pair a harness wraps injected context in.
 
     Normalizing here rather than at the scan is what makes matching case-insensitive: markers reach
@@ -241,7 +242,7 @@ class ReminderMarkerPair(BaseModel):
         return self
 
 
-class ComplexityTierModel(BaseModel):
+class ComplexityTierModel(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     model_name: str
@@ -477,7 +478,7 @@ DEFAULT_TIER_MODELS: Final[dict[str, str]] = {
 }
 
 
-class ClassifierVisionConfig(BaseModel):
+class ClassifierVisionConfig(LiteLLMBaseModel):
     """Whether the LLM classifier sees the images on the request it is classifying.
 
     Off by default because images cost far more than the text ask they arrive with, and the
@@ -508,7 +509,7 @@ class ClassifierVisionConfig(BaseModel):
     )
 
 
-class ClassifierLLMConfig(BaseModel):
+class ClassifierLLMConfig(LiteLLMBaseModel):
     """Configuration for the LLM-based complexity classifier."""
 
     model: str = Field(
@@ -604,7 +605,7 @@ class ClassifierLLMConfig(BaseModel):
         return self
 
 
-class CapabilityCalibrationConfig(BaseModel):
+class CapabilityCalibrationConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     version: str = Field(min_length=1, max_length=128, pattern=r"^\S(?:.*\S)?$")
@@ -617,7 +618,7 @@ class CapabilityCalibrationConfig(BaseModel):
         return 1.0 / (1.0 + math.exp(-log_odds))
 
 
-class CapabilityClassifierConfig(BaseModel):
+class CapabilityClassifierConfig(LiteLLMBaseModel):
     """Switchyard-compatible probability threshold policy for two model tiers."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -695,7 +696,7 @@ def normalize_classifier_config_aliases(config: Mapping[str, object]) -> Mapping
     return normalized
 
 
-class OpenSourceClassifierConfig(BaseModel):
+class OpenSourceClassifierConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     provider: Literal["jev", "laya", "bespoke"] = "jev"
@@ -904,7 +905,7 @@ def custom_pattern_work(pattern: str) -> int | str:
     return cost if isinstance(cost, str) else cost.steps
 
 
-class CustomDimension(BaseModel):
+class CustomDimension(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
@@ -940,7 +941,7 @@ class CustomDimension(BaseModel):
         )
 
 
-class ContextCompactionConfig(BaseModel):
+class ContextCompactionConfig(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     model: str | None = Field(default=None, min_length=1)
@@ -949,7 +950,7 @@ class ContextCompactionConfig(BaseModel):
     timeout_seconds: float = Field(default=120, gt=0)
 
 
-class ComplexityRouterConfig(BaseModel):
+class ComplexityRouterConfig(LiteLLMBaseModel):
     """Configuration for the ComplexityRouter."""
 
     @model_validator(mode="before")
@@ -1954,6 +1955,20 @@ class ComplexityRouterConfig(BaseModel):
     @classmethod
     def _normalize_classification_examples_field(cls, value: str | None) -> str | None:
         return normalize_classification_examples(value)
+
+    def resolve_default_model(self, default_model: str | None = None) -> str | None:
+        if default_model is not None:
+            return default_model
+        if self.default_model is not None:
+            return self.default_model
+        derived: Final = (
+            (self.tiers.get(self.fallback_tier) if self.fallback_tier is not None else None)
+            or self.tiers.get("MEDIUM")
+            or self.tiers.get("SIMPLE")
+        )
+        if isinstance(derived, list):
+            return derived[0] if derived else None
+        return derived
 
     @property
     def has_custom_tiers(self) -> bool:

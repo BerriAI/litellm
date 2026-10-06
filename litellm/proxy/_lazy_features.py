@@ -140,11 +140,6 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=("/model-insights",),
     ),
     LazyFeature(
-        name="roi_calculator",
-        module_path="litellm.proxy.management_endpoints.roi_calculator_endpoints",
-        path_prefixes=("/roi-calculator",),
-    ),
-    LazyFeature(
         name="search_tools",
         module_path="litellm.proxy.search_endpoints.search_tool_management",
         path_prefixes=("/search_tools",),
@@ -358,7 +353,7 @@ class LazyFeatureMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Short-circuit once every feature has loaded.
         if scope["type"] in ("http", "websocket") and len(self._loaded) < len(self._features):
-            path = scope.get("path", "")
+            path: str = scope.get("path", "")
             # Strip the request's root_path so prefix matching works under a
             # server root path. Without this, requests like /api/v1/policies/...
             # never match the registered prefixes (/policies/...) and lazy

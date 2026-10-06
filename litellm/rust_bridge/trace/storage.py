@@ -17,6 +17,7 @@ from litellm.rust_bridge.trace.generated.models import (
     LensSampleParams,
     PartRow,
 )
+from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
 from litellm.rust_bridge.trace.generated.types import ReadQueryName
 from litellm.rust_bridge.trace.queries import (
     LENS_AGENTS,
@@ -24,6 +25,7 @@ from litellm.rust_bridge.trace.queries import (
     LENS_CONTENT,
     LENS_EVIDENCE,
     LENS_SAMPLE,
+    ClickHouseSQLEnvelope,
     ParamsT,
     ReadQuery,
     RowT,
@@ -38,7 +40,6 @@ from .generated.types import (
     TracePage,
     TraceScope,
 )
-from .queries import TraceSQLResponse
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +62,9 @@ class NativeStore(Protocol):
 
     def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Awaitable[None]: ...
 
-    def ingest(self, payload: bytes, content_type: str | None, tenant: Mapping[str, str]) -> Awaitable[int]: ...
+    def ingest(
+        self, payload: bytes, content_type: str | None, tenant: Mapping[str, str], logs: bool = False
+    ) -> Awaitable[int]: ...
 
     def list_traces(
         self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
@@ -99,7 +102,7 @@ class NativeTraces(Protocol):
 
 
 QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | float | list[str]])
-_SQL_RESPONSE: Final = TypeAdapter(TraceSQLResponse)
+_SQL_ENVELOPE: Final = TypeAdapter(ClickHouseSQLEnvelope)
 _HELP_RESPONSE: Final = TypeAdapter(TraceQueryHelp)
 _TRACE_PAGE: Final = TypeAdapter(TracePage)
 _TRACE: Final[TypeAdapter[Trace | None]] = TypeAdapter(Trace | None)
@@ -177,8 +180,8 @@ class ClickHouseStorage:
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
         await self._native.insert_rows(table, rows)
 
-    async def ingest(self, payload: bytes, content_type: str | None, tenant: Tenant) -> int:
-        return await self._native.ingest(payload, content_type, asdict(tenant))
+    async def ingest(self, payload: bytes, content_type: str | None, tenant: Tenant, logs: bool = False) -> int:
+        return await self._native.ingest(payload, content_type, asdict(tenant), logs)
 
     async def list_traces(
         self,
@@ -219,7 +222,8 @@ class ClickHouseStorage:
 
     async def query_sql(self, sql: str, scope: QueryScope, secret: str) -> TraceSQLResponse:
         result: Final = await self._native.query_sql(sql, scope, secret)
-        return _decode_query_response(_SQL_RESPONSE, result)
+        envelope: Final = _decode_query_response(_SQL_ENVELOPE, result)
+        return TraceSQLResponse(data=envelope.data)
 
     async def query_help(self, scope: QueryScope, secret: str) -> TraceQueryHelp:
         result: Final = await self._native.query_help(scope, secret)

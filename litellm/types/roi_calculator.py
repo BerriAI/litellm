@@ -1,9 +1,12 @@
 from collections.abc import Mapping
+from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, StrictFloat, StrictInt, ValidationInfo, field_validator
+from pydantic import ConfigDict, Field, SecretStr, StrictFloat, StrictInt, ValidationInfo, field_validator
 from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 DEFAULT_PROMPT: Final = (
     "Estimate how many hours it would take an engineer to complete the work in this pull request without AI assistance. "
@@ -21,10 +24,15 @@ def normalize_source_login(value: str, provider: str = "github") -> str:
     return login
 
 
-class ROISettings(BaseModel):
+class ROISettings(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
+    report_mode: Literal["legacy", "observed"] = "legacy"
     source_provider: Literal["github", "gitlab"] = "github"
+    connection_type: Literal["token", "app"] = "token"
+    oauth_refresh_token: SecretStr = SecretStr("")
+    oauth_expires_at: datetime | None = None
+    ignored_logins: tuple[str, ...] = ()
     gitlab_api_url: str = "https://gitlab.com/api/v4"
     gitlab_token: SecretStr = SecretStr("")
     github_api_url: str = "https://api.github.com"
@@ -74,8 +82,13 @@ class ROISettings(BaseModel):
         import re
 
         normalized_values: Final = tuple(repo.strip().rstrip("/").removesuffix(".git") for repo in values)
+        repository_keys: Final = tuple(
+            repo.casefold() if info.data.get("source_provider") != "gitlab" else repo for repo in normalized_values
+        )
         normalized: Final = tuple(
-            repo for index, repo in enumerate(normalized_values) if repo not in normalized_values[:index]
+            repo
+            for index, repo in enumerate(normalized_values)
+            if repository_keys[index] not in repository_keys[:index]
         )
         pattern: Final = (
             r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+"
@@ -118,9 +131,10 @@ class ROISettings(BaseModel):
         return normalized
 
 
-class ROISettingsUpdate(BaseModel):
+class ROISettingsUpdate(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    report_mode: Literal["legacy", "observed"] | None = None
     source_provider: Literal["github", "gitlab"] | None = None
     gitlab_api_url: str | None = None
     gitlab_token: str | None = None
@@ -134,12 +148,13 @@ class ROISettingsUpdate(BaseModel):
     update_interval_minutes: float | None = Field(default=None, ge=0, le=43200, allow_inf_nan=False)
 
 
-class ROIEstimatorModel(BaseModel):
+class ROIEstimatorModel(LiteLLMBaseModel):
     model_name: str
     provider_models: tuple[str, ...]
 
 
-class ROISettingsResponse(BaseModel):
+class ROISettingsResponse(LiteLLMBaseModel):
+    report_mode: Literal["legacy", "observed"] = "legacy"
     source_provider: Literal["github", "gitlab"] = "github"
     gitlab_api_url: str = "https://gitlab.com/api/v4"
     has_gitlab_token: bool = False
@@ -158,19 +173,19 @@ class ROISettingsResponse(BaseModel):
     ready: bool
 
 
-class ROIRepository(BaseModel):
+class ROIRepository(LiteLLMBaseModel):
     name: str
     visibility: str
     archived: bool
 
 
-class ROIRepositoriesResponse(BaseModel):
+class ROIRepositoriesResponse(LiteLLMBaseModel):
     repositories: tuple[ROIRepository, ...]
     page: int
     has_more: bool
 
 
-class ROISyncStatus(BaseModel):
+class ROISyncStatus(LiteLLMBaseModel):
     running: bool
     phase: Literal["idle", "spend", "repositories", "estimates", "complete", "cancelled", "error"]
     stage: str
@@ -227,14 +242,14 @@ class ROIPullRecord(TypedDict):
     cache_key: ReadOnly[str | None]
 
 
-class ROIBranchSpend(BaseModel):
+class ROIBranchSpend(LiteLLMBaseModel):
     repo: str
     branch: str
     spend: float
     requests: int
 
 
-class ROIBranchAttribution(BaseModel):
+class ROIBranchAttribution(LiteLLMBaseModel):
     repo: str
     branch: str
     spend: float | None = None
@@ -242,7 +257,7 @@ class ROIBranchAttribution(BaseModel):
     status: Literal["matched", "unattributed", "ambiguous", "unavailable"] = "unattributed"
 
 
-class ROIBranchMetrics(BaseModel):
+class ROIBranchMetrics(LiteLLMBaseModel):
     spend: float = 0
     hours: float = 0
     cost_per_hour: float | None = None
@@ -397,7 +412,7 @@ class ROISummary(TypedDict):
     trend: ReadOnly[tuple[ROITrendDay, ...]]
 
 
-class ROIMetricsResponse(BaseModel):
+class ROIMetricsResponse(LiteLLMBaseModel):
     matched_spend: float
     output_hours: float
     total_spend: float
@@ -413,7 +428,7 @@ class ROIMetricsResponse(BaseModel):
     pending_prs: int
 
 
-class ROIPersonResponse(BaseModel):
+class ROIPersonResponse(LiteLLMBaseModel):
     id: str
     email: str
     logins: tuple[str, ...]
@@ -427,7 +442,7 @@ class ROIPersonResponse(BaseModel):
     cost_per_hour: float | None
 
 
-class ROIEstimateResponse(BaseModel):
+class ROIEstimateResponse(LiteLLMBaseModel):
     status: Literal["estimated", "needs_review", "error"]
     hours: float | None
     reasoning: str
@@ -437,7 +452,7 @@ class ROIEstimateResponse(BaseModel):
     cached: bool = False
 
 
-class ROIPullResponse(BaseModel):
+class ROIPullResponse(LiteLLMBaseModel):
     source_repo: str = ""
     source_branch: str = ""
     branch_cost: ROIBranchAttribution = Field(default_factory=lambda: ROIBranchAttribution(repo="", branch=""))
@@ -462,14 +477,14 @@ class ROIPullResponse(BaseModel):
     matched: bool
 
 
-class ROITrendResponse(BaseModel):
+class ROITrendResponse(LiteLLMBaseModel):
     date: str
     spend: float
     hours: float
     prs: int
 
 
-class ROISummaryResponse(BaseModel):
+class ROISummaryResponse(LiteLLMBaseModel):
     source_provider: Literal["github", "gitlab"] = "github"
     branch_metrics: ROIBranchMetrics = Field(default_factory=ROIBranchMetrics)
     unlinked_branches: tuple[ROIBranchSpend, ...] = ()
@@ -489,11 +504,11 @@ class ROISummaryResponse(BaseModel):
     trend: tuple[ROITrendResponse, ...]
 
 
-class ROIReportResponse(BaseModel):
+class ROIReportResponse(LiteLLMBaseModel):
     report: ROISummaryResponse | None
 
 
-class ROIIdentityMapUpdate(BaseModel):
+class ROIIdentityMapUpdate(LiteLLMBaseModel):
     github_login: str
     email: str | None
 
@@ -503,26 +518,26 @@ class ROIIdentityMapUpdate(BaseModel):
         return value.strip().casefold()
 
 
-class ROIIdentityMapResponse(BaseModel):
+class ROIIdentityMapResponse(LiteLLMBaseModel):
     report: ROISummaryResponse | None
     identity_map: Mapping[str, str]
 
 
-class ROIEstimatorChanges(BaseModel):
+class ROIEstimatorChanges(LiteLLMBaseModel):
     additions: int
     deletions: int
     files: int
     commits: int
 
 
-class ROIEstimatorFile(BaseModel):
+class ROIEstimatorFile(LiteLLMBaseModel):
     filename: str | None
     status: str | None
     additions: int | None
     deletions: int | None
 
 
-class ROIEstimatorCommit(BaseModel):
+class ROIEstimatorCommit(LiteLLMBaseModel):
     sha: str
     message: str
     additions: int | None = None
@@ -530,7 +545,7 @@ class ROIEstimatorCommit(BaseModel):
     changed_files: int | None = None
 
 
-class ROIEstimatorEvidence(BaseModel):
+class ROIEstimatorEvidence(LiteLLMBaseModel):
     repo: str
     number: int
     title: str
@@ -553,7 +568,7 @@ class ROIResponseFormat(TypedDict):
     type: ReadOnly[Literal["json_object"]]
 
 
-class ROICompletionRequest(BaseModel):
+class ROICompletionRequest(LiteLLMBaseModel):
     model: str
     temperature: Literal[0]
     messages: tuple[ROICompletionMessage, ...]
@@ -563,26 +578,26 @@ class ROICompletionRequest(BaseModel):
     reasoning_effort: Literal["none"] | None = None
 
 
-class _ROICompletionMessageResponse(BaseModel):
+class _ROICompletionMessageResponse(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     content: str | None = None
 
 
-class _ROICompletionChoice(BaseModel):
+class _ROICompletionChoice(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     finish_reason: str | None = None
     message: _ROICompletionMessageResponse
 
 
-class ROICompletionResponse(BaseModel):
+class ROICompletionResponse(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     choices: tuple[_ROICompletionChoice, ...]
 
 
-class ROIEstimatorResult(BaseModel):
+class ROIEstimatorResult(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     hours: StrictInt | StrictFloat

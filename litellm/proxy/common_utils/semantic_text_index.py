@@ -11,9 +11,10 @@ from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from fastapi import HTTPException
 from openai import OpenAIError
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from litellm.exceptions import BudgetExceededError
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -35,19 +36,19 @@ class EmbeddingFailed:
     reason: str
 
 
-class _EmbeddingItem(BaseModel):
+class _EmbeddingItem(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     embedding: tuple[float, ...]
 
 
-class _EmbeddingData(BaseModel):
+class _EmbeddingData(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     data: tuple[_EmbeddingItem, ...]
 
 
-class _EmbeddingRequest(BaseModel):
+class _EmbeddingRequest(LiteLLMBaseModel):
     """The /embeddings-shaped request as the pre-call hooks (rate limits, budgets, guardrails) hand it back."""
 
     model_config = ConfigDict(frozen=True, extra="ignore")

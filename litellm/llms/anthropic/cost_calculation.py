@@ -5,13 +5,14 @@ Helper util for handling anthropic-specific cost calculation
 
 from typing import TYPE_CHECKING, Final, Optional
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     generic_cost_per_token,
     get_provider_specific_geo_multiplier,
     get_web_search_requests_from_usage,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
@@ -71,15 +72,15 @@ def cost_per_token(
     return prompt_cost, completion_cost
 
 
-class _AnthropicServerToolUseProbe(BaseModel):
+class _AnthropicServerToolUseProbe(LiteLLMBaseModel):
     web_search_requests: int | None = None
 
 
-class _AnthropicUsageProbe(BaseModel):
+class _AnthropicUsageProbe(LiteLLMBaseModel):
     server_tool_use: _AnthropicServerToolUseProbe | None = None
 
 
-class _AnthropicResponseProbe(BaseModel):
+class _AnthropicResponseProbe(LiteLLMBaseModel):
     usage: _AnthropicUsageProbe | None = None
 
 

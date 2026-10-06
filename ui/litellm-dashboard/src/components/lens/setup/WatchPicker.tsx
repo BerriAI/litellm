@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { watches } from "./watches";
+import { watches } from "../model/watches";
 import { cn } from "@/lib/cva.config";
 
 const dotColors = ["#8b5cf6", "#22b3e8", "#e3a32b", "#eb6b93", "#22b3e8", "#8b5cf6", "#e3a32b", "#eb6b93"];

@@ -4,10 +4,11 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     Agent365GuardrailConfigModel,
 )
@@ -145,6 +146,7 @@ class SupportedGuardrailIntegrations(Enum):
     STRAIKER = "straiker"
     ALICE = "alice"
     AGENT_365 = "agent_365"
+    LLM_SHIELD_PROXY = "llm_shield_proxy"
     CONDUCT = "conduct"
 
 
@@ -165,7 +167,7 @@ class GuardrailItemSpec(TypedDict, total=False):
     callback_args: dict[str, dict]
 
 
-class GuardrailItem(BaseModel):
+class GuardrailItem(LiteLLMBaseModel):
     callbacks: list[str]
     default_on: bool
     logging_only: bool | None
@@ -435,7 +437,7 @@ class GuardrailParamUITypes(str, Enum):
     PERCENTAGE = "percentage"
 
 
-class PresidioPresidioConfigModelUserInterface(BaseModel):
+class PresidioPresidioConfigModelUserInterface(LiteLLMBaseModel):
     """Configuration parameters for the Presidio PII masking guardrail on LiteLLM UI"""
 
     presidio_analyzer_api_base: str | None = Field(
@@ -544,31 +546,31 @@ BedrockChecksSensitiveInformationEntity = Literal[
 ]
 
 
-class BedrockChecksContentFilterCategoryItem(BaseModel):
+class BedrockChecksContentFilterCategoryItem(LiteLLMBaseModel):
     category: BedrockChecksContentFilterCategory
 
 
-class BedrockChecksContentFilterModel(BaseModel):
+class BedrockChecksContentFilterModel(LiteLLMBaseModel):
     categories: list[BedrockChecksContentFilterCategoryItem]
 
 
-class BedrockChecksPromptAttackCategoryItem(BaseModel):
+class BedrockChecksPromptAttackCategoryItem(LiteLLMBaseModel):
     category: BedrockChecksPromptAttackCategory
 
 
-class BedrockChecksPromptAttackModel(BaseModel):
+class BedrockChecksPromptAttackModel(LiteLLMBaseModel):
     categories: list[BedrockChecksPromptAttackCategoryItem]
 
 
-class BedrockChecksSensitiveInformationEntityItem(BaseModel):
+class BedrockChecksSensitiveInformationEntityItem(LiteLLMBaseModel):
     type: BedrockChecksSensitiveInformationEntity
 
 
-class BedrockChecksSensitiveInformationModel(BaseModel):
+class BedrockChecksSensitiveInformationModel(LiteLLMBaseModel):
     entities: list[BedrockChecksSensitiveInformationEntityItem]
 
 
-class BedrockChecksConfigModel(BaseModel):
+class BedrockChecksConfigModel(LiteLLMBaseModel):
     """Inline `checks` config for the resource-less Bedrock InvokeGuardrailChecks API.
 
     Include only the checks you want to run; at least one must be set.
@@ -587,7 +589,7 @@ class BedrockChecksConfigModel(BaseModel):
         return self
 
 
-class BedrockGuardrailConfigModel(BaseModel):
+class BedrockGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the AWS Bedrock guardrail"""
 
     guardrailIdentifier: str | None = Field(default=None, description="The ID of your guardrail on Bedrock")
@@ -662,7 +664,7 @@ class BedrockGuardrailConfigModel(BaseModel):
     )
 
 
-class BedrockGuardrailStreamingParams(BaseModel):
+class BedrockGuardrailStreamingParams(LiteLLMBaseModel):
     streaming_buffer_until_moderated: bool = Field(
         default=True,
         description="If True (default), withhold every streamed chunk until the end-of-stream "
@@ -702,7 +704,7 @@ class BedrockGuardrailStreamingParams(BaseModel):
         )
 
 
-class LakeraV2GuardrailConfigModel(BaseModel):
+class LakeraV2GuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the Lakera AI v2 guardrail"""
 
     api_key: str | None = Field(default=None, description="API key for the Lakera AI service")
@@ -727,7 +729,7 @@ class LakeraV2GuardrailConfigModel(BaseModel):
     )
 
 
-class LassoGuardrailConfigModel(BaseModel):
+class LassoGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the Lasso guardrail"""
 
     lasso_user_id: str | None = Field(default=None, description="User ID for the Lasso guardrail")
@@ -735,7 +737,7 @@ class LassoGuardrailConfigModel(BaseModel):
     mask: bool | None = Field(default=False, description="Enable content masking using Lasso classifix API")
 
 
-class DeepKeepGuardrailConfigModel(BaseModel):
+class DeepKeepGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the DeepKeep AI Firewall guardrail"""
 
     deepkeep_firewall_id: str | None = Field(
@@ -747,7 +749,7 @@ class DeepKeepGuardrailConfigModel(BaseModel):
     )
 
 
-class PillarGuardrailConfigModel(BaseModel):
+class PillarGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the Pillar Security guardrail"""
 
     on_flagged_action: str | None = Field(
@@ -772,7 +774,7 @@ class PillarGuardrailConfigModel(BaseModel):
     )
 
 
-class NomaGuardrailConfigModel(BaseModel):
+class NomaGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the Noma Security guardrail"""
 
     use_v2: bool | None = Field(
@@ -801,7 +803,7 @@ class NomaGuardrailConfigModel(BaseModel):
     )
 
 
-class ZscalerAIGuardConfigModel(BaseModel):
+class ZscalerAIGuardConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the Zscaler AI Guard guardrail"""
 
     policy_id: int | None = Field(
@@ -819,7 +821,7 @@ class ZscalerAIGuardConfigModel(BaseModel):
     )
 
 
-class JavelinGuardrailConfigModel(BaseModel):
+class JavelinGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the Javelin guardrail"""
 
     guard_name: str | None = Field(default=None, description="Name of the Javelin guard to use")
@@ -836,7 +838,7 @@ class ContentFilterAction(str, Enum):
     MASK = "MASK"
 
 
-class BlockedWord(BaseModel):
+class BlockedWord(LiteLLMBaseModel):
     """Represents a blocked word with its action and optional description"""
 
     keyword: str = Field(description="The keyword to block or mask")
@@ -847,7 +849,7 @@ class BlockedWord(BaseModel):
     )
 
 
-class ContentFilterPattern(BaseModel):
+class ContentFilterPattern(LiteLLMBaseModel):
     """Represents a content filter pattern (prebuilt or custom regex)"""
 
     pattern_type: Literal["prebuilt", "regex"] = Field(
@@ -868,7 +870,7 @@ class ContentFilterPattern(BaseModel):
     action: ContentFilterAction = Field(description="Action to take when pattern matches (BLOCK or MASK)")
 
 
-class ContentFilterConfigModel(BaseModel):
+class ContentFilterConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the content filter guardrail"""
 
     patterns: list[ContentFilterPattern] | None = Field(
@@ -1167,7 +1169,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
-class Mode(BaseModel):
+class Mode(LiteLLMBaseModel):
     tags: dict[str, str | list[str]] = Field(description="Tags for the guardrail mode")
     default: str | list[str] | None = Field(default=None, description="Default mode when no tags match")
 
@@ -1286,7 +1288,7 @@ class GUARDRAIL_DEFINITION_LOCATION(str, Enum):
     CONFIG = "config"
 
 
-class GuardrailInfoResponse(BaseModel):
+class GuardrailInfoResponse(LiteLLMBaseModel):
     guardrail_id: str | None = None
     guardrail_name: str
     litellm_params: BaseLitellmParams | None = None
@@ -1299,11 +1301,11 @@ class GuardrailInfoResponse(BaseModel):
         super().__init__(**kwargs)
 
 
-class ListGuardrailsResponse(BaseModel):
+class ListGuardrailsResponse(LiteLLMBaseModel):
     guardrails: list[GuardrailInfoResponse]
 
 
-class GuardrailUIAddGuardrailSettings(BaseModel):
+class GuardrailUIAddGuardrailSettings(LiteLLMBaseModel):
     supported_entities: list[str]
     supported_actions: list[str]
     supported_modes: list[str]
@@ -1312,7 +1314,7 @@ class GuardrailUIAddGuardrailSettings(BaseModel):
     content_filter_settings: dict[str, object] | None = None
 
 
-class PresidioPerRequestConfig(BaseModel):
+class PresidioPerRequestConfig(LiteLLMBaseModel):
     """
     presdio params that can be controlled per request, api key
     """
@@ -1321,7 +1323,7 @@ class PresidioPerRequestConfig(BaseModel):
     entities: list[PiiEntityType] | None = None
 
 
-class ApplyGuardrailRequest(BaseModel):
+class ApplyGuardrailRequest(LiteLLMBaseModel):
     guardrail_name: str
     text: str
     language: str | None = None
@@ -1331,11 +1333,11 @@ class ApplyGuardrailRequest(BaseModel):
     metadata: dict[str, object] | None = None
 
 
-class ApplyGuardrailResponse(BaseModel):
+class ApplyGuardrailResponse(LiteLLMBaseModel):
     response_text: str
 
 
-class PatchGuardrailRequest(BaseModel):
+class PatchGuardrailRequest(LiteLLMBaseModel):
     guardrail_name: str | None = None
     litellm_params: BaseLitellmParams | None = None
     guardrail_info: dict[str, object] | None = None

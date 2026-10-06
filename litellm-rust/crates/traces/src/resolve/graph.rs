@@ -46,6 +46,13 @@ impl<'a> Graph<'a> {
         parent.is_empty() || !self.by_id.contains_key(parent.as_str())
     }
 
+    pub(super) fn children(&self, index: usize) -> Vec<usize> {
+        self.children
+            .get(self.id(index))
+            .map(|children| children.to_vec())
+            .unwrap_or_default()
+    }
+
     pub(super) fn ancestors(&self, index: usize) -> Vec<usize> {
         let mut seen = HashSet::from([self.id(index)]);
         let mut found = Vec::new();

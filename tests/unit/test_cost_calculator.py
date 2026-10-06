@@ -1,5 +1,6 @@
 import datetime
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
@@ -1500,7 +1501,7 @@ def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
     usage = Usage(prompt_tokens=15, completion_tokens=5, total_tokens=20)
-    for model in ("claude-haiku-4-5@20251001", "gemini-3.5-flash"):
+    for model in ("claude-haiku-4-5@20251001", "gemini-3.5-flash", "gemini-3.1-flash-image"):
         global_prompt, global_completion = cost_per_token(
             model=model,
             custom_llm_provider="vertex_ai",
@@ -1519,6 +1520,74 @@ def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
         assert regional_total == pytest.approx(global_total * 1.10, rel=1e-9), (
             f"{model}: regional Vertex request must cost 1.1x the global one"
         )
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        ImageUsage(
+            input_tokens=100,
+            input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=100),
+            output_tokens=1120,
+            total_tokens=1220,
+        ),
+        None,
+    ],
+    ids=["token-priced", "per-image-fallback"],
+)
+def test_vertex_regional_image_generation_costs_uplift_over_global(monkeypatch, usage):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.get_model_cost_map(url=""),
+            "vertex_ai/fake-regional-image-model": {
+                "litellm_provider": "vertex_ai-language-models",
+                "mode": "image_generation",
+                "input_cost_per_token": 5e-07,
+                "output_cost_per_token": 3e-06,
+                "output_cost_per_image_token": 6e-05,
+                "output_cost_per_image": 0.0672,
+                "regional_endpoint_uplift_multiplier": 1.1,
+            },
+        },
+    )
+
+    def image_cost(vertex_location: str) -> float:
+        return completion_cost(
+            completion_response=ImageResponse(data=[ImageObject(b64_json="img")], usage=usage),
+            model="vertex_ai/fake-regional-image-model",
+            call_type="image_generation",
+            vertex_location=vertex_location,
+        )
+
+    global_cost: Final = image_cost("global")
+    assert global_cost > 0
+    assert image_cost("us-central1") == pytest.approx(global_cost * 1.10, rel=1e-9)
+
+
+def test_vertex_gemini_flash_image_generation_regional_costs_uplift_over_global(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    usage: Final = ImageUsage(
+        input_tokens=100,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=100),
+        output_tokens=1120,
+        total_tokens=1220,
+    )
+
+    def image_cost(vertex_location: str) -> float:
+        return completion_cost(
+            completion_response=ImageResponse(data=[ImageObject(b64_json="img")], usage=usage),
+            model="vertex_ai/gemini-3.1-flash-image",
+            call_type="image_generation",
+            vertex_location=vertex_location,
+        )
+
+    global_cost: Final = image_cost("global")
+    assert global_cost > 0
+    assert image_cost("us-central1") == pytest.approx(global_cost * 1.10, rel=1e-9)
 
 
 def test_vertex_uplift_composes_with_above_128k_pricing(monkeypatch):
@@ -3298,7 +3367,7 @@ def test_completion_cost_per_second_deployment_bills_the_call_duration(
     assert cost == pytest.approx(0.02 * expected_seconds)
 
 
-@pytest.mark.parametrize("mode", ["audio_transcription", "audio_speech", "video_generation", "realtime"])
+@pytest.mark.parametrize("mode", ["audio_speech", "video_generation", "realtime"])
 def test_cost_per_token_leaves_media_second_rates_to_their_dedicated_paths(monkeypatch, mode: str):
     """
     A media-mode entry's per-second rates price audio or video seconds, which the dedicated
@@ -3313,6 +3382,29 @@ def test_cost_per_token_leaves_media_second_rates_to_their_dedicated_paths(monke
     )
 
     assert cost_per_token(model=model, custom_llm_provider="openai", response_time_ms=2000.0) == (0.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("audio_seconds", "expected_cost"),
+    [(0.0, (0.04, 0.0)), (60.0, (1.2, 0.0))],
+    ids=["no_audio_length_bills_request_time", "audio_length_bills_audio_seconds"],
+)
+def test_cost_per_token_bills_transcription_second_rates(
+    monkeypatch: pytest.MonkeyPatch, audio_seconds: float, expected_cost: tuple[float, float]
+) -> None:
+    model: Final = "test-transcription-per-second"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.02, "litellm_provider": "deepgram", "mode": "audio_transcription"},
+    )
+
+    assert cost_per_token(
+        model=model,
+        custom_llm_provider="deepgram",
+        response_time_ms=2000.0,
+        audio_transcription_file_duration=audio_seconds,
+    ) == pytest.approx(expected_cost)
 
 
 def test_completion_cost_video_status_poll_bills_nothing_on_a_per_second_video_model(monkeypatch):
@@ -3862,6 +3954,35 @@ def test_completion_cost_mantle_native_messages_prices_unversioned_claude_from_t
             model=model,
             custom_llm_provider="bedrock_mantle",
         ) == pytest.approx(expected), model
+
+
+@pytest.mark.parametrize("model", ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5"])
+def test_completion_cost_region_without_its_own_row_prices_mantle_claude_from_the_mantle_row(
+    _local_model_cost_map, model: str
+):
+    """The proxy resolves a Mantle region for every call. A region with no
+    bedrock_mantle/<region>/<model> row must fall back to the model's own bedrock_mantle/ row, not to the
+    bare Bedrock row that the bedrock provider family also matches."""
+
+    response = litellm.ModelResponse(
+        id="msg_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model=model,
+        usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+    )
+    mantle: Final[Mapping[str, float]] = litellm.model_cost[f"bedrock_mantle/{model}"]
+    bedrock: Final[Mapping[str, float]] = litellm.model_cost[model]
+    expected: Final = 100 * mantle["input_cost_per_token"] + 10 * mantle["output_cost_per_token"]
+    assert expected != 100 * bedrock["input_cost_per_token"] + 10 * bedrock["output_cost_per_token"]
+
+    for deployment in (model, f"bedrock_mantle/{model}", f"bedrock_mantle/us-east-1/{model}"):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model=deployment,
+            custom_llm_provider="bedrock_mantle",
+            region_name="us-east-1",
+        ) == pytest.approx(expected), deployment
+    assert litellm.get_model_info(f"bedrock_mantle/us-east-1/{model}", "bedrock_mantle")["key"] == f"bedrock_mantle/{model}"
 
 
 @pytest.mark.parametrize("model", ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5"])

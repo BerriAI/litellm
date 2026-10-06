@@ -21,7 +21,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.callback_config_validation import cross_entry_family_error
-from litellm.proxy.management.teams.access import TeamAccess
+from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     add_team_callbacks,
     delete_team_callback,

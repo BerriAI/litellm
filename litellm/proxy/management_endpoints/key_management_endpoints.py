@@ -64,7 +64,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
-    enforce_batch_enqueued_token_limit_is_admin_only,
+    enforce_batch_limits_are_admin_only,
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -86,7 +86,7 @@ from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
-from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
+from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_utils import (
     _check_disable_global_guardrails_caller_permission,
@@ -154,6 +154,7 @@ from litellm.repositories.verification_token_repository import (
 from litellm.router import Router
 from litellm.secret_managers.base_secret_manager import raise_if_unsafe_secret_name
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
@@ -212,7 +213,7 @@ class _KeyUpdateResult(TypedDict):
     data: ReadOnly[Mapping[str, object]]
 
 
-class _StoredKeyRouterSettings(BaseModel):
+class _StoredKeyRouterSettings(LiteLLMBaseModel):
     router_settings: Mapping[str, object] | None = None
 
 
@@ -355,9 +356,12 @@ _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
 )
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _decode_json_string_column(column: str, value: object) -> object:
     if column in _KEY_UPDATE_JSON_STRING_COLUMNS and isinstance(value, str):
-        return json.loads(value)
+        return _DECODED_JSON.validate_python(json.loads(value))
     return value
 
 
@@ -1215,7 +1219,7 @@ async def _common_key_generation_helper(
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
-    enforce_batch_enqueued_token_limit_is_admin_only(
+    enforce_batch_limits_are_admin_only(
         data=data,
         existing_metadata=None,
         user_api_key_dict=user_api_key_dict,
@@ -2024,7 +2028,7 @@ async def generate_key_fn(
 
     ```bash
     curl --location 'http://0.0.0.0:4000/key/generate' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --header 'Content-Type: application/json' \
         --data '{
             "permissions": {"allow_pii_controls": true}
@@ -2222,7 +2226,7 @@ async def generate_service_account_key_fn(
 
     ```bash
     curl --location 'http://0.0.0.0:4000/key/generate' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --header 'Content-Type: application/json' \
         --data '{
             "permissions": {"allow_pii_controls": true}
@@ -2754,7 +2758,7 @@ async def _process_single_key_update(
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
 
-    enforce_batch_enqueued_token_limit_is_admin_only(
+    enforce_batch_limits_are_admin_only(
         data=update_key_request,
         existing_metadata=existing_key_row.metadata,
         user_api_key_dict=user_api_key_dict,
@@ -3202,7 +3206,7 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
-    enforce_batch_enqueued_token_limit_is_admin_only(
+    enforce_batch_limits_are_admin_only(
         data=data,
         existing_metadata=_existing_metadata if isinstance(_existing_metadata, dict) else None,
         user_api_key_dict=user_api_key_dict,
@@ -3436,10 +3440,10 @@ async def update_key_fn(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
-        "key": "sk-1234",
+        "key": "sk-<your-virtual-key>",
         "key_alias": "my-key",
         "user_id": "user-1234",
         "team_id": "team-1234",
@@ -3662,12 +3666,12 @@ async def bulk_update_keys(
     Example request:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/bulk_update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "keys": [
             {
-                "key": "sk-1234",
+                "key": "sk-<your-virtual-key>",
                 "max_budget": 100.0,
                 "team_id": "team-123",
                 "tags": ["production", "api"]
@@ -4093,7 +4097,7 @@ async def delete_key_fn(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/delete' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "keys": ["sk-QWrxEynunsNpV1zT48HIrw"]
@@ -4272,7 +4276,7 @@ async def info_key_fn_v2(
     Example Curl:
     ```
     curl -X GET "http://0.0.0.0:4000/key/info" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
     ```
     """
@@ -4401,7 +4405,7 @@ async def info_key_fn(
     Example Curl:
     ```
     curl -X GET "http://0.0.0.0:4000/key/info?key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
@@ -5595,7 +5599,7 @@ async def _execute_virtual_key_regeneration(
             user_api_key_dict=user_api_key_dict,
             entity="key",
         )
-        enforce_batch_enqueued_token_limit_is_admin_only(
+        enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,
@@ -5791,8 +5795,8 @@ async def regenerate_key_fn(
 
     Example:
     ```bash
-    curl --location --request POST 'http://localhost:4000/key/sk-1234/regenerate' \
-    --header 'Authorization: Bearer sk-1234' \
+    curl --location --request POST "http://localhost:4000/key/$LITELLM_API_KEY/regenerate" \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "max_budget": 100,
@@ -6488,7 +6492,7 @@ KeyStatus = Literal["active", "expired", "revoked", "deleted"]
 VALID_STATUS_FILTER_VALUES: Final[frozenset[KeyStatus]] = frozenset({"active", "expired", "revoked", "deleted"})
 
 
-class _KeyStatusSource(BaseModel):
+class _KeyStatusSource(LiteLLMBaseModel):
     blocked: bool | None = None
     expires: datetime | None = None
 
@@ -7325,7 +7329,7 @@ async def block_key(
      Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/block' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
@@ -7439,7 +7443,7 @@ async def unblock_key(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/unblock' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
@@ -7556,7 +7560,7 @@ async def key_health(
 
     ```bash
     curl -X POST "http://localhost:4000/key/health" \
-     -H "Authorization: Bearer sk-1234" \
+     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
      -H "Content-Type: application/json"
     ```
 

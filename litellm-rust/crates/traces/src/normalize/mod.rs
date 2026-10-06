@@ -10,7 +10,7 @@ use std::{
 };
 
 use crate::{Error, otlp::DecodedEvent};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 mod format;
 mod instrumentation;
@@ -18,6 +18,12 @@ mod messages;
 mod metadata;
 
 pub(crate) const CLAUDE_CODE_SCOPE: &str = "com.anthropic.claude_code.tracing";
+pub(crate) const CLAUDE_CODE_EVENTS_SCOPE: &str = "com.anthropic.claude_code.events";
+pub(crate) fn visible_claude_response(event: &str, source: &str) -> bool {
+    event == "assistant_response"
+        && (matches!(source, "repl_main_thread" | "sdk" | "sdk_main_thread")
+            || source.starts_with("agent:"))
+}
 pub(crate) const CLAUDE_CODE_AGENT: &str = "claude-code";
 use instrumentation::Instrumentation;
 pub(crate) use messages::{HIDDEN_BLOCK_TYPES, MessagePayload, encode};
@@ -44,15 +50,33 @@ pub enum ObservationType {
 }
 
 /// A model request a span stands for, by the identifier its instrumentation recorded.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
-#[serde(try_from = "String")]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    serde_with::DeserializeFromStr,
+    serde_with::SerializeDisplay,
+)]
 pub enum CallKey {
-    /// LiteLLM's own id for the request (`spend_logs.request_id`).
+    /// LiteLLM's gateway call id, with a fallback to legacy spend request ids.
     LiteLlmRequest(String),
     /// The provider response id returned to the caller (`spend_logs.response_id`).
     ProviderResponse(String),
+    ProviderRequest(String),
     /// The span is the HTTP request itself; LiteLLM logs its `traceparent` span id.
     Transport,
+    GatewayAttempt,
+}
+
+pub(crate) fn claude_call_key(id: String) -> CallKey {
+    if id.starts_with("msg_") {
+        CallKey::ProviderResponse(id)
+    } else {
+        CallKey::ProviderRequest(id)
+    }
 }
 
 impl fmt::Display for CallKey {
@@ -60,7 +84,9 @@ impl fmt::Display for CallKey {
         match self {
             Self::LiteLlmRequest(id) => write!(formatter, "litellm_request:{id}"),
             Self::ProviderResponse(id) => write!(formatter, "provider_response:{id}"),
+            Self::ProviderRequest(id) => write!(formatter, "provider_request:{id}"),
             Self::Transport => formatter.write_str("transport:"),
+            Self::GatewayAttempt => formatter.write_str("gateway_attempt:"),
         }
     }
 }
@@ -73,10 +99,14 @@ impl FromStr for CallKey {
             Some(("provider_response", id)) if !id.is_empty() => {
                 Ok(Self::ProviderResponse(id.to_owned()))
             }
+            Some(("provider_request", id)) if !id.is_empty() => {
+                Ok(Self::ProviderRequest(id.to_owned()))
+            }
             Some(("litellm_request", id)) if !id.is_empty() => {
                 Ok(Self::LiteLlmRequest(id.to_owned()))
             }
             Some(("transport", "")) => Ok(Self::Transport),
+            Some(("gateway_attempt", "")) => Ok(Self::GatewayAttempt),
             _ => Err(crate::InvalidCallKey),
         }
     }
@@ -98,12 +128,6 @@ pub enum CallEvidenceKind {
     Complete,
 }
 
-impl Serialize for CallKey {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
 /// Which model requests a span accounts for. `Complete` comes only from an instrumentation's known
 /// contract (one chat span is one response), never from how many ids happened to be found.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
@@ -116,24 +140,45 @@ pub enum CallEvidence {
 
 impl CallEvidence {
     pub(crate) fn row_keys(row: &crate::query::named::TraceSpansRow) -> BTreeSet<CallKey> {
-        if row.call_keys.is_empty() && !row.litellm_request_id.is_empty() {
+        let native = Self::native_request(row);
+        let keys = if row.call_keys.is_empty() && !row.litellm_request_id.is_empty() {
             BTreeSet::from([CallKey::ProviderResponse(row.litellm_request_id.clone())])
         } else {
             row.call_keys.iter().cloned().collect()
+        };
+        if !native {
+            return keys;
         }
+        if keys.is_empty() {
+            return BTreeSet::from([CallKey::Transport]);
+        }
+        keys.into_iter()
+            .map(|key| match key {
+                CallKey::ProviderResponse(id) => claude_call_key(id),
+                key => key,
+            })
+            .collect()
+    }
+
+    fn native_request(row: &crate::query::named::TraceSpansRow) -> bool {
+        matches!(row.framework.as_str(), "claude-code" | "claude-agent-sdk")
+            && row.name == "claude_code.llm_request"
     }
 
     pub(crate) fn from_row(row: &crate::query::named::TraceSpansRow) -> Self {
-        let kind = row
-            .call_evidence
-            .unwrap_or(if row.litellm_request_id.is_empty() {
+        let keys = Self::row_keys(row);
+        let kind = if Self::native_request(row) {
+            CallEvidenceKind::Complete
+        } else {
+            row.call_evidence.unwrap_or(if keys.is_empty() {
                 CallEvidenceKind::Unknown
             } else {
                 CallEvidenceKind::Complete
-            });
+            })
+        };
         match kind {
-            CallEvidenceKind::Complete => Self::Complete(Self::row_keys(row)),
-            CallEvidenceKind::Partial => Self::Partial(Self::row_keys(row)),
+            CallEvidenceKind::Complete => Self::Complete(keys),
+            CallEvidenceKind::Partial => Self::Partial(keys),
             CallEvidenceKind::Unknown => Self::Unknown,
         }
     }
@@ -146,7 +191,7 @@ impl CallEvidence {
     /// convention found, but says nothing about completeness.
     fn with(self, key: CallKey) -> Self {
         match self {
-            Self::Unknown => Self::complete(key),
+            Self::Unknown => Self::Partial(BTreeSet::from([key])),
             Self::Partial(keys) => Self::Partial(keys.into_iter().chain([key]).collect()),
             Self::Complete(keys) => Self::Complete(keys.into_iter().chain([key]).collect()),
         }
