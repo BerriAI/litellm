@@ -84,7 +84,6 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/spend/",
     "/analytics/",
     "/lens/",
-    "/v1/logs",
     "/v1/traces",
     "/global/",
     "/user_agent",
