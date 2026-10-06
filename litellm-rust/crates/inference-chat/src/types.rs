@@ -1,9 +1,14 @@
-use litellm_secrets::source::Secrets;
 use std::time::Duration;
 
 use litellm_auth::SecretValue;
+use litellm_cache_response::{CacheKeyInput, Deployment, extra_headers};
+use litellm_inference::{
+    RouteError,
+    caching::{Cachable, CacheKeyProjection},
+};
 use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
 use litellm_llms_types::formats::chat_completions::ChatMessage;
+use litellm_secrets::source::Secrets;
 use serde_json::{Map, Value};
 
 /// A `/chat/completions` call as it crosses into the core.
@@ -76,4 +81,18 @@ pub struct ProviderChatCompletionsRequest {
     pub secrets: Secrets,
     pub timeout: Option<Duration>,
     pub api_key: Option<SecretValue>,
+}
+
+impl CacheKeyProjection for ChatCompletionsRequest<'_> {
+    fn cache_key_input(&self) -> Result<CacheKeyInput, RouteError> {
+        Ok(CacheKeyInput::forwarded(
+            <crate::route::ChatCompletions as Cachable>::SURFACE,
+            Deployment::new(self.model, self.custom_llm_provider, self.api_base),
+            self.optional_params
+                .clone()
+                .into_iter()
+                .chain([("messages".into(), self.messages.clone())]),
+            extra_headers(self.extra_headers.as_ref()),
+        ))
+    }
 }

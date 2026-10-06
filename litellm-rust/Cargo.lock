@@ -3610,6 +3610,7 @@ dependencies = [
 name = "litellm-cache-response"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "litellm-cache",
  "litellm-cache-gcs",
  "litellm-cache-memory",
@@ -4013,7 +4014,6 @@ dependencies = [
  "litellm-framer",
  "litellm-host",
  "litellm-http",
- "litellm-inference",
  "litellm-llms",
  "litellm-secrets",
  "litellm-tracing",
@@ -4042,6 +4042,7 @@ dependencies = [
  "litellm-host-native",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
@@ -4064,10 +4065,12 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
+ "litellm-framer",
  "litellm-host",
  "litellm-host-native",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
@@ -4096,6 +4099,7 @@ dependencies = [
  "litellm-host-native",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
@@ -4121,21 +4125,34 @@ dependencies = [
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
+ "litellm-framer",
  "litellm-host",
  "litellm-host-native",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
  "litellm-tracing",
  "reqwest 0.12.28",
  "rstest",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite",
  "tracing",
  "wiremock",
+]
+
+[[package]]
+name = "litellm-inference-testing"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-secrets",
 ]
 
 [[package]]
@@ -4147,6 +4164,7 @@ dependencies = [
  "litellm-core-utils",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-testing",
  "litellm-llms",
  "litellm-secrets",
  "litellm-tracing",
@@ -4236,6 +4254,7 @@ dependencies = [
  "litellm-cache-response",
  "litellm-callbacks-legacy-python",
  "litellm-core-utils",
+ "litellm-framer",
  "litellm-host",
  "litellm-host-python",
  "litellm-http",

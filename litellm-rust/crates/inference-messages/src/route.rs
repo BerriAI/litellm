@@ -35,20 +35,14 @@ impl super::MessagesRoute {
         request: super::MessagesCall,
         options: impl Into<litellm_inference::CallOptions>,
     ) -> MessagesMachine {
-        let litellm_inference::CallOptions {
-            cache: cache_options,
-            observers,
-        } = options.into();
+        let litellm_inference::CallOptions { cache, observers } = options.into();
         hosted_call(
             request,
             observers,
             move |call, _, interceptors, observers| async move {
                 let context = litellm_inference::context::CallContext::new(
                     &interceptors,
-                    litellm_inference::CallOptions {
-                        cache: cache_options,
-                        observers,
-                    },
+                    litellm_inference::CallOptions { cache, observers },
                 );
                 self.run(call, context).await
             },
@@ -68,7 +62,9 @@ impl litellm_inference::caching::StreamCachable for Messages {
             head: MessagesStreamHead {
                 headers: Vec::new(),
             },
-            chunks: Box::pin(futures_util::stream::iter([Ok(data)])),
+            chunks: Box::pin(futures_util::stream::iter(
+                litellm_framer::sse::RawBlocks::new(data).map(Ok),
+            )),
         })
     }
 

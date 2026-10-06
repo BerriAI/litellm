@@ -6,6 +6,7 @@ use litellm_core_utils::{
     get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,
 };
 use litellm_http::request::with_default_headers;
+use litellm_inference::provider::resolve_llm_provider;
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, messages::context::MessagesTransformContext,
 };
@@ -17,7 +18,6 @@ use super::{
     common_utils::{MessagesProvider, messages_provider, string_headers},
     types::invalid_request,
 };
-use litellm_inference::provider::resolve_llm_provider;
 
 struct ResolvedProvider {
     model: String,

@@ -1,7 +1,6 @@
 //! Credentials the caller supplies as Python callables, projected out of a route's
 //! keyword arguments and acquired on the host's own thread when the call asks for one.
 
-use crate::callable::wrap_failure;
 use litellm_auth::{ResolvedCredential, SecretValue};
 use pyo3::{
     exceptions::PyTypeError,
@@ -9,6 +8,8 @@ use pyo3::{
     prelude::*,
     types::{PyDict, PyString},
 };
+
+use crate::callable::wrap_failure;
 
 const NOT_CALLABLE: &str = "Azure AD token provider must be callable";
 const NOT_A_STRING: &str = "Azure AD token must be a string, got {}";

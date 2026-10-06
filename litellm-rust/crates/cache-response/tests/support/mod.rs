@@ -1,10 +1,11 @@
+#![allow(dead_code)] // each test binary compiles this module on its own and uses a different subset
+
 use std::{sync::Arc, time::Duration};
 
+use litellm_cache::ExactCacheContext;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::RedisCache;
-use litellm_cache_response::{
-    CacheEntry, CacheKeyInput, ResponseCache, ResponseCacheCodec, ResponseCacheRequest,
-};
+use litellm_cache_response::{CacheEntry, CacheKey, ResponseCache, ResponseCacheCodec};
 use redis_test::{MockCmd, MockRedisConnection};
 use rstest::fixture;
 
@@ -19,16 +20,15 @@ pub fn memory() -> Arc<ResponseCache<InMemoryCache<CacheEntry>>> {
 }
 
 #[fixture]
-pub fn request() -> ResponseCacheRequest {
+pub fn key() -> CacheKey {
     keyed("tenant:key")
 }
 
-pub fn keyed(key: &str) -> ResponseCacheRequest {
-    ResponseCacheRequest::new(CacheKeyInput {
-        preset: Some(key.into()),
-        ..Default::default()
-    })
+pub fn keyed(key: &str) -> CacheKey {
+    CacheKey::Supplied(key.into())
 }
+
+pub const DEFAULT: ExactCacheContext = ExactCacheContext { ttl: None };
 
 /// A Redis response cache that must receive exactly `commands`, in order.
 pub fn redis(commands: Vec<MockCmd>, namespace: Option<&str>) -> ResponseCache<MockedRedis> {

@@ -1,9 +1,11 @@
-use litellm_host::lifecycle::ExecutionEvent;
-use litellm_host::observation::ObservationSender;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use litellm_host::interceptors::{Interceptors, RawResponse, WireRequest};
+use litellm_host::{
+    interceptors::{Interceptors, RawResponse, WireRequest},
+    lifecycle::ExecutionEvent,
+    observation::ObservationSender,
+};
 use litellm_llms::base_llm::auth::{Authenticated, resolve_auth};
 
 use super::{
@@ -15,8 +17,7 @@ pub(super) async fn execute(
     http: &litellm_http::Client,
     auth: &litellm_auth::AuthServices,
     request: ProviderResponsesRequest,
-    cache: Option<litellm_cache_response::ScopedCache>,
-    cache_options: Option<litellm_cache_response::CachePolicy>,
+    cache: Option<litellm_inference::caching::CachePlan>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<ResponsesOutput, Error> {
@@ -25,25 +26,20 @@ pub(super) async fn execute(
         model: request.context.model.clone(),
         provider: request.context.custom_llm_provider.clone(),
     };
+    let outbound = WireRequest {
+        url: request.url,
+        headers: authenticated.headers,
+        body: request.body,
+    };
+    let cache = cache
+        .filter(|_| authenticated.signer.is_none())
+        .map(|cache| cache.guard(&outbound));
     let wire = interceptors
-        .before_provider_request(
-            WireRequest {
-                url: request.url,
-                headers: authenticated.headers,
-                body: request.body,
-            },
-            request.context,
-        )
+        .before_provider_request(outbound, request.context)
         .await?;
-    let cache = cache.filter(|_| authenticated.signer.is_none());
-    let cache_request = litellm_inference::caching::CacheRequest::from_wire(
-        identity,
-        cache.as_ref().map(|_| &wire),
-    );
     litellm_inference::caching::execute_streaming::<super::route::Responses, _, _>(
-        cache_request,
-        cache.as_ref().map(|cache| cache.service.clone()),
-        cache.as_ref().map(|cache| cache.options(cache_options)),
+        identity,
+        cache.and_then(|cache| cache.confirm(&wire)),
         interceptors,
         observers,
         || async move {

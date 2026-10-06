@@ -1,6 +1,7 @@
 use litellm_auth::SecretValue;
 use litellm_core_utils::settings::Lookup;
 use litellm_http::request::with_default_headers;
+use litellm_inference::provider::resolve_llm_provider;
 use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
 use litellm_llms_types::formats::chat_completions::ChatMessage;
 use litellm_secrets::source::Secrets;
@@ -13,7 +14,6 @@ use super::{
 use crate::types::{
     ChatCompletionsRequest, ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest,
 };
-use litellm_inference::provider::resolve_llm_provider;
 
 pub(super) struct ResolvedProvider {
     pub(super) model: String,

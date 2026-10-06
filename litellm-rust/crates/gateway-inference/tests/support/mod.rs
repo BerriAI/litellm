@@ -37,7 +37,7 @@ pub fn app_with_permissions(
     api_base: &str,
     permissions: litellm_gateway_auth::Permissions,
 ) -> Router {
-    configured_app(model, api_base, permissions, None, None)
+    configured_app(&["public/model"], model, api_base, permissions, None, None)
 }
 
 pub fn app_with_cache(
@@ -45,7 +45,17 @@ pub fn app_with_cache(
     api_base: &str,
     cache: Arc<dyn litellm_cache_response::ResponseCacheService>,
 ) -> Router {
+    app_with_cache_for_models(&["public/model"], model, api_base, cache)
+}
+
+pub fn app_with_cache_for_models(
+    names: &[&str],
+    model: &str,
+    api_base: &str,
+    cache: Arc<dyn litellm_cache_response::ResponseCacheService>,
+) -> Router {
     configured_app(
+        names,
         model,
         api_base,
         litellm_gateway_auth::Permissions::All,
@@ -61,6 +71,7 @@ pub fn app_with_cache_for_principal(
     principal: litellm_gateway_auth::Principal,
 ) -> Router {
     configured_app(
+        &["public/model"],
         model,
         api_base,
         litellm_gateway_auth::Permissions::All,
@@ -70,6 +81,7 @@ pub fn app_with_cache_for_principal(
 }
 
 fn configured_app(
+    names: &[&str],
     model: &str,
     api_base: &str,
     permissions: litellm_gateway_auth::Permissions,
@@ -84,18 +96,21 @@ fn configured_app(
         resources,
         http,
         secrets,
-        [(
-            "public/model".into(),
-            Deployment {
-                model: model.into(),
-                api_base: Some(api_base.into()),
-                api_key: Some("test-key".into()),
-                timeout: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
-        )]
-        .into_iter()
-        .collect(),
+        names
+            .iter()
+            .map(|name| {
+                (
+                    (*name).into(),
+                    Deployment {
+                        model: model.into(),
+                        api_base: Some(api_base.into()),
+                        api_key: Some("test-key".into()),
+                        timeout: Some(Duration::from_secs(5)),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect(),
     )
     .unwrap();
     let gateway = match cache {

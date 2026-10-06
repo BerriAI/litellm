@@ -1,8 +1,10 @@
 //! Failures raised by a caller-supplied Python callable.
 
-use pyo3::exceptions::{PyException, PyRuntimeError, PyTypeError};
-use pyo3::prelude::*;
-use pyo3::types::PyString;
+use pyo3::{
+    exceptions::{PyException, PyRuntimeError, PyTypeError},
+    prelude::*,
+    types::PyString,
+};
 
 /// Reports a caller-supplied callable's failure under `template`, a Python format string
 /// with one field for the original exception, while leaving alone the failures a caller

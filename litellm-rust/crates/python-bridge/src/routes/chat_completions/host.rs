@@ -1,6 +1,3 @@
-use std::convert::Infallible;
-
-use super::super::inference::InferenceHost;
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
 use litellm_inference_chat::{Error, route::ChatCompletions, types::ChatCompletionsCall};
 use pyo3::{
@@ -9,7 +6,24 @@ use pyo3::{
     types::PyDict,
 };
 
-pub(super) struct ChatCompletionsPythonHost(pub InferenceHost);
+use super::super::inference::InferenceHost;
+use crate::cache::{CacheCall, PythonCache, PythonCacheSelection, PythonCached};
+
+pub(super) struct ChatCompletionsPythonHost {
+    host: InferenceHost,
+    cache: PythonCache,
+    call_type: &'static str,
+}
+
+impl ChatCompletionsPythonHost {
+    pub(super) fn new(host: InferenceHost, asynchronous: bool, call_type: &'static str) -> Self {
+        Self {
+            host,
+            cache: PythonCache::new(asynchronous),
+            call_type,
+        }
+    }
+}
 
 pub(super) fn project(
     host: &InferenceHost,
@@ -30,15 +44,15 @@ pub(super) fn project(
 }
 
 impl PythonBinding for ChatCompletionsPythonHost {
-    type Protocol = ChatCompletions;
+    type Protocol = PythonCached<ChatCompletions>;
     type Failure = PyErr;
 
     fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<ChatCompletionsCall, InvokeError<Error>> {
-        let call = project(&self.0, py, arguments).map_err(InvokeError::Python)?;
+    ) -> Result<(ChatCompletionsCall, Option<PythonCacheSelection>), InvokeError<Error>> {
+        let call = project(&self.host, py, arguments).map_err(InvokeError::Python)?;
         if call
             .optional_params
             .get("stream")
@@ -48,7 +62,14 @@ impl PythonBinding for ChatCompletionsPythonHost {
                 "native Python chat_completions streaming",
             )));
         }
-        Ok(call)
+        let selection = crate::cache::select_python_cache::<ChatCompletions>(
+            &mut self.cache,
+            py,
+            arguments,
+            self.call_type,
+        )
+        .map_err(InvokeError::Python)?;
+        Ok((call, selection))
     }
 
     fn encode_response(
@@ -56,7 +77,7 @@ impl PythonBinding for ChatCompletionsPythonHost {
         py: Python<'_>,
         response: <ChatCompletions as litellm_host::protocol::Protocol>::Response,
     ) -> PyResult<Py<PyAny>> {
-        self.0.response(py, &response)
+        self.host.response(py, &response)
     }
 
     fn encode_stream_head(
@@ -76,26 +97,48 @@ impl PythonBinding for ChatCompletionsPythonHost {
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
-        self.0.error(py, error)
+        self.host.error(py, error)
     }
     fn host_error(error: &PyErr) -> Error {
         Error::InvalidRequest(error.to_string().into())
     }
 }
 
-impl PythonHostCalls<ChatCompletions> for ChatCompletionsPythonHost {
+impl PythonHostCalls<PythonCached<ChatCompletions>> for ChatCompletionsPythonHost {
     fn handle_host_call(
         &mut self,
-        _: Python<'_>,
-        op: Infallible,
+        py: Python<'_>,
+        op: CacheCall,
     ) -> Result<(), InvokeError<Error>> {
-        match op {}
+        self.cache
+            .begin(py, op)
+            .map(|_| ())
+            .map_err(InvokeError::Python)
+    }
+
+    fn begin_host_call(
+        &mut self,
+        py: Python<'_>,
+        op: CacheCall,
+    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+        self.cache.begin(py, op).map_err(InvokeError::Python)
+    }
+
+    fn resume_host_call(
+        &mut self,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+        self.cache.resume(py, result).map_err(InvokeError::Python)
     }
 }
 
 impl PythonOwned for ChatCompletionsPythonHost {
-    fn close(&mut self, _: Python<'_>) {}
+    fn close(&mut self, _: Python<'_>) {
+        self.cache.close();
+    }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.0.request)
+        visit.call(&self.host.request)?;
+        self.cache.traverse(visit)
     }
 }

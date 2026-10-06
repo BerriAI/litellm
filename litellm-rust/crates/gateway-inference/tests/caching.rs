@@ -4,9 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use axum::body::to_bytes;
 use litellm_cache_memory::InMemoryCache;
-use litellm_cache_response::{
-    CacheKeyInput, ResponseCache, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
-};
+use litellm_cache_response::{CacheKey, ResponseCache, ResponseCacheService};
 use rstest::rstest;
 use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
@@ -52,10 +50,7 @@ async fn all_inference_endpoints_share_native_cache(
             Some(100),
             Some(Duration::from_secs(60)),
         )))
-        .with_config(ResponseCacheConfig {
-            namespace: "gateway-test".into(),
-            max_entry_bytes: 4096,
-        }),
+        .with_max_entry_bytes(4096),
     );
     let app = support::app_with_cache(model, &upstream.uri(), cache.clone());
     let request = if is_responses {
@@ -73,10 +68,8 @@ async fn all_inference_endpoints_share_native_cache(
     assert!(!cache_key.as_bytes().is_empty());
     let stored = cache
         .lookup(
-            &ResponseCacheRequest::new(CacheKeyInput {
-                preset: Some(cache_key.to_str().unwrap().into()),
-                ..Default::default()
-            }),
+            &CacheKey::Derived(cache_key.to_str().unwrap().into()),
+            None,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap(),
@@ -125,6 +118,50 @@ async fn all_inference_endpoints_share_native_cache(
         Some(&cache_key)
     );
     assert_eq!(to_bytes(restored.into_body(), 4096).await.unwrap(), second);
+}
+
+#[rstest]
+#[case::no_cache(json!({"cache": {"no-cache": true}}), false, true)]
+#[case::no_store(json!({"cache": {"no-store": true}}), true, false)]
+#[case::caching_disabled(json!({"caching": false}), false, false)]
+#[case::caching_enabled(json!({"caching": true}), true, true)]
+#[case::null_controls(json!({"caching": null, "cache": null}), true, true)]
+#[tokio::test]
+async fn request_controls_gate_cache_reads_and_writes(
+    #[case] controls: Value,
+    #[case] reads: bool,
+    #[case] writes: bool,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id":"response-1", "model":"test-model", "status":"completed", "output":[]
+        })))
+        .expect(1 + u64::from(!writes) + u64::from(!reads))
+        .mount(&upstream)
+        .await;
+    let cache: Arc<dyn ResponseCacheService> = Arc::new(ResponseCache::new(Arc::new(
+        InMemoryCache::new(Some(100), Some(Duration::from_secs(60))),
+    )));
+    let app = support::app_with_cache("openai/test-model", &upstream.uri(), cache);
+    let plain = json!({"model":"public/model", "input":"hello"});
+    let controlled = Value::Object(
+        plain
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .chain(controls.as_object().unwrap().clone())
+            .collect(),
+    );
+    let hit = async |body: Value| {
+        let response = support::post(app.clone(), "/v1/responses", body).await;
+        assert_eq!(response.status(), 200);
+        response.headers().contains_key("x-litellm-cache-key")
+    };
+    assert!(!hit(controlled.clone()).await);
+    assert_eq!(hit(plain).await, writes);
+    assert_eq!(hit(controlled).await, reads);
 }
 
 #[rstest]
@@ -182,4 +219,55 @@ async fn authenticated_callers_do_not_share_cached_responses(
         first_again.headers().get("x-litellm-cache-key"),
         Some(first_key)
     );
+}
+
+#[rstest]
+#[case::chat("/v1/chat/completions", "anthropic/test-model")]
+#[case::messages("/v1/messages", "anthropic/test-model")]
+#[case::responses("/v1/responses", "openai/test-model")]
+#[tokio::test]
+async fn model_groups_over_one_deployment_do_not_share_cached_responses(
+    #[case] path: &str,
+    #[case] model: &str,
+) {
+    let upstream = MockServer::start().await;
+    let provider_body = if path.ends_with("responses") {
+        json!({"id":"response-1", "model":"test-model", "status":"completed", "output":[]})
+    } else {
+        json!({"id":"message-1", "model":"test-model", "type":"message", "role":"assistant", "content":[{"type":"text","text":"hello"}], "stop_reason":"end_turn", "usage":{"input_tokens":1,"output_tokens":1}})
+    };
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(provider_body))
+        .expect(2)
+        .mount(&upstream)
+        .await;
+    let cache: Arc<dyn ResponseCacheService> = Arc::new(ResponseCache::new(Arc::new(
+        InMemoryCache::new(Some(100), Some(Duration::from_secs(60))),
+    )));
+    let app = support::app_with_cache_for_models(
+        &["public/fast", "public/smart"],
+        model,
+        &upstream.uri(),
+        cache,
+    );
+    let request = |name: &str| {
+        if path.ends_with("responses") {
+            json!({"model":name, "input":"hello"})
+        } else {
+            json!({"model":name, "messages":[{"role":"user","content":"hello"}], "max_tokens":16})
+        }
+    };
+    for (name, cached) in [
+        ("public/fast", false),
+        ("public/smart", false),
+        ("public/fast", true),
+    ] {
+        let response = support::post(app.clone(), path, request(name)).await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers().contains_key("x-litellm-cache-key"),
+            cached
+        );
+    }
+    upstream.verify().await;
 }

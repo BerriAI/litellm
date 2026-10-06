@@ -3,10 +3,10 @@ use litellm_host::{
     lifecycle::ExecutionEvent,
 };
 use litellm_http::transport::Error as TransportError;
-use litellm_inference::test_support::{
+use litellm_inference_messages::{MessagesCallResponse, messages_body};
+use litellm_inference_testing::{
     RecordingSecrets, http_config, no_secrets, provider_http, resources,
 };
-use litellm_inference_messages::{MessagesCallResponse, messages_body};
 use rstest::rstest;
 
 use super::*;
@@ -23,7 +23,6 @@ async fn calls_defer_execution_until_polled(
     #[case] with_observer: bool,
 ) {
     use futures_util::future::BoxFuture;
-
     use litellm_host::lifecycle::CallEvent;
 
     let upstream = upstream([message_response()]).await;
@@ -350,7 +349,7 @@ async fn route_uses_injected_dependencies_and_optional_cache(
     #[case] expected_requests: usize,
 ) {
     use litellm_cache_memory::InMemoryCache;
-    use litellm_cache_response::{CacheScope, ResponseCache, ScopedCache};
+    use litellm_cache_response::{CacheOptions, ResponseCache, ResponseCacheService};
     use litellm_inference_messages::MessagesRoute;
 
     let upstream = upstream([message_response(), message_response()]).await;
@@ -361,13 +360,10 @@ async fn route_uses_injected_dependencies_and_optional_cache(
         Arc::new(RecordingSecrets::new([("ANTHROPIC_API_KEY", "route-key")])),
     );
     let route = if caching {
-        route.with_cache(ScopedCache::new(
-            Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
-                Some(100),
-                Some(Duration::from_secs(60)),
-            )))),
-            CacheScope::Shared,
-        ))
+        let cache: Arc<dyn ResponseCacheService> = Arc::new(ResponseCache::new(Arc::new(
+            InMemoryCache::new(Some(100), Some(Duration::from_secs(60))),
+        )));
+        route.with_cache(cache)
     } else {
         route
     };
@@ -376,8 +372,10 @@ async fn route_uses_injected_dependencies_and_optional_cache(
             api_base: Some(upstream.uri()),
             ..super::call()
         };
-        let MessagesCallResponse::Complete(response) =
-            route.execute(request, &(), None).await.unwrap()
+        let MessagesCallResponse::Complete(response) = route
+            .execute(request, &(), CacheOptions::default())
+            .await
+            .unwrap()
         else {
             panic!("expected a completed message");
         };
@@ -393,9 +391,11 @@ async fn route_uses_injected_dependencies_and_optional_cache(
 
 #[rstest]
 #[tokio::test]
-async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) {
+async fn cache_policy_overrides_keep_the_caller_scope(call: MessagesCall) {
     use litellm_cache_memory::InMemoryCache;
-    use litellm_cache_response::{CachePolicy, CacheScope, ResponseCache, ScopedCache};
+    use litellm_cache_response::{
+        CacheCredential, CacheOptions, CachePolicy, CacheScope, ResponseCache, ResponseCacheService,
+    };
 
     let first_body = message_body();
     let second_body = Value::Object(
@@ -420,23 +420,15 @@ async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) 
         json_response(second_body.clone()),
     ])
     .await;
-    let service = Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
-        Some(100),
-        Some(Duration::from_secs(60)),
-    ))));
-    let first = messages_route(no_secrets()).with_cache(ScopedCache::new(
-        service.clone(),
-        CacheScope::Isolated("first".into()),
-    ));
-    let second = messages_route(no_secrets()).with_cache(ScopedCache::new(
-        service,
-        CacheScope::Isolated("second".into()),
-    ));
-    for (route, expected) in [
-        (&first, &first_body),
-        (&second, &second_body),
-        (&first, &first_body),
-        (&second, &second_body),
+    let service: Arc<dyn ResponseCacheService> = Arc::new(ResponseCache::new(Arc::new(
+        InMemoryCache::new(Some(100), Some(Duration::from_secs(60))),
+    )));
+    let route = messages_route(no_secrets()).with_cache(service);
+    for (caller, expected) in [
+        ("first", &first_body),
+        ("second", &second_body),
+        ("first", &first_body),
+        ("second", &second_body),
     ] {
         let request = MessagesCall {
             body: call.body.clone(),
@@ -444,9 +436,15 @@ async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) 
             api_base: Some(upstream.uri()),
             ..super::call()
         };
-        let override_options = CachePolicy {
-            ttl: Some(Duration::from_secs(30)),
-            ..CachePolicy::default()
+        let override_options = CacheOptions {
+            policy: CachePolicy {
+                ttl: Some(Duration::from_secs(30)),
+                ..CachePolicy::default()
+            },
+            scope: CacheScope {
+                credential: Some(CacheCredential::new("test", caller, "key")),
+                model_group: None,
+            },
         };
         let MessagesCallResponse::Complete(response) =
             route.execute(request, &(), override_options).await.unwrap()

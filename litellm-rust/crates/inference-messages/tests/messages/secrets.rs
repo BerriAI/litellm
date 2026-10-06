@@ -1,4 +1,4 @@
-use litellm_inference::test_support::RecordingSecrets;
+use litellm_inference_testing::RecordingSecrets;
 use rstest::rstest;
 
 use super::*;

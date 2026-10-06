@@ -1,5 +1,3 @@
-mod support;
-
 use std::{
     sync::{
         Arc,
@@ -10,19 +8,21 @@ use std::{
 
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheOptions, CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService,
-    ResponseEnvelope, ScopedCache,
+    CacheKey, CacheKeyInput, CacheOptions, CacheScope, Deployment, ResponseCache,
+    ResponseCacheService, ResponseEnvelope,
 };
-use litellm_host::interceptors::{
-    ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext, ResultSource,
-    WireRequest,
-};
+use litellm_host::interceptors::{Interceptors, ProviderIdentity};
 use litellm_inference::{
     RouteError,
-    caching::{CacheRequest, execute_unary},
+    caching::{Cachable, CachePlan},
 };
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
+struct CacheRequest {
+    identity: ProviderIdentity,
+    deployment: Deployment,
+    parameters: Value,
+}
 
 fn cache_request(input: Value) -> CacheRequest {
     CacheRequest {
@@ -30,8 +30,49 @@ fn cache_request(input: Value) -> CacheRequest {
             model: "test-model".into(),
             provider: "test-provider".into(),
         },
-        input,
+        deployment: Deployment::new("test-model", None, None),
+        parameters: input,
     }
+}
+
+fn plan<P: Cachable>(
+    request: CacheRequest,
+    cache: Option<Arc<dyn ResponseCacheService>>,
+    options: Option<CacheOptions>,
+) -> (ProviderIdentity, Option<CachePlan>) {
+    let plan = cache.zip(options).and_then(|(cache, options)| {
+        CachePlan::new(
+            cache,
+            options,
+            CacheKeyInput::new(P::SURFACE, request.deployment, request.parameters),
+        )
+    });
+    (request.identity, plan)
+}
+
+async fn execute_unary<P, F, Fut>(
+    request: CacheRequest,
+    cache: Option<Arc<dyn ResponseCacheService>>,
+    options: Option<CacheOptions>,
+    interceptors: &impl Interceptors<RouteError>,
+    observers: Option<&litellm_host::observation::ObservationSender>,
+    provider: F,
+) -> Result<P::Response, RouteError>
+where
+    P: Cachable,
+    P::Response: serde::Serialize + serde::de::DeserializeOwned,
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<P::Response, RouteError>>,
+{
+    let (identity, plan) = plan::<P>(request, cache, options);
+    litellm_inference::caching::execute_unary::<P, _, _>(
+        identity,
+        plan,
+        interceptors,
+        observers,
+        provider,
+    )
+    .await
 }
 
 #[fixture]
@@ -45,10 +86,7 @@ fn cache_with_limit(max_entry_bytes: usize) -> Arc<dyn ResponseCacheService> {
             Some(100),
             Some(Duration::from_secs(60)),
         )))
-        .with_config(ResponseCacheConfig {
-            namespace: "test".into(),
-            max_entry_bytes,
-        }),
+        .with_max_entry_bytes(max_entry_bytes),
     )
 }
 
@@ -58,19 +96,26 @@ struct InvalidEntryCache(
 );
 
 impl ResponseCacheService for InvalidEntryCache {
-    fn config(&self) -> &ResponseCacheConfig {
-        self.0.config()
+    fn max_entry_bytes(&self) -> Option<usize> {
+        self.0.max_entry_bytes()
+    }
+
+    fn key<'a>(
+        &'a self,
+        input: &'a CacheKeyInput,
+        scope: &'a CacheScope,
+    ) -> futures_util::future::BoxFuture<'a, Result<CacheKey, litellm_cache::Error>> {
+        ResponseCacheService::key(&self.0, input, scope)
     }
 
     fn lookup<'a>(
         &'a self,
-        request: &'a litellm_cache_response::ResponseCacheRequest,
+        key: &'a CacheKey,
+        max_age: Option<Duration>,
         now: Duration,
     ) -> futures_util::future::BoxFuture<'a, Result<Option<Value>, litellm_cache::Error>> {
         Box::pin(async move {
-            Ok(self
-                .0
-                .async_lookup(request, now)
+            Ok(ResponseCacheService::lookup(&self.0, key, max_age, now)
                 .await?
                 .or_else(|| Some(self.1.clone())))
         })
@@ -78,72 +123,12 @@ impl ResponseCacheService for InvalidEntryCache {
 
     fn store<'a>(
         &'a self,
-        request: &'a litellm_cache_response::ResponseCacheRequest,
+        key: &'a CacheKey,
+        ttl: Option<Duration>,
         response: Value,
         now: Duration,
     ) -> futures_util::future::BoxFuture<'a, Result<(), litellm_cache::Error>> {
-        Box::pin(self.0.async_store(request, response, now))
-    }
-}
-
-struct ChangingSecrets {
-    revision: AtomicUsize,
-    endpoints: [String; 2],
-    change_credentials: bool,
-}
-
-impl litellm_secrets::source::SecretSource for ChangingSecrets {
-    fn get_secret_str<'a>(
-        &'a self,
-        name: &'a str,
-    ) -> futures_util::future::BoxFuture<
-        'a,
-        Result<Option<litellm_secrets::SecretValue>, litellm_secrets::Error>,
-    > {
-        Box::pin(async move {
-            let revision = self.revision.load(Ordering::SeqCst);
-            let value = if name.ends_with("_API_KEY") {
-                Some(format!(
-                    "key-{}",
-                    if self.change_credentials { revision } else { 0 }
-                ))
-            } else if name.ends_with("_API_BASE") {
-                Some(self.endpoints[revision].clone())
-            } else {
-                None
-            };
-            Ok(value.map(litellm_secrets::SecretValue::new))
-        })
-    }
-}
-
-#[derive(Default)]
-struct ChangingHooks {
-    calls: AtomicUsize,
-    rewrite: bool,
-    facts: std::sync::Mutex<Vec<ExecutionFacts>>,
-}
-
-impl Interceptors<RouteError> for ChangingHooks {
-    async fn before_provider_request(
-        &self,
-        mut wire: WireRequest,
-        _: RequestContext,
-    ) -> Result<WireRequest, RouteError> {
-        let call = self.calls.fetch_add(1, Ordering::SeqCst);
-        if self.rewrite {
-            wire.body["temperature"] = json!(if call < 2 { 0.1 } else { 0.8 });
-        }
-        Ok(wire)
-    }
-
-    async fn after_provider_response(&self, _: RawResponse) -> Result<(), RouteError> {
-        Ok(())
-    }
-
-    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), RouteError> {
-        self.facts.lock().unwrap().push(facts);
-        Ok(())
+        ResponseCacheService::store(&self.0, key, ttl, response, now)
     }
 }
 
@@ -166,7 +151,7 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
         let response = execute_unary::<Responses, _, _>(
             cache_request(json!({"input":"hello"})),
             Some(cache.clone()),
-            Some(CacheOptions::new(CacheScope::Shared)),
+            Some(CacheOptions::default()),
             &(),
             None,
             || async {
@@ -208,7 +193,7 @@ async fn responses_cache_only_reuses_completed_responses(
         let response = execute_unary::<Responses, _, _>(
             cache_request(json!({"input":"hello"})),
             Some(cache.clone()),
-            Some(CacheOptions::new(CacheScope::Shared)),
+            Some(CacheOptions::default()),
             &(),
             None,
             || async {
@@ -228,12 +213,87 @@ async fn responses_cache_only_reuses_completed_responses(
     assert_eq!(calls.load(Ordering::SeqCst), expected_calls);
 }
 
+use litellm_host::interceptors::{
+    ExecutionFacts, RawResponse, RequestContext, ResultSource, WireRequest,
+};
+mod support;
+struct ChangingSecrets {
+    revision: AtomicUsize,
+    endpoints: [String; 2],
+    change_credentials: bool,
+}
+
+impl litellm_secrets::source::SecretSource for ChangingSecrets {
+    fn get_secret_str<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        Result<Option<litellm_secrets::SecretValue>, litellm_secrets::Error>,
+    > {
+        Box::pin(async move {
+            let revision = self.revision.load(Ordering::SeqCst);
+            let value = if name.ends_with("_API_KEY") {
+                Some(format!(
+                    "key-{}",
+                    if self.change_credentials { revision } else { 0 }
+                ))
+            } else if name.ends_with("_API_BASE") {
+                Some(self.endpoints[revision].clone())
+            } else {
+                None
+            };
+            Ok(value.map(litellm_secrets::SecretValue::new))
+        })
+    }
+}
+
+#[derive(Default)]
+struct ChangingHooks {
+    calls: AtomicUsize,
+    rewrite: bool,
+    reshape_headers: bool,
+    facts: std::sync::Mutex<Vec<ExecutionFacts>>,
+}
+
+impl Interceptors<RouteError> for ChangingHooks {
+    async fn before_provider_request(
+        &self,
+        mut wire: WireRequest,
+        _: RequestContext,
+    ) -> Result<WireRequest, RouteError> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.rewrite {
+            wire.body["temperature"] = json!(if call < 2 { 0.1 } else { 0.8 });
+        }
+        if self.reshape_headers {
+            wire.headers = wire
+                .headers
+                .into_iter()
+                .rev()
+                .map(|(name, value)| (name.to_ascii_uppercase(), value))
+                .collect();
+        }
+        Ok(wire)
+    }
+
+    async fn after_provider_response(&self, _: RawResponse) -> Result<(), RouteError> {
+        Ok(())
+    }
+
+    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), RouteError> {
+        self.facts.lock().unwrap().push(facts);
+        Ok(())
+    }
+}
+
 #[rstest]
 #[case::credentials("credentials")]
 #[case::endpoint("endpoint")]
 #[case::callback("callback")]
+#[case::headers("headers")]
 #[tokio::test]
-async fn responses_cache_identity_follows_resolved_configuration_and_request_callbacks(
+async fn cache_identity_ignores_deployment_settings_and_skips_rewritten_requests(
     cache: Arc<dyn ResponseCacheService>,
     #[case] change: &str,
 ) {
@@ -243,14 +303,15 @@ async fn responses_cache_identity_follows_resolved_configuration_and_request_cal
     let first = MockServer::start().await;
     let second = MockServer::start().await;
     let response = json!({"id":"response-test", "model":"test", "output":[], "status":"completed"});
+    let rewritten = change == "callback";
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(response.clone()))
-        .expect(if change == "endpoint" { 1 } else { 2 })
+        .expect(if rewritten { 4 } else { 1 })
         .mount(&first)
         .await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(response))
-        .expect(if change == "endpoint" { 1 } else { 0 })
+        .expect(0)
         .mount(&second)
         .await;
     let secrets = Arc::new(ChangingSecrets {
@@ -267,18 +328,21 @@ async fn responses_cache_identity_follows_resolved_configuration_and_request_cal
     });
     let hooks = ChangingHooks {
         rewrite: change == "callback",
+        reshape_headers: change == "headers",
         ..Default::default()
     };
     for call in 0..4 {
         secrets
             .revision
             .store(usize::from(call >= 2), Ordering::SeqCst);
-        let cache = ScopedCache::new(cache.clone(), CacheScope::Shared);
+        let cache = cache.clone();
+        let model = "cache-test-model";
+
         support::responses_route(secrets.clone())
             .with_cache(cache)
             .execute(
                 ResponsesCall {
-                    model: "test".into(),
+                    model: model.into(),
                     input: json!("hello"),
                     optional_params: Default::default(),
                     api_key: None,
@@ -288,40 +352,73 @@ async fn responses_cache_identity_follows_resolved_configuration_and_request_cal
                     timeout: None,
                 },
                 &hooks,
-                None,
+                CacheOptions::default(),
             )
             .await
             .unwrap();
     }
     assert_eq!(hooks.calls.load(Ordering::SeqCst), 4);
-    {
-        let facts = hooks.facts.lock().unwrap();
-        assert_eq!(facts[0].source, ResultSource::Provider);
-        assert_eq!(facts[2].source, ResultSource::Provider);
-        let (ResultSource::Cache { key: first_key }, ResultSource::Cache { key: second_key }) =
-            (&facts[1].source, &facts[3].source)
-        else {
-            panic!("unchanged effective requests must hit the cache");
-        };
-        assert_ne!(first_key, second_key);
+    let sources = hooks
+        .facts
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|facts| facts.source.clone())
+        .collect::<Vec<_>>();
+    match sources.as_slice() {
+        [
+            ResultSource::Provider,
+            ResultSource::Provider,
+            ResultSource::Provider,
+            ResultSource::Provider,
+        ] if rewritten => {}
+        [
+            ResultSource::Provider,
+            ResultSource::Cache { key: first },
+            ResultSource::Cache { key: second },
+            ResultSource::Cache { key: third },
+        ] if !rewritten && first == second && second == third => {}
+        _ => panic!("unexpected result sources for {change}: {sources:?}"),
     }
-    let requests = first.received_requests().await.unwrap();
-    if change == "credentials" {
-        assert_ne!(
-            requests[0].headers["authorization"],
-            requests[1].headers["authorization"]
-        );
-    }
-    if change == "callback" {
+    if rewritten {
+        let temperatures = first
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| {
+                serde_json::from_slice::<Value>(&request.body).unwrap()["temperature"].clone()
+            })
+            .collect::<Vec<_>>();
         assert_eq!(
-            serde_json::from_slice::<Value>(&requests[0].body).unwrap()["temperature"],
-            0.1
-        );
-        assert_eq!(
-            serde_json::from_slice::<Value>(&requests[1].body).unwrap()["temperature"],
-            0.8
+            temperatures,
+            [json!(0.1), json!(0.1), json!(0.8), json!(0.8)]
         );
     }
     first.verify().await;
     second.verify().await;
+}
+
+use bytes::Bytes;
+use futures_util::TryStreamExt;
+use litellm_host::call::CallOutput;
+use litellm_inference::caching::StreamCachable;
+use litellm_inference_responses::route::Responses;
+
+#[rstest]
+#[tokio::test]
+async fn replay_yields_one_chunk_per_sse_event() {
+    let data = Bytes::from_static(
+        b"data: {\"type\":\"content_block_delta\",\"text\":\"hello\"}\n\ndata: {\"type\":\"message_stop\"}\n\n",
+    );
+    let expected = vec![
+        Bytes::from_static(b"data: {\"type\":\"content_block_delta\",\"text\":\"hello\"}\n\n"),
+        Bytes::from_static(b"data: {\"type\":\"message_stop\"}\n\n"),
+    ];
+
+    let CallOutput::Stream { chunks, .. } = <Responses as StreamCachable>::replay(data).unwrap()
+    else {
+        panic!("expected a stream");
+    };
+    assert_eq!(chunks.try_collect::<Vec<_>>().await.unwrap(), expected);
 }

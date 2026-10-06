@@ -1,11 +1,9 @@
 mod machine;
 
-pub(crate) use machine::LoggedMachine;
-
 use litellm_host_python::Pythonized;
 use litellm_tracing::{DiagnosticInput, Level, Logger, Metadata, Policy, Processor, Record, Sink};
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+pub(crate) use machine::LoggedMachine;
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
 const MODULE: &str = "litellm.rust_bridge.logger";
 type NativeDiagnosticOutput = (String, Option<String>, Option<String>, Vec<String>, bool);

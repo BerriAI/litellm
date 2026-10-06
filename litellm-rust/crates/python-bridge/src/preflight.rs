@@ -105,11 +105,11 @@ fn inherit_credentials<'py>(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-    use std::sync::Mutex;
+    use std::{collections::BTreeSet, sync::Mutex};
+
+    use strum::VariantArray;
 
     use super::*;
-    use strum::VariantArray;
 
     /// Tests share one interpreter, and the stub module below is global state, so the
     /// tests that install it run one at a time.

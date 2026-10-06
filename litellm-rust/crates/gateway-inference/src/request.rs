@@ -110,14 +110,17 @@ pub(crate) async fn authorize_model(
     Ok(())
 }
 
+pub(crate) fn model_name(body: &Map<String, Value>) -> Result<&str, Error> {
+    body.get("model")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::InvalidBody("model is required".into()))
+}
+
 pub(crate) fn resolve_deployment<'a>(
     gateway: &'a Gateway,
     body: &Map<String, Value>,
 ) -> Result<&'a Deployment, Error> {
-    let model = body
-        .get("model")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::InvalidBody("model is required".into()))?;
+    let model = model_name(body)?;
     gateway
         .models
         .get(model)

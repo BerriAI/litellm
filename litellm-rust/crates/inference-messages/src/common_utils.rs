@@ -62,13 +62,12 @@ pub(super) fn string_headers(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
+    use litellm_core_utils::get_llm_provider_logic::LlmProviders;
     use rstest::rstest;
+    use serde_json::json;
 
     use super::{MessagesProvider, messages_provider, string_headers, truncate_error_body};
     use crate::Error;
-    use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
     #[rstest]
     #[case::anthropic("anthropic", MessagesProvider::Anthropic)]

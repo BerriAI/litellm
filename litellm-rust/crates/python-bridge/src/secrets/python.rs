@@ -60,13 +60,13 @@ impl SecretSource for PythonSecrets {
 
 #[cfg(test)]
 mod tests {
+    use litellm_host_python::PythonContext;
     use litellm_secrets::source::SecretSource;
     use pyo3::{prelude::*, types::PyDict};
     use rstest::{fixture, rstest};
 
     use super::PythonSecrets;
     use crate::secrets::python_error;
-    use litellm_host_python::PythonContext;
 
     #[fixture]
     fn namespace() -> Py<PyDict> {

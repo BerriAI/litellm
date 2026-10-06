@@ -1,4 +1,4 @@
-use litellm_cache_response::CachePolicy;
+use litellm_cache_response::CacheOptions;
 use litellm_host::{
     interceptors::{ExecutionFacts, Interceptors, RawResponse},
     lifecycle::{CallEvent, ExecutionEvent},
@@ -10,7 +10,7 @@ use crate::{CallOptions, RouteError};
 pub struct CallContext<'a, I> {
     pub interceptors: &'a I,
     pub observers: Option<ObservationSender>,
-    pub cache: CachePolicy,
+    pub cache: Option<CacheOptions>,
 }
 
 impl<'a, I: Interceptors<RouteError>> CallContext<'a, I> {
@@ -18,7 +18,7 @@ impl<'a, I: Interceptors<RouteError>> CallContext<'a, I> {
         Self {
             interceptors,
             observers: options.observers,
-            cache: options.cache.unwrap_or_default(),
+            cache: options.cache,
         }
     }
 

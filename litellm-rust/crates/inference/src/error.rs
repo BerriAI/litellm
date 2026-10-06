@@ -115,9 +115,10 @@ impl Eq for SecretError {}
 
 #[cfg(test)]
 mod tests {
-    use super::RouteError;
     use litellm_llms::{Error as LlmError, ErrorDetail};
     use rstest::rstest;
+
+    use super::RouteError;
 
     #[test]
     fn a_missing_api_key_is_the_environment_not_the_request() {

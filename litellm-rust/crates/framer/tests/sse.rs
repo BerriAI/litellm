@@ -8,7 +8,7 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_framer::{
     SseError, frames,
-    sse::{SseCodec, SseEvent},
+    sse::{RawBlocks, SseCodec, SseEvent, text_blocks},
 };
 use proptest::prelude::*;
 use rstest::rstest;
@@ -166,4 +166,80 @@ async fn a_body_error_keeps_earlier_events_and_its_cause_then_terminates(
     assert_eq!(body_cause::<io::Error>(&body).unwrap().kind(), kind);
     assert!(events.next().await.is_none());
     assert!(events.next().await.is_none());
+}
+
+#[rstest]
+#[case::lf(
+    b"event: one\n\nevent: two\n\n",
+    vec![&b"event: one\n\n"[..], &b"event: two\n\n"[..]]
+)]
+#[case::crlf(
+    b"event: one\r\n\r\nevent: two\r\n\r\n",
+    vec![&b"event: one\r\n\r\n"[..], &b"event: two\r\n\r\n"[..]]
+)]
+#[case::mixed_delimiters(
+    b"event: one\r\n\r\nevent: two\r\nevent: three\r\r",
+    vec![&b"event: one\r\n\r\n"[..], &b"event: two\r\nevent: three\r\r"[..]]
+)]
+#[case::unterminated_suffix(
+    b"event: complete\n\nevent: partial",
+    vec![&b"event: complete\n\n"[..], &b"event: partial"[..]]
+)]
+#[case::empty(b"", vec![])]
+fn raw_blocks_preserve_boundaries_and_concatenation(
+    #[case] input: &'static [u8],
+    #[case] expected: Vec<&'static [u8]>,
+) {
+    let blocks: Vec<Bytes> = RawBlocks::new(Bytes::copy_from_slice(input)).collect();
+    assert_eq!(
+        blocks.iter().map(Bytes::as_ref).collect::<Vec<_>>(),
+        expected
+    );
+    let concatenated: Vec<u8> = blocks
+        .iter()
+        .flat_map(|block| block.iter())
+        .copied()
+        .collect();
+    assert_eq!(concatenated.as_slice(), input);
+}
+
+#[rstest]
+#[case::lf("event: one\n\nevent: two\n\n", vec!["event: one\n\n", "event: two\n\n"])]
+#[case::crlf(
+    "event: one\r\n\r\nevent: two\r\n\r\n",
+    vec!["event: one\r\n\r\n", "event: two\r\n\r\n"]
+)]
+#[case::mixed_delimiters(
+    "event: one\r\n\r\nevent: two\r\nevent: three\r\r",
+    vec!["event: one\r\n\r\n", "event: two\r\nevent: three\r\r"]
+)]
+#[case::unterminated_suffix(
+    "event: complete\n\nevent: partial",
+    vec!["event: complete\n\n", "event: partial"]
+)]
+#[case::empty("", vec![])]
+#[case::multibyte_utf8("data: é🙂\n\n", vec!["data: é🙂\n\n"])]
+fn text_blocks_preserve_boundaries_and_match_raw_blocks(
+    #[case] input: &'static str,
+    #[case] expected: Vec<&'static str>,
+) {
+    let text: Vec<&str> = text_blocks(input).collect();
+    let raw: Vec<Bytes> = RawBlocks::new(Bytes::copy_from_slice(input.as_bytes())).collect();
+    assert_eq!(text, expected);
+    assert_eq!(
+        raw.iter().map(Bytes::as_ref).collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(|block| block.as_bytes())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(text.concat(), input);
+    assert_eq!(
+        raw.iter()
+            .flat_map(|block| block.iter())
+            .copied()
+            .collect::<Vec<_>>()
+            .as_slice(),
+        input.as_bytes()
+    );
 }

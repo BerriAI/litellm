@@ -444,8 +444,9 @@ pub fn trace_span_rows<'py>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[rstest]
     #[case::row(Error::InvalidRow, "ValueError")]

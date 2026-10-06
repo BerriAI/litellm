@@ -1,23 +1,28 @@
 //! The Python face of the text codecs: one `Tokenizer` class over the tiktoken and Hugging
 //! Face backends, carrying the read-only surface of `tiktoken.Encoding` and
 //! `tokenizers.Tokenizer` that `litellm/litellm_core_utils/tokenizer.py` wraps.
-use std::borrow::Cow;
 #[cfg(any(feature = "tiktoken", feature = "huggingface"))]
 use std::collections::HashMap;
-use std::sync::Arc;
 #[cfg(feature = "fast")]
 use std::sync::OnceLock;
+use std::{borrow::Cow, sync::Arc};
 
 use litellm_host_python::{enter_native, release_gil};
 #[cfg(feature = "fast")]
 use litellm_token_counter::fast::{FastCounter, FastTokenizer};
+#[cfg(feature = "huggingface")]
+use litellm_token_counter::huggingface::{
+    EncodeInput, Encoding, HuggingFaceTokenizer, InputSequence, PaddingDirection, PaddingStrategy,
+    TruncationDirection, encoding_from_json, encoding_to_json,
+};
+#[cfg(feature = "tiktoken")]
+use litellm_token_counter::tiktoken::{TiktokenTokenizer, Vocabulary};
 use litellm_token_counter::{Error, TextCodec};
-use pyo3::{exceptions::PyUnicodeEncodeError, prelude::*, types::PyString};
-
 #[cfg(any(feature = "tiktoken", feature = "huggingface"))]
 use pyo3::exceptions::PyValueError;
 #[cfg(feature = "huggingface")]
 use pyo3::{exceptions::PyIOError, types::PyDict};
+use pyo3::{exceptions::PyUnicodeEncodeError, prelude::*, types::PyString};
 #[cfg(feature = "tiktoken")]
 use pyo3::{
     exceptions::{PyKeyError, PyRuntimeError},
@@ -27,14 +32,6 @@ use pyo3::{
 #[cfg(not(all(feature = "tiktoken", feature = "huggingface")))]
 use crate::errors::RustBridgeDeclined;
 use crate::routes::token_counter::token_count_error_to_pyerr;
-
-#[cfg(feature = "huggingface")]
-use litellm_token_counter::huggingface::{
-    EncodeInput, Encoding, HuggingFaceTokenizer, InputSequence, PaddingDirection, PaddingStrategy,
-    TruncationDirection, encoding_from_json, encoding_to_json,
-};
-#[cfg(feature = "tiktoken")]
-use litellm_token_counter::tiktoken::{TiktokenTokenizer, Vocabulary};
 
 #[cfg(feature = "tiktoken")]
 pub(crate) fn load_tiktoken(py: Python<'_>, encoding: &str) -> PyResult<TiktokenTokenizer> {

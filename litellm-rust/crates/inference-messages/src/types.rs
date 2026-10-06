@@ -1,7 +1,12 @@
 use std::time::Duration;
 
 use bytes::Bytes;
+use litellm_cache_response::{CacheKeyInput, Deployment, extra_headers};
 use litellm_host::call::CallOutput;
+use litellm_inference::{
+    RouteError,
+    caching::{Cachable, CacheKeyProjection},
+};
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::{
     formats::messages::{MessagesRequest, MessagesResponse},
@@ -44,6 +49,37 @@ pub struct MessagesShaping {
     pub reasoning_auto_summary: bool,
     #[serde(default)]
     pub additional_drop_params: Vec<String>,
+}
+
+impl CacheKeyProjection for MessagesCall {
+    fn cache_key_input(&self) -> Result<CacheKeyInput, RouteError> {
+        let invalid =
+            |error: serde_json::Error| RouteError::InvalidRequest(error.to_string().into());
+        let Value::Object(body) = serde_json::to_value(&self.body).map_err(invalid)? else {
+            return Err(RouteError::InvalidRequest(
+                "messages body must be an object".into(),
+            ));
+        };
+        let provider_specific_header = self
+            .provider_specific_header
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(invalid)?
+            .map(|header| ("provider_specific_header", header));
+        Ok(CacheKeyInput::forwarded(
+            <crate::route::Messages as Cachable>::SURFACE,
+            Deployment::new(
+                &self.body.model,
+                self.custom_llm_provider.as_deref(),
+                self.api_base.as_deref(),
+            ),
+            body,
+            extra_headers(self.extra_headers.as_ref())
+                .into_iter()
+                .chain(provider_specific_header),
+        ))
+    }
 }
 
 #[cfg(test)]

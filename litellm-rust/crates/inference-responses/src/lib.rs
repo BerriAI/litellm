@@ -1,5 +1,6 @@
 use litellm_host::observation::ObservationSender;
 pub use litellm_inference::RouteError as Error;
+use litellm_inference::caching::CachePlan;
 
 pub mod route;
 pub mod types;
@@ -20,7 +21,7 @@ pub struct ResponsesRoute {
     http: litellm_http::Client,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
-    cache: Option<litellm_cache_response::ScopedCache>,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
 }
 
 impl ResponsesRoute {
@@ -37,9 +38,12 @@ impl ResponsesRoute {
         }
     }
 
-    pub fn with_cache(self, cache: litellm_cache_response::ScopedCache) -> Self {
+    pub fn with_cache(
+        self,
+        cache: impl Into<Option<Arc<dyn litellm_cache_response::ResponseCacheService>>>,
+    ) -> Self {
         Self {
-            cache: Some(cache),
+            cache: cache.into(),
             ..self
         }
     }
@@ -72,7 +76,7 @@ impl ResponsesRoute {
     async fn run(
         &self,
         call: ResponsesCall,
-        cache_options: Option<litellm_cache_response::CachePolicy>,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
@@ -86,10 +90,11 @@ impl ResponsesRoute {
     async fn run_provider(
         &self,
         call: ResponsesCall,
-        cache_options: Option<litellm_cache_response::CachePolicy>,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
         interceptors: &impl Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
+        let cache = CachePlan::for_request(self.cache.as_ref(), cache_options, &call)?;
         let request = prepare::prepare(call, self.secrets.as_ref()).await?;
         litellm_inference::diagnostic::provider(
             &request.context.model,
@@ -100,8 +105,7 @@ impl ResponsesRoute {
                 &self.http,
                 &self.auth,
                 request,
-                self.cache.clone(),
-                cache_options,
+                cache,
                 interceptors,
                 observers,
             ));
