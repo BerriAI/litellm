@@ -1,8 +1,11 @@
-from typing import Any, Final, Literal
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 from typing_extensions import TypedDict
 
+from litellm._logging import verbose_proxy_logger
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
@@ -11,7 +14,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigM
 from litellm.types.utils import ChatCompletionMessageToolCall
 
 
-class GuardrailToolParam(BaseModel):
+class GuardrailToolParam(LiteLLMBaseModel):
     """A tool forwarded verbatim to the guardrail for inspection.
 
     Built-in tools (code_interpreter, file_search, ...) have no ``function`` block
@@ -34,7 +37,7 @@ class GenericGuardrailAPIMetadata(TypedDict, total=False):
     user_api_key_org_id: str | None
 
 
-class GenericGuardrailAPIOptionalParams(BaseModel):
+class GenericGuardrailAPIOptionalParams(LiteLLMBaseModel):
     """Optional parameters for the Generic Guardrail API"""
 
     additional_provider_specific_params: dict[str, Any] | None = Field(
@@ -118,7 +121,7 @@ class GenericGuardrailAPIConfigModel(
         return "Generic Guardrail API"
 
 
-class GenericGuardrailAPIRequest(BaseModel):
+class GenericGuardrailAPIRequest(LiteLLMBaseModel):
     """Request model for the Generic Guardrail API"""
 
     input_type: Literal["request", "response"]
@@ -158,16 +161,62 @@ def coerce_stream_holdback_value(value: Any) -> int:
         return 0
 
 
+def structured_messages_from_response(value: object) -> Sequence[AllMessageValues] | None:
+    if not isinstance(value, list):
+        return None
+    if not all(isinstance(message, Mapping) and isinstance(message.get("role"), str) for message in value):
+        return None
+    return cast("Sequence[AllMessageValues]", value)  # cast-ok: JSON rows checked for a role, the same trust texts get
+
+
+def _json_object(value: object) -> Mapping[str, object] | None:
+    """`value` as a JSON object, or None; the keys of a JSON object are strings."""
+    if not isinstance(value, Mapping):
+        return None
+    return cast("Mapping[str, object]", value)  # cast-ok: isinstance leaves a Mapping's item types unknown
+
+
+def _json_field(container: object, key: str) -> object:
+    fields: Final = _json_object(container)
+    return fields.get(key) if fields is not None else None
+
+
+def _is_usable_tool_call(row: object) -> bool:
+    """Whether a returned tool call carries what the chat handlers index: a function name and string arguments."""
+    function: Final = _json_field(row, "function")
+    return isinstance(_json_field(function, "name"), str) and isinstance(_json_field(function, "arguments"), str)
+
+
+def _json_array(value: object) -> Sequence[object] | None:
+    if not isinstance(value, list):
+        return None
+    return cast("Sequence[object]", value)  # cast-ok: isinstance leaves a list's item type unknown
+
+
+def tool_calls_from_response(value: object) -> Sequence[ChatCompletionToolCallChunk] | None:
+    """The tool calls a guardrail handed back, or None when absent or when any row is unusable."""
+    rows: Final = _json_array(value)
+    if rows is None:
+        return None
+    if not all(_is_usable_tool_call(row) for row in rows):
+        verbose_proxy_logger.warning(
+            "Generic Guardrail API returned tool calls missing a function name or arguments; keeping the ones already sent",
+        )
+        return None
+    return cast("Sequence[ChatCompletionToolCallChunk]", rows)  # cast-ok: every row checked above
+
+
 class GenericGuardrailAPIResponse:
     """Response model for the Generic Guardrail API"""
 
     texts: list[str] | None
     images: list[str] | None
     tools: list[GuardrailToolParam] | None
+    structured_messages: Sequence[AllMessageValues] | None
     action: str
     blocked_reason: str | None
     stream_holdback_chars: list[int] | None
-    tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None
+    tool_calls: Sequence[ChatCompletionToolCallChunk] | None
 
     def __init__(
         self,
@@ -177,13 +226,15 @@ class GenericGuardrailAPIResponse:
         images: list[str] | None = None,
         tools: list[GuardrailToolParam] | None = None,
         stream_holdback_chars: list[int] | None = None,
-        tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None = None,
+        structured_messages: Sequence[AllMessageValues] | None = None,
+        tool_calls: Sequence[ChatCompletionToolCallChunk] | None = None,
     ) -> None:
         self.action = action
         self.blocked_reason = blocked_reason
         self.texts = texts
         self.images = images
         self.tools = tools
+        self.structured_messages = structured_messages
         # Number of trailing chars, indexed the same as ``texts``, that the
         # framework must withhold from streaming emission until the next
         # processing round (word-boundary safety for text transformations).
@@ -192,6 +243,7 @@ class GenericGuardrailAPIResponse:
 
     @classmethod
     def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":
+        fields: Final = _json_object(data) or {}
         raw_holdback: Final = data.get("stream_holdback_chars")
         stream_holdback_chars: Final = (
             [coerce_stream_holdback_value(value) for value in raw_holdback] if isinstance(raw_holdback, list) else None
@@ -203,5 +255,6 @@ class GenericGuardrailAPIResponse:
             images=data.get("images"),
             tools=data.get("tools"),
             stream_holdback_chars=stream_holdback_chars,
-            tool_calls=data.get("tool_calls"),
+            structured_messages=structured_messages_from_response(fields.get("structured_messages")),
+            tool_calls=tool_calls_from_response(fields.get("tool_calls")),
         )

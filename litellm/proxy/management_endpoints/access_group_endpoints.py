@@ -5,7 +5,9 @@ from types import MappingProxyType
 from typing import Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from typing_extensions import ReadOnly, TypedDict
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy._types import (
@@ -22,6 +24,7 @@ from litellm.proxy.auth.auth_checks import (
     _get_team_object_from_cache,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_helpers.access_group_team_sync import invalidate_access_group_cache
 from litellm.proxy.management_helpers.resource_display_names import (
@@ -109,6 +112,36 @@ class _KeyTable(Protocol):
     async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
 
 
+class _AgentRecord(Protocol):
+    @property
+    def agent_id(self) -> str: ...
+
+    @property
+    def access_group_ids(self) -> Sequence[str] | None: ...
+
+
+class _AgentTable(Protocol):
+    async def find_many(self, where: Mapping[str, object]) -> Sequence[_AgentRecord]: ...
+
+    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+
+
+class _HasSomeFilter(TypedDict):
+    hasSome: ReadOnly[Sequence[str]]
+
+
+class _AgentAccessGroupsWhere(TypedDict):
+    access_group_ids: ReadOnly[_HasSomeFilter]
+
+
+class _AgentIdWhere(TypedDict):
+    agent_id: ReadOnly[str]
+
+
+class _AgentAccessGroupsData(TypedDict):
+    access_group_ids: ReadOnly[Sequence[str]]
+
+
 class _AccessGroupTx(Protocol):
     @property
     def litellm_accessgrouptable(self) -> _AccessGroupTable: ...
@@ -118,6 +151,9 @@ class _AccessGroupTx(Protocol):
 
     @property
     def litellm_verificationtoken(self) -> _KeyTable: ...
+
+    @property
+    def litellm_agentstable(self) -> _AgentTable: ...
 
 
 def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -226,9 +262,9 @@ async def _teams_touching(team_table: _TeamTable, records: Sequence[_AccessGroup
     """Team rows listed on any of the groups or carrying any of them in access_group_ids."""
     group_ids: Final = tuple(record.access_group_id for record in records)
     stored_team_ids: Final = _ids_across(records, lambda record: record.assigned_team_ids)
-    carrying: Final = {"access_group_ids": {"hasSome": group_ids}}  # mutable-ok: prisma where is a dict
-    listed: Final = {"team_id": {"in": stored_team_ids}}  # mutable-ok: prisma where is a dict
-    return await team_table.find_many(where={"OR": (carrying, listed)})  # mutable-ok: prisma where is a dict
+    carrying: Final = {"access_group_ids": {"hasSome": group_ids}}
+    listed: Final = {"team_id": {"in": stored_team_ids}}
+    return await team_table.find_many(where={"OR": (carrying, listed)})
 
 
 async def _attached_team_ids_for(
@@ -242,7 +278,7 @@ async def _attached_team_ids_for(
 async def _require_teams_exist(tx: _AccessGroupTx, team_ids: Sequence[str]) -> None:
     if not team_ids:
         return
-    where: Final = {"team_id": {"in": team_ids}}  # mutable-ok: prisma where is a dict
+    where: Final = {"team_id": {"in": team_ids}}
     found: Final = await tx.litellm_teamtable.find_many(where=where)
     missing: Final = frozenset(team_ids) - frozenset(team.team_id for team in found)
     if missing:
@@ -324,6 +360,41 @@ async def _sync_remove_access_group_from_keys(tx: _AccessGroupTx, key_tokens: li
             )
 
 
+def _without_access_group(access_group_ids: Sequence[str] | None, access_group_id: str) -> tuple[str, ...]:
+    return tuple(ag for ag in (access_group_ids or ()) if ag != access_group_id)
+
+
+async def _detach_access_group_from_agents(tx: _AccessGroupTx, access_group_id: str) -> tuple[str, ...]:
+    agents_with_group: Final = await tx.litellm_agentstable.find_many(
+        where=_AgentAccessGroupsWhere(access_group_ids=_HasSomeFilter(hasSome=(access_group_id,)))
+    )
+    for agent in agents_with_group:
+        await tx.litellm_agentstable.update(
+            where=_AgentIdWhere(agent_id=agent.agent_id),
+            data=_AgentAccessGroupsData(
+                access_group_ids=_without_access_group(agent.access_group_ids, access_group_id)
+            ),
+        )
+    return tuple(agent.agent_id for agent in agents_with_group)
+
+
+def _detach_access_group_from_agent_registry(agent_ids: Sequence[str], access_group_id: str) -> None:
+    registered: Final = tuple(
+        agent
+        for agent in (global_agent_registry.get_agent_by_id(agent_id) for agent_id in agent_ids)
+        if agent is not None
+    )
+    for agent in registered:
+        global_agent_registry.deregister_agent(agent_name=agent.agent_name)
+        global_agent_registry.register_agent(
+            agent_config=agent.model_copy(
+                update=_AgentAccessGroupsData(
+                    access_group_ids=_without_access_group(agent.access_group_ids, access_group_id)
+                )
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # Cache patch helpers
 # ---------------------------------------------------------------------------
@@ -381,6 +452,7 @@ async def _patch_team_caches_remove_access_group(
             )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _patch_key_caches_add_access_group(
     key_tokens: list[str],
     access_group_id: str,
@@ -409,6 +481,7 @@ async def _patch_key_caches_add_access_group(
         )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _patch_key_caches_remove_access_group(
     key_tokens: list[str],
     access_group_id: str,
@@ -705,11 +778,14 @@ async def delete_access_group(
             out_of_sync_key_tokens: Final = set(existing.assigned_key_ids or []) - {k.token for k in keys_with_group}
             await _sync_remove_access_group_from_keys(tx, list(out_of_sync_key_tokens), access_group_id)
 
+            detached_agent_ids: Final = await _detach_access_group_from_agents(tx, access_group_id)
+
             await tx.litellm_accessgrouptable.delete(where={"access_group_id": access_group_id})
 
         from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
         await invalidate_access_group_cache(access_group_id)
+        _detach_access_group_from_agent_registry(detached_agent_ids, access_group_id)
         await _patch_team_caches_remove_access_group(
             affected_team_ids, access_group_id, user_api_key_cache, proxy_logging_obj
         )

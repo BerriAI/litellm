@@ -3,10 +3,10 @@ Auto-Routing Strategy that works with a Semantic Router Config
 """
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     forwarded_internal_call_metadata,
     parent_session_kwargs,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 
 if TYPE_CHECKING:
@@ -33,7 +34,7 @@ else:
     LiteLLMRouterEncoder = Any
 
 
-class _CallerMetadata(BaseModel):
+class _CallerMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     metadata: Mapping[str, object] | None = None
@@ -158,7 +159,7 @@ class AutoRouter(CustomLogger):
         return await asyncio.shield(build_task)
 
     @staticmethod
-    def _extract_text_from_messages(messages: list[dict[str, Any]]) -> str:
+    def _extract_text_from_messages(messages: Sequence[Mapping[str, object]]) -> str:
         """
         Extract text content from the last user message for routing.
 

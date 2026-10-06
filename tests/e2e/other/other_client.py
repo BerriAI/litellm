@@ -14,16 +14,37 @@ own endpoints, so no test ever holds a signing key.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Final
 
-from e2e_http import NoBody, ProbeResult, Result
+from e2e_http import AnthropicHeaders, AuthHeaders, NoBody, ProbeResult, Result
 from idp import Keycloak, keycloak_from_env
 from models import (
+    ChatBody,
+    ChatResponse,
+    JwtKeyMappingDeleteBody,
+    JwtKeyMappingDeleteResponse,
+    JwtKeyMappingListParams,
+    JwtKeyMappingListResponse,
+    ModelsListParams,
+    ModelsListResponse,
     ReadinessDetailsResponse,
     ReadinessResponse,
+    UserInfoParams,
+    UserInfoWithKeysResponse,
     UserListParams,
     UserListResponse,
+    UserNewBody,
+    UserNewResponse,
 )
 from proxy_client import ProxyClient
+from pydantic import Field
+
+
+class TeamHeaders(AuthHeaders):
+    """Bearer auth plus ``x-litellm-team-id``, the header a JWT caller sends to
+    pick one of the teams it belongs to."""
+
+    x_litellm_team_id: str = Field(serialization_alias="x-litellm-team-id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +85,67 @@ class OtherClient:
             headers=NoBody(),
             params=NoBody(),
             response_type=ReadinessDetailsResponse,
+        )
+
+    def user_new(self, body: UserNewBody) -> Result[UserNewResponse]:
+        """POST /user/new under the master key: seed the litellm user a JWT
+        `sub` claim resolves to, before that token ever reaches the proxy."""
+        return self.proxy.transport.post(
+            "/user/new",
+            headers=self.proxy.transport.master,
+            json=body,
+            response_type=UserNewResponse,
+        )
+
+    def user_info(self, user_id: str) -> Result[UserInfoWithKeysResponse]:
+        """GET /user/info under the master key. Only the user's key rows are
+        modelled: `token` is the stored key hash, never the plaintext key."""
+        return self.proxy.transport.get(
+            "/user/info",
+            headers=self.proxy.transport.master,
+            params=UserInfoParams(user_id=user_id),
+            response_type=UserInfoWithKeysResponse,
+        )
+
+    def jwt_mapping_list(self) -> Result[JwtKeyMappingListResponse]:
+        """GET /jwt/key/mapping/list under the master key."""
+        return self.proxy.transport.get(
+            "/jwt/key/mapping/list",
+            headers=self.proxy.transport.master,
+            params=JwtKeyMappingListParams(size=100),
+            response_type=JwtKeyMappingListResponse,
+        )
+
+    def jwt_mapping_delete(self, mapping_id: str) -> Result[JwtKeyMappingDeleteResponse]:
+        """POST /jwt/key/mapping/delete under the master key."""
+        return self.proxy.transport.post(
+            "/jwt/key/mapping/delete",
+            headers=self.proxy.transport.master,
+            json=JwtKeyMappingDeleteBody(id=mapping_id),
+            response_type=JwtKeyMappingDeleteResponse,
+        )
+
+    def chat_as_team(self, token: str, team: str, body: ChatBody) -> Result[ChatResponse]:
+        """POST /chat/completions under `token` with `x-litellm-team-id: team`."""
+        return self.proxy.transport.post(
+            "/chat/completions",
+            headers=TeamHeaders(
+                authorization=self.proxy.transport.bearer(token).authorization,
+                x_litellm_team_id=team,
+            ),
+            json=body,
+            response_type=ChatResponse,
+        )
+
+    def list_models_as(self, token: str, *, anthropic: bool = False) -> Result[ModelsListResponse]:
+        """GET /v1/models under `token`, in the OpenAI shape or, with `anthropic`, the
+        Anthropic Models API shape Claude Code reads. Both carry `data[].id`."""
+        bearer: Final = self.proxy.transport.bearer(token)
+        return self.proxy.transport.get(
+            "/v1/models",
+            headers=AnthropicHeaders(authorization=bearer.authorization) if anthropic else bearer,
+            params=ModelsListParams(return_wildcard_routes=False),
+            response_type=ModelsListResponse,
         )
 
     def list_users_as(self, key: str) -> Result[UserListResponse]:

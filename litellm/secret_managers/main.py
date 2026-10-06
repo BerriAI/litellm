@@ -6,24 +6,27 @@ import traceback
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.secret_managers.dispatch import get_secret_from_manager
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
-from litellm.secret_managers.secret_manager_handler import get_secret_from_manager
+from litellm.types.llms.base import LiteLLMBaseModel
 
 oidc_cache: Final = DualCache()
+
+_PARSED_LITERAL: Final = TypeAdapter(object)
 
 
 _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS: Final = 60
 
 
-class _OidcTokenClaims(BaseModel):
+class _OidcTokenClaims(LiteLLMBaseModel):
     exp: float | None = None
 
 
@@ -47,6 +50,10 @@ def _oidc_token_cache_ttl(oidc_token: str, max_ttl: int) -> int:
 
 
 _DEFAULT_OIDC_ALLOWED_CREDENTIAL_DIRS: Final = ("/var/run/secrets", "/run/secrets")
+
+
+class OidcPathNotAllowedError(ValueError):
+    """An ``oidc/file/`` path was rejected by the credential-directory allowlist."""
 
 
 def _get_oidc_allowed_credential_dirs() -> list[str]:
@@ -73,7 +80,7 @@ def _resolve_oidc_file_path(requested_path: str) -> str:
     credential directories. Raises ``ValueError`` otherwise.
     """
     if not os.path.isabs(requested_path):
-        raise ValueError(
+        raise OidcPathNotAllowedError(
             "oidc/file path must be absolute. Use the format "
             "'oidc/file//var/run/secrets/<name>' (note the leading slash "
             "after 'oidc/file/')."
@@ -87,7 +94,7 @@ def _resolve_oidc_file_path(requested_path: str) -> str:
             # commonpath raises when paths are on different drives (Windows);
             # treat as not-matching and continue.
             continue
-    raise ValueError(
+    raise OidcPathNotAllowedError(
         "oidc/file path is outside the allowed credential directories. "
         "Set LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS to extend the allowlist."
     )
@@ -344,7 +351,7 @@ def get_secret(
                 secret = os.getenv(secret_name)
             try:
                 if isinstance(secret, str):
-                    secret_value_as_bool = ast.literal_eval(secret)
+                    secret_value_as_bool = _PARSED_LITERAL.validate_python(ast.literal_eval(secret))
                     if isinstance(secret_value_as_bool, bool):
                         return secret_value_as_bool
                     else:

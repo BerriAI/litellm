@@ -14,8 +14,9 @@ from collections.abc import Iterator
 from typing import Final, Literal, NamedTuple, NoReturn, TypeAlias
 
 import httpx
+import httpx2
 from mcp.types import Tool as MCPTool
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import assert_never
 
 from litellm.proxy._experimental.mcp_server.exceptions import (
@@ -23,6 +24,7 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPUpstreamAuthError,
 )
 from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
+from litellm.types.llms.base import LiteLLMBaseModel
 
 ListFaultCategory: TypeAlias = Literal[
     "auth_required",
@@ -34,13 +36,13 @@ ListFaultCategory: TypeAlias = Literal[
 ]
 
 
-class ServerListOk(BaseModel):
+class ServerListOk(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     tag: Literal["ok"] = "ok"
     tool_count: int
 
 
-class ServerListFault(BaseModel):
+class ServerListFault(LiteLLMBaseModel):
     """Why a server contributed nothing to a listing: the caller must authenticate upstream
     (``auth_required``/``forbidden``), the upstream did not answer (``timeout``/``unreachable``),
     the upstream answered outside its contract (``upstream_error``), or the gateway itself failed
@@ -63,8 +65,8 @@ class AggregateToolListing(NamedTuple):
     outcomes: dict[str, ServerOutcome]
 
 
-def _iter_upstream_responses(exc: BaseException) -> Iterator[httpx.Response]:
-    """Yield every ``httpx.Response`` in the exception tree, in the shared traversal's deliberate
+def _iter_upstream_responses(exc: BaseException) -> Iterator[httpx.Response | httpx2.Response]:
+    """Yield every upstream ``httpx``/``httpx2`` ``Response`` in the exception tree, in the shared traversal's deliberate
     order (explicit causes first, ExceptionGroup members in raise order, the incidental
     ``__context__`` chain last), so a response raised while handling the real failure can never
     shadow one on the explicit causal chain. Consumers apply their own predicate over the stream:
@@ -72,11 +74,11 @@ def _iter_upstream_responses(exc: BaseException) -> Iterator[httpx.Response]:
     behind an unrelated earlier one."""
     for current in iter_exception_tree(exc):
         response = getattr(current, "response", None)
-        if isinstance(response, httpx.Response):
+        if isinstance(response, (httpx.Response, httpx2.Response)):
             yield response
 
 
-def _find_upstream_response(exc: BaseException) -> httpx.Response | None:
+def _find_upstream_response(exc: BaseException) -> httpx.Response | httpx2.Response | None:
     return next(_iter_upstream_responses(exc), None)
 
 
@@ -136,9 +138,9 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
     response: Final = _find_upstream_response(exc)
     if response is not None:
         return ServerListFault(tag="upstream_error", status_code=response.status_code)
-    if isinstance(exc, (httpx.TimeoutException,)):
+    if isinstance(exc, (httpx.TimeoutException, httpx2.TimeoutException)):
         return ServerListFault(tag="timeout")
-    if isinstance(exc, httpx.TransportError):
+    if isinstance(exc, (httpx.TransportError, httpx2.TransportError)):
         return ServerListFault(tag="unreachable")
     return ServerListFault(tag="internal")
 

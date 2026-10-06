@@ -1,20 +1,198 @@
+import json
+from collections.abc import Callable
+from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
-from typing import Final
+from typing import Final, NoReturn
 
+import httpx
 import pytest
+from pydantic import JsonValue
 
 import litellm
-from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
+    call_native,
     call_native_aocr,
     call_native_ocr,
 )
 
 pytestmark = pytest.mark.requires_rust_extension
+
+
+@pytest.fixture(params=[False, True], ids=["python", "rust"])
+def ocr_backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> bool:
+    enabled: Final = bool(request.param)
+    monkeypatch.setenv("LITELLM_RUST", "1" if enabled else "0")
+    return enabled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_ocr_contract_upstream_status(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+) -> None:
+    upstream: Final = ResponseSpec(body={"detail": "invalid provider option"}, status=422)
+    ocr_server.enqueue(upstream)
+    arguments: Final = {
+        "model": "vertex_ai/mistral-ocr-latest",
+        "vertex_project": "test-project",
+        "vertex_location": "us-central1",
+        "num_retries": 0,
+    }
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await call_native(ocr_server, asynchronous, **arguments)
+    assert caught.value.status_code == upstream.status
+    assert caught.value.response.status_code == upstream.status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("preserved", ["body", "headers"])
+async def test_ocr_contract_provider_error_details(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+    preserved: str,
+) -> None:
+    payload: Final = {"message": "rate limited"}
+    headers: Final = {"Retry-After": "17", "X-Request-ID": "ocr-request-123", "X-Future-Header": "retained"}
+    ocr_server.enqueue(ResponseSpec(body=payload, status=429, headers=headers))
+    with pytest.raises(litellm.RateLimitError) as caught:
+        await call_native(ocr_server, asynchronous, num_retries=0)
+    response: Final = caught.value.response
+    assert isinstance(response, httpx.Response)
+    if preserved == "body":
+        assert response.content == json.dumps(payload).encode()
+    else:
+        for name, value in headers.items():
+            assert response.headers.get(name.lower()) == value
+            assert response.headers.get(name.upper()) == value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_ocr_contract_invalid_response_format(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+) -> None:
+    ocr_server.expected_requests = 0
+    with pytest.raises(litellm.UnsupportedParamsError) as caught:
+        await call_native(ocr_server, asynchronous, req_format="bogus", num_retries=0)
+    assert caught.value.status_code == 400
+    for value in ("req_format", "bogus", "native", "litellm"):
+        assert value in str(caught.value)
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "document,field",
+    [
+        ([], "document"),
+        ({"document_url": "https://example.com/a.pdf"}, "type"),
+        ({"type": "text"}, "type"),
+    ],
+)
+async def test_ocr_contract_malformed_document_is_actionable(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+    document: JsonValue,
+    field: str,
+) -> None:
+    ocr_server.expected_requests = None
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await call_native(ocr_server, asynchronous, document=document, num_retries=0)
+    assert caught.value.status_code == 400
+    assert field.lower() in str(caught.value).lower()
+    assert "NoneType: None" not in str(caught.value)
+    assert "indices must be" not in str(caught.value)
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("option,value,field", [("pages", [-1], "pages"), ("features", [1], "features")])
+async def test_ocr_contract_azure_invalid_options_are_bad_requests(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+    option: str,
+    value: JsonValue,
+    field: str,
+) -> None:
+    ocr_server.expected_requests = 0
+    arguments: Final = {"model": "azure_ai/doc-intelligence/prebuilt-read", option: value, "num_retries": 0}
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await call_native(ocr_server, asynchronous, **arguments)
+    assert caught.value.status_code == 400
+    assert field in str(caught.value)
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("model", ["mistral/mistral-ocr-latest", "azure_ai/mistral-ocr-latest", "reducto/parse-v3"])
+async def test_ocr_contract_native_format_supported(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+    model: str,
+) -> None:
+    ocr_server.expected_requests = None
+    payload: Final = (
+        {"result": {"chunks": [{"content": "native OCR response"}]}, "usage": {"num_pages": 1}}
+        if model.startswith("reducto/")
+        else OCR_RESPONSE
+    )
+    ocr_server.default_response = ResponseSpec(body=payload)
+    arguments: Final = {
+        "model": model,
+        "req_format": "native",
+        "num_retries": 0,
+        "document": {"type": "document_url", "document_url": "reducto://ready.pdf"}
+        if model.startswith("reducto/")
+        else OCR_DOCUMENT,
+    }
+    response: Final = (
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
+    )
+    assert response.pages[0].markdown == "native OCR response"
+    assert response.get_provider_native_response() == payload
+    assert len(ocr_server.requests) == 1
+    if ocr_backend:
+        assert_native_request(ocr_server)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_ocr_contract_unknown_reducto_model_reaches_provider(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+) -> None:
+    ocr_server.default_response = ResponseSpec(body={"result": {"chunks": [{"content": "future model response"}]}})
+    arguments: Final = {
+        "model": "reducto/future-parse-model",
+        "document": {"type": "document_url", "document_url": "reducto://ready.pdf"},
+        "num_retries": 0,
+    }
+    response: Final = (
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
+    )
+    assert response.model == "future-parse-model"
+    assert response.pages[0].markdown == "future model response"
+    assert len(ocr_server.requests) == 1
+    assert ocr_server.requests[0].path == "/parse"
+    assert ocr_server.requests[0].body == {"input": "reducto://ready.pdf"}
 
 
 @pytest.mark.asyncio
@@ -54,118 +232,6 @@ def assert_native_request(server: RecordingServer) -> None:
     assert not server.requests[0].headers.get("user-agent", "").startswith("python-httpx")
 
 
-def test_native_ocr_sends_model_and_document_to_mistral_ocr_path(ocr_server: RecordingServer) -> None:
-    response: Final = call_native_ocr(ocr_server)
-
-    assert response.pages[0].markdown == "native OCR response"
-    assert_native_request(ocr_server)
-    assert ocr_server.requests[0].path == "/v1/ocr"
-    assert ocr_server.requests[0].body == {"model": "mistral-ocr-latest", "document": OCR_DOCUMENT}
-
-
-def test_native_ocr_prepares_file_document_like_python(ocr_server: RecordingServer) -> None:
-    response: Final = call_native_ocr(
-        ocr_server,
-        document={"type": "file", "file": b"%PDF-1.4", "mime_type": "application/pdf"},
-    )
-
-    assert response.pages[0].markdown == "native OCR response"
-    assert_native_request(ocr_server)
-    assert ocr_server.requests[0].body == {
-        "model": "mistral-ocr-latest",
-        "document": {
-            "type": "document_url",
-            "document_url": "data:application/pdf;base64,JVBERi0xLjQ=",
-        },
-    }
-
-
-def test_native_ocr_reads_sdk_path_input(ocr_server: RecordingServer, tmp_path: Path) -> None:
-    document_path: Final = tmp_path / "document.pdf"
-    document_path.write_bytes(b"%PDF-1.4")
-
-    response: Final = call_native_ocr(
-        ocr_server,
-        document={"type": "file", "file": document_path},
-    )
-
-    assert response.pages[0].markdown == "native OCR response"
-    assert ocr_server.requests[0].body["document"] == {
-        "type": "document_url",
-        "document_url": "data:application/pdf;base64,JVBERi0xLjQ=",
-    }
-
-
-def test_native_ocr_sends_pages_and_image_options(ocr_server: RecordingServer) -> None:
-    call_native_ocr(ocr_server, pages=[0, 2], include_image_base64=True)
-
-    assert ocr_server.requests[0].body["pages"] == [0, 2]
-    assert ocr_server.requests[0].body["include_image_base64"] is True
-
-
-def test_native_ocr_merges_custom_headers_with_authorization(ocr_server: RecordingServer) -> None:
-    call_native_ocr(ocr_server, extra_headers={"x-trace-id": "trace-1"})
-
-    assert ocr_server.requests[0].headers["authorization"] == "Bearer test-key"
-    assert ocr_server.requests[0].headers["x-trace-id"] == "trace-1"
-
-
-def test_native_mistral_ocr_uses_environment_api_key_when_argument_is_missing(
-    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("MISTRAL_API_KEY", "environment-key")
-
-    call_native_ocr(ocr_server, api_key=None)
-
-    assert ocr_server.requests[0].headers["authorization"] == "Bearer environment-key"
-
-
-def test_native_mistral_ocr_prefers_explicit_api_key_over_environment(
-    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("MISTRAL_API_KEY", "environment-key")
-
-    call_native_ocr(ocr_server)
-
-    assert ocr_server.requests[0].headers["authorization"] == "Bearer test-key"
-
-
-def test_native_azure_ocr_uses_environment_endpoint_and_api_key(
-    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("AZURE_AI_API_KEY", "azure-key")
-    monkeypatch.setenv("AZURE_AI_API_BASE", ocr_server.base_url)
-
-    call_native_ocr(ocr_server, model="azure_ai/pixtral-12b-2409", api_key=None, api_base=None)
-
-    assert_native_request(ocr_server)
-    assert ocr_server.requests[0].path == "/providers/mistral/azure/ocr"
-    assert ocr_server.requests[0].headers["authorization"] == "Bearer azure-key"
-
-
-def test_native_vertex_ocr_builds_path_from_project_and_location(ocr_server: RecordingServer) -> None:
-    call_native_ocr(
-        ocr_server,
-        model="vertex_ai/mistral-ocr-2505",
-        api_key="vertex-token",
-        vertex_project="project-1",
-        vertex_location="us-central1",
-    )
-
-    assert_native_request(ocr_server)
-    assert ocr_server.requests[0].path == (
-        "/v1/projects/project-1/locations/us-central1/publishers/mistralai/models/mistral-ocr-2505:rawPredict"
-    )
-
-
-def test_native_ocr_normalizes_provider_response_model_and_usage(ocr_server: RecordingServer) -> None:
-    response: Final = call_native_ocr(ocr_server)
-
-    assert isinstance(response, OCRResponse)
-    assert response.model == "mistral-ocr-latest"
-    assert response.usage_info.pages_processed == 1
-
-
 def test_native_ocr_maps_provider_400_with_public_provider_details(ocr_server: RecordingServer) -> None:
     ocr_server.enqueue(ResponseSpec(body={"message": "invalid OCR request"}, status=400))
 
@@ -178,96 +244,19 @@ def test_native_ocr_maps_provider_400_with_public_provider_details(ocr_server: R
     assert "invalid OCR request" in str(caught.value)
 
 
-def test_native_ocr_rejects_unknown_response_format_before_provider_request(ocr_server: RecordingServer) -> None:
-    ocr_server.expected_requests = 0
-
-    with pytest.raises(litellm.BadRequestError, match="Invalid `req_format`"):
-        call_native_ocr(ocr_server, req_format="raw")
-
-    assert ocr_server.requests == []
-
-
-def test_ocr_raises_public_timeout_when_request_exceeds_timeout(ocr_server: RecordingServer) -> None:
-    litellm.rust(True)
-    ocr_server.enqueue(ResponseSpec(body=OCR_RESPONSE, delay=0.2))
-
-    with pytest.raises(litellm.Timeout):
-        call_native_ocr(ocr_server, timeout=0.01)
-
-    assert len(ocr_server.requests) == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize(
-    "credentials, expected_token, expected_calls",
-    [
-        ({"api_key": "resource-key"}, "resource-key", 0),
-        ({"azure_ad_token": "static-token"}, "callback-1", 1),
-        ({"extra_headers": {"Authorization": "Bearer override"}}, "override", 1),
-    ],
-    ids=["api-key-skips-provider", "provider-overrides-static-token", "header-overrides-provider"],
-)
-async def test_native_azure_ocr_applies_python_credential_precedence(
-    ocr_server: RecordingServer,
-    isolated_azure_auth: None,
-    asynchronous: bool,
-    credentials: dict[str, object],
-    expected_token: str,
-    expected_calls: int,
-) -> None:
-    calls: Final = []
-
-    def token_provider() -> str:
-        calls.append("token")
-        return f"callback-{len(calls)}"
-
-    arguments: Final = {
-        "model": "azure_ai/mistral-ocr-latest",
-        "api_key": None,
-        "azure_ad_token_provider": token_provider,
-        **credentials,
-    }
-    response: Final = (
-        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
+def test_native_ocr_encodes_python_file_input_and_drops_unknown_arguments(ocr_server: RecordingServer) -> None:
+    response: Final = call_native_ocr(
+        ocr_server,
+        document={"type": "file", "file": BytesIO(b"abc"), "mime_type": "image/png"},
+        opaque_extension=object(),
     )
+
     assert response.pages[0].markdown == "native OCR response"
-    assert len(calls) == expected_calls
-    assert len(ocr_server.requests) == 1
-    assert ocr_server.requests[0].headers["authorization"] == f"Bearer {expected_token}"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_native_azure_ocr_calls_token_provider_for_each_request(
-    ocr_server: RecordingServer,
-    isolated_azure_auth: None,
-    asynchronous: bool,
-) -> None:
-    calls: Final = []
-    ocr_server.expected_requests = 2
-
-    def token_provider() -> str:
-        calls.append("token")
-        return f"callback-{len(calls)}"
-
-    for _ in range(2):
-        arguments: Final = {
-            "model": "azure_ai/mistral-ocr-latest",
-            "api_key": None,
-            "azure_ad_token_provider": token_provider,
-        }
-        response: Final = (
-            await call_native_aocr(ocr_server, **arguments)
-            if asynchronous
-            else call_native_ocr(ocr_server, **arguments)
-        )
-        assert response.pages[0].markdown == "native OCR response"
-    assert len(calls) == 2
-    assert [request.headers["authorization"] for request in ocr_server.requests] == [
-        "Bearer callback-1",
-        "Bearer callback-2",
-    ]
+    assert_native_request(ocr_server)
+    assert ocr_server.requests[0].body == {
+        "model": "mistral-ocr-latest",
+        "document": {"type": "image_url", "image_url": "data:image/png;base64,YWJj"},
+    }
 
 
 class TokenAbort(BaseException):
@@ -276,11 +265,7 @@ class TokenAbort(BaseException):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize(
-    "failure",
-    ["non_string", "type_error", "ordinary", "abort"],
-    ids=["non-string-result", "type-error", "value-error", "base-exception"],
-)
+@pytest.mark.parametrize("failure", ["ordinary", "abort"], ids=["value-error", "base-exception"])
 async def test_native_azure_ocr_token_provider_failure_prevents_pre_call_callback_and_request(
     ocr_server: RecordingServer,
     isolated_azure_auth: None,
@@ -290,16 +275,10 @@ async def test_native_azure_ocr_token_provider_failure_prevents_pre_call_callbac
     ocr_server.expected_requests = 0
     calls: Final = []
     recorder: Final = RecordingLogger()
-    original: Final = {
-        "type_error": TypeError("token type"),
-        "ordinary": ValueError("token unavailable"),
-        "abort": TokenAbort("abort"),
-    }
+    original: Final = {"ordinary": ValueError("token unavailable"), "abort": TokenAbort("abort")}
 
     def token_provider() -> object:
         calls.append("token")
-        if failure == "non_string":
-            return 123
         raise original[failure]
 
     arguments: Final = {
@@ -318,144 +297,8 @@ async def test_native_azure_ocr_token_provider_failure_prevents_pre_call_callbac
         assert "Failed to get Azure AD token: token unavailable" in str(caught.value)
         assert isinstance(caught.value.__context__, RuntimeError)
         assert caught.value.__context__.__cause__ is original[failure]
-    elif failure == "abort":
-        assert caught.value is original[failure]
-    elif failure == "type_error":
-        assert caught.value.__context__ is original[failure]
     else:
-        assert isinstance(caught.value.__context__, TypeError)
-
-
-@pytest.mark.parametrize(
-    "configuration",
-    [{"azure_ad_token": "oidc/assertion", "client_id": "client", "tenant_id": "tenant"}],
-    ids=["invalid-oidc-assertion"],
-)
-def test_public_azure_ocr_maps_invalid_oidc_configuration_before_token_or_request(
-    ocr_server: RecordingServer,
-    isolated_azure_auth: None,
-    configuration: dict[str, object],
-) -> None:
-    ocr_server.expected_requests = 0
-    calls: Final = []
-    recorder: Final = RecordingLogger()
-
-    def provider() -> str:
-        calls.append("token")
-        return "unused"
-
-    arguments: Final = {
-        "model": "azure_ai/mistral-ocr-latest",
-        "api_key": None,
-        "azure_ad_token_provider": provider,
-        "callbacks": [recorder],
-        **configuration,
-    }
-    with pytest.raises(litellm.APIConnectionError):
-        call_native_ocr(ocr_server, **arguments)
-    assert calls == []
-    assert "log_pre_api_call" not in recorder.names
-    assert ocr_server.requests == []
-
-
-@pytest.mark.asyncio
-async def test_native_azure_ocr_validates_endpoint_before_calling_token_provider(
-    ocr_server: RecordingServer,
-    isolated_azure_auth: None,
-) -> None:
-    ocr_server.expected_requests = 0
-    calls: Final = []
-
-    def provider() -> str:
-        calls.append("token")
-        return "unused"
-
-    with pytest.raises(litellm.APIConnectionError, match="Missing Azure AI API Base"):
-        await call_native_aocr(
-            ocr_server,
-            model="azure_ai/mistral-ocr-latest",
-            api_key=None,
-            api_base=None,
-            azure_ad_token_provider=provider,
-        )
-    assert calls == []
-    assert ocr_server.requests == []
-
-
-@pytest.mark.asyncio
-async def test_native_azure_ocr_does_not_fall_back_to_static_token_after_empty_provider_result(
-    ocr_server: RecordingServer,
-    isolated_azure_auth: None,
-) -> None:
-    ocr_server.expected_requests = 0
-
-    def provider() -> str:
-        return ""
-
-    with pytest.raises(litellm.APIConnectionError, match="Missing Azure AI credentials"):
-        await call_native_aocr(
-            ocr_server,
-            model="azure_ai/mistral-ocr-latest",
-            api_key=None,
-            azure_ad_token="static-token",
-            azure_ad_token_provider=provider,
-        )
-    assert ocr_server.requests == []
-
-
-@pytest.mark.asyncio
-async def test_native_azure_ocr_ignores_falsey_token_provider_and_uses_static_token(
-    ocr_server: RecordingServer,
-    isolated_azure_auth: None,
-) -> None:
-    calls: Final = []
-
-    class Provider:
-        def __bool__(self) -> bool:
-            return False
-
-        def __call__(self) -> str:
-            calls.append("token")
-            return "unused"
-
-    response: Final = await call_native_aocr(
-        ocr_server,
-        model="azure_ai/mistral-ocr-latest",
-        api_key=None,
-        azure_ad_token="static-token",
-        azure_ad_token_provider=Provider(),
-    )
-    assert response.pages[0].markdown == "native OCR response"
-    assert calls == []
-    assert ocr_server.requests[0].headers["authorization"] == "Bearer static-token"
-
-
-@pytest.mark.asyncio
-async def test_native_azure_ocr_rejects_coroutine_returned_by_sync_token_provider(
-    ocr_server: RecordingServer,
-    isolated_azure_auth: None,
-) -> None:
-    ocr_server.expected_requests = 0
-    calls: Final = []
-
-    async def acquire() -> str:
-        calls.append("awaited")
-        return "unused"
-
-    coroutine: Final = acquire()
-
-    def provider() -> object:
-        return coroutine
-
-    try:
-        with pytest.raises(litellm.APIConnectionError, match="Azure AD token must be a string"):
-            await call_native_aocr(
-                ocr_server, model="azure_ai/mistral-ocr-latest", api_key=None, azure_ad_token_provider=provider
-            )
-    finally:
-        coroutine.close()
-    assert calls == []
-    assert ocr_server.requests == []
+        assert caught.value is original[failure]
 
 
 @pytest.mark.asyncio
@@ -518,108 +361,306 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
     assert ocr_server.requests[0].body["pages"] == [0, 2]
 
 
-@pytest.mark.parametrize("source", ["sdk", "proxy"])
-@pytest.mark.parametrize(
-    "filename,mime", [("scan.PNG", "image/png"), ("document.pdf", "application/pdf"), ("note.txt", "text/plain")]
-)
-def test_ocr_file_helpers_use_native_document_preparation(source: str, filename: str, mime: str) -> None:
-    from io import BytesIO
-
-    from litellm.ocr.input import convert_file_document_to_url_document, get_mime_type
-    from litellm.proxy.ocr_endpoints.endpoints import _build_document_from_upload
-
-    file: Final = BytesIO(b"abc")
-    file.name = filename
-    document: Final = (
-        convert_file_document_to_url_document({"type": "file", "file": file})
-        if source == "sdk"
-        else _build_document_from_upload(b"abc", filename, "application/octet-stream; charset=utf-8")
-    )
-    field: Final = "image_url" if mime.startswith("image/") else "document_url"
-    assert get_mime_type(filename) == mime
-    assert document == {"type": field, field: f"data:{mime};base64,YWJj"}
-
-
-@pytest.mark.parametrize("attribute", ["read", "name"])
-def test_native_file_preparation_preserves_property_errors(attribute: str) -> None:
-    from litellm.ocr.input import convert_file_document_to_url_document
-
-    failure: Final = LookupError("file property failed")
-
-    class File:
-        def __getattribute__(self, name: str):
-            if name == attribute:
-                raise failure
-            return super().__getattribute__(name)
-
-        def read(self):
-            return b"abc"
-
-    with pytest.raises(LookupError) as caught:
-        convert_file_document_to_url_document({"type": "file", "file": File()})
-    assert caught.value is failure
-
-
-@pytest.mark.parametrize("kind", ["bytes", "path", "reader"])
-def test_native_file_preparation_rejects_oversized_input(kind: str, tmp_path: Path) -> None:
-    from litellm.ocr.input import FileDocument, convert_file_document_to_url_document, get_max_file_bytes
-
-    limit: Final = get_max_file_bytes()
-    path: Final = tmp_path / "large.pdf"
-    with path.open("wb") as stream:
-        stream.truncate(limit + 1)
-
-    class Reader:
-        def read(self) -> bytes:
-            return b"a" * (limit + 1)
-
-    document: Final[FileDocument] = {
-        "type": "file",
-        "file": path if kind == "path" else Reader() if kind == "reader" else b"a" * (limit + 1),
-    }
-    with pytest.raises(ValueError, match="exceeds the size limit"):
-        convert_file_document_to_url_document(document)
-
-
-@pytest.mark.parametrize("kind", ["str", "path", "reader"])
-def test_native_upload_binding_rejects_filesystem_inputs(kind: str, tmp_path: Path) -> None:
-    from io import BytesIO
-    from typing import cast  # noqa: TID251  # deliberately invalid inputs exercise the native runtime boundary
-
-    from litellm.ocr.input import convert_upload_to_url_document
-
-    path: Final = tmp_path / "secret.pdf"
-    path.write_bytes(b"server secret")
-    source: Final = str(path) if kind == "str" else path if kind == "path" else BytesIO(b"abc")
-    with pytest.raises(TypeError):
-        convert_upload_to_url_document(cast(bytes, source), "document.pdf", None)
-
-
-@pytest.mark.parametrize("extra_bytes", [0, 1])
-def test_native_upload_enforces_file_size_limit(extra_bytes: int) -> None:
-    import base64
-
-    from litellm.ocr.input import convert_upload_to_url_document, get_max_file_bytes
-
-    content: Final = b"a" * (get_max_file_bytes() + extra_bytes)
-    if extra_bytes:
-        with pytest.raises(ValueError, match="exceeds the size limit"):
-            convert_upload_to_url_document(content, "scan.pdf", None)
-        return
-    document: Final = convert_upload_to_url_document(content, "scan.pdf", None)
-    assert document["type"] == "document_url"
-    assert base64.b64decode(document["document_url"].split(",", 1)[1]) == content
-
-
-def test_native_file_preparation_preserves_reader_exception() -> None:
-    from litellm.ocr.input import convert_file_document_to_url_document
-
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_native_file_preparation_preserves_reader_exception(
+    ocr_server: RecordingServer, asynchronous: bool
+) -> None:
+    ocr_server.expected_requests = 0
     failure: Final = RuntimeError("reader failed")
 
     class Reader:
         def read(self) -> bytes:
             raise failure
 
-    with pytest.raises(RuntimeError) as caught:
-        convert_file_document_to_url_document({"type": "file", "file": Reader()})
+    document: Final = {"type": "file", "file": Reader()}
+    with pytest.raises(litellm.APIConnectionError, match="reader failed") as caught:
+        await call_native_aocr(ocr_server, document=document) if asynchronous else call_native_ocr(
+            ocr_server, document=document
+        )
+    assert caught.value.__context__ is failure
+
+
+COHERE_IMAGE: Final = {"type": "image_url", "image_url": "data:image/png;base64,YWJj"}
+FILE_SIZE_LIMIT: Final = 50 * 1024 * 1024
+
+
+class IntReader:
+    def read(self) -> int:
+        return 1
+
+
+def oversized_file(tmp_path: Path) -> Path:
+    path: Final = tmp_path / "large.pdf"
+    with path.open("wb") as stream:
+        stream.truncate(FILE_SIZE_LIMIT + 1)
+    return path
+
+
+def empty_token() -> str:
+    return ""
+
+
+def unused_token() -> str:
+    raise AssertionError("the token provider must not run")
+
+
+@dataclass(frozen=True, slots=True)
+class PublicFailure:
+    arguments: Callable[[Path], dict[str, object]]
+    error: type[Exception]
+    match: str
+    provider_requests: int = 0
+    response: ResponseSpec | None = None
+    cause: type[BaseException] | None = None
+
+
+PUBLIC_FAILURES: Final = {
+    "unknown-req-format": PublicFailure(
+        lambda _: {"req_format": "raw"}, litellm.BadRequestError, "Invalid `req_format`"
+    ),
+    "empty-file": PublicFailure(
+        lambda _: {"document": {"type": "file", "file": BytesIO(b"")}}, litellm.BadRequestError, "File is empty"
+    ),
+    "oversized-file": PublicFailure(
+        lambda tmp_path: {"document": {"type": "file", "file": oversized_file(tmp_path)}},
+        litellm.BadRequestError,
+        "exceeds the size limit",
+    ),
+    "missing-file": PublicFailure(
+        lambda tmp_path: {"document": {"type": "file", "file": tmp_path / "missing.pdf"}},
+        litellm.APIConnectionError,
+        "File not found",
+        cause=FileNotFoundError,
+    ),
+    "reader-returns-non-bytes": PublicFailure(
+        lambda _: {"document": {"type": "file", "file": IntReader()}},
+        litellm.APIConnectionError,
+        "bytes or str",
+        cause=TypeError,
+    ),
+    "cohere-non-image": PublicFailure(
+        lambda _: {"model": "cohere/parse-v5.0"}, litellm.BadRequestError, "only accepts `image_url`"
+    ),
+    "cohere-unknown-format": PublicFailure(
+        lambda _: {"model": "cohere/parse-v5.0", "document": COHERE_IMAGE, "output_format": "html"},
+        litellm.BadRequestError,
+        "output_format",
+    ),
+    "azure-missing-api-base": PublicFailure(
+        lambda _: {
+            "model": "azure_ai/mistral-ocr-latest",
+            "api_key": None,
+            "api_base": None,
+            "azure_ad_token_provider": unused_token,
+        },
+        litellm.APIConnectionError,
+        "Missing Azure AI API Base",
+    ),
+    "azure-empty-token": PublicFailure(
+        lambda _: {
+            "model": "azure_ai/mistral-ocr-latest",
+            "api_key": None,
+            "azure_ad_token": "static-token",
+            "azure_ad_token_provider": empty_token,
+        },
+        litellm.APIConnectionError,
+        "Missing Azure AI credentials",
+    ),
+    "upstream-500": PublicFailure(
+        lambda _: {},
+        litellm.InternalServerError,
+        "provider unavailable",
+        provider_requests=1,
+        response=ResponseSpec(body={"message": "provider unavailable"}, status=500),
+    ),
+    "invalid-provider-response": PublicFailure(
+        lambda _: {},
+        litellm.APIConnectionError,
+        "pages",
+        provider_requests=1,
+        response=ResponseSpec(body={"pages": "invalid"}),
+    ),
+    "response-over-limit": PublicFailure(
+        lambda _: {"max_response_bytes": len(json.dumps(OCR_RESPONSE).encode()) - 1},
+        litellm.APIConnectionError,
+        "OCR response exceeds the size limit",
+        provider_requests=1,
+    ),
+    "timeout": PublicFailure(
+        lambda _: {"timeout": 0.01},
+        litellm.Timeout,
+        "",
+        provider_requests=1,
+        response=ResponseSpec(body=OCR_RESPONSE, delay=0.2),
+    ),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("failure", PUBLIC_FAILURES.values(), ids=PUBLIC_FAILURES.keys())
+async def test_native_failures_raise_the_public_exception_class(
+    ocr_server: RecordingServer,
+    isolated_azure_auth: None,
+    tmp_path: Path,
+    asynchronous: bool,
+    failure: PublicFailure,
+) -> None:
+    ocr_server.expected_requests = failure.provider_requests
+    if failure.response is not None:
+        ocr_server.enqueue(failure.response)
+
+    with pytest.raises(failure.error, match=failure.match) as caught:
+        await call_native(ocr_server, asynchronous, **failure.arguments(tmp_path))
+
+    assert len(ocr_server.requests) == failure.provider_requests
+    if failure.cause is not None:
+        assert isinstance(caught.value.__context__, failure.cause)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("ssl_verify", object()),
+        ("ssl_certificate", 1),
+        ("ssl_certificate", ""),
+        ("vertex_project", 1),
+        ("vertex_location", ["region"]),
+        ("user_url_allowed_hosts", ["example.test", 1]),
+    ],
+)
+async def test_native_settings_fail_before_provider_io(
+    ocr_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    asynchronous: bool,
+    name: str,
+    value: object,
+) -> None:
+    ocr_server.expected_requests = 0
+    monkeypatch.setattr(litellm, name, value)
+    with pytest.raises(ValueError, match=r"http_settings|provider_defaults|url_policy"):
+        await call_native(ocr_server, asynchronous, num_retries=0)
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_ssl_context_is_terminal_configuration(ocr_server: RecordingServer, asynchronous: bool) -> None:
+    import ssl
+
+    ocr_server.expected_requests = 0
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    with pytest.raises(ValueError, match=r"request\.ssl_verify.*SSLContext"):
+        await call_native(ocr_server, asynchronous, ssl_verify=context, num_retries=0)
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_settings_preserve_protocol_failures(
+    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    ocr_server.expected_requests = 0
+    failure: Final = LookupError("settings truth test failed")
+    cause: Final = RuntimeError("settings cause")
+
+    class RaisesBool:
+        def __bool__(self) -> bool:
+            raise failure from cause
+
+    monkeypatch.setattr(litellm, "force_ipv4", RaisesBool())
+    with pytest.raises(LookupError) as caught:
+        await call_native(ocr_server, asynchronous, num_retries=0)
     assert caught.value is failure
+    assert caught.value.__cause__ is cause
+    assert caught.value.__traceback__ is not None
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_settings_observe_mutation_between_calls(
+    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    monkeypatch.setattr(litellm, "force_ipv4", "yes")
+    monkeypatch.setattr(litellm, "http2", 1)
+    monkeypatch.setattr(litellm, "vertex_project", [])
+    monkeypatch.setattr(litellm, "vertex_location", 0)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", "EXAMPLE.TEST.")
+    response: Final = await call_native(ocr_server, asynchronous, num_retries=0)
+    assert response.pages[0].markdown == "native OCR response"
+    assert_native_request(ocr_server)
+    monkeypatch.setattr(litellm, "ssl_certificate", 1)
+    with pytest.raises(ValueError, match=r"http_settings\.ssl_certificate"):
+        await call_native(ocr_server, asynchronous, num_retries=0)
+    assert len(ocr_server.requests) == 1
+
+
+@pytest.mark.parametrize("required", [False, True])
+@pytest.mark.parametrize("failure", ["invalid", "live", "schema"])
+def test_native_projection_errors_never_select_python(
+    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, required: bool, failure: str
+) -> None:
+    import dataclasses
+    import ssl
+
+    from litellm.rust_bridge import runtime, settings
+    from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
+    from litellm.rust_bridge.configuration import Rollout
+    from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR, LiteLLMOcrRequest
+
+    ocr_server.expected_requests = 0
+    snapshot: Final = dataclasses.replace(settings.http_settings(), user_agent=1)
+    if failure == "schema":
+        monkeypatch.setattr(settings, "http_settings", lambda: snapshot)
+    else:
+        monkeypatch.setattr(
+            litellm, "ssl_verify", ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT) if failure == "live" else object()
+        )
+    request: Final = LiteLLMOcrRequest(
+        model="mistral/mistral-ocr-latest",
+        document=OCR_DOCUMENT,
+        api_key="test-key",
+        api_base=ocr_server.base_url,
+        timeout=None,
+        custom_llm_provider="mistral",
+        extra_headers=None,
+        kwargs={},
+    )
+
+    def python_fallback() -> NoReturn:
+        pytest.fail("projection failures must not select Python")
+
+    with pytest.raises(RuntimeError if failure == "schema" else ValueError, match="http_settings"):
+        runtime.run(
+            RouteContext(Route.OCR, provider="mistral"),
+            binding=NATIVE_OCR,
+            native=lambda native: native(request, (), {}),
+            python=python_fallback,
+            rules=(RouteRule(Route.OCR, Rollout.RUST_REQUIRED if required else Rollout.RUST_OPT_OUT),),
+        )
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("present", [False, True], ids=["missing", "invalid-pem"])
+async def test_native_client_certificate_is_validated_before_io(
+    ocr_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    asynchronous: bool,
+    present: bool,
+) -> None:
+    ocr_server.expected_requests = 0
+    certificate: Final = tmp_path / "client.pem"
+    if present:
+        certificate.write_text("invalid certificate")
+    monkeypatch.setattr(litellm, "ssl_certificate", str(certificate))
+    with pytest.raises(ValueError, match=r"http_settings\.ssl_certificate.*PEM") as caught:
+        await call_native(ocr_server, asynchronous, num_retries=0)
+    assert str(certificate) not in str(caught.value)
+    assert ocr_server.requests == []

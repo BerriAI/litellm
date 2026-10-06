@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Coroutine, Iterable
+from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict, Field
 from typing_extensions import Required, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     import httpx
@@ -172,9 +174,9 @@ ChatCompletionMessageParam = (
 )
 
 
-class CompletionRequest(BaseModel):
+class CompletionRequest(LiteLLMBaseModel):
     model: str
-    messages: list[ChatCompletionMessageParam] = []
+    messages: list[ChatCompletionMessageParam] = Field(default=[])
     timeout: float | int | None = None
     temperature: float | None = None
     top_p: float | None = None
@@ -229,6 +231,7 @@ class _CompletionDispatchContext:
     optional_params: dict
     organization: str | None
     provider_config: BaseConfig | None
+    request_params: Mapping[str, object]
     shared_session: ClientSession | None
     stream: bool | None
     temperature: float | None

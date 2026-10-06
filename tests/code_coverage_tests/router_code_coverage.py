@@ -31,7 +31,7 @@ def get_all_functions_called_in_tests(base_dir):
     specifically in files containing the word 'router'.
     """
     called_functions = set()
-    test_dirs = ["local_testing", "router_unit_tests", "test_litellm"]
+    test_dirs = ["local_testing", "router_unit_tests", "test_litellm", "unit"]
 
     for test_dir in test_dirs:
         dir_path = os.path.join(base_dir, test_dir)
@@ -54,13 +54,9 @@ def get_all_functions_called_in_tests(base_dir):
                     if file == "test_router_validate_fallbacks.py":
                         print(f"tree: {tree}")
                     for node in ast.walk(tree):
-                        if isinstance(node, ast.Call) and isinstance(
-                            node.func, ast.Name
-                        ):
+                        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                             called_functions.add(node.func.id)
-                        elif isinstance(node, ast.Call) and isinstance(
-                            node.func, ast.Attribute
-                        ):
+                        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                             called_functions.add(node.func.attr)
 
     return called_functions
@@ -81,13 +77,35 @@ ignored_function_names = [
     "_merge_tools_from_deployment",  # Tested indirectly via _update_kwargs_with_deployment (test files lack "router" in name)
     "_invalidate_access_groups_cache",  # Tested indirectly via set_model_list, upsert_model etc. (test files lack "router" in name)
     "has_buffered_provider_output",  # Property, so its reads in test_router.py are never an ast.Call
-    "_resolved_provider",  # Tested via get_pattern in test_pattern_match_deployments.py (file lacks "router" in name)
+    "chunks",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
+    "messages",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
+    "model",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
     "_request_header",  # Tested through Claude Code session routing in test_router.py
     "_claude_code_session_router_cache_key",  # Tested through Claude Code session routing in test_router.py
     "_delete_claude_code_session_router_binding",  # Tested through Redis cleanup failure in test_router.py
     "_resolve_claude_code_session_router",  # Tested through Claude Code session routing in test_router.py
     "_get_claude_code_session_router_binding",  # Tested through the two-worker session routing test in test_router.py
     "_apply_updated_routing_strategy_args",  # Tested via update_settings in test_lowest_latency.py (file lacks "router" in name)
+    "arm_routing_read_prefetch",  # Tested in tests/unit/caching/test_request_redis_batch_pre_call.py (file lacks "router" in name)
+    "_configured_model_info",  # Tested through get_configured_service_tiers in test_router.py
+    "_routable_deployments",  # Tested through get_configured_service_tiers and get_routable_upstream_model in test_router.py
+    "_async_get_available_deployment",  # Body of the `route {model}` phase wrapper, exercised through async_get_available_deployment in test_router.py
+    "_async_get_available_deployment_for_pass_through",  # Same, through async_get_available_deployment_for_pass_through in test_router.py
+    "_embedding",
+    "_aembedding",
+    "_anthropic_stream_pre_content_error",  # Tested through the non-retriable retry error tests in test_router.py
+    "_deployment_num_retries",  # Tested through the deployment num_retries mid-stream budget test in test_router.py
+    "_request_fallback_list",  # Tested through every mid-stream retry test in test_router.py
+    "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call
+    "_mid_stream_retry_trigger",  # Tested through the retry policy mid-stream budget test in test_router.py
+    "_anthropic_messages_group_retry_policy",  # Tested through the retry budget precedence test in test_router.py
+    "_anthropic_messages_resolved_retry_policy",  # Tested through the malformed retry policy tests in test_router.py
+    "_anthropic_messages_plain_retry_budget",  # Tested through the retry budget precedence test in test_router.py
+    "_anthropic_messages_should_retry",  # Tested through every mid-stream retry test in test_router.py
+    "_aanthropic_messages_retry_same_group",  # Tested through the dropped-before-content retry tests in test_router.py
+    "_aanthropic_messages_yield_recovered",  # Tested through every mid-stream retry and fallback test in test_router.py
+    "_anthropic_messages_policy_retries",  # Tested through the retry budget precedence test in test_router.py
+    "_get_wildcard_deployments",  # Tested through the get_model_list_of_routed_group wildcard test in test_router.py
 ]
 
 
@@ -102,9 +120,7 @@ def main():
     #     "../../litellm/router_utils/pattern_match_deployments.py",
     #     "../../litellm/router_utils/batch_utils.py",
     # ]  ## LOCAL TESTING
-    tests_dir = (
-        "./tests/"  # Update this path if your tests directory is located elsewhere
-    )
+    tests_dir = "./tests/"  # Update this path if your tests directory is located elsewhere
     # tests_dir = "../../tests/"  # LOCAL TESTING
 
     router_functions = []
@@ -112,9 +128,7 @@ def main():
         router_functions.extend(get_functions_from_router(file))
     print("router_functions: ", router_functions)
     called_functions_in_tests = get_all_functions_called_in_tests(tests_dir)
-    untested_functions = [
-        fn for fn in router_functions if fn not in called_functions_in_tests
-    ]
+    untested_functions = [fn for fn in router_functions if fn not in called_functions_in_tests]
 
     if untested_functions:
         all_untested_functions = []

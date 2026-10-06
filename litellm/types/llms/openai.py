@@ -63,7 +63,6 @@ from openai.types.responses.response_create_params import (
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Discriminator,
     Field,
@@ -82,7 +81,7 @@ from typing_extensions import (
     override,
 )
 
-from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject, LiteLLMBaseModel
 from litellm.types.responses.main import (
     CustomToolCallOutputItem,
     GenericResponseOutputItem,
@@ -90,6 +89,8 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
 )
+
+from .base import CachedTokensDetails
 
 FileContent = IO[bytes] | bytes | PathLike
 
@@ -108,12 +109,33 @@ FileTypes = (
 EmbeddingInput = str | list[str]
 
 
+class BinaryResponseSummary(TypedDict):
+    """What logging keeps of a binary response (speech audio, file content): size and media type, never the bytes."""
+
+    object: ReadOnly[Literal["binary"]]
+    content_type: ReadOnly[str | None]
+    num_bytes: ReadOnly[int]
+
+
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     _hidden_params: dict
 
     def __init__(self, response: httpx.Response) -> None:
         super().__init__(response)
-        self._hidden_params = {}  # mutable-ok: mutable-dict contract shared with ModelResponse logging consumers
+        self._hidden_params = {}
+
+    def logging_summary(self) -> BinaryResponseSummary:
+        return {
+            "object": "binary",
+            "content_type": self.response.headers.get("content-type"),
+            "num_bytes": self._num_bytes(),
+        }
+
+    def _num_bytes(self) -> int:
+        try:
+            return len(self.response.content)
+        except httpx.ResponseNotRead:
+            return self.response.num_bytes_downloaded
 
     def set_response_cost(self, response_cost: float | None) -> None:
         if response_cost is None:
@@ -260,7 +282,7 @@ class MessageData(TypedDict):
     metadata: dict | None
 
 
-class Thread(BaseModel):
+class Thread(LiteLLMBaseModel):
     id: str
     """The identifier, which can be referenced in API endpoints."""
 
@@ -295,7 +317,7 @@ OpenAIFilesPurpose = Literal[
 ]
 
 
-class BatchGuardrailRecord(BaseModel):
+class BatchGuardrailRecord(LiteLLMBaseModel):
     """One batch input record a guardrail acted on."""
 
     line: int
@@ -319,7 +341,7 @@ class BatchGuardrailRecord(BaseModel):
     """
 
 
-class BatchGuardrailReport(BaseModel):
+class BatchGuardrailReport(LiteLLMBaseModel):
     """What guardrails did to a batch input file, per record."""
 
     submitted_records: int
@@ -336,7 +358,7 @@ _JsonValue: TypeAlias = object
 BATCH_GUARDRAIL_RESPONSE_FIELD: Final = "litellm_batch_guardrail"
 
 
-class OpenAIFileObject(BaseModel):
+class OpenAIFileObject(LiteLLMBaseModel):
     id: str
     """The file identifier, which can be referenced in the API endpoints."""
 
@@ -382,7 +404,7 @@ class OpenAIFileObject(BaseModel):
     Absent on every other upload, so OpenAI-shaped clients see an unchanged response.
     """
 
-    _hidden_params: dict = {"response_cost": 0.0}  # no cost for writing a file
+    _hidden_params: dict = PrivateAttr(default={"response_cost": 0.0})  # no cost for writing a file
 
     @model_serializer(mode="wrap")
     def _omit_absent_batch_guardrail(  # noqa: ANN202  # annotating it replaces the model's serialization schema
@@ -391,9 +413,7 @@ class OpenAIFileObject(BaseModel):
         serialized: Final[Mapping[str, object]] = handler(self)
         if self.litellm_batch_guardrail is not None:
             return serialized
-        return {  # mutable-ok: pydantic's json serializer rejects a mapping that is not a dict
-            key: value for key, value in serialized.items() if key != BATCH_GUARDRAIL_RESPONSE_FIELD
-        }
+        return {key: value for key, value in serialized.items() if key != BATCH_GUARDRAIL_RESPONSE_FIELD}
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -415,7 +435,7 @@ class OpenAIFileObject(BaseModel):
             return self.dict()
 
 
-class FileListPage(BaseModel):
+class FileListPage(LiteLLMBaseModel):
     """A page of files, as `GET /v1/files` returns it.
 
     Post-call hooks and logging callbacks are handed the listing response, and
@@ -499,7 +519,19 @@ class CreateBatchRequest(TypedDict, total=False):
     """
 
     completion_window: Literal["24h"]
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses"]
+    endpoint: Literal[
+        "/v1/chat/completions",
+        "/v1/embeddings",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/ocr",
+        "/v1/images/generations",
+        "/v1/images/edits",
+        "/v1/videos/generations",
+        "/v1/videos",
+        "/v1/videos/edits",
+        "/v1/videos/extensions",
+    ]
     input_file_id: str
     metadata: dict[str, str] | None
     output_expires_after: FileExpiresAfter
@@ -510,6 +542,7 @@ class CreateBatchRequest(TypedDict, total=False):
 
 class LiteLLMBatchCreateRequest(CreateBatchRequest, total=False):
     model: str
+    disable_fallbacks: ReadOnly[bool]
 
 
 class RetrieveBatchRequest(TypedDict, total=False):
@@ -990,6 +1023,7 @@ class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
     description: str
     parameters: dict
     strict: bool
+    eager_input_streaming: ReadOnly[bool]
 
 
 class OpenAIChatCompletionToolParam(TypedDict):
@@ -1000,6 +1034,7 @@ class OpenAIChatCompletionToolParam(TypedDict):
 class ChatCompletionToolParam(OpenAIChatCompletionToolParam, total=False):
     cache_control: ChatCompletionCachedContent
     allowed_callers: list[str]
+    eager_input_streaming: ReadOnly[bool]
 
 
 class Function(TypedDict, total=False):
@@ -1079,7 +1114,7 @@ class OpenAIChatCompletionChunk(ChatCompletionChunk):
         super().__init__(**kwargs)
 
 
-class Hyperparameters(BaseModel):
+class Hyperparameters(LiteLLMBaseModel):
     batch_size: str | int | None = None  # "Number of examples in each batch."
     learning_rate_multiplier: str | float | None = None  # Scaling factor for the learning rate
     n_epochs: str | int | None = None  # "The number of epochs to train the model for"
@@ -1087,7 +1122,7 @@ class Hyperparameters(BaseModel):
     model_config = {"extra": "allow"}
 
 
-class FineTuningJobCreate(BaseModel):
+class FineTuningJobCreate(LiteLLMBaseModel):
     """
     FineTuningJobCreate - Create a fine-tuning job
 
@@ -1121,7 +1156,7 @@ class FineTuningJobCreate(BaseModel):
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] | None = None
 
-    model_config = {"extra": "allow"}  # This allows the model to accept additional fields
+    model_config = ConfigDict(extra="allow")  # This allows the model to accept additional fields
 
 
 AllEmbeddingInputValues = str | list[str] | list[int] | list[list[int]]
@@ -1158,6 +1193,10 @@ OpenAIImageGenerationOptionalParams = Literal[
     "image_url",
     "image_prompt_strength",
     "aspect_ratio",
+    "width",
+    "height",
+    "guidance",
+    "steps",
     "imageConfig",
 ]
 
@@ -1271,8 +1310,8 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
     """TypedDict for request parameters supported by the responses API."""
 
-    input: str | ResponseInputParam
-    model: str
+    input: Required[ReadOnly[str | ResponseInputParam]]
+    model: Required[ReadOnly[str]]
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
@@ -1288,7 +1327,10 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
+    cached_tokens_details: CachedTokensDetails | None = None
+    image_tokens: int | None = None
     text_tokens: int | None = None
+    video_tokens: int | None = None
 
     model_config = {"extra": "allow"}
 
@@ -1320,16 +1362,16 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
             return v.get("total_cost")
         return v
 
-    model_config = {"extra": "allow"}
+    model_config = ConfigDict(extra="allow")
 
 
-class WebSearchToolUsage(BaseModel):
+class WebSearchToolUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     num_requests: NonNegativeInt
 
 
-class ResponsesToolUsage(BaseModel):
+class ResponsesToolUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     web_search: WebSearchToolUsage | None = None
@@ -2254,10 +2296,17 @@ class OpenAIRealtimeInputAudioTranscriptionCompleted(TypedDict):
     usage: NotRequired[ReadOnly[Mapping[str, object]]]
 
 
+class OpenAIRealtimeCachedTokensDetails(TypedDict, total=False):
+    text_tokens: ReadOnly[int]
+    audio_tokens: ReadOnly[int]
+    image_tokens: ReadOnly[int]
+
+
 class OpenAIRealtimeUsageTokenDetails(TypedDict):
     audio_tokens: ReadOnly[int]
     text_tokens: ReadOnly[int]
     cached_tokens: NotRequired[ReadOnly[int]]
+    cached_tokens_details: NotRequired[ReadOnly[OpenAIRealtimeCachedTokensDetails]]
 
 
 class OpenAIRealtimeResponseUsage(TypedDict):
@@ -2469,7 +2518,7 @@ class CreateVideoRequest(TypedDict, total=False):
     timeout: float | None
 
 
-class OpenAIVideoObject(BaseModel):
+class OpenAIVideoObject(LiteLLMBaseModel):
     """OpenAI Video Object representing a video generation job."""
 
     id: str
@@ -2508,7 +2557,7 @@ class OpenAIVideoObject(BaseModel):
     model: str | None = None
     """The video generation model that produced the job."""
 
-    _hidden_params: dict[str, _JsonValue] = {}
+    _hidden_params: dict[str, _JsonValue] = PrivateAttr(default={})
 
     def __contains__(self, key) -> bool:
         return hasattr(self, key)
