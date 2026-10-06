@@ -7,7 +7,7 @@ from typing import Final
 from urllib.parse import urlsplit
 
 import httpx
-from integration._support.client import Gateway, eventually, object_value, string_value
+from integration._support.client import Gateway, eventually, string_value
 from integration._support.database import read_rows, write_rows
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import OpenAI
@@ -62,22 +62,39 @@ class _SearchPage(BaseModel):
     next_page: str | None
 
 
-def _models_over_fresh_connection(gateway: Gateway, _: int) -> frozenset[str]:
+def _deployment_id(model: str) -> str:
+    rows: Final = read_rows(
+        'SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_name = %s '
+        "OR model_info->>'team_public_model_name' = %s",
+        (model, model),
+    )
+    assert len(rows) == 1, f"Expected one deployment for {model!r}, found {rows}"
+    return string_value(rows[0]["model_id"])
+
+
+def _worker_has_deployment(gateway: Gateway, deployment_id: str, _: int) -> bool:
     with httpx.Client(base_url=gateway.client.base_url, timeout=15, trust_env=False) as client:
-        listed: Final = client.get("/v1/models", headers={"Authorization": f"Bearer {gateway.key}"})
-    assert listed.status_code == 200, listed.text
-    data: Final = JSON_OBJECT.validate_json(listed.content)["data"]
-    assert isinstance(data, list), listed.text
-    return frozenset(string_value(object_value(entry)["id"]) for entry in data)
+        response: Final = client.get(
+            "/model/info",
+            params={"litellm_model_id": deployment_id},
+            headers={"Authorization": f"Bearer {gateway.key}"},
+        )
+    if response.status_code == 200:
+        return True
+    assert response.status_code == 400, response.text
+    assert "not found on litellm proxy" in response.text.lower(), response.text
+    return False
 
 
 def _wait_until_every_worker_serves(gateway: Gateway, model: str) -> None:
+    deployment_id: Final = _deployment_id(model)
+
     def every_worker_serves() -> bool:
         with ThreadPoolExecutor(max_workers=16) as pool:
             rounds: Final = tuple(
-                tuple(pool.map(partial(_models_over_fresh_connection, gateway), range(16))) for _ in range(2)
+                tuple(pool.map(partial(_worker_has_deployment, gateway, deployment_id), range(16))) for _ in range(2)
             )
-        return all(model in models for round_ in rounds for models in round_)
+        return all(has_deployment for round_ in rounds for has_deployment in round_)
 
     eventually(every_worker_serves, lambda served: served, seconds=90)
 

@@ -312,26 +312,45 @@ def _sdk_base_url(gateway: Gateway) -> str:
     return str(gateway.client.base_url).rstrip("/") + "/v1"
 
 
-def _models_over_a_fresh_connection(gateway: Gateway, key: str, _: int) -> frozenset[str]:
+def _deployment_id(model: str) -> str:
+    rows: Final = read_rows(
+        'SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_name = %s '
+        "OR model_info->>'team_public_model_name' = %s",
+        (model, model),
+    )
+    assert len(rows) == 1, f"Expected one deployment for {model!r}, found {rows}"
+    return string_value(rows[0]["model_id"])
+
+
+def _worker_has_deployment(gateway: Gateway, deployment_id: str, _: int) -> bool:
     with httpx.Client(base_url=gateway.client.base_url, timeout=15, trust_env=False) as client:
-        listed: Final = client.get("/v1/models", headers={"Authorization": f"Bearer {key}"})
-    assert listed.status_code == 200, listed.text
-    data: Final = _json(listed)["data"]
-    assert isinstance(data, list), listed.text
-    return frozenset(string_value(object_value(entry)["id"]) for entry in data)
+        response: Final = client.get(
+            "/model/info",
+            params={"litellm_model_id": deployment_id},
+            headers={"Authorization": f"Bearer {gateway.key}"},
+        )
+    if response.status_code == 200:
+        return True
+    assert response.status_code == 400, response.text
+    assert "not found on litellm proxy" in response.text.lower(), response.text
+    return False
 
 
-def _every_worker_serves(gateway: Gateway, model: str, key: str) -> bool:
+def _every_worker_has_deployment(gateway: Gateway, deployment_id: str) -> bool:
     with ThreadPoolExecutor(max_workers=16) as pool:
         rounds: Final = tuple(
-            tuple(pool.map(partial(_models_over_a_fresh_connection, gateway, key), range(16))) for _ in range(2)
+            tuple(pool.map(partial(_worker_has_deployment, gateway, deployment_id), range(16))) for _ in range(2)
         )
-    return all(model in seen for round_ in rounds for seen in round_)
+    return all(has_deployment for round_ in rounds for has_deployment in round_)
 
 
-def _wait_until_every_worker_serves(gateway: Gateway, model: str, key: str | None = None) -> None:
-    caller: Final = gateway.key if key is None else key
-    eventually(lambda: _every_worker_serves(gateway, model, caller), lambda served: served, seconds=90)
+def _wait_until_every_worker_serves(gateway: Gateway, model: str) -> None:
+    deployment_id: Final = _deployment_id(model)
+    eventually(
+        lambda: _every_worker_has_deployment(gateway, deployment_id),
+        lambda served: served,
+        seconds=90,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -714,7 +733,7 @@ def test_team_model_managed_file_lifecycle_forwards_the_provider_file_id(gateway
         model: Final = scenario.model(api_base=f"{wire.url}/v1", api_key=bearer, model_info={"team_id": team})
         user: Final = scenario.member(team)
         key: Final = scenario.key(team_id=team, user_id=user)
-        _wait_until_every_worker_serves(gateway, model, key)
+        _wait_until_every_worker_serves(gateway, model)
         wire.drain()
         entries: Final = gateway.get("/model/info")["data"]
         assert isinstance(entries, list)
@@ -748,9 +767,7 @@ def test_team_model_managed_file_lifecycle_forwards_the_provider_file_id(gateway
         assert downloaded.content == json.dumps(_file_content_page(content), separators=(",", ":")).encode(), (
             downloaded.text
         )
-        assert downloaded.headers["content-disposition"] == f'attachment; filename="{managed_file_id}"', (
-            downloaded.text
-        )
+        assert downloaded.headers["content-disposition"] == f'attachment; filename="{managed_file_id}"', downloaded.text
         assert downloaded.headers["x-content-type-options"] == "nosniff", downloaded.text
         deleted: Final = gateway.request("DELETE", file_path, key=key)
         assert deleted.status_code == 200, deleted.text
@@ -1117,9 +1134,7 @@ def test_provider_errors_reach_the_caller_and_other_models_keep_mapping(
     gateway: Gateway, status: int, expected_error_type: str
 ) -> None:
     message: Final = f"provider refused listing {uuid.uuid4().hex[:8]}"
-    with _rig(gateway, listing=_error_listing(status, message)) as failing, _rig(
-        gateway, "a.txt"
-    ) as healthy:
+    with _rig(gateway, listing=_error_listing(status, message)) as failing, _rig(gateway, "a.txt") as healthy:
         member: Final = _member(failing.scenario, failing.model, healthy.model)
         managed_a: Final = healthy.upload(member.key, "a.txt")
         failed: Final = failing.list(member.key, {"model": failing.model}, {"x-litellm-num-retries": "0"})
