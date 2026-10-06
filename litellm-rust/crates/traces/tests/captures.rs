@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use litellm_traces::{
-    CallEvidence, CallEvidenceKind, CallKey, DecodedSpan, ObservationType, SpanStatus, decode_otlp,
+    CallEvidence, CallEvidenceKind, CallKey, DecodedSpan, ObservationType, SpanStatus, SpendLookup,
+    decode_otlp,
     query::named::{SpendByResponseIdsRow, TraceSpansRow},
     resolve_trace,
 };
@@ -53,14 +54,8 @@ fn capture_data(spend_log_path: &Path) -> CaptureData {
 #[derive(Deserialize)]
 struct CapturedSpend {
     request_id: String,
-    #[serde(default)]
-    litellm_call_id: String,
     response_id: String,
-    trace_id: String,
-    span_id: String,
     team_id: String,
-    api_key: String,
-    user: String,
     spend: Option<f64>,
     start_time: i64,
     metadata: String,
@@ -76,12 +71,6 @@ struct FixtureCapture {
     name: String,
     trace_id: String,
     spend_linked: bool,
-    #[serde(default = "true_value")]
-    spend_complete: bool,
-}
-
-fn true_value() -> bool {
-    true
 }
 
 fn upstream_response_id(response_id: &str) -> String {
@@ -114,14 +103,9 @@ fn captured_spend_rows(spend_logs: &str) -> (FixtureCapture, Vec<SpendByResponse
             let upstream_response_id = upstream_response_id(&record.response_id);
             SpendByResponseIdsRow {
                 request_id: record.request_id,
-                litellm_call_id: record.litellm_call_id,
                 response_id: record.response_id,
                 upstream_response_id,
-                trace_id: record.trace_id,
-                span_id: record.span_id,
                 team_id: record.team_id,
-                api_key: record.api_key,
-                user: record.user,
                 spend: record.spend,
                 start_ms: record.start_time,
             }
@@ -335,12 +319,19 @@ fn captured_trace_cost_matches_spend_logs(
     let name = capture_name(&spend_logs);
     let (_, capture, rows, spends) = fixture(&spend_logs);
     let trace = resolve_trace(&capture.trace_id, "", &rows, &spends).expect("captured trace");
-    let expected = if capture.spend_linked && capture.spend_complete {
-        Some(spends.iter().map(|row| row.spend.unwrap_or(0.0)).sum())
-    } else {
-        None
-    };
+    let recorded: BTreeSet<String> = SpendLookup::new(&rows).response_ids.into_iter().collect();
+    let joined: Vec<f64> = spends
+        .iter()
+        .filter(|row| {
+            recorded.contains(&row.response_id) || recorded.contains(&row.upstream_response_id)
+        })
+        .map(|row| row.spend.unwrap_or(0.0))
+        .collect();
+    let expected = (!joined.is_empty()).then(|| joined.iter().sum());
     assert_spend_close(trace.summary.spend, expected, name);
+    if !capture.spend_linked {
+        assert_eq!(trace.summary.spend, None, "{name}");
+    }
 }
 
 #[rstest]
