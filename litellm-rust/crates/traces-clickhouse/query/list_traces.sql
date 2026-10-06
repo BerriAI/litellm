@@ -44,22 +44,27 @@ SELECT page.* EXCEPT (trace_start, trace_end, agent_invocations),
 FROM page
 LEFT JOIN (
     SELECT TeamId, ApiKeyHash, TraceId,
-           arraySort(groupUniqArrayIf(AgentName, AgentName != '')) AS agent_names,
-           arraySort(groupUniqArrayIf(toString(Framework), Framework != '')) AS frameworks,
-           groupUniqArrayIf(native_session, native_root) AS root_sessions,
-           groupUniqArrayIf((native_session, SpanId), native_root AND SpanName = 'claude_code.interaction') AS root_interactions,
-           groupUniqArrayIf((native_session, SpanAttributes['agent_id']), native_child) AS child_identities,
-           groupUniqArrayIf((native_session, SpanAttributes['agent_id'], SpanId), native_child AND SpanName = 'claude_code.interaction') AS child_interactions,
-           length(child_identities) + length(root_sessions) AS native_count,
-           native_count + uniqExactIf(if(AgentName = '', SpanName, AgentName), ObservationType = 'agent' AND NOT native) AS agent_count,
-           uniqExactIf(SpanId, ObservationType = 'agent' AND NOT native)
-             + arraySum(arrayMap(child -> greatest(1, arrayCount(interaction -> (interaction.1, interaction.2) = child, child_interactions)), child_identities))
-             + arraySum(arrayMap(session -> greatest(1, arrayCount(interaction -> interaction.1 = session, root_interactions)), root_sessions)) AS resolved_invocations
-    FROM otel_traces
-    WHERE Timestamp >= (SELECT min(trace_start) FROM page)
-      AND Timestamp <= (SELECT max(trace_end) FROM page)
-      AND TraceId IN (SELECT trace_id FROM page)
-      AND (TeamId, ApiKeyHash, TraceId) IN (SELECT team_id, api_key_hash, trace_id FROM page)
+           arraySort(groupUniqArrayArray(agent_names)) AS agent_names,
+           arraySort(groupUniqArrayArray(frameworks)) AS frameworks,
+           countIf(native_actor) AS native_count,
+           native_count + uniqExactIf(legacy_name, legacy_invocations > 0) AS agent_count,
+           sum(if(native_actor, greatest(1, native_interactions), legacy_invocations)) AS resolved_invocations
+    FROM (
+        SELECT TeamId, ApiKeyHash, TraceId,
+               native_root OR native_child AS native_actor,
+               (native_session, if(native_child, concat('agent:', SpanAttributes['agent_id']), 'root')) AS actor_identity,
+               if(native_actor, '', if(AgentName = '', SpanName, AgentName)) AS legacy_name,
+               groupUniqArrayIf(AgentName, AgentName != '') AS agent_names,
+               groupUniqArrayIf(toString(Framework), Framework != '') AS frameworks,
+               uniqExactIf(SpanId, native_actor AND SpanName = 'claude_code.interaction') AS native_interactions,
+               uniqExactIf(SpanId, ObservationType = 'agent' AND NOT native) AS legacy_invocations
+        FROM otel_traces
+        WHERE Timestamp >= (SELECT min(trace_start) FROM page)
+          AND Timestamp <= (SELECT max(trace_end) FROM page)
+          AND TraceId IN (SELECT trace_id FROM page)
+          AND (TeamId, ApiKeyHash, TraceId) IN (SELECT team_id, api_key_hash, trace_id FROM page)
+        GROUP BY TeamId, ApiKeyHash, TraceId, native_actor, actor_identity, legacy_name
+    )
     GROUP BY TeamId, ApiKeyHash, TraceId
 ) AS identities
 ON page.team_id = identities.TeamId AND page.api_key_hash = identities.ApiKeyHash

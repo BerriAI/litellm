@@ -118,7 +118,9 @@ impl Actors {
             .iter()
             .enumerate()
             .map(|(index, row)| {
-                if !native(row) {
+                if !native(row)
+                    && !(row.framework == "claude-agent-sdk" && !row.session_id.is_empty())
+                {
                     return None;
                 }
                 direct[index]

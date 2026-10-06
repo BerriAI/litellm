@@ -57,7 +57,7 @@ fn result_contracts_preserve_public_field_names() {
         "native_agent_id": "child",
         "native_parent_agent_id": "parent",
         "session_id": "session",
-        "query_source": "agent.builtin.general-purpose", "framework": "framework", "status": "STATUS_CODE_ERROR", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "call_keys": ["provider_response:request"], "call_evidence": "complete", "tool_call_id": "call", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
+        "query_source": "agent.builtin.general-purpose", "has_output": 1, "capture_warning": 0, "framework": "framework", "status": "STATUS_CODE_ERROR", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "call_keys": ["provider_response:request"], "call_evidence": "complete", "tool_call_id": "call", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
     );
     round_trip::<SpanDetailRow>(
         json!({"span_id": "span", "input": "input", "output": "output", "attributes": {"count": "42"}}),

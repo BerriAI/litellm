@@ -20,6 +20,8 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
         native_parent_agent_id: String::new(),
         session_id: String::new(),
         query_source: String::new(),
+        has_output: false,
+        capture_warning: false,
         trace_id: String::new(),
         span_id: span_id.into(),
         parent_span_id: parent.into(),

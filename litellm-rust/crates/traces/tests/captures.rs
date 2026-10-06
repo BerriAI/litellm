@@ -176,6 +176,8 @@ fn trace_span(span: DecodedSpan) -> TraceSpansRow {
         })
         .unwrap_or_default();
     TraceSpansRow {
+        has_output: !normalized.output.is_empty(),
+        capture_warning: span.attributes.contains_key("lens.capture.warning"),
         native_agent_id: span.attributes.get("agent_id").cloned().unwrap_or_default(),
         native_parent_agent_id: span
             .attributes
@@ -287,6 +289,8 @@ fn unrelated_transport(call: &TraceSpansRow) -> TraceSpansRow {
         native_parent_agent_id: String::new(),
         session_id: String::new(),
         query_source: String::new(),
+        has_output: false,
+        capture_warning: false,
         trace_id: call.trace_id.clone(),
         span_id: format!("unrelated-transport-{}", call.span_id),
         parent_span_id: call.parent_span_id.clone(),

@@ -1,5 +1,55 @@
 {
   "$defs": {
+    "ActorCapture": {
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "content_events": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "llm_calls": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model_outputs": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reply_events": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool_calls": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "actor_id",
+        "name",
+        "llm_calls",
+        "tool_calls",
+        "reply_events",
+        "model_outputs",
+        "content_events"
+      ],
+      "type": "object"
+    },
     "AgentNode": {
       "description": "One distinct agent in a trace: 200 invocations of `researcher` are one node.",
       "properties": {
@@ -215,6 +265,41 @@
       ],
       "type": "string"
     },
+    "TraceCapture": {
+      "properties": {
+        "actors": {
+          "items": {
+            "$ref": "#/$defs/ActorCapture"
+          },
+          "type": "array"
+        },
+        "content_events": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unassigned_events": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "warning_events": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "actors",
+        "content_events",
+        "unassigned_events",
+        "warning_events"
+      ],
+      "type": "object"
+    },
     "TraceSummary": {
       "properties": {
         "agent_count": {
@@ -357,6 +442,18 @@
       },
       "type": "array"
     },
+    "capture": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TraceCapture"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "x-python-optional": true
+    },
     "next_cursor": {
       "type": [
         "string",
@@ -375,6 +472,7 @@
     }
   },
   "required": [
+    "capture",
     "summary",
     "agents",
     "spans",

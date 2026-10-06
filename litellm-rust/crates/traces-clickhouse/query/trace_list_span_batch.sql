@@ -5,6 +5,8 @@ SELECT o.TraceId AS trace_id, o.SpanId AS span_id, o.ParentSpanId AS parent_span
        o.SpanAttributes['parent_agent_id'] AS native_parent_agent_id,
        o.SpanAttributes['session.id'] AS session_id,
        coalesce(nullIf(o.SpanAttributes['query_source_safe'], ''), o.SpanAttributes['query_source']) AS query_source,
+       o.Output != '' AS has_output,
+       o.SpanAttributes['lens.capture.warning'] != '' AS capture_warning,
        o.Framework AS framework, o.StatusCode AS status,
        substringUTF8(o.StatusMessage, 1, 128) AS status_message,
        lengthUTF8(o.StatusMessage) > 128 AS error_truncated,

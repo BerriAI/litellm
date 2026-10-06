@@ -22,6 +22,7 @@ import { ErrorBlock } from "../content/SpanError";
 import { Markdown } from "../content/Markdown";
 import { ToolCallBlock, ToolResultCard } from "../content/Messages";
 import type { SpanDetail, Trace, TraceMessage } from "../../types";
+import { CaptureCoverage } from "./CaptureCoverage";
 import { fmtMs } from "../../utils";
 
 export function TraceConversation({
@@ -66,6 +67,7 @@ export function TraceConversation({
   return (
     <section aria-label="Trace conversation" className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto min-w-0 max-w-3xl space-y-5 px-3 py-4 sm:px-6 sm:py-5">
+        <CaptureCoverage capture={trace.capture} />
         {rootErrors.map((span) => (
           <ErrorBlock key={span.span_id} span={span} />
         ))}

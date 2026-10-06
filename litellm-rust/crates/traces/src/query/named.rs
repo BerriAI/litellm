@@ -88,6 +88,18 @@ pub struct TraceSpansRow {
     pub session_id: String,
     #[serde(default)]
     pub query_source: String,
+    #[serde(
+        default,
+        deserialize_with = "crate::wire::flag",
+        serialize_with = "crate::wire::serialize_flag"
+    )]
+    pub has_output: bool,
+    #[serde(
+        default,
+        deserialize_with = "crate::wire::flag",
+        serialize_with = "crate::wire::serialize_flag"
+    )]
+    pub capture_warning: bool,
     #[serde(default)]
     pub framework: String,
     #[serde(serialize_with = "crate::wire::serialize_status")]

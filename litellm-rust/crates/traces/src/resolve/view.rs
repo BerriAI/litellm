@@ -61,7 +61,9 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
     let graph = &resolution.graph;
     let mut entries: IndexMap<&str, Vec<usize>> = IndexMap::new();
     for index in (0..graph.rows.len()).filter(|index| {
-        resolution.is_agent(*index) && !super::actors::native(resolution.row(*index))
+        resolution.is_agent(*index)
+            && !super::actors::native(resolution.row(*index))
+            && resolution.actors.owner(*index).is_none()
     }) {
         entries
             .entry(agent_label(resolution.row(index)))
@@ -74,6 +76,7 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
             .parent(index)
             .map(|parent| graph.rows[parent].agent.as_str());
         if !super::actors::native(row)
+            && resolution.actors.owner(index).is_none()
             && !row.agent.is_empty()
             && !explicit.contains(row.agent.as_str())
             && parent_agent != Some(row.agent.as_str())
@@ -84,7 +87,10 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
     let calls: Vec<(&str, Option<Requests<'_>>)> = resolution
         .model_calls
         .iter()
-        .filter(|call| !super::actors::native(resolution.row(**call)))
+        .filter(|call| {
+            !super::actors::native(resolution.row(**call))
+                && resolution.actors.owner(**call).is_none()
+        })
         .map(|call| (resolution.owner(*call), resolution.call_requests(*call)))
         .collect();
     let tools = resolution.unique_tools();
@@ -109,6 +115,7 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
                 .iter()
                 .filter(|tool| {
                     !super::actors::native(resolution.row(**tool))
+                        && resolution.actors.owner(**tool).is_none()
                         && resolution.owner(**tool) == name
                 })
                 .count() as u64,
@@ -120,17 +127,14 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
             spend: total(&owned_calls),
         }
     });
+    let model_calls: HashSet<_> = resolution.model_calls.iter().copied().collect();
+    let native_tools: HashSet<_> = tools.iter().copied().collect();
     legacy
         .chain(resolution.actors.entries.values().map(|actor| {
-            let calls: Vec<_> = resolution
-                .model_calls
+            let calls: Vec<_> = actor
+                .spans
                 .iter()
-                .filter(|index| {
-                    resolution
-                        .actors
-                        .owner(**index)
-                        .is_some_and(|owner| owner.id == actor.id)
-                })
+                .filter(|index| model_calls.contains(index))
                 .map(|index| resolution.call_requests(*index))
                 .collect();
             let start = actor
@@ -164,14 +168,10 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
                     .count()
                     .max(1) as u64,
                 llm_calls: calls.len() as u64,
-                tool_calls: tools
+                tool_calls: actor
+                    .spans
                     .iter()
-                    .filter(|index| {
-                        resolution
-                            .actors
-                            .owner(**index)
-                            .is_some_and(|owner| owner.id == actor.id)
-                    })
+                    .filter(|index| native_tools.contains(index))
                     .count() as u64,
                 duration_ms: (end - start) as f64 / NANOS_PER_MS,
                 spend: total(&calls),
@@ -289,6 +289,7 @@ pub fn resolve_trace(
         ),
     };
     Some(Trace {
+        capture: super::capture::coverage(&resolution),
         summary,
         agents,
         spans,

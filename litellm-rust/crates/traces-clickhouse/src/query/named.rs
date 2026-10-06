@@ -102,6 +102,18 @@ struct TraceSpansRowEncoding {
     pub session_id: String,
     #[serde(default)]
     pub query_source: String,
+    #[serde(
+        default,
+        deserialize_with = "super::number::boolean",
+        serialize_with = "litellm_traces::wire::serialize_flag"
+    )]
+    pub has_output: bool,
+    #[serde(
+        default,
+        deserialize_with = "super::number::boolean",
+        serialize_with = "litellm_traces::wire::serialize_flag"
+    )]
+    pub capture_warning: bool,
     #[serde(default)]
     pub framework: String,
     #[serde(serialize_with = "litellm_traces::wire::serialize_status")]

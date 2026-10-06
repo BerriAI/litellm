@@ -96,6 +96,9 @@ pub struct TraceSummary {
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trace {
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub capture: Option<TraceCapture>,
     pub summary: TraceSummary,
     pub agents: Vec<AgentNode>,
     pub spans: Vec<Span>,
@@ -128,4 +131,25 @@ pub struct SpanErrorPage {
     pub message: String,
     pub total_chars: u64,
     pub next_cursor: Option<String>,
+}
+
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ActorCapture {
+    pub actor_id: String,
+    pub name: String,
+    pub llm_calls: u64,
+    pub tool_calls: u64,
+    pub reply_events: u64,
+    pub model_outputs: u64,
+    pub content_events: u64,
+}
+
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TraceCapture {
+    pub actors: Vec<ActorCapture>,
+    pub content_events: u64,
+    pub unassigned_events: u64,
+    pub warning_events: u64,
 }

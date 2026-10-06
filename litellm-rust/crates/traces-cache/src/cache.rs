@@ -301,6 +301,8 @@ mod tests {
             native_parent_agent_id: String::new(),
             session_id: String::new(),
             query_source: String::new(),
+            has_output: false,
+            capture_warning: false,
             trace_id: String::new(),
             span_id: span_id.into(),
             parent_span_id: String::new(),

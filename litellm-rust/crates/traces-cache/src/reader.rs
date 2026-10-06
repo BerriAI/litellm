@@ -325,6 +325,7 @@ fn page<E>(
     let create_page = |count: usize| {
         let end = position.offset.saturating_add(count).min(spans.len());
         Trace {
+            capture: snapshot.trace().capture.clone(),
             summary: snapshot.trace().summary.clone(),
             agents: snapshot.trace().agents.clone(),
             spans: spans[position.offset..end].to_vec(),

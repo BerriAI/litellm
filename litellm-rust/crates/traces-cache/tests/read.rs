@@ -263,6 +263,8 @@ fn span(index: usize) -> TraceSpansRow {
         native_parent_agent_id: String::new(),
         session_id: String::new(),
         query_source: String::new(),
+        has_output: false,
+        capture_warning: false,
         trace_id: "trace".into(),
         span_id: format!("span-{index}"),
         parent_span_id: if index == 0 {
