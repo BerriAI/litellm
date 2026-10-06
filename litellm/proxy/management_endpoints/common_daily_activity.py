@@ -47,6 +47,11 @@ from litellm.types.repositories.daily_activity import (
 )
 
 
+class _UserApiKeyRecord(Protocol):
+    token: str
+    user_id: str | None
+
+
 @dataclass(frozen=True, slots=True)
 class ScopeDenied:
     status_code: Literal[403, 404]
@@ -607,7 +612,7 @@ async def get_api_key_metadata(
 async def _get_deleted_keys_for_user(
     prisma_client: PrismaClient,
     user_id: str,
-) -> Sequence[object]:
+) -> Sequence[_UserApiKeyRecord]:
     return await DeletedVerificationTokenRepository(prisma_client).table.find_many(
         where={"user_id": user_id},
         order={"deleted_at": "desc"},
@@ -620,9 +625,9 @@ async def get_user_api_key_filter(
     api_key: str | None,
 ) -> list[str]:
     """Return the key digests that should scope a user activity query."""
-    active_keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
-        where={"user_id": user_id},
-    )
+    active_keys: Final[Sequence[_UserApiKeyRecord]] = await VerificationTokenRepository(
+        prisma_client
+    ).find_by_user_id(user_id)
     deleted_keys: Final = await _get_deleted_keys_for_user(prisma_client, user_id)
     user_api_keys: Final = list(
         dict.fromkeys(

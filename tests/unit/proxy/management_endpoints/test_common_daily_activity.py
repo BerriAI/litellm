@@ -2554,6 +2554,7 @@ async def test_get_user_api_key_filter_scopes_to_active_and_deleted_user_keys():
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[deleted_key])
 
     assert await get_user_api_key_filter(mock_prisma, "target-user", None) == ["active-key", "deleted-key"]
+    assert await get_user_api_key_filter(mock_prisma, "target-user", "deleted-key") == ["deleted-key"]
     assert await get_user_api_key_filter(mock_prisma, "target-user", "unrelated-key") == []
 
 
