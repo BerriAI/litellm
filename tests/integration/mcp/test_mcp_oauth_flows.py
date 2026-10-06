@@ -8,6 +8,7 @@ import textwrap
 import time
 import uuid
 from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -798,6 +799,130 @@ def test_rotated_session_refresh_token_cannot_be_replayed_after_revocation(gatew
         }, listed.tools
 
 
+def _consent_form_fields(page: str) -> dict[str, str]:
+    return dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)">', page))
+
+
+def test_lite_logout_revokes_the_cli_refresh_token_sent_the_way_the_cli_sends_it(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team_id: Final = scenario.team()
+        member: Final = scenario.member(team_id)
+        discovered: Final = gateway.client.get("/.well-known/litellm-cli-auth")
+        assert discovered.status_code == 200, discovered.text
+        contract: Final = _response_object(discovered)
+        base: Final = _base(gateway)
+        assert (contract["resource"], contract["token_endpoint"], contract["revocation_endpoint"]) == (
+            base,
+            f"{base}/token",
+            f"{base}/revoke",
+        ), discovered.text
+        resource: Final = str(contract["resource"])
+        registered: Final = gateway.client.post(
+            str(contract["registration_endpoint"]),
+            json={
+                "client_name": "LiteLLM CLI",
+                "redirect_uris": [CLIENT_REDIRECT],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            },
+        )
+        assert registered.status_code in (200, 201), registered.text
+        client_id: Final = str(_response_object(registered)["client_id"])
+        pkce: Final = _Pkce(secrets.token_urlsafe(64))
+        cookies: Final = _ui_session_cookie(gateway, member)
+        consent: Final = gateway.client.get(
+            str(contract["authorization_endpoint"]),
+            params={
+                "response_type": "code",
+                "client_id": client_id,
+                "redirect_uri": CLIENT_REDIRECT,
+                "state": "lite-login-state",
+                "code_challenge": pkce.challenge,
+                "code_challenge_method": "S256",
+                "resource": resource,
+            },
+            cookies=cookies,
+        )
+        assert consent.status_code == 200, consent.text
+        consent_fields: Final = _consent_form_fields(consent.text)
+        assert set(consent_fields) == {"flow", "team_id"} and consent_fields["team_id"] == team_id, consent.text
+        approved: Final = gateway.client.post(
+            "/authorize/complete",
+            data={**consent_fields, "decision": "approve"},
+            cookies={**cookies, **dict(consent.cookies)},
+        )
+        assert approved.status_code == 303, approved.text
+        callback: Final = parse_qs(urlsplit(approved.headers["location"]).query)
+        assert callback["state"] == ["lite-login-state"], approved.headers["location"]
+        issued: Final = gateway.client.post(
+            str(contract["token_endpoint"]),
+            data={
+                "grant_type": "authorization_code",
+                "code": callback["code"][0],
+                "redirect_uri": CLIENT_REDIRECT,
+                "client_id": client_id,
+                "code_verifier": pkce.verifier,
+                "resource": resource,
+            },
+        )
+        assert issued.status_code == 200, issued.text
+        issued_body: Final = _response_object(issued)
+        assert (issued_body["user_id"], issued_body["team_id"]) == (member, team_id), issued.text
+        r1: Final = str(issued_body["refresh_token"])
+        assert r1.startswith("llm_srefresh_"), issued.text
+
+        def refresh(refresh_token: str) -> httpx.Response:
+            return gateway.client.post(
+                str(contract["token_endpoint"]),
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "client_id": client_id,
+                    "resource": resource,
+                },
+            )
+
+        def revoke(refresh_token: str) -> httpx.Response:
+            return gateway.client.post(
+                str(contract["revocation_endpoint"]),
+                data={"token": refresh_token, "token_type_hint": "refresh_token", "client_id": client_id},
+            )
+
+        rotated: Final = refresh(r1)
+        assert rotated.status_code == 200, rotated.text
+        rotated_body: Final = _response_object(rotated)
+        r2: Final = str(rotated_body["refresh_token"])
+        assert r2 != r1 and r2.startswith("llm_srefresh_"), rotated.text
+        assert (rotated_body["user_id"], rotated_body["team_id"]) == (member, team_id), rotated.text
+        replayed: Final = refresh(r1)
+        assert replayed.status_code == 400, replayed.text
+        assert _response_object(replayed) == {
+            "error": "invalid_grant",
+            "error_description": "the refresh token was already used",
+        }, replayed.text
+        logged_out: Final = revoke(r2)
+        assert logged_out.status_code == 200, logged_out.text
+        assert _response_object(logged_out) == {}, logged_out.text
+        logged_out_again: Final = revoke(r2)
+        assert logged_out_again.status_code == 200, logged_out_again.text
+        assert _response_object(logged_out_again) == {}, logged_out_again.text
+        after_logout: Final = refresh(r2)
+        assert after_logout.status_code == 400, after_logout.text
+        assert _response_object(after_logout) == {
+            "error": "invalid_grant",
+            "error_description": "the refresh token was already used",
+        }, after_logout.text
+        completion: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "lite logout access token"}]},
+            key=str(rotated_body["access_token"]),
+        )
+        assert completion.status_code == 200, completion.text
+
+
 def _toolset_rpc(gateway: Gateway, bearer: str, name: str, method: str, params: dict[str, object]) -> Outcome:
     def post(rpc_method: str, rpc_params: dict[str, object]) -> httpx.Response:
         return gateway.client.post(
@@ -950,21 +1075,48 @@ def _proxy_config_with_general_settings(directory: Path, name: str, overrides: M
     return config_path
 
 
-def _idp_proxy_config(directory: Path) -> Path:
+def _idp_proxy_config(directory: Path, team_id_jwt_field: str | None = None) -> Path:
     return _proxy_config_with_general_settings(
         directory,
         "mcp_idp.yaml",
         {
             "enable_jwt_auth": True,
-            "litellm_jwtauth": {"user_id_jwt_field": "sub", "user_id_upsert": True},
+            "litellm_jwtauth": {
+                "user_id_jwt_field": "sub",
+                "user_id_upsert": True,
+                **({} if team_id_jwt_field is None else {"team_id_jwt_field": team_id_jwt_field}),
+            },
             "use_x_forwarded_for": True,
             "mcp_trusted_proxy_ranges": ["127.0.0.1/32"],
         },
     )
 
 
-@pytest.fixture(scope="module")
-def idp_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_IdpRig]:
+def _signed_subject_token(private_key: RSAPrivateKey, claims: Mapping[str, str], kid: str) -> str:
+    now: Final = int(time.time())
+    return jwt.encode({**claims, "iat": now, "exp": now + 300}, private_key, algorithm="RS256", headers={"kid": kid})
+
+
+def _token_exchange_form(client_id: str, subject_token: str) -> dict[str, str]:
+    return {
+        "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+        "client_id": client_id,
+        "subject_token": subject_token,
+        "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+        "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
+    }
+
+
+def _registered_dcr_client(gateway: Gateway) -> str:
+    registered: Final = gateway.client.post(
+        "/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+    )
+    assert registered.status_code in (200, 201), registered.text
+    return str(_response_object(registered)["client_id"])
+
+
+@contextmanager
+def _idp_gateway(directory: Path, team_id_jwt_field: str | None, workers: int) -> Iterator[_IdpRig]:
     assert os.environ.get("LITELLM_LICENSE"), (
         "enable_jwt_auth is enterprise-only: these tests need LITELLM_LICENSE (CI forwards it); "
         "without it /token answers 400 'JWT auth is an enterprise only feature; no license is set' "
@@ -985,8 +1137,7 @@ def idp_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_IdpRig]:
         assert request.method == "GET", request
         return Reply(drop_connection=True)
 
-    directory: Final = tmp_path_factory.mktemp("mcp-idp")
-    config_path: Final = _idp_proxy_config(directory)
+    config_path: Final = _idp_proxy_config(directory, team_id_jwt_field)
     with (
         wire_server(respond_good) as good_jwks,
         wire_server(respond_dead) as dead_jwks,
@@ -997,10 +1148,22 @@ def idp_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_IdpRig]:
             {"JWT_PUBLIC_KEY_URL": f"{good_jwks.url},{dead_jwks.url}"},
             config=config_path,
             remove_environment=("PROXY_BASE_URL",),
-            workers=2,
+            workers=workers,
         ) as candidate,
     ):
         yield _IdpRig(candidate, private_key, other_private_key, kid, dead_jwks)
+
+
+@pytest.fixture(scope="module")
+def idp_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_IdpRig]:
+    with _idp_gateway(tmp_path_factory.mktemp("mcp-idp"), None, workers=2) as rig:
+        yield rig
+
+
+@pytest.fixture(scope="module")
+def idp_team_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_IdpRig]:
+    with _idp_gateway(tmp_path_factory.mktemp("mcp-idp-team"), "team_id", workers=1) as rig:
+        yield rig
 
 
 @pytest.fixture(scope="module")
@@ -1210,6 +1373,62 @@ def test_idp_subject_token_exchange_mints_a_credential_for_the_mapped_user_and_r
         "error": "invalid_request",
         "error_description": "subject_token is not a JWT",
     }, non_jwt.text
+
+
+def test_idp_subject_token_exchange_binds_the_team_claim_and_refuses_a_signed_subject_with_no_user(
+    idp_team_rig: _IdpRig,
+) -> None:
+    client_id: Final = _registered_dcr_client(idp_team_rig.gateway)
+    subject: Final = "mcp-idp-team-user-" + uuid.uuid4().hex
+    with idp_team_rig.gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team_id: Final = scenario.team()
+        exchanged: Final = idp_team_rig.gateway.client.post(
+            "/token",
+            data=_token_exchange_form(
+                client_id,
+                _signed_subject_token(idp_team_rig.private_key, {"sub": subject, "team_id": team_id}, idp_team_rig.kid),
+            ),
+        )
+        assert exchanged.status_code == 200, exchanged.text
+        body: Final = _response_object(exchanged)
+        assert (body["user_id"], body["team_id"], body["issued_token_type"]) == (
+            subject,
+            team_id,
+            "urn:ietf:params:oauth:token-type:access_token",
+        ), exchanged.text
+        completion: Final = idp_team_rig.gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "mcp idp team spend"}]},
+            key=str(body["access_token"]),
+        )
+        assert completion.status_code == 200, completion.text
+        request_id: Final = str(_response_object(completion)["id"])
+        spend: Final = eventually(
+            lambda: read_rows(
+                "SELECT team_id, metadata->>'user_api_key_user_id' AS user_api_key_user_id, "
+                "metadata->>'user_api_key_team_id' AS user_api_key_team_id "
+                'FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
+                (request_id,),
+            ),
+            lambda rows: len(rows) == 1,
+            seconds=70,
+        )
+        assert spend == [{"team_id": team_id, "user_api_key_user_id": subject, "user_api_key_team_id": team_id}], (
+            spend
+        )
+        no_user: Final = idp_team_rig.gateway.client.post(
+            "/token",
+            data=_token_exchange_form(
+                client_id, _signed_subject_token(idp_team_rig.private_key, {"team_id": team_id}, idp_team_rig.kid)
+            ),
+        )
+        assert no_user.status_code == 400, no_user.text
+        assert _response_object(no_user) == {
+            "error": "invalid_request",
+            "error_description": "subject_token names no user the gateway knows",
+        }, no_user.text
 
 
 def test_idp_jwks_server_error_answers_temporarily_unavailable(tmp_path: Path) -> None:
