@@ -12387,6 +12387,59 @@ class TestKeyOwnerPrivilegeEscalation:
         mock_check.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_creator_cannot_clear_own_max_budget(self):
+        """An explicit max_budget null removes the key's cap, so it is a budget change."""
+        data = UpdateKeyRequest(key="sk-test", max_budget=None)
+        existing = self._make_existing_key(created_by="creator-123")
+        existing.max_budget = 10.0
+        auth = self._make_auth(user_id="creator-123")
+
+        mock_check = AsyncMock(
+            side_effect=HTTPException(status_code=403, detail="Not authorized")
+        )
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            mock_check,
+        ):
+            with pytest.raises(HTTPException):
+                await _validate_update_key_data(
+                    data=data,
+                    existing_key_row=existing,
+                    user_api_key_dict=auth,
+                    llm_router=None,
+                    premium_user=False,
+                    prisma_client=AsyncMock(),
+                    user_api_key_cache=MagicMock(),
+                )
+        mock_check.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_creator_null_max_budget_on_uncapped_key_needs_no_admin(self):
+        """The dashboard form always sends max_budget, null when empty, so echoing the stored null is not a change."""
+        data = UpdateKeyRequest(key="sk-test", max_budget=None, key_alias="renamed")
+        existing = self._make_existing_key(created_by="creator-123")
+        existing.max_budget = None
+        auth = self._make_auth(user_id="creator-123")
+
+        mock_check = AsyncMock(
+            side_effect=HTTPException(status_code=403, detail="Not authorized")
+        )
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            mock_check,
+        ):
+            result = await _validate_update_key_data(
+                data=data,
+                existing_key_row=existing,
+                user_api_key_dict=auth,
+                llm_router=None,
+                premium_user=False,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        assert result is None
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("cleared_value", [[], None])
     async def test_creator_cannot_clear_own_budget_limits(self, cleared_value):
         """Clearing budget_limits is a budget change and requires admin."""
