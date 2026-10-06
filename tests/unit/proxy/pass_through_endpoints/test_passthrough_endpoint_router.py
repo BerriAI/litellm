@@ -15,7 +15,6 @@ from litellm.types.utils import CredentialItem
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import patch
 
 
 @pytest.fixture(autouse=True)
