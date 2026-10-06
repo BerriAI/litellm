@@ -89,6 +89,7 @@ CALLBACK_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingProx
         "arize_space_id": NotSecret("space identifier"),
         "arize_success_sampling_rate": NotSecret("sampling rate"),
         "arize_error_sampling_rate": NotSecret("sampling rate"),
+        "arize_otlp_protocol": NotSecret("transport protocol enum"),
         "posthog_api_key": Unplanted(),
         "posthog_api_url": NotSecret("sink endpoint URL"),
         "wandb_api_key": Unplanted(),

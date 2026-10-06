@@ -8590,3 +8590,38 @@ def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
         team_callback_settings_obj=None,
     )
     assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}
+
+
+def test_arize_otlp_protocol_on_a_key_logging_entry_reaches_the_destination(monkeypatch):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.proxy.litellm_pre_call_utils import resolve_tenant_otel_destinations
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("ARIZE_ENDPOINT", "https://arize.internal.example/v1")
+    monkeypatch.delenv("ARIZE_HTTP_ENDPOINT", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        auth = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "arize_space_id": "s",
+                            "arize_api_key": "k",
+                            "arize_otlp_protocol": "http/protobuf",
+                        },
+                    }
+                ]
+            },
+            team_metadata={},
+        )
+
+        destinations = resolve_tenant_otel_destinations(auth)
+
+        assert [d.protocol for d in destinations] == ["otlp_http"]
+        assert destinations[0].endpoint == "https://arize.internal.example/v1/traces"
+    finally:
+        is_otel_v2_enabled.cache_clear()

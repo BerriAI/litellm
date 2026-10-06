@@ -63,7 +63,7 @@ def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
 def _arize_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
     from litellm.integrations.arize.arize import ArizeLogger
 
-    config: Final = ArizeLogger.get_arize_config()
+    config: Final = ArizeLogger.get_arize_config(params.get("arize_otlp_protocol"))
     return (config.endpoint, config.protocol)
 
 

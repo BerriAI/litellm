@@ -61,7 +61,7 @@ def _callback_config_error(message: str) -> HTTPException:
 
 
 def _validate_team_callback(data: "AddTeamCallback") -> None:
-    error: Final = callback_config_error(data.callback_name, data.callback_vars)
+    error: Final = callback_config_error(data.callback_name, data.callback_vars, data.callback_type)
     if error is not None:
         raise _callback_config_error(error)
 

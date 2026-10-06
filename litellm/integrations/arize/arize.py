@@ -17,7 +17,7 @@ from litellm.integrations.arize._utils import ArizeOTELAttributes
 from litellm.integrations.opentelemetry import _MAX_DYNAMIC_TRACER_PROVIDERS, OpenTelemetry, OpenTelemetryConfig
 from litellm.types.integrations.arize import ArizeConfig
 from litellm.types.services import ServiceLoggerPayload
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import ArizeOtlpProtocol, StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -174,7 +174,7 @@ class ArizeLogger(OpenTelemetry):
         _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
 
     @staticmethod
-    def get_arize_config() -> ArizeConfig:
+    def get_arize_config(otlp_protocol: ArizeOtlpProtocol | None = None) -> ArizeConfig:
         """
         Helper function to get Arize configuration.
 
@@ -195,7 +195,19 @@ class ArizeLogger(OpenTelemetry):
         endpoint = None
         protocol: Protocol = "otlp_grpc"
 
-        if grpc_endpoint:
+        if otlp_protocol == "http/protobuf":
+            protocol = "otlp_http"
+            if http_endpoint:
+                endpoint = http_endpoint
+            elif grpc_endpoint:
+                base: Final = grpc_endpoint.rstrip("/")
+                endpoint = f"{base}/traces" if base.endswith("/v1") else base
+            else:
+                endpoint = "https://otlp.arize.com/v1/traces"
+        elif otlp_protocol == "grpc":
+            protocol = "otlp_grpc"
+            endpoint = grpc_endpoint or http_endpoint or "https://otlp.arize.com/v1"
+        elif grpc_endpoint:
             protocol = "otlp_grpc"
             endpoint = grpc_endpoint
         elif http_endpoint:
