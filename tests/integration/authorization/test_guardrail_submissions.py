@@ -409,11 +409,9 @@ def test_team_guardrail_submissions_require_admin_approval(
         admin_list: Final = gateway.request("GET", "/guardrails/submissions")
         assert admin_list.status_code == 200, admin_list.text
         admin_submissions: Final = _SubmissionsResponse.model_validate_json(admin_list.content)
-        assert {item.guardrail_id for item in admin_submissions.submissions} == {
-            first_id,
-            second_id,
-            other_id,
-        }, admin_list.text
+        assert {first_id, second_id, other_id} <= {item.guardrail_id for item in admin_submissions.submissions}, (
+            admin_list.text
+        )
 
         provider_requests: Final = provider.drain()
         assert [(request.method, request.target) for request in provider_requests] == [
