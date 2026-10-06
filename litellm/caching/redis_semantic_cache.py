@@ -22,7 +22,6 @@ from litellm.constants import SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_semantic_cache_prompt_from_messages,
-    get_semantic_cache_prompt_from_responses_input,
 )
 from litellm.types.utils import EmbeddingResponse
 
@@ -269,7 +268,65 @@ class RedisSemanticCache(BaseCache):
         if "input" not in kwargs:
             return None
 
-        return get_semantic_cache_prompt_from_responses_input(kwargs.get("input")) or None
+        prompt_parts: Final[list[str]] = []
+        cls._collect_responses_input_text(kwargs.get("input"), prompt_parts)
+        prompt: Final = "\n".join(prompt_parts).strip()
+        return prompt or None
+
+    @classmethod
+    def _collect_responses_input_text(cls, value: object, prompt_parts: list[str]) -> None:
+        value = cls._coerce_response_input_value(value)
+        if value is None:
+            return
+
+        if isinstance(value, str):
+            stripped_value: Final = value.strip()
+            if stripped_value:
+                prompt_parts.append(stripped_value)
+            return
+
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                cls._collect_responses_input_text(item, prompt_parts)
+            return
+
+        if isinstance(value, dict):
+            content = value.get("content")
+            if content is not None:
+                cls._collect_responses_input_text(content, prompt_parts)
+                return
+
+            for text_key in ("text", "output", "input_text", "output_text"):
+                text_value = value.get(text_key)
+                if isinstance(text_value, str):
+                    stripped_text = text_value.strip()
+                    if stripped_text:
+                        prompt_parts.append(stripped_text)
+                        return
+            return
+
+        content = getattr(value, "content", None)
+        if content is not None:
+            cls._collect_responses_input_text(content, prompt_parts)
+            return
+
+        for text_key in ("text", "output", "input_text", "output_text"):
+            text_value = getattr(value, text_key, None)
+            if isinstance(text_value, str):
+                stripped_text = text_value.strip()
+                if stripped_text:
+                    prompt_parts.append(stripped_text)
+                    return
+
+    @staticmethod
+    def _coerce_response_input_value(value: object) -> object:
+        model_dump: Final = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            return model_dump()
+        dict_method: Final = getattr(value, "dict", None)
+        if callable(dict_method):
+            return dict_method()
+        return value
 
     def _embedding_input(self, prompt: str, router: "Router | None") -> str:
         return truncate_embedding_input(

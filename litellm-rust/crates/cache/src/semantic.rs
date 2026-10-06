@@ -1,15 +1,14 @@
 //! The embedding and prompt contract every semantic backend shares.
 //!
-//! Python's semantic caches all read their prompt through `get_semantic_cache_prompt_from_messages`, and
-//! `RedisSemanticCache._get_prompt_from_kwargs` (inherited by Valkey) adds Responses API `input`
-//! through `get_semantic_cache_prompt_from_responses_input`. Qdrant reads messages only. Each
-//! backend picks one of the two extractors here.
+//! Python's semantic caches all read their prompt through `get_str_from_messages`, and
+//! `RedisSemanticCache._get_prompt_from_kwargs` (inherited by Valkey) adds Responses API
+//! `input`. Qdrant reads messages only. Each backend picks one of the two extractors here.
 
-use std::{collections::HashMap, future::Future, io};
+use std::{future::Future, io};
 
 use serde::Serialize;
 use serde_json::{
-    Value, json,
+    Value,
     ser::{CharEscape, Formatter, Serializer},
 };
 
@@ -84,122 +83,45 @@ impl Embedder for PreparedEmbedding {
     }
 }
 
-/// `get_semantic_cache_prompt_from_messages`: every message's content text, tool calls and tool results,
-/// then its OpenAI `tool_calls`, then its search results. Each tool result is encoded with the
-/// position of the call it answers.
+/// `get_semantic_cache_prompt_from_messages`: every message's text content, including the text of
+/// Messages API `tool_result` blocks, followed by its search results.
 pub fn str_from_messages(messages: &[Value]) -> String {
-    let messages: Vec<_> = messages.iter().filter_map(Value::as_object).collect();
-    let call_ordinals = tool_call_ordinals(messages.iter().flat_map(|message| {
-        let block_ids = message
-            .get("content")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
-            .filter_map(|block| block.get("id"));
-        let tool_call_ids = message
-            .get("tool_calls")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|tool_call| tool_call.get("id"));
-        block_ids.chain(tool_call_ids)
-    }));
     let mut text = String::new();
-    for message in messages {
-        if message.get("role").and_then(Value::as_str) == Some("tool") {
-            let mut output = String::new();
-            push_content_text(&mut output, message.get("content"), &call_ordinals);
-            text.push_str(&tool_result_json(
-                message.get("tool_call_id"),
-                &call_ordinals,
-                &output,
-            ));
-        } else {
-            push_content_text(&mut text, message.get("content"), &call_ordinals);
-        }
-        if let Some(Value::Array(tool_calls)) = message.get("tool_calls") {
-            for tool_call in tool_calls.iter().filter_map(Value::as_object) {
-                let function = tool_call.get("function");
-                text.push_str(&tool_call_json(
-                    function.and_then(|function| function.get("name")),
-                    function.and_then(|function| function.get("arguments")),
-                ));
+    for message in messages.iter().filter_map(Value::as_object) {
+        match message.get("content") {
+            Some(Value::String(content)) => text.push_str(content),
+            Some(Value::Array(blocks)) => {
+                for block in blocks {
+                    push_block_text(&mut text, block);
+                }
             }
+            _ => {}
         }
         push_search_results_text(&mut text, message.get("search_results"));
     }
     text
 }
 
-/// `_content_str_with_tools`: text parts, Anthropic `tool_use` blocks and `tool_result` content.
-fn push_content_text(
-    text: &mut String,
-    content: Option<&Value>,
-    call_ordinals: &HashMap<&str, usize>,
-) {
-    match content {
-        Some(Value::String(content)) => text.push_str(content),
+fn push_block_text(text: &mut String, block: &Value) {
+    if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+        push_text_field(text, block);
+        return;
+    }
+    match block.get("content") {
+        Some(Value::String(result)) => text.push_str(result),
         Some(Value::Array(blocks)) => {
-            for block in blocks.iter().filter_map(Value::as_object) {
-                match block.get("type").and_then(Value::as_str) {
-                    Some("tool_use") => {
-                        text.push_str(&tool_call_json(block.get("name"), block.get("input")));
-                    }
-                    Some("tool_result") => {
-                        let mut output = String::new();
-                        push_content_text(&mut output, block.get("content"), call_ordinals);
-                        text.push_str(&tool_result_json(
-                            block.get("tool_use_id"),
-                            call_ordinals,
-                            &output,
-                        ));
-                    }
-                    _ => {
-                        if let Some(block_text) = block.get("text").and_then(Value::as_str) {
-                            text.push_str(block_text);
-                        }
-                    }
-                }
+            for inner in blocks {
+                push_text_field(text, inner);
             }
         }
         _ => {}
     }
 }
 
-/// `tool_call_ordinals`: the 1-based position of each distinct string call id, first seen first.
-fn tool_call_ordinals<'a>(call_ids: impl Iterator<Item = &'a Value>) -> HashMap<&'a str, usize> {
-    let mut ordinals = HashMap::new();
-    for call_id in call_ids.filter_map(Value::as_str) {
-        let next = ordinals.len() + 1;
-        ordinals.entry(call_id).or_insert(next);
+fn push_text_field(text: &mut String, block: &Value) {
+    if let Some(block_text) = block.get("text").and_then(Value::as_str) {
+        text.push_str(block_text);
     }
-    ordinals
-}
-
-/// `tool_result_str`: `{"result_of_call":N,"output":...}`, with a `null` position when the result
-/// answers no known call.
-fn tool_result_json(
-    call_id: Option<&Value>,
-    call_ordinals: &HashMap<&str, usize>,
-    output: &str,
-) -> String {
-    let ordinal = call_id
-        .and_then(Value::as_str)
-        .and_then(|call_id| call_ordinals.get(call_id));
-    format!(
-        "{{\"result_of_call\":{},\"output\":{}}}",
-        compact_json(&json!(ordinal)),
-        compact_json(&Value::String(output.to_owned())),
-    )
-}
-
-/// `tool_call_str`: the compact `{"name":...,"arguments":...}` a tool call contributes.
-fn tool_call_json(name: Option<&Value>, arguments: Option<&Value>) -> String {
-    compact_json(&json!({
-        "name": name.unwrap_or(&Value::Null),
-        "arguments": arguments.unwrap_or(&Value::Null),
-    }))
 }
 
 /// The messages prompt Qdrant embeds: `None` when the request carries no messages.
@@ -208,9 +130,8 @@ pub fn prompt_from_messages(context: &SemanticCacheContext) -> Option<String> {
     (!messages.is_empty()).then(|| str_from_messages(messages))
 }
 
-/// `RedisSemanticCache._get_prompt_from_kwargs`: chat messages first, then
-/// `get_semantic_cache_prompt_from_responses_input` over a Responses API `input`. `None` when
-/// neither yields a prompt.
+/// `RedisSemanticCache._get_prompt_from_kwargs`: chat messages first, then the text parts of a
+/// Responses API `input`. `None` when neither yields a prompt.
 pub fn prompt_from_context(context: &SemanticCacheContext) -> Option<String> {
     if let Some(messages) = context.messages.as_ref().and_then(Value::as_array)
         && !messages.is_empty()
@@ -218,16 +139,8 @@ pub fn prompt_from_context(context: &SemanticCacheContext) -> Option<String> {
         return Some(str_from_messages(messages));
     }
     let input = context.input.as_ref()?;
-    let call_ordinals = tool_call_ordinals(
-        input
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|item| item.get("type").and_then(Value::as_str) == Some("function_call"))
-            .filter_map(|item| item.get("call_id")),
-    );
     let mut parts = Vec::new();
-    collect_input_text(input, &mut parts, &call_ordinals);
+    collect_input_text(input, &mut parts);
     let prompt = python_strip(&parts.join("\n")).to_owned();
     (!prompt.is_empty()).then_some(prompt)
 }
@@ -256,49 +169,26 @@ fn push_search_results_text(text: &mut String, search_results: Option<&Value>) {
     }
 }
 
-fn collect_input_text(
-    value: &Value,
-    parts: &mut Vec<String>,
-    call_ordinals: &HashMap<&str, usize>,
-) {
+fn collect_input_text(value: &Value, parts: &mut Vec<String>) {
     match value {
         Value::String(text) => {
             push_trimmed(text, parts);
         }
         Value::Array(items) => {
             for item in items {
-                collect_input_text(item, parts, call_ordinals);
+                collect_input_text(item, parts);
             }
         }
         Value::Object(map) => {
-            if map.get("type").and_then(Value::as_str) == Some("function_call") {
-                parts.push(tool_call_json(map.get("name"), map.get("arguments")));
-                return;
-            }
-            if map.get("type").and_then(Value::as_str) == Some("function_call_output") {
-                let mut output_parts = Vec::new();
-                if let Some(output) = map.get("output") {
-                    collect_input_text(output, &mut output_parts, call_ordinals);
-                }
-                parts.push(tool_result_json(
-                    map.get("call_id"),
-                    call_ordinals,
-                    python_strip(&output_parts.join("\n")),
-                ));
-                return;
-            }
             if let Some(content) = map.get("content").filter(|content| !content.is_null()) {
-                collect_input_text(content, parts, call_ordinals);
+                collect_input_text(content, parts);
                 return;
             }
             for key in ["text", "output", "input_text", "output_text"] {
-                match map.get(key) {
-                    Some(nested @ Value::Array(_)) => {
-                        collect_input_text(nested, parts, call_ordinals);
-                        return;
-                    }
-                    Some(Value::String(text)) if push_trimmed(text, parts) => return,
-                    _ => {}
+                if let Some(Value::String(text)) = map.get(key)
+                    && push_trimmed(text, parts)
+                {
+                    return;
                 }
             }
         }

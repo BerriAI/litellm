@@ -567,122 +567,27 @@ def test_redis_semantic_cache_prompt_extraction_prefers_messages():
     assert prompt == "message prompt"
 
 
-def test_redis_semantic_cache_prompt_extraction_keeps_tool_turns_distinct():
+def test_redis_semantic_cache_prompt_extraction_handles_model_objects():
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
-    def turn(command: str) -> list[dict[str, object]]:
-        return [
-            {"role": "user", "content": "fix the failing test"},
-            {
-                "role": "assistant",
-                "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"cmd": command}}],
-            },
-            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
-        ]
+    class ModelDumpInput:
+        def model_dump(self):
+            return {"content": [{"text": "model dump prompt"}]}
 
-    assert RedisSemanticCache._get_prompt_from_kwargs(messages=turn("ls")) == (
-        'fix the failing test{"name":"Bash","arguments":{"cmd":"ls"}}{"result_of_call":1,"output":"ok"}'
-    )
-    assert RedisSemanticCache._get_prompt_from_kwargs(messages=turn("pwd")) == (
-        'fix the failing test{"name":"Bash","arguments":{"cmd":"pwd"}}{"result_of_call":1,"output":"ok"}'
-    )
-
-
-def test_redis_semantic_cache_prompt_extraction_keeps_responses_function_calls():
-    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+    class DictInput:
+        def dict(self):
+            return {"content": [{"output_text": "dict prompt"}]}
 
     prompt = RedisSemanticCache._get_prompt_from_kwargs(
         input=[
-            {"role": "user", "content": "update the config"},
-            {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": '{"path":"a.yaml"}'},
-            {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+            ModelDumpInput(),
+            DictInput(),
+            {"content": [{"input_text": "inline prompt"}]},
+            {"content": [{"type": "input_image", "image_url": "https://example.com"}]},
         ]
     )
 
-    assert prompt == (
-        'update the config\n{"name":"write_file","arguments":"{\\"path\\":\\"a.yaml\\"}"}\n{"result_of_call":1,"output":"ok"}'
-    )
-
-
-def test_redis_semantic_cache_prompt_extraction_keeps_structured_function_call_outputs():
-    from litellm.caching.redis_semantic_cache import RedisSemanticCache
-
-    def prompt_for(output_text: str) -> str | None:
-        return RedisSemanticCache._get_prompt_from_kwargs(
-            input=[
-                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "write hello"}]},
-                {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": '{"path":"a.txt"}'},
-                {
-                    "type": "function_call_output",
-                    "call_id": "c1",
-                    "output": [{"type": "input_text", "text": output_text}],
-                },
-            ]
-        )
-
-    expected_call = '{"name":"write_file","arguments":"{\\"path\\":\\"a.txt\\"}"}'
-    assert (
-        prompt_for("wrote 5 bytes") == f'write hello\n{expected_call}\n{{"result_of_call":1,"output":"wrote 5 bytes"}}'
-    )
-    assert prompt_for("wrote 5 bytes") != prompt_for("PermissionError")
-
-
-def test_redis_semantic_cache_prompt_extraction_joins_multi_part_function_call_output_lines():
-    from litellm.caching.redis_semantic_cache import RedisSemanticCache
-
-    prompt = RedisSemanticCache._get_prompt_from_kwargs(
-        input=[
-            {"type": "function_call", "call_id": "c1", "name": "run", "arguments": "{}"},
-            {
-                "type": "function_call_output",
-                "call_id": "c1",
-                "output": [{"type": "input_text", "text": " line one "}, {"type": "input_text", "text": "line two"}],
-            },
-        ]
-    )
-
-    assert prompt == '{"name":"run","arguments":"{}"}\n{"result_of_call":1,"output":"line one\\nline two"}'
-
-
-def test_redis_semantic_cache_prompt_extraction_tells_apart_parallel_outputs_answering_different_calls():
-    from litellm.caching.redis_semantic_cache import RedisSemanticCache
-
-    def prompt_for(first_output_call_id: str, second_output_call_id: str) -> str | None:
-        return RedisSemanticCache._get_prompt_from_kwargs(
-            input=[
-                {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "a"},
-                {"type": "function_call", "call_id": "c2", "name": "read", "arguments": "b"},
-                {"type": "function_call_output", "call_id": first_output_call_id, "output": "empty"},
-                {"type": "function_call_output", "call_id": second_output_call_id, "output": "secret"},
-            ]
-        )
-
-    assert prompt_for("c2", "c1") == (
-        '{"name":"read","arguments":"a"}\n{"name":"read","arguments":"b"}\n'
-        '{"result_of_call":2,"output":"empty"}\n{"result_of_call":1,"output":"secret"}'
-    )
-    assert prompt_for("c1", "c2") != prompt_for("c2", "c1")
-
-
-def test_redis_semantic_cache_prompt_extraction_dumps_sdk_response_items_appended_to_input():
-    from openai.types.responses import ResponseFunctionToolCall
-
-    from litellm.caching.redis_semantic_cache import RedisSemanticCache
-
-    prompt = RedisSemanticCache._get_prompt_from_kwargs(
-        input=[
-            {"role": "user", "content": "write hello"},
-            ResponseFunctionToolCall(
-                type="function_call", call_id="c1", name="write_file", arguments='{"path":"a.txt"}'
-            ),
-            {"type": "function_call_output", "call_id": "c1", "output": "ok"},
-        ]
-    )
-
-    assert (
-        prompt
-        == 'write hello\n{"name":"write_file","arguments":"{\\"path\\":\\"a.txt\\"}"}\n{"result_of_call":1,"output":"ok"}'
-    )
+    assert prompt == "model dump prompt\ndict prompt\ninline prompt"
 
 
 def test_redis_semantic_cache_prompt_extraction_returns_none_without_text():
@@ -695,6 +600,37 @@ def test_redis_semantic_cache_prompt_extraction_returns_none_without_text():
         RedisSemanticCache._get_prompt_from_kwargs(input=[{"type": "input_image", "image_url": "https://example.com"}])
         is None
     )
+
+
+def test_redis_semantic_cache_prompt_extraction_skips_blank_dict_text_keys():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(input={"text": "   ", "input_text": "fallback prompt"})
+
+    assert prompt == "fallback prompt"
+
+
+def test_redis_semantic_cache_prompt_extraction_skips_blank_object_text_keys():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    class ResponseInput:
+        text = "   "
+        input_text = "fallback prompt"
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(input=ResponseInput())
+
+    assert prompt == "fallback prompt"
+
+
+def test_redis_semantic_cache_prompt_extraction_handles_object_content():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    class ResponseInput:
+        content = [{"text": "object content prompt"}]
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(input=ResponseInput())
+
+    assert prompt == "object content prompt"
 
 
 def test_redis_semantic_cache_set_cache_skips_blank_responses_input():
@@ -1454,3 +1390,23 @@ async def test_redis_async_embedding_truncates_off_the_event_loop(monkeypatch):
     assert embedding == [0.1, 0.2]
     assert _token_count("sem-embed", router.aembedding.call_args.kwargs["input"]) == 5
     assert_loop_stayed_free(took, lags)
+
+
+def test_redis_semantic_cache_prompt_extraction_keeps_tool_result_text():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(
+        messages=[
+            {"role": "user", "content": "list the files"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "calc.py test_calc.py"}],
+            },
+        ]
+    )
+
+    assert prompt == "list the filescalc.py test_calc.py"

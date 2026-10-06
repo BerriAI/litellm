@@ -23,9 +23,6 @@ IGNORE_FUNCTIONS = [
     "_can_object_call_model",  # max depth set.
     "encode_unserializable_types",  # max depth set.
     "filter_value_from_dict",  # max depth set.
-    "_responses_text",  # walks only the nesting a Responses `input` carries.
-    "_messages_api_blocks_text",  # walks only the nesting a `tool_result` block carries.
-    "_plain",  # walks only the nesting a request `messages` or `input` carries.
     "normalize_json_schema_types",  # max depth set.
     "_extract_fields_recursive",  # max depth set.
     "_remove_json_schema_refs",  # max depth set.,
@@ -109,8 +106,13 @@ class RecursiveFunctionFinder(ast.NodeVisitor):
             return True
 
         # Case 2: Method call with self (e.g., self.my_func())
-        if isinstance(call_node.func, ast.Attribute) and isinstance(call_node.func.value, ast.Name):
-            return call_node.func.value.id == "self" and call_node.func.attr == func_node.name
+        if isinstance(call_node.func, ast.Attribute) and isinstance(
+            call_node.func.value, ast.Name
+        ):
+            return (
+                call_node.func.value.id == "self"
+                and call_node.func.attr == func_node.name
+            )
 
         return False
 
@@ -145,7 +147,9 @@ if __name__ == "__main__":
     # this is used in the CI/CD pipeline to prevent recursive functions from being merged
 
     directory_path = "./litellm"
-    recursive_functions, ignored_recursive_functions = find_recursive_functions_in_directory(directory_path)
+    recursive_functions, ignored_recursive_functions = (
+        find_recursive_functions_in_directory(directory_path)
+    )
     print("UNIGNORED RECURSIVE FUNCTIONS: ", recursive_functions)
     print("IGNORED RECURSIVE FUNCTIONS: ", ignored_recursive_functions)
 

@@ -30,7 +30,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     system_messages_first,
     update_messages_with_model_file_ids,
 )
-from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 _ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
@@ -2176,28 +2175,23 @@ class TestMergeConsecutiveSystemMessages:
         assert merged == [{"role": "system"}, {"role": "user", "content": "Hi"}]
 
 
-_TASK: Final = {"role": "user", "content": "fix the failing test"}
+_CLAUDE_CODE_TOOL_TURN: Final = [
+    {"role": "user", "content": "list the files"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}],
+    },
+    {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "calc.py test_calc.py"}],
+    },
+]
 
 
 @pytest.mark.parametrize(
     ("messages", "expected"),
     [
-        pytest.param(
-            [
-                _TASK,
-                {
-                    "role": "assistant",
-                    "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"cmd": "ls"}}],
-                },
-            ],
-            'fix the failing test{"name":"Bash","arguments":{"cmd":"ls"}}',
-            id="anthropic-tool-use-name-and-input-without-id",
-        ),
-        pytest.param(
-            [_TASK, {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "calc.py"}]}],
-            'fix the failing test{"result_of_call":null,"output":"calc.py"}',
-            id="anthropic-string-tool-result",
-        ),
+        pytest.param(_CLAUDE_CODE_TOOL_TURN, "list the filescalc.py test_calc.py", id="tool-result-string"),
         pytest.param(
             [
                 {
@@ -2205,166 +2199,67 @@ _TASK: Final = {"role": "user", "content": "fix the failing test"}
                     "content": [
                         {
                             "type": "tool_result",
-                            "tool_use_id": "t1",
-                            "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}],
-                        },
-                        {"type": "text", "text": "next"},
+                            "tool_use_id": "toolu_1",
+                            "content": [
+                                {"type": "text", "text": "x = 1"},
+                                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}},
+                            ],
+                        }
                     ],
                 }
             ],
-            '{"result_of_call":null,"output":"ab"}next',
-            id="anthropic-nested-text-tool-result-then-text",
+            "x = 1",
+            id="tool-result-blocks",
         ),
         pytest.param(
-            [
-                _TASK,
-                {
-                    "role": "assistant",
-                    "content": "writing",
-                    "tool_calls": [
-                        {"id": "c1", "type": "function", "function": {"name": "write", "arguments": '{"path": "a"}'}},
-                        {"id": "c2", "type": "function", "function": {"name": "write", "arguments": '{"path": "b"}'}},
-                    ],
-                },
-                {"role": "tool", "tool_call_id": "c1", "content": "ok"},
-            ],
-            'fix the failing testwriting{"name":"write","arguments":"{\\"path\\": \\"a\\"}"}'
-            '{"name":"write","arguments":"{\\"path\\": \\"b\\"}"}{"result_of_call":1,"output":"ok"}',
-            id="openai-tool-calls-in-order-before-tool-result",
-        ),
-        pytest.param(
-            [
-                {
-                    "role": "assistant",
-                    "content": [
-                        {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "a"}},
-                        {"type": "tool_use", "id": "t2", "name": "Read", "input": {"path": "b"}},
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "tool_result", "tool_use_id": "t2", "content": "B"},
-                        {"type": "tool_result", "tool_use_id": "t1", "content": "A"},
-                    ],
-                },
-            ],
-            '{"name":"Read","arguments":{"path":"a"}}{"name":"Read","arguments":{"path":"b"}}'
-            '{"result_of_call":2,"output":"B"}{"result_of_call":1,"output":"A"}',
-            id="anthropic-parallel-tool-results-tagged-with-their-call",
-        ),
-        pytest.param(
-            [
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [{"id": "call_0", "type": "function", "function": {"name": "a", "arguments": "{}"}}],
-                },
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {"id": "call_0", "type": "function", "function": {"name": "b", "arguments": "{}"}},
-                        {"id": "call_1", "type": "function", "function": {"name": "c", "arguments": "{}"}},
-                    ],
-                },
-                {"role": "tool", "tool_call_id": "call_1", "content": "C"},
-            ],
-            '{"name":"a","arguments":"{}"}{"name":"b","arguments":"{}"}{"name":"c","arguments":"{}"}'
-            '{"result_of_call":2,"output":"C"}',
-            id="reused-call-ids-keep-first-position",
-        ),
-        pytest.param(
-            [
-                {
-                    "role": "tool",
-                    "tool_call_id": "c1",
-                    "content": "small",
-                    "search_results": [{"source": "s", "title": "t"}],
-                }
-            ],
-            '{"result_of_call":null,"output":"small"}st',
-            id="tool-result-search-results-follow-the-encoded-result",
-        ),
-        pytest.param(
-            [{"role": "tool", "tool_call_id": "c1", "content": '"},{"result_of_call":2,"output":"'}],
-            '{"result_of_call":null,"output":"\\"},{\\"result_of_call\\":2,\\"output\\":\\""}',
-            id="tool-output-cannot-forge-an-encoded-result",
-        ),
-        pytest.param(
-            [
-                Message(
-                    content=None,
-                    tool_calls=[ChatCompletionMessageToolCall(id="c1", function=Function(name="read", arguments="{}"))],
-                )
-            ],
-            '{"name":"read","arguments":"{}"}',
-            id="openai-response-message-object",
-        ),
-        pytest.param(
-            [{"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function"}, "junk"]}, "junk"],
-            '{"name":null,"arguments":null}',
-            id="malformed-tool-call-entries",
+            [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1"}]}],
+            "",
+            id="tool-result-without-content",
         ),
     ],
 )
-def test_get_semantic_cache_prompt_from_messages_keeps_tool_exchange(messages: list[object], expected: str) -> None:
+def test_get_semantic_cache_prompt_from_messages_keeps_tool_result_text(
+    messages: list[dict[str, object]], expected: str
+) -> None:
     assert get_semantic_cache_prompt_from_messages(messages) == expected
+
+
+def test_get_semantic_cache_prompt_from_messages_differs_from_the_turn_before_it() -> None:
+    assert get_str_from_messages(_CLAUDE_CODE_TOOL_TURN) == get_str_from_messages(_CLAUDE_CODE_TOOL_TURN[:1])
+    assert get_semantic_cache_prompt_from_messages(_CLAUDE_CODE_TOOL_TURN) != get_semantic_cache_prompt_from_messages(
+        _CLAUDE_CODE_TOOL_TURN[:1]
+    )
 
 
 @pytest.mark.parametrize(
     "messages",
     [
-        pytest.param([_TASK, {"role": "assistant", "content": "done"}], id="string-content"),
+        pytest.param([{"role": "system", "content": "be brief. "}, {"role": "user", "content": "hello"}], id="strings"),
         pytest.param(
             [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "what is "},
+                        {"type": "text", "text": "What is "},
                         {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
-                        {"type": "text", "text": "this"},
+                        {"type": "text", "text": "this?"},
                     ],
                 }
             ],
-            id="text-and-image-parts",
+            id="text-parts",
         ),
-        pytest.param([{"role": "assistant", "content": None}, {"role": "user"}], id="missing-content"),
+        pytest.param(
+            [
+                {"role": "assistant"},
+                {"role": "assistant", "content": None},
+                {"role": "user", "content": ""},
+                {"role": "tool", "content": "small", "search_results": [{"source": "s", "title": "t", "content": []}]},
+            ],
+            id="empty-content-and-search-results",
+        ),
     ],
 )
-def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_without_tools(
-    messages: list[object],
+def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_without_tool_results(
+    messages: list[dict[str, object]],
 ) -> None:
-    assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)  # pyright: ignore[reportArgumentType]  # untyped fixtures
-
-
-def _parallel_reads(result_for_a: str, result_for_b: str, *, call_id_prefix: str = "c") -> list[object]:
-    return [
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {"id": f"{call_id_prefix}1", "type": "function", "function": {"name": "read", "arguments": '"a"'}},
-                {"id": f"{call_id_prefix}2", "type": "function", "function": {"name": "read", "arguments": '"b"'}},
-            ],
-        },
-        {"role": "tool", "tool_call_id": f"{call_id_prefix}1", "content": result_for_a},
-        {"role": "tool", "tool_call_id": f"{call_id_prefix}2", "content": result_for_b},
-    ]
-
-
-def _results_in_swapped_order(result_for_a: str, result_for_b: str) -> list[object]:
-    call, answer_a, answer_b = _parallel_reads(result_for_a, result_for_b)
-    return [call, answer_b, answer_a]
-
-
-def test_get_semantic_cache_prompt_from_messages_tells_apart_parallel_results_answering_different_calls() -> None:
-    assert get_semantic_cache_prompt_from_messages(
-        _parallel_reads("empty", "secret")
-    ) != get_semantic_cache_prompt_from_messages(_results_in_swapped_order("secret", "empty"))
-
-
-def test_get_semantic_cache_prompt_from_messages_ignores_call_ids_that_differ_between_sessions() -> None:
-    assert get_semantic_cache_prompt_from_messages(
-        _parallel_reads("A", "B", call_id_prefix="toolu_")
-    ) == get_semantic_cache_prompt_from_messages(_parallel_reads("A", "B"))
+    assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)

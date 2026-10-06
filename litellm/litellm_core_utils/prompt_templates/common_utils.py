@@ -13,8 +13,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
-from pydantic import BaseModel
-
 import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
@@ -194,113 +192,44 @@ def get_str_from_messages(messages: list[AllMessageValues]) -> str:
     return text
 
 
-def get_semantic_cache_prompt_from_messages(messages: object) -> str:
+def get_semantic_cache_prompt_from_messages(messages: Sequence[Mapping[str, object]]) -> str:
     """
-    The text the semantic cache embeds for ``messages``, shared by the Messages API and Chat Completions. Keeps
-    the text ``get_str_from_messages`` keeps, plus every tool call and tool result, so agent turns that differ
-    only in their tool exchange embed differently. Call ids are random per session, so each result names the
-    position of the call it answers instead
+    The text a semantic cache embeds for a request: `get_str_from_messages` plus the text inside
+    Messages API `tool_result` blocks, so a tool turn does not embed identically to the turn before it
     """
-    message_dicts = _dicts(_plain(messages))
-    positions = _tool_call_positions(_messages_tool_call_ids(message_dicts))
-    parts = []
-    for message in message_dicts:
-        content = message.get("content")
-        text = content if isinstance(content, str) else _messages_api_blocks_text(content, positions)
-        if message.get("role") == "tool":
-            text = _tool_result_text(message.get("tool_call_id"), text, positions)
-        for tool_call in _dicts(message.get("tool_calls")):
-            function = tool_call.get("function")
-            if not isinstance(function, Mapping):
-                function = {}
-            text += _tool_call_text(function.get("name"), function.get("arguments"))
-        parts.append(text + extract_search_results_text(message.get("search_results")))
-    return "".join(parts)
+    return "".join(_semantic_cache_message_text(message) for message in messages)
 
 
-def _messages_tool_call_ids(messages: Sequence[Mapping[str, object]]) -> Iterator[object]:
-    for message in messages:
-        for block in _dicts(message.get("content")):
-            if block.get("type") == "tool_use":
-                yield block.get("id")
-        for tool_call in _dicts(message.get("tool_calls")):
-            yield tool_call.get("id")
+def _semantic_cache_message_text(message: Mapping[str, object]) -> str:
+    return _semantic_cache_content_text(message.get("content")) + extract_search_results_text(
+        message.get("search_results")
+    )
 
 
-def _messages_api_blocks_text(blocks: object, positions: Mapping[str, int]) -> str:
-    text = ""
-    for block in _dicts(blocks):
-        if block.get("type") == "tool_use":
-            text += _tool_call_text(block.get("name"), block.get("input"))
-        elif block.get("type") == "tool_result":
-            content = block.get("content")
-            output = content if isinstance(content, str) else _messages_api_blocks_text(content, positions)
-            text += _tool_result_text(block.get("tool_use_id"), output, positions)
-        elif isinstance(block.get("text"), str):
-            text += str(block["text"])
-    return text
-
-
-def get_semantic_cache_prompt_from_responses_input(responses_input: object) -> str:
-    """
-    The text the semantic cache embeds for a Responses API ``input``: each text part stripped and on its own
-    line, with ``function_call`` and ``function_call_output`` items encoded like tool calls and results above
-    """
-    items = _plain(responses_input)
-    call_ids = [item.get("call_id") for item in _dicts(items) if item.get("type") == "function_call"]
-    return _responses_text(items, _tool_call_positions(call_ids))
-
-
-def _responses_text(value: object, positions: Mapping[str, int]) -> str:
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, list):
-        lines = [_responses_text(item, positions) for item in value]
-        return "\n".join(line for line in lines if line)
-    if not isinstance(value, Mapping):
+def _semantic_cache_content_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
         return ""
-    if value.get("type") == "function_call":
-        return _tool_call_text(value.get("name"), value.get("arguments"))
-    if value.get("type") == "function_call_output":
-        output = _responses_text(value.get("output"), positions)
-        return _tool_result_text(value.get("call_id"), output, positions)
-    if value.get("content") is not None:
-        return _responses_text(value.get("content"), positions)
-    return _responses_text(value.get("text"), positions)
+    return "".join(_semantic_cache_block_text(block) for block in content)
 
 
-def _tool_call_text(name: object, arguments: object) -> str:
-    return json.dumps({"name": name, "arguments": arguments}, separators=(",", ":"), default=str)
+def _semantic_cache_block_text(block: object) -> str:
+    if not isinstance(block, Mapping):
+        return ""
+    if block.get("type") != "tool_result":
+        return _text_field(block)
+    result: Final = block.get("content")
+    if isinstance(result, str):
+        return result
+    if isinstance(result, list):
+        return "".join(_text_field(inner) for inner in result)
+    return ""
 
 
-def _tool_result_text(call_id: object, output: str, positions: Mapping[str, int]) -> str:
-    position = positions.get(call_id) if isinstance(call_id, str) else None
-    return json.dumps({"result_of_call": position, "output": output}, separators=(",", ":"), default=str)
-
-
-def _tool_call_positions(call_ids: Iterable[object]) -> Mapping[str, int]:
-    positions = {}
-    for call_id in call_ids:
-        if isinstance(call_id, str) and call_id not in positions:
-            positions[call_id] = len(positions) + 1
-    return positions
-
-
-def _plain(value: object) -> object:
-    """SDK callers pass pydantic items (``input += response.output``); dump them to the dicts the request carried"""
-    if isinstance(value, BaseModel):
-        return value.model_dump()
-    if isinstance(value, (list, tuple)):
-        return [_plain(item) for item in value]
-    if isinstance(value, Mapping):
-        return {key: _plain(item) for key, item in value.items()}
-    return value
-
-
-def _dicts(values: object) -> list[Mapping[str, object]]:
-    if not isinstance(values, list):
-        return []
-    return [value for value in values if isinstance(value, Mapping)]
+def _text_field(block: object) -> str:
+    text: Final = block.get("text") if isinstance(block, Mapping) else None
+    return text if isinstance(text, str) else ""
 
 
 def is_non_content_values_set(message: AllMessageValues) -> bool:
