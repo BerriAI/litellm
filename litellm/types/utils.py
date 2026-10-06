@@ -2182,6 +2182,13 @@ class ModelResponseStream(ModelResponseBase):
             return self.dict()
 
 
+def _normalize_model_response_usage(usage: dict[str, object] | BaseModel) -> Usage:
+    if isinstance(usage, dict):
+        return Usage(**usage)
+    dump: Final = usage.model_dump() if hasattr(usage, "model_dump") else usage.dict()
+    return Usage(**dump)
+
+
 class ModelResponse(ModelResponseBase):
     choices: list[Choices]
     """The list of completion choices the model generated for the input prompt."""
@@ -2229,13 +2236,8 @@ class ModelResponse(ModelResponseBase):
             created = created
         model = model
         if usage is not None:
-            if isinstance(usage, dict):
-                usage = Usage(**usage)
-            elif isinstance(usage, BaseModel):
-                dump = usage.model_dump() if hasattr(usage, "model_dump") else usage.dict()
-                usage = Usage(**dump)
-            else:
-                usage = usage
+            if isinstance(usage, dict | BaseModel):
+                usage = _normalize_model_response_usage(usage)
         elif stream is None or stream is False:
             usage = None  # avoid constructing throwaway Usage; set by convert_to_model_response_object
         if hidden_params:

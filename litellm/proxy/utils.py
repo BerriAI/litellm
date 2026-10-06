@@ -9012,7 +9012,7 @@ def model_dump_with_preserved_fields(
     )
 
     for field_name in _PRESERVED_NONE_RESPONSE_FIELDS:
-        if field_name not in result and field_name in obj.model_fields_set:
+        if field_name not in result and field_name in getattr(obj, "model_fields_set", ()):
             result[field_name] = getattr(obj, field_name)
 
     choices: Final = cast(

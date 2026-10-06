@@ -10,7 +10,7 @@ import ssl
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional, Protocol
 from urllib.parse import urlsplit
 
 import httpx
@@ -21,6 +21,7 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from openai.types.completion_usage import CompletionUsage
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -46,6 +47,16 @@ _AZURE_OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(Azur
 
 
 _OPENAI_API_HOST: Final[str] = "api.openai.com"
+
+
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> dict[str, object]: ...
+
+
+def model_dump_provider_response(response: _ModelDumpable) -> dict[str, object]:
+    if isinstance(response, BaseModel):
+        return response.model_dump(exclude_unset=True)
+    return response.model_dump()
 
 
 def is_openai_backed_api_base(api_base: str) -> bool:

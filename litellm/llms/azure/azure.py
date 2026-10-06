@@ -41,6 +41,7 @@ from ..base import BaseLLM
 from ..openai.common_utils import (
     build_output_token_limit_response,
     is_output_token_limit_error,
+    model_dump_provider_response,
 )
 from .common_utils import (
     AzureOpenAIError,
@@ -354,7 +355,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                         status_code=500,
                         message=f"Unexpected string response from Azure: {response[:500]}",
                     )
-                stringified_response: Final = response.model_dump(exclude_unset=True)
+                stringified_response: Final = model_dump_provider_response(response)
                 ## LOGGING
                 logging_obj.post_call(
                     input=messages,
@@ -449,7 +450,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     status_code=500,
                     message=f"Unexpected string response from Azure: {response[:500]}",
                 )
-            stringified_response: Final = response.model_dump(exclude_unset=True)
+            stringified_response: Final = model_dump_provider_response(response)
             logging_obj.post_call(
                 input=data["messages"],
                 api_key=api_key,
