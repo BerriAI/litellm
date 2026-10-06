@@ -1253,7 +1253,7 @@ def _dispatch_success_logging(
                 )
 
             logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging
-        else:
+        elif logging_obj.claim_async_success_log():
             asyncio.create_task(
                 _client_async_logging_helper(
                     logging_obj=logging_obj,
