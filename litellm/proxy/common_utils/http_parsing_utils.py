@@ -183,7 +183,7 @@ def _mark_body_received(byte_count: int | None) -> None:
 
 
 def is_otlp_trace_request(request: Request) -> bool:
-    return request.method == "POST" and get_route_path(request.scope) == "/v1/traces"
+    return request.method == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
 
 
 async def _read_request_body(request: Request | None) -> dict:

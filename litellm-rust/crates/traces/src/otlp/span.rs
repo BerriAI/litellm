@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 use opentelemetry_proto::tonic::{
@@ -12,7 +13,7 @@ use super::{
 };
 use crate::{
     Error, Shared,
-    normalize::{SpanContext, normalize},
+    normalize::{CLAUDE_CODE_EVENTS_SCOPE, CLAUDE_CODE_SCOPE, SpanContext, normalize},
 };
 
 pub(super) fn flatten(
@@ -132,7 +133,28 @@ fn decoded_span(
 ) -> Result<DecodedSpan, Error> {
     let status = span.status.unwrap_or_default();
     let parent_span_id = hex_bytes(&span.parent_span_id);
-    let span_attributes = attributes(span.attributes, budget)?;
+    let mut span_attributes = attributes(span.attributes, budget)?;
+    let original_trace_id = hex_bytes(&span.trace_id);
+    let trace_id = if matches!(
+        scope_name.as_str(),
+        CLAUDE_CODE_SCOPE | CLAUDE_CODE_EVENTS_SCOPE
+    ) && resource_attributes
+        .get("lens.session.capture")
+        .is_some_and(|value| value == "true")
+        && let Some(session) = span_attributes
+            .get("session.id")
+            .filter(|value| !value.is_empty())
+    {
+        let trace_id =
+            hex_bytes(&Sha256::digest(format!("litellm.claude.session.v1\0{session}"))[..16]);
+        let actor = span_attributes.get("agent_id").unwrap_or(session).clone();
+        budget.consume(original_trace_id.len() + actor.len() + 256)?;
+        span_attributes.insert("lens.original_trace_id".to_owned(), original_trace_id);
+        span_attributes.insert("gen_ai.agent.id".to_owned(), actor);
+        trace_id
+    } else {
+        original_trace_id
+    };
     let events = span
         .events
         .into_iter()
@@ -183,7 +205,7 @@ fn decoded_span(
             + normalization.display_name.as_ref().map_or(0, String::len),
     )?;
     Ok(DecodedSpan {
-        trace_id: hex_bytes(&span.trace_id),
+        trace_id,
         span_id: hex_bytes(&span.span_id),
         parent_span_id,
         trace_state: span.trace_state,

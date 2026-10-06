@@ -61,10 +61,11 @@ class TraceReceiver:
         content_type: str | None,
         content_encoding: str | None,
         tenant: Tenant,
+        logs: bool = False,
     ) -> int:
         if not self._ingest_slots.acquire(blocking=False):
             raise TracingOverloadedError("OTLP ingestion is at capacity")
-        task: Final = asyncio.create_task(self._ingest(body, content_type, content_encoding, tenant))
+        task: Final = asyncio.create_task(self._ingest(body, content_type, content_encoding, tenant, logs))
         task.add_done_callback(self._release_ingest)
         return await asyncio.shield(task)
 
@@ -79,6 +80,7 @@ class TraceReceiver:
         content_type: str | None,
         content_encoding: str | None,
         tenant: Tenant,
+        logs: bool = False,
     ) -> int:
         try:
             received: Final = (
@@ -90,7 +92,7 @@ class TraceReceiver:
             raise TracingOverloadedError("OTLP body upload timed out") from error
         payload: Final = await asyncio.to_thread(self._decompressor, received, content_encoding)
         try:
-            return await self.storage.ingest(payload, content_type, tenant)
+            return await self.storage.ingest(payload, content_type, tenant, logs)
         except OverflowError as error:
             raise TracingPayloadTooLargeError(str(error)) from error
         except ValueError as error:

@@ -138,6 +138,63 @@ describe("TraceConversation", () => {
     expect(screen.queryByRole("button", { name: /Load next/ })).not.toBeInTheDocument();
   });
 
+  it("shows a loaded agent reply while later trace pages remain available", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceCall).mockResolvedValue({ ...trace, spans: [root], next_cursor: "next-page" });
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Conversation" }));
+    expect(await screen.findByText("The release is ready")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Load more steps" })).toBeVisible();
+    expect(screen.queryByText("End of conversation")).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])(
+    "checks for missing replies after the final trace page and details load (reply: %s)",
+    async (hasReply) => {
+      const user = userEvent.setup();
+      const laterDetail = Promise.withResolvers<SpanDetail>();
+      const summary = { ...trace.summary, span_count: 2 };
+      const first: Trace = { ...trace, summary, spans: [root], next_cursor: "last-page" };
+      const last: Trace = {
+        ...trace,
+        summary,
+        spans: [{ ...tool, span_id: "later", name: "later response", type: "llm" }],
+        next_cursor: null,
+      };
+      vi.mocked(agentTraceCall).mockImplementation(async (_token, _trace, _ref, cursor) => (cursor ? last : first));
+      vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) =>
+        id === "root" ? { ...rootDetail, output: "", attributes: { "span.type": "llm_request" } } : laterDetail.promise,
+      );
+      renderWithProviders(
+        <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+      );
+      await user.click(await screen.findByRole("tab", { name: "Conversation" }));
+      expect(await screen.findByText("Read the release notes")).toBeVisible();
+      expect(screen.queryByText(/no recorded assistant replies/)).not.toBeInTheDocument();
+      expect(screen.queryByText("End of conversation")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Load more steps" }));
+      expect(await screen.findByText("Loading conversation…")).toBeVisible();
+      expect(screen.queryByText(/no recorded assistant replies/)).not.toBeInTheDocument();
+      expect(screen.queryByText("End of conversation")).not.toBeInTheDocument();
+      const resolved: SpanDetail = {
+        span_id: "later",
+        input: "",
+        output: hasReply ? rootDetail.output : "",
+        attributes: hasReply ? { "event.name": "assistant_response" } : {},
+      };
+      await act(async () => laterDetail.resolve(resolved));
+      expect(await screen.findByText("End of conversation")).toBeVisible();
+      if (hasReply) {
+        expect(screen.getByText("The release is ready")).toBeVisible();
+        expect(screen.queryByText(/no recorded assistant replies/)).not.toBeInTheDocument();
+      } else {
+        expect(screen.getByText(/no recorded assistant replies/)).toBeVisible();
+      }
+    },
+  );
+
   it("shows distinct agent invocation labels together with each step's time", async () => {
     const first = { ...root, name: "reviewer", start_offset_ms: 1000 };
     const second = { ...first, span_id: "second", start_offset_ms: 2000 };
@@ -249,6 +306,7 @@ describe("TraceConversation", () => {
   it.each(["Partial investigation", ""])(
     "shows a failed child agent's error once after its work, with output %j",
     async (output) => {
+      const user = userEvent.setup();
       const agent = {
         ...root,
         span_id: "child",
@@ -269,6 +327,7 @@ describe("TraceConversation", () => {
       renderWithProviders(<TraceConversation trace={traced} accessToken="test" onOpenStep={vi.fn()} />);
 
       expect(await screen.findByText("End of conversation")).toBeVisible();
+      await user.click(screen.getByText("Subagent: Investigate release", { exact: true }));
       expect(screen.getAllByText("Investigation timed out")).toHaveLength(1);
       const entries = screen.getAllByRole("region", { name: "Conversation step Investigate release" });
       expect(within(entries[0]).getByText("Investigate failed checks")).toBeVisible();

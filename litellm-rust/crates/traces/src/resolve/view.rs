@@ -22,6 +22,7 @@ fn optional(value: &str) -> Option<String> {
 
 fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span {
     let row = resolution.row(index);
+    let status = resolution.status_source(index);
     let requests = resolution.requests(index).complete_requests();
     Span {
         span_id: row.span_id.clone(),
@@ -33,9 +34,9 @@ fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span 
         start_offset_ms: (i128::from(row.start_ns) - i128::from(trace_start_ns)) as f64
             / NANOS_PER_MS,
         duration_ms: row.duration_ns as f64 / NANOS_PER_MS,
-        status: row.status,
-        error: optional(&row.status_message),
-        error_truncated: row.error_truncated,
+        status: status.status,
+        error: optional(&status.status_message),
+        error_truncated: status.error_truncated,
         input_preview: row.input_preview.clone(),
         model: optional(&row.model),
         input_tokens: row.input_tokens,
@@ -192,10 +193,18 @@ pub fn resolve_trace(
         agent_invocations: agents.iter().map(|agent| agent.invocations).sum(),
         llm_calls: calls.len() as u64,
         tool_calls: resolution.unique_tools().len() as u64,
-        error_count: spans
+        error_count: rows
             .iter()
             .filter(|span| span.status == SpanStatus::Error)
-            .count() as u64,
+            .map(|span| {
+                if span.framework == "claude-code" && !span.tool_call_id.is_empty() {
+                    ("claude-tool", span.tool_call_id.as_str())
+                } else {
+                    ("span", span.span_id.as_str())
+                }
+            })
+            .collect::<BTreeSet<_>>()
+            .len() as u64,
         input_tokens: counted.iter().map(|row| u64::from(row.input_tokens)).sum(),
         output_tokens: counted.iter().map(|row| u64::from(row.output_tokens)).sum(),
         models: sorted_unique(calls.iter().map(|call| rows[*call].model.as_str())),

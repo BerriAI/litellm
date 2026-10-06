@@ -9,7 +9,15 @@ import { ToolArguments, ToolOutput } from "../content/ToolContent";
 import { toolSummary } from "../content/payload";
 import { useTracesApi } from "../../api";
 import { Button } from "@/components/ui/button";
-import { buildConversation, conversationSteps, CONVERSATION_PAGE_SIZE, type ConversationItem } from "./conversation";
+import {
+  buildConversation,
+  conversationSteps,
+  conversationWarnings,
+  groupConversation,
+  CONVERSATION_PAGE_SIZE,
+  type ConversationItem,
+  type ConversationGroup,
+} from "./conversation";
 import { ErrorBlock } from "../content/SpanError";
 import { Markdown } from "../content/Markdown";
 import { ToolCallBlock, ToolResultCard } from "../content/Messages";
@@ -46,7 +54,9 @@ export function TraceConversation({
     queries.slice(0, loadedCount).map((query, index) => [visible[index].span_id, query.data!] as const),
   );
   const complete = loadedCount === steps.length;
+  const traceComplete = complete && !trace.next_cursor;
   const items = buildConversation(trace.spans, details, complete);
+  const warnings = conversationWarnings(details, traceComplete);
   const multipleAgents = new Set(items.map((item) => item.agentId).filter(Boolean)).size > 1;
   const inlineErrorIds = new Set(items.filter((item) => item.showError).map((item) => item.span.span_id));
   const rootErrors = trace.spans.filter((span) => {
@@ -59,38 +69,16 @@ export function TraceConversation({
         {rootErrors.map((span) => (
           <ErrorBlock key={span.span_id} span={span} />
         ))}
-        {items.map((item) => (
-          <section key={item.id} className="min-w-0 space-y-2" aria-label={`Conversation step ${item.span.name}`}>
-            {(multipleAgents || item.toolResult === undefined) && (
-              <div className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
-                <div className="flex min-w-0 items-center gap-2">
-                  {multipleAgents && (
-                    <span className="truncate" title={item.agentName}>
-                      {item.agentName}
-                    </span>
-                  )}
-                  <span className="shrink-0 tabular-nums">{fmtMs(item.span.start_offset_ms)}</span>
-                </div>
-                {item.toolResult === undefined && (
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    aria-label={`Inspect step ${item.span.name}`}
-                    onClick={() => onOpenStep(item.span.span_id)}
-                    className="shrink-0 text-muted-foreground"
-                  >
-                    Inspect step
-                  </Button>
-                )}
-              </div>
-            )}
-            {item.showError && <ErrorBlock span={item.span} />}
-            {item.messages.map((message, index) => (
-              <ConversationMessage key={index} message={message} />
-            ))}
-            {item.toolResult !== undefined && <ConversationTool item={item} onOpenStep={onOpenStep} />}
-          </section>
+        {warnings.map((warning) => (
+          <p key={warning} role="status" className="rounded-md border p-3 text-sm text-muted-foreground">
+            {warning}
+          </p>
         ))}
+        <ConversationGroups
+          groups={groupConversation(items, trace.spans)}
+          multipleAgents={multipleAgents}
+          onOpenStep={onOpenStep}
+        />
         {queries.map(
           (query, index) =>
             query.isError && (
@@ -107,11 +95,11 @@ export function TraceConversation({
             Loading conversation…
           </p>
         )}
-        {complete && items.length === 0 && (
+        {traceComplete && items.length === 0 && (
           <p className="text-sm text-muted-foreground">No conversation content recorded.</p>
         )}
         <div className="flex items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">
-          <span>{complete ? "End of conversation" : `${loadedCount} of ${steps.length} steps loaded`}</span>
+          <span>{traceComplete ? "End of conversation" : `${loadedCount} of ${steps.length} steps loaded`}</span>
           {visible.length < steps.length && (
             <Button
               variant="outline"
@@ -124,6 +112,86 @@ export function TraceConversation({
           )}
         </div>
       </div>
+    </section>
+  );
+}
+
+function ConversationGroups({
+  groups,
+  multipleAgents,
+  onOpenStep,
+}: {
+  groups: ConversationGroup[];
+  multipleAgents: boolean;
+  onOpenStep: (id: string) => void;
+}) {
+  return (
+    <>
+      {groups.map((group) =>
+        group.kind === "item" ? (
+          <ConversationStep
+            key={group.item.id}
+            item={group.item}
+            multipleAgents={multipleAgents}
+            onOpenStep={onOpenStep}
+          />
+        ) : (
+          <details key={group.id} className="min-w-0 rounded-md border p-3">
+            <summary className="cursor-pointer text-sm font-medium">Subagent: {group.name}</summary>
+            <div className="mt-4 min-w-0 space-y-5 border-l pl-3">
+              <ConversationGroups groups={group.children} multipleAgents={multipleAgents} onOpenStep={onOpenStep} />
+            </div>
+          </details>
+        ),
+      )}
+    </>
+  );
+}
+
+function ConversationStep({
+  item,
+  multipleAgents,
+  onOpenStep,
+}: {
+  item: ConversationItem;
+  multipleAgents: boolean;
+  onOpenStep: (id: string) => void;
+}) {
+  return (
+    <section className="min-w-0 space-y-2" aria-label={`Conversation step ${item.span.name}`}>
+      {(multipleAgents || item.toolResult === undefined) && (
+        <div className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
+          <div className="flex min-w-0 items-center gap-2">
+            {multipleAgents && (
+              <span className="truncate" title={item.agentName}>
+                {item.agentName}
+              </span>
+            )}
+            {item.model && (
+              <span className="truncate" title={item.model}>
+                {item.model}
+              </span>
+            )}
+            <span className="shrink-0 tabular-nums">{fmtMs(item.time ?? item.span.start_offset_ms)}</span>
+          </div>
+          {item.toolResult === undefined && (
+            <Button
+              variant="ghost"
+              size="xs"
+              aria-label={`Inspect step ${item.span.name}`}
+              onClick={() => onOpenStep(item.span.span_id)}
+              className="shrink-0 text-muted-foreground"
+            >
+              Inspect step
+            </Button>
+          )}
+        </div>
+      )}
+      {item.showError && <ErrorBlock span={item.span} />}
+      {item.messages.map((message, index) => (
+        <ConversationMessage key={index} message={message} />
+      ))}
+      {item.toolResult !== undefined && <ConversationTool item={item} onOpenStep={onOpenStep} />}
     </section>
   );
 }
@@ -183,7 +251,11 @@ function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpen
               iconOnly
             />
           </div>
-          <ToolOutput result={item.toolResult ?? ""} failed={failed} />
+          {item.toolResult ? (
+            <ToolOutput result={item.toolResult} failed={failed} />
+          ) : (
+            <p className="text-sm text-muted-foreground">No result content recorded.</p>
+          )}
         </div>
       )}
     </div>
@@ -191,10 +263,12 @@ function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpen
 }
 
 function ConversationMessage({ message }: { message: TraceMessage }) {
+  if (message.role === "system" && (message.content.startsWith("Agent ") || message.content === "Context compacted"))
+    return <p className="text-xs text-muted-foreground">{message.content}</p>;
   if (message.role === "system")
     return (
       <details className="text-sm text-muted-foreground">
-        <summary className="cursor-pointer">System instructions</summary>
+        <summary className="cursor-pointer">Session context</summary>
         <div className="pt-3">
           <Markdown text={message.content} />
         </div>

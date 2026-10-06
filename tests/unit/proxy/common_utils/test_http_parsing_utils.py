@@ -12,7 +12,6 @@ from starlette.datastructures import FormData
 from starlette.requests import Request
 
 
-
 import litellm
 import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
 from litellm.proxy._types import ProxyException
@@ -478,9 +477,7 @@ async def test_circular_reference_handling():
 
     # Second parse using the same request - will use the modified cached value
     result2 = await _read_request_body(mock_request)
-    assert (
-        "proxy_server_request" not in result2
-    )  # This will pass, showing the cache pollution
+    assert "proxy_server_request" not in result2  # This will pass, showing the cache pollution
 
 
 @pytest.mark.asyncio
@@ -591,9 +588,7 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
 
     # Cap the repair at ~100 bytes so the test stays fast and independent of the default.
-    monkeypatch.setattr(
-        http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 100 / (1024 * 1024)
-    )
+    monkeypatch.setattr(http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 100 / (1024 * 1024))
 
     small_body = b'{"model":"gpt-4o","x":NaN}'
     assert len(small_body) <= 100
@@ -601,9 +596,7 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     assert repaired["model"] == "gpt-4o"
 
     padding = "a" * 200
-    large_body = (
-        b'{"model":"gpt-4o","pad":"' + padding.encode() + b'","x":NaN}'
-    )
+    large_body = b'{"model":"gpt-4o","pad":"' + padding.encode() + b'","x":NaN}'
     assert len(large_body) > 100
     with pytest.raises(ProxyException) as exc_info:
         await _read_request_body(_make_json_request(large_body))
@@ -612,9 +605,7 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
 
     # Disabling the cap (0) restores repair for the same large body, proving the cap
     # — not the malformed content — is what short-circuits the repair.
-    monkeypatch.setattr(
-        http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 0
-    )
+    monkeypatch.setattr(http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 0)
     repaired_large = await _read_request_body(_make_json_request(large_body))
     assert repaired_large["model"] == "gpt-4o"
 
@@ -643,7 +634,7 @@ async def test_lone_surrogate_escape_is_rejected_with_400(content: bytes):
 
     paired = body.replace(content, b"say ok \\ud83d\\ude00")
     parsed = await _read_request_body(_make_json_request(paired))
-    assert parsed["messages"][0]["content"] == "say ok \U0001F600"
+    assert parsed["messages"][0]["content"] == "say ok \U0001f600"
 
 
 @pytest.mark.asyncio
@@ -865,9 +856,7 @@ def test_populate_request_with_path_params_does_not_overwrite_existing_values():
 
     # Verify existing values were NOT overwritten
     assert result["model"] == "gpt-4"  # Should keep original, not "gpt-3.5-turbo"
-    assert (
-        result["organization_id"] == "org-existing"
-    )  # Should keep original, not "org-query-param"
+    assert result["organization_id"] == "org-existing"  # Should keep original, not "org-query-param"
     # Verify other data is preserved
     assert result["messages"] == [{"role": "user", "content": "Hello"}]
 
@@ -1035,9 +1024,7 @@ class TestGetTagsFromRequestBodyStringCoerce:
         )
 
         # Must not raise; must yield no metadata tags but keep root tags
-        tags = get_tags_from_request_body(
-            {"metadata": "not-json", "tags": ["root-only"]}
-        )
+        tags = get_tags_from_request_body({"metadata": "not-json", "tags": ["root-only"]})
         assert tags == ["root-only"]
 
     def test_dict_metadata_still_works(self):
@@ -1094,9 +1081,7 @@ class TestReadRequestBodyNonCanonicalContentType:
             "multiform/anything",
         ],
     )
-    async def test_json_body_with_formlike_content_type_parses_as_json(
-        self, content_type
-    ):
+    async def test_json_body_with_formlike_content_type_parses_as_json(self, content_type):
         payload = {"user_config": {"model_list": []}, "model": "x"}
 
         mock_request = MagicMock()
@@ -1329,6 +1314,8 @@ def test_shared_inference_model_selection_preserves_handler_precedence(
     "method,path,skip_parse",
     [
         ("POST", "/v1/traces", True),
+        ("POST", "/v1/logs", True),
+        ("GET", "/v1/logs", False),
         ("GET", "/v1/traces", False),
         ("POST", "/v1/messages", False),
         ("POST", "/v1/traces/other", False),
@@ -1340,7 +1327,10 @@ async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_pa
     receive: Final = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
     request: Final = Request(
         {
-            "type": "http", "method": method, "path": root_path + path, "root_path": root_path,
+            "type": "http",
+            "method": method,
+            "path": root_path + path,
+            "root_path": root_path,
             "headers": [(b"content-type", b"application/json")],
         },
         receive,
@@ -1356,9 +1346,14 @@ async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("content_type, encoding", [
-    ("application/json", ""), ("application/x-protobuf", ""), ("application/json", "gzip"),
-])
+@pytest.mark.parametrize(
+    "content_type, encoding",
+    [
+        ("application/json", ""),
+        ("application/x-protobuf", ""),
+        ("application/json", "gzip"),
+    ],
+)
 async def test_otlp_auth_does_not_consume_chunked_bodies_before_the_receiver_limit(content_type, encoding):
     from litellm.constants import OTLP_MAX_BODY_BYTES
     from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
@@ -1371,9 +1366,18 @@ async def test_otlp_auth_does_not_consume_chunked_bodies_before_the_receiver_lim
         assert len(received) <= 2, "receiver must reject without consuming subsequent chunks"
         return {"type": "http.request", "body": chunk, "more_body": True}
 
-    request = Request({"type": "http", "method": "POST", "path": "/v1/traces", "headers": [
-        (b"content-type", content_type.encode()), (b"content-encoding", encoding.encode()),
-    ]}, receive)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/traces",
+            "headers": [
+                (b"content-type", content_type.encode()),
+                (b"content-encoding", encoding.encode()),
+            ],
+        },
+        receive,
+    )
     assert await _read_request_body(request) == {}
     assert received == []
     storage = MagicMock()
@@ -1393,9 +1397,7 @@ async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit(
     from litellm.tracing import TraceReceiver
 
     chunk: Final = b"x" * (OTLP_MAX_BODY_BYTES // 2 + 1)
-    receive: Final = AsyncMock(
-        side_effect=[{"type": "http.request", "body": chunk, "more_body": True}] * 2
-    )
+    receive: Final = AsyncMock(side_effect=[{"type": "http.request", "body": chunk, "more_body": True}] * 2)
     request: Final = Request(
         {"type": "http", "method": "POST", "path": "/v1/traces", "headers": [(b"content-type", b"application/json")]},
         receive,

@@ -18,6 +18,12 @@ mod messages;
 mod metadata;
 
 pub(crate) const CLAUDE_CODE_SCOPE: &str = "com.anthropic.claude_code.tracing";
+pub(crate) const CLAUDE_CODE_EVENTS_SCOPE: &str = "com.anthropic.claude_code.events";
+pub(crate) fn visible_claude_response(event: &str, source: &str) -> bool {
+    event == "assistant_response"
+        && (matches!(source, "repl_main_thread" | "sdk" | "sdk_main_thread")
+            || source.starts_with("agent:"))
+}
 pub(crate) const CLAUDE_CODE_AGENT: &str = "claude-code";
 use instrumentation::Instrumentation;
 pub(crate) use messages::{HIDDEN_BLOCK_TYPES, MessagePayload, encode};

@@ -6,8 +6,8 @@ use super::{Extraction, Format, SpanFacts};
 use crate::{
     Error,
     normalize::{
-        CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE, CallEvidence, CallKey, ObservationType, RoleEvidence,
-        SpanContext, attr, present, tokens,
+        CLAUDE_CODE_AGENT, CLAUDE_CODE_EVENTS_SCOPE, CLAUDE_CODE_SCOPE, CallEvidence, CallKey,
+        ObservationType, RoleEvidence, SpanContext, attr, present, tokens,
     },
     otlp::DecodedEvent,
 };
@@ -16,6 +16,10 @@ use crate::{
 pub(crate) struct ClaudeCode;
 
 enum SpanType {
+    AssistantResponse,
+    ToolResult,
+    ApiRequestBody,
+    Compaction,
     Interaction,
     LlmRequest,
     Tool,
@@ -30,6 +34,10 @@ fn span_type(name: &str, attributes: &BTreeMap<String, String>) -> SpanType {
         kind
     };
     match kind {
+        "assistant_response" => SpanType::AssistantResponse,
+        "tool_result" => SpanType::ToolResult,
+        "api_request_body" => SpanType::ApiRequestBody,
+        "compaction" => SpanType::Compaction,
         "interaction" => SpanType::Interaction,
         "llm_request" => SpanType::LlmRequest,
         "tool" => SpanType::Tool,
@@ -147,6 +155,30 @@ fn llm_output(attributes: &BTreeMap<String, String>) -> String {
     }
 }
 
+fn exported_tool_results(attributes: &BTreeMap<String, String>) -> String {
+    let Ok(body) = serde_json::from_str::<Value>(attr(attributes, "body")) else {
+        return json!({"warning": "Claude's API body export is missing or truncated. Some tool results may be unavailable."}).to_string();
+    };
+    let results: Vec<Value> = body.get("messages").and_then(Value::as_array)
+        .and_then(|messages| messages.last())
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        .and_then(|message| message.get("content").and_then(Value::as_array))
+        .into_iter()
+        .flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+        .map(|block| {
+            let content = match block.get("content") {
+                Some(Value::String(text)) => text.clone(),
+                Some(Value::Array(blocks)) => blocks.iter().map(|block| {
+                    block.get("text").and_then(Value::as_str).unwrap_or("[Non-text tool output omitted by Claude export]")
+                }).collect::<Vec<_>>().join("\n"),
+                _ => String::new(),
+            };
+            json!({"id": block.get("tool_use_id"), "content": content, "is_error": block.get("is_error").and_then(Value::as_bool).unwrap_or(false)})
+        }).collect();
+    json!({"tool_results": results}).to_string()
+}
+
 fn input_tokens(attributes: &BTreeMap<String, String>) -> Result<u32, Error> {
     ["input_tokens", "cache_read_tokens", "cache_creation_tokens"]
         .into_iter()
@@ -159,7 +191,7 @@ fn input_tokens(attributes: &BTreeMap<String, String>) -> Result<u32, Error> {
 
 impl Format for ClaudeCode {
     fn matches(&self, context: &SpanContext<'_>) -> bool {
-        context.scope == CLAUDE_CODE_SCOPE
+        matches!(context.scope, CLAUDE_CODE_SCOPE | CLAUDE_CODE_EVENTS_SCOPE)
     }
 
     fn extract(&self, context: &SpanContext<'_>) -> Result<Extraction, Error> {
@@ -172,6 +204,48 @@ impl Format for ClaudeCode {
             ..SpanFacts::default()
         };
         let (facts, consumed): (SpanFacts, Vec<&'static str>) = match kind {
+            SpanType::AssistantResponse => (
+                SpanFacts {
+                    role: Some(RoleEvidence::Declared(ObservationType::Chain)),
+                    agent_name: Some(subagent(attributes).unwrap_or(CLAUDE_CODE_AGENT).to_owned()),
+                    model: present(attributes, &["model"]),
+                    output: json!({"role": "assistant", "content": attr(attributes, "response")})
+                        .to_string(),
+                    ..base
+                },
+                vec!["response"],
+            ),
+            SpanType::ToolResult => (
+                SpanFacts {
+                    input: tool_input(attributes),
+                    tool_call_id: present(attributes, &["tool_use_id"]),
+                    ..base
+                },
+                if tool_arguments(attributes).is_some() {
+                    vec!["tool_input"]
+                } else {
+                    Vec::new()
+                },
+            ),
+            SpanType::Compaction => (
+                SpanFacts {
+                    role: Some(RoleEvidence::Declared(ObservationType::Chain)),
+                    output: json!({"role": "system", "content": if attr(attributes, "success") == "true" {
+                        "Context compacted"
+                    } else {
+                        "Context compaction failed"
+                    }}).to_string(),
+                    ..base
+                },
+                Vec::new(),
+            ),
+            SpanType::ApiRequestBody => (
+                SpanFacts {
+                    output: exported_tool_results(attributes),
+                    ..base
+                },
+                vec!["body"],
+            ),
             SpanType::Interaction => (
                 SpanFacts {
                     role: Some(RoleEvidence::Declared(ObservationType::Agent)),
@@ -266,6 +340,33 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    #[rstest]
+    fn notification_prompts_keep_user_provenance_and_compaction_is_system() {
+        let prompt_text =
+            "<task-notification><summary>Agent Reader completed</summary></task-notification>";
+        let notification = normalize(
+            "claude_code.interaction",
+            &attributes(&[("user_prompt", prompt_text)]),
+            &[],
+        )
+        .unwrap();
+        let prompt: Value = serde_json::from_str(&notification.input).unwrap();
+        assert_eq!(
+            prompt[0],
+            serde_json::json!({"role":"user","content":prompt_text})
+        );
+        let compaction = normalize(
+            "claude_code.compaction",
+            &attributes(&[("success", "true")]),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&compaction.output).unwrap(),
+            serde_json::json!({"role":"system","content":"Context compacted"})
+        );
     }
 
     #[rstest]

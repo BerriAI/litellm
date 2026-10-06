@@ -122,6 +122,7 @@ def _otlp_error(content_type: str | None, status_code: int, message: str, retry:
     )
 
 
+@router.post("/v1/logs", include_in_schema=False)
 @router.post("/v1/traces", include_in_schema=False)
 async def ingest_otlp_traces(
     request: Request,
@@ -135,6 +136,7 @@ async def ingest_otlp_traces(
             content_type=content_type,
             content_encoding=request.headers.get("content-encoding"),
             tenant=tenant,
+            logs=request.url.path.endswith("/v1/logs"),
         )
     except TracingPayloadTooLargeError as e:
         return _otlp_error(content_type, 413, str(e))
