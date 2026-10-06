@@ -1493,7 +1493,7 @@ class Logging(LiteLLMLoggingBaseClass):
         Prints the RAW curl command sent from LiteLLM
         """
         if _is_debugging_on() or self.litellm_request_debug:
-            if litellm.json_logs:
+            if litellm.json_logs or litellm.ecs_logs:
                 masked_headers: Final = self._get_masked_headers(headers or {})
                 masked_api_base: Final = self._get_masked_api_base(str(api_base or ""))
                 if self.litellm_request_debug:

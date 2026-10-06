@@ -9373,3 +9373,32 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+def test_ecs_logs_keep_the_request_body_out_of_the_debug_log(logging_obj, monkeypatch):
+    import io
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    monkeypatch.setattr(litellm, "json_logs", False)
+    monkeypatch.setattr(litellm, "ecs_logs", True)
+    logging_obj.litellm_request_debug = True
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    verbose_logger.addHandler(handler)
+    try:
+        logging_obj._print_llm_call_debugging_log(
+            api_base="https://api.example.com/v1",
+            headers={},
+            additional_args={
+                "api_base": "https://api.example.com/v1",
+                "headers": {},
+                "complete_input_dict": {"messages": [{"role": "user", "content": "my-private-prompt-text"}]},
+            },
+        )
+    finally:
+        verbose_logger.removeHandler(handler)
+
+    assert "POST Request Sent from LiteLLM" in stream.getvalue()
+    assert "my-private-prompt-text" not in stream.getvalue()

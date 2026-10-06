@@ -7,10 +7,13 @@ import os
 import re
 import sys
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import datetime, timezone
 from logging import Formatter
+from types import MappingProxyType
 from typing import Final, TextIO
 from urllib.parse import unquote
+
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -644,6 +647,7 @@ def resolve_log_level(log_level: str) -> int:
 
 
 json_logs: Final = _parse_json_logs_env(os.getenv("JSON_LOGS"))
+ecs_logs: Final = _parse_json_logs_env(os.getenv("LITELLM_ECS_LOGS"))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: Final[int] = resolve_log_level(log_level)
@@ -804,6 +808,94 @@ class CorrelationPlainFormatter(logging.Formatter):
         return f"{formatted} [{' '.join(parts)}]"
 
 
+_ECS_RESERVED_KEYS: Final = frozenset({"@timestamp", "log", "message", "service", "ecs", "error"})
+
+
+class _ECSFile(TypedDict):
+    name: ReadOnly[str]
+    line: ReadOnly[int]
+
+
+class _ECSOrigin(TypedDict):
+    file: ReadOnly[_ECSFile]
+    function: ReadOnly[str]
+
+
+class _ECSLog(TypedDict):
+    level: ReadOnly[str]
+    logger: ReadOnly[str]
+    origin: ReadOnly[_ECSOrigin]
+
+
+class _ECSService(TypedDict):
+    name: ReadOnly[str]
+
+
+class _ECSMeta(TypedDict):
+    version: ReadOnly[str]
+
+
+class _ECSError(TypedDict):
+    type: ReadOnly[str | None]
+    message: ReadOnly[str]
+    stack_trace: ReadOnly[str]
+
+
+class _ECSRecord(TypedDict):
+    log: ReadOnly[_ECSLog]
+    message: ReadOnly[str]
+    service: ReadOnly[_ECSService]
+    ecs: ReadOnly[_ECSMeta]
+
+
+class ECSFormatter(Formatter):
+    ECS_VERSION = "8.11.0"
+
+    def __init__(self, service_name: str | None = None) -> None:
+        super().__init__()
+        self._service_name = service_name or os.getenv("LITELLM_SERVICE_NAME", "litellm")
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        dt: Final = datetime.fromtimestamp(record.created, tz=timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+    def format(self, record: logging.LogRecord) -> str:
+        ecs_fields: Final[_ECSRecord] = {
+            "log": {
+                "level": record.levelname.lower(),
+                "logger": record.name,
+                "origin": {"file": {"name": record.filename, "line": record.lineno}, "function": record.funcName},
+            },
+            "message": record.getMessage(),
+            "service": {"name": self._service_name},
+            "ecs": {"version": self.ECS_VERSION},
+        }
+        extra_fields: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in record.__dict__.items()
+                if key not in _NON_EXTRA_RECORD_ATTRS and key not in _ECS_RESERVED_KEYS
+            }
+        )
+        document: Final = MappingProxyType(
+            {"@timestamp": self.formatTime(record), **ecs_fields, **self._error_fields(record), **extra_fields}
+        )
+        return safe_dumps(
+            document if _is_redacted(record) or not _ENABLE_SECRET_REDACTION else _redact_json_record(document)
+        )
+
+    def _error_fields(self, record: logging.LogRecord) -> MappingProxyType[str, _ECSError]:
+        exc_info: Final = record.exc_info
+        if exc_info is None or exc_info[1] is None:
+            return MappingProxyType({})
+        error: Final[_ECSError] = {
+            "type": exc_info[0].__name__ if exc_info[0] else None,
+            "message": str(exc_info[1]),
+            "stack_trace": record.exc_text or self.formatException(exc_info),
+        }
+        return MappingProxyType({"error": error})
+
+
 # Function to set up exception handlers for JSON logging
 def _setup_json_exception_handlers(formatter):
     # Create a handler with JSON formatting for exceptions
@@ -855,7 +947,10 @@ def _setup_json_exception_handlers(formatter):
 
 
 # Create a formatter and set it for the handler
-if json_logs:
+if ecs_logs:
+    handler.setFormatter(ECSFormatter())
+    _setup_json_exception_handlers(ECSFormatter())
+elif json_logs:
     handler.setFormatter(JsonFormatter())
     _setup_json_exception_handlers(JsonFormatter())
 else:
@@ -997,7 +1092,7 @@ def _get_uvicorn_json_log_config():
     This ensures that uvicorn's access logs, error logs, and all application logs
     are formatted as JSON when json_logs is enabled.
     """
-    json_formatter_class: Final = "litellm._logging.JsonFormatter"
+    formatter_class: Final = "litellm._logging.ECSFormatter" if ecs_logs else "litellm._logging.JsonFormatter"
 
     # Use the module-level log_level variable for consistency
     uvicorn_log_level: Final = log_level.upper()
@@ -1007,13 +1102,13 @@ def _get_uvicorn_json_log_config():
         "disable_existing_loggers": False,
         "formatters": {
             "json": {
-                "()": json_formatter_class,
+                "()": formatter_class,
             },
             "default": {
-                "()": json_formatter_class,
+                "()": formatter_class,
             },
             "access": {
-                "()": json_formatter_class,
+                "()": formatter_class,
             },
         },
         "handlers": {
@@ -1062,6 +1157,14 @@ def _turn_on_json():
     _initialize_loggers_with_handler(handler)
     # Set up exception handlers
     _setup_json_exception_handlers(JsonFormatter())
+
+
+def _turn_on_ecs():
+    handler: Final = LevelRoutingStreamHandler()
+    handler.setLevel(numeric_level)
+    handler.setFormatter(ECSFormatter())
+    _initialize_loggers_with_handler(handler)
+    _setup_json_exception_handlers(ECSFormatter())
 
 
 def _turn_on_debug():

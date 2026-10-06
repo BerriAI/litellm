@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable
+from types import MappingProxyType
 from typing import Any, Final
 
 from pydantic import BaseModel
@@ -49,7 +50,7 @@ def safe_json_structure(
             return "CircularReference Detected"
         seen.add(id(obj))
         result: dict | list | tuple | set | str
-        if isinstance(obj, dict):
+        if isinstance(obj, (dict, MappingProxyType)):
             result = {}
             for k, v in obj.items():
                 if isinstance(k, (str)):
