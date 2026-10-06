@@ -4124,7 +4124,7 @@ async def test_compression_savings_survive_to_spend_log_payload_metadata(monkeyp
         "max_tokens": 512,
         "litellm_call_id": "test-compression-call-id",
         "litellm_metadata": {
-            "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "user_api_key": "bc46df66218d24bc910f7c95ef9d861c706d22a191f9e7378f8a51f54146474f",
             "user_api_key_user_id": "u1",
             "user_api_key_team_id": "t1",
         },

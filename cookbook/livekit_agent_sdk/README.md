@@ -22,6 +22,7 @@ litellm --config config.yaml --port 4000
 ### 3. Run the voice agent
 
 ```bash
+export LITELLM_API_KEY="$LITELLM_MASTER_KEY"
 python main.py
 ```
 

@@ -88,7 +88,7 @@ def test_default_master_key_is_random_and_stable(tmp_path):
     second = _run(tmp_path, 'load_master_key; echo "$master_key"')
     assert first.returncode == 0, first.stderr
     key = first.stdout.strip()
-    assert key.startswith("sk-") and len(key) == 35
+    assert key.startswith("sk-") and len(key) == 51
     assert second.stdout.strip() == key
     assert oct((tmp_path / "state" / "master_key").stat().st_mode & 0o777) == "0o600"
 
