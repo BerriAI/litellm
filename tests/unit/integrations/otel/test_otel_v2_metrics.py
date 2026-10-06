@@ -31,7 +31,7 @@ pytest.importorskip("opentelemetry")
 
 from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
-from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
+from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View  # noqa: E402
 
 import litellm  # noqa: E402
 from litellm.constants import (  # noqa: E402
@@ -41,7 +41,10 @@ from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.config import (  # noqa: E402
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.model.semconv import MetricBuckets
+from litellm.integrations.otel.model.semconv import MetricBuckets  # noqa: E402
+from litellm.integrations.otel.plumbing.histograms import (  # noqa: E402
+    _warn_bucket_advisory_unsupported,
+)
 from litellm.integrations.otel.plumbing.metrics import (  # noqa: E402
     GenAIMetricRecorder,
     create_genai_metrics,
@@ -68,12 +71,16 @@ ALL_METRICS = frozenset(
     }
 )
 
+# Copied from the OTel GenAI semantic conventions (gen-ai-metrics.md), as of
+# 2026-10, so a typo in MetricBuckets cannot also be a typo in the expectation.
+# gen_ai.client.response.duration has no semconv entry and reuses operation.duration's.
+_DURATION_BOUNDARIES = (0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92)
 EXPECTED_BOUNDARIES = {
-    OPERATION_DURATION: MetricBuckets.OPERATION_DURATION,
-    TOKEN_USAGE: MetricBuckets.TOKEN_USAGE,
-    TIME_TO_FIRST_TOKEN: MetricBuckets.TIME_TO_FIRST_TOKEN,
-    TIME_PER_OUTPUT_TOKEN: MetricBuckets.TIME_PER_OUTPUT_TOKEN,
-    RESPONSE_DURATION: MetricBuckets.RESPONSE_DURATION,
+    OPERATION_DURATION: _DURATION_BOUNDARIES,
+    TOKEN_USAGE: (1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864),
+    TIME_TO_FIRST_TOKEN: (0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0),
+    TIME_PER_OUTPUT_TOKEN: (0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 2.5),
+    RESPONSE_DURATION: _DURATION_BOUNDARIES,
 }
 
 TOKEN_TYPE = "gen_ai.token.type"
@@ -140,10 +147,12 @@ def _build_call(
     return kwargs, response_obj, start, end
 
 
-def _logger(reader, *, enable_metrics: bool):
+def _logger(reader, *, enable_metrics: bool, semconv_histogram_buckets: bool = False):
     return OpenTelemetryV2(
         config=OpenTelemetryV2Config(
-            exporter="in_memory", enable_metrics=enable_metrics
+            exporter="in_memory",
+            enable_metrics=enable_metrics,
+            semconv_histogram_buckets=semconv_histogram_buckets,
         ),
         meter_provider=MeterProvider(metric_readers=[reader]),
     )
@@ -162,10 +171,10 @@ def _metrics_by_name(reader):
     return out
 
 
-def _drive_success(reader, callback_settings_attributes=None, **call_overrides):
+def _drive_success(reader, callback_settings_attributes=None, *, semconv_histogram_buckets=False, **call_overrides):
     """Construct a metrics-on logger, optionally populate callback_settings AFTER
     construction (mirroring the proxy ordering), run the real success hook."""
-    logger = _logger(reader, enable_metrics=True)
+    logger = _logger(reader, enable_metrics=True, semconv_histogram_buckets=semconv_histogram_buckets)
     previous = litellm.callback_settings
     if callback_settings_attributes is not None:
         litellm.callback_settings = {
@@ -178,28 +187,64 @@ def _drive_success(reader, callback_settings_attributes=None, **call_overrides):
         litellm.callback_settings = previous
     return _metrics_by_name(reader)
 
+
+def _sdk_default_boundaries():
+    """The bounds the SDK gives a histogram created with no advisory and no View."""
+    reader = InMemoryMetricReader()
+    MeterProvider(metric_readers=[reader]).get_meter("probe").create_histogram("probe").record(1)
+    (dp,) = _metrics_by_name(reader)["probe"]
+    return tuple(dp.explicit_bounds)
+
 @pytest.mark.parametrize("name, expected", EXPECTED_BOUNDARIES.items())
 def test_histograms_use_semconv_bucket_boundaries(name, expected):
-    """without explicit boundaries the SDK defaults
-    (0, 5, 10, ... sized for ms) put every seconds-valued latency in one bucket."""
+    """With LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS on, each latency/token histogram
+    carries the semconv boundaries. Without them the SDK defaults (0, 5, 10, ...
+    sized for ms) put every seconds-valued latency in one bucket."""
+    metrics = _drive_success(InMemoryMetricReader(), semconv_histogram_buckets=True)
+    points = metrics[name]
+    assert points, f"{name} recorded no data points"
+    for dp in points:
+        assert tuple(dp.explicit_bounds) == expected
+
+
+@pytest.mark.parametrize("name", sorted(ALL_METRICS))
+def test_histograms_keep_sdk_default_boundaries_when_flag_off(name):
+    """The flag defaults off so an upgrade does not change bucket layouts under an
+    operator's stored data: every histogram is created exactly as before."""
     metrics = _drive_success(InMemoryMetricReader())
     points = metrics[name]
     assert points, f"{name} recorded no data points"
     for dp in points:
-        assert tuple(dp.explicit_bounds) == tuple(expected)
+        assert tuple(dp.explicit_bounds) == _sdk_default_boundaries()
+
+
+def test_cost_histogram_keeps_sdk_default_boundaries_with_flag_on():
+    """Semconv defines no boundaries for gen_ai.usage.cost, so the flag leaves it alone."""
+    (dp,) = _drive_success(InMemoryMetricReader(), semconv_histogram_buckets=True)[TOKEN_COST]
+    assert tuple(dp.explicit_bounds) == _sdk_default_boundaries()
+
+
+def test_semconv_histogram_buckets_flag_reads_env(monkeypatch):
+    """Operators turn the flag on with the env var, which the config resolves at
+    construction, before the histograms are created."""
+    monkeypatch.setenv("LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS", "true")
+    assert OpenTelemetryV2Config(exporter="in_memory").semconv_histogram_buckets is True
+
 
 def test_operator_view_overrides_default_boundaries():
     """The boundaries are an advisory, so an operator's own View still wins."""
     custom = (0.5, 1, 2, 5, 10, 30)
     reader = InMemoryMetricReader()
     logger = OpenTelemetryV2(
-        config=OpenTelemetryV2Config(exporter="in_memory", enable_metrics=True),
+        config=OpenTelemetryV2Config(exporter="in_memory", enable_metrics=True, semconv_histogram_buckets=True),
         meter_provider=MeterProvider(
             metric_readers=[reader],
-            views=[View(
-                instrument_name=OPERATION_DURATION,
-                aggregation=ExplicitBucketHistogramAggregation(boundaries=custom),
-            )],
+            views=[
+                View(
+                    instrument_name=OPERATION_DURATION,
+                    aggregation=ExplicitBucketHistogramAggregation(boundaries=custom),
+                )
+            ],
         ),
     )
     kwargs, response_obj, start, end = _build_call()
@@ -208,11 +253,12 @@ def test_operator_view_overrides_default_boundaries():
     (dp,) = _metrics_by_name(reader)[OPERATION_DURATION]
     assert tuple(dp.explicit_bounds) == custom
 
+
 def test_distinct_latencies_land_in_distinct_buckets():
-    """with the SDK's ms-sized defaults, a 0.3 s call and
-    a 4.9 s call shared the (0, 5] bucket, making percentiles meaningless."""
+    """With the SDK's ms-sized defaults, a 0.3 s call and a 4.9 s call shared the
+    (0, 5] bucket, making percentiles meaningless."""
     reader = InMemoryMetricReader()
-    logger = _logger(reader, enable_metrics=True)
+    logger = _logger(reader, enable_metrics=True, semconv_histogram_buckets=True)
     for seconds in (0.3, 4.9):
         kwargs, response_obj, start, _ = _build_call()
         end = start + timedelta(seconds=seconds)
@@ -223,10 +269,66 @@ def test_distinct_latencies_land_in_distinct_buckets():
     occupied = [i for i, count in enumerate(dp.bucket_counts) if count]
     assert len(occupied) == 2, f"both calls collapsed into one bucket: {dp.bucket_counts}"
 
-@pytest.mark.parametrize("bounds", EXPECTED_BOUNDARIES.values())
+
+class _PreAdvisoryMeter:
+    """A meter shaped like opentelemetry-api < 1.30.0, whose create_histogram has no
+    explicit_bucket_boundaries_advisory parameter and raises TypeError if given one."""
+
+    def __init__(self):
+        self.created = []
+
+    def create_histogram(self, name, unit="", description=""):
+        self.created.append(name)
+        return object()
+
+
+@pytest.fixture
+def fresh_advisory_warning():
+    _warn_bucket_advisory_unsupported.cache_clear()
+    yield
+    _warn_bucket_advisory_unsupported.cache_clear()
+
+
+def _advisory_warnings(caplog):
+    return [r for r in caplog.records if "LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS" in r.getMessage()]
+
+
+def test_flag_on_with_pre_advisory_api_creates_histograms_and_warns_once(caplog, fresh_advisory_warning):
+    """On an opentelemetry-api without the advisory argument, turning the flag on must
+    not break logger startup; all six histograms are still created, and the operator
+    is told once (not per histogram) why the boundaries did not apply."""
+    meter = _PreAdvisoryMeter()
+    with caplog.at_level("WARNING"):
+        create_genai_metrics(meter, semconv_buckets=True)
+
+    assert sorted(meter.created) == sorted(ALL_METRICS)
+    assert len(_advisory_warnings(caplog)) == 1
+
+
+def test_flag_off_with_pre_advisory_api_does_not_warn(caplog, fresh_advisory_warning):
+    """An operator who never asked for semconv boundaries hears nothing about them."""
+    meter = _PreAdvisoryMeter()
+    with caplog.at_level("WARNING"):
+        create_genai_metrics(meter)
+
+    assert sorted(meter.created) == sorted(ALL_METRICS)
+    assert _advisory_warnings(caplog) == []
+
+
+@pytest.mark.parametrize(
+    "bounds",
+    [
+        MetricBuckets.OPERATION_DURATION,
+        MetricBuckets.TOKEN_USAGE,
+        MetricBuckets.TIME_TO_FIRST_TOKEN,
+        MetricBuckets.TIME_PER_OUTPUT_TOKEN,
+        MetricBuckets.RESPONSE_DURATION,
+    ],
+)
 def test_bucket_boundaries_are_positive_and_strictly_increasing(bounds):
     assert all(b > 0 for b in bounds)
     assert all(a < b for a, b in zip(bounds, bounds[1:]))
+
 
 def test_all_six_metrics_emitted_when_enabled():
     """A successful streaming call with metrics on emits exactly the six

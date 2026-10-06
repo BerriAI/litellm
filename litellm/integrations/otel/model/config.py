@@ -192,6 +192,15 @@ class OpenTelemetryV2Config(BaseSettings):
         default=False,
         validation_alias=AliasChoices("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS"),
     )
+    semconv_histogram_buckets: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS"),
+        description=(
+            "Create the GenAI histograms with the semantic-convention bucket boundaries "
+            "instead of the SDK defaults. Off by default because changing boundaries "
+            "breaks percentile continuity with previously stored data."
+        ),
+    )
     capture_message_content: str = Field(
         default=CaptureMessageContent.NO_CONTENT,
         validation_alias=AliasChoices("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"),
