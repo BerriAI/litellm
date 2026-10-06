@@ -438,6 +438,39 @@ def test_path_only_model_alias_refuses_an_unallowed_deployment(gateway: Gateway,
 
 
 @pytest.mark.parametrize(("route", "kind"), _PATH_MODEL_ROUTES)
+def test_mixed_body_and_path_model_is_refused_or_served_by_the_body_model(
+    gateway: Gateway, route: str, kind: str
+) -> None:
+    pytest.skip(
+        "BUG: a key scoped to model A that sends model A in the body and an unallowed model B in the "
+        "/openai/deployments or /engines path is served by deployment B"
+    )
+    with wire_server(_path_model_reply) as allowed_wire, wire_server(_path_model_reply) as other_wire:
+        with gateway.scenario() as scenario:
+            allowed: Final = scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=allowed_wire.url)
+            other: Final = scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=other_wire.url)
+            key: Final = scenario.key(models=[allowed])
+            prompt: Final = _marker()
+            response: Final = gateway.request(
+                "POST",
+                route.format(model=other),
+                {"model": allowed, **_path_model_body(kind, prompt)},
+                key=key,
+                params={"api-version": "2024-10-21"},
+            )
+            other_bodies: Final = _upstream_bodies(other_wire)
+            allowed_bodies: Final = _upstream_bodies(allowed_wire)
+            outcome: Final = (response.status_code, other_bodies, allowed_bodies)
+            refused: Final = outcome[0] in (401, 403) and outcome[1:] == ([], [])
+            served_by_body_model: Final = outcome == (
+                200,
+                [],
+                [{"model": _PATH_MODEL_BACKEND, "messages": [{"role": "user", "content": prompt}]}],
+            )
+            assert refused or served_by_body_model, (outcome, response.text)
+
+
+@pytest.mark.parametrize(("route", "kind"), _PATH_MODEL_ROUTES)
 def test_path_only_model_alias_reaches_the_allowed_deployment(gateway: Gateway, route: str, kind: str) -> None:
     with wire_server(_path_model_reply) as allowed_wire, wire_server(_path_model_reply) as other_wire:
         with gateway.scenario() as scenario:
