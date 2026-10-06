@@ -32,6 +32,17 @@ export interface TraceRef {
 export const traceRefOf = (run: TraceSummary): TraceRef => ({ traceId: run.trace_id, traceRef: run.trace_ref });
 export const traceKey = (ref: TraceRef): string => ref.traceRef || ref.traceId;
 
+/** A shareable link that opens just this run on the current page, dropping list filters and step selection. */
+export const traceShareUrl = (ref: TraceRef, location: Pick<Location, "origin" | "pathname" | "search">): string => {
+  const demo = new URLSearchParams(location.search).get("demo") === "true";
+  const params = new URLSearchParams({
+    ...(demo ? { demo: "true" } : {}),
+    trace: ref.traceId,
+    ...(ref.traceRef ? { trace_ref: ref.traceRef } : {}),
+  });
+  return `${location.origin}${location.pathname}?${params}`;
+};
+
 /** Which step, view and detail section of an open run are showing. Owned by the URL in the drawer, locally in sheets. */
 export interface RunSelection {
   spanId: string | null;
