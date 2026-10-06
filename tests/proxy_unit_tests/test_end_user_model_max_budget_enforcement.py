@@ -211,7 +211,7 @@ async def test_enforce_end_user_model_max_budget_returns_early_when_unconfigured
 
 
 @pytest.mark.asyncio
-async def test_master_key_auth_skips_end_user_model_budget_when_flag_disabled():
+async def test_master_key_auth_skips_end_user_model_budget_when_flag_disabled(monkeypatch):
     from fastapi import Request
     from starlette.datastructures import URL
 
@@ -229,10 +229,7 @@ async def test_master_key_auth_skips_end_user_model_budget_when_flag_disabled():
         litellm_budget_table=LiteLLM_BudgetTable(model_max_budget={MODEL: MODEL_BUDGET}),
     )
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
-    flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = (
-        False  # test-quality-ok: feature-flag toggle required by design (PR description)
-    )
+    monkeypatch.setattr(litellm, "enforce_end_user_model_max_budget_on_master_key", False)
 
     try:
         for k, v in attrs.items():
@@ -267,15 +264,13 @@ async def test_master_key_auth_skips_end_user_model_budget_when_flag_disabled():
         assert result.end_user_model_max_budget == {MODEL: MODEL_BUDGET}
         limiter.is_end_user_within_model_budget.assert_not_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = (
-            flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
-        )
+        pass
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
 
 @pytest.mark.asyncio
-async def test_master_key_auth_passes_when_flag_enabled_and_within_budget():
+async def test_master_key_auth_passes_when_flag_enabled_and_within_budget(monkeypatch):
     from fastapi import Request
     from starlette.datastructures import URL
 
@@ -284,10 +279,7 @@ async def test_master_key_auth_passes_when_flag_enabled_and_within_budget():
 
     attrs, limiter = _proxy_server_attrs_for_master_key_auth()
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
-    flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = (
-        True  # test-quality-ok: feature-flag toggle required by design (PR description)
-    )
+    monkeypatch.setattr(litellm, "enforce_end_user_model_max_budget_on_master_key", True)
 
     try:
         for k, v in attrs.items():
@@ -325,9 +317,7 @@ async def test_master_key_auth_passes_when_flag_enabled_and_within_budget():
         assert result.end_user_model_max_budget == {MODEL: MODEL_BUDGET}
         limiter.is_end_user_within_model_budget.assert_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = (
-            flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
-        )
+        pass
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
@@ -372,7 +362,7 @@ async def test_virtual_key_auth_applies_and_enforces_end_user_model_budget():
 
 
 @pytest.mark.asyncio
-async def test_master_key_auth_enforces_end_user_model_budget_when_flag_enabled():
+async def test_master_key_auth_enforces_end_user_model_budget_when_flag_enabled(monkeypatch):
     from fastapi import Request
     from starlette.datastructures import URL
 
@@ -390,10 +380,7 @@ async def test_master_key_auth_enforces_end_user_model_budget_when_flag_enabled(
         litellm_budget_table=LiteLLM_BudgetTable(model_max_budget={MODEL: MODEL_BUDGET}),
     )
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
-    flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = (
-        True  # test-quality-ok: feature-flag toggle required by design (PR description)
-    )
+    monkeypatch.setattr(litellm, "enforce_end_user_model_max_budget_on_master_key", True)
 
     try:
         for k, v in attrs.items():
@@ -432,15 +419,13 @@ async def test_master_key_auth_enforces_end_user_model_budget_when_flag_enabled(
             assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
             limiter.is_end_user_within_model_budget.assert_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = (
-            flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
-        )
+        pass
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
 
 @pytest.mark.asyncio
-async def test_cached_master_key_auth_enforces_end_user_model_budget_when_flag_enabled():
+async def test_cached_master_key_auth_enforces_end_user_model_budget_when_flag_enabled(monkeypatch):
     from fastapi import Request
     from starlette.datastructures import URL
 
@@ -464,10 +449,7 @@ async def test_cached_master_key_auth_enforces_end_user_model_budget_when_flag_e
 
     attrs, limiter = _proxy_server_attrs_for_master_key_auth()
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
-    flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = (
-        True  # test-quality-ok: feature-flag toggle required by design (PR description)
-    )
+    monkeypatch.setattr(litellm, "enforce_end_user_model_max_budget_on_master_key", True)
 
     try:
         for k, v in attrs.items():
@@ -509,15 +491,13 @@ async def test_cached_master_key_auth_enforces_end_user_model_budget_when_flag_e
         assert result.end_user_model_max_budget == {MODEL: MODEL_BUDGET}
         limiter.is_end_user_within_model_budget.assert_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = (
-            flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
-        )
+        pass
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
 
 @pytest.mark.asyncio
-async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcement():
+async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcement(monkeypatch):
     from fastapi import Request
     from starlette.datastructures import URL
 
@@ -543,10 +523,7 @@ async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcemen
         message="Exceeded budget", current_cost=0.0002, max_budget=1e-05
     )
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
-    flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = (
-        True  # test-quality-ok: feature-flag toggle required by design (PR description)
-    )
+    monkeypatch.setattr(litellm, "enforce_end_user_model_max_budget_on_master_key", True)
 
     try:
         for k, v in attrs.items():
@@ -584,9 +561,7 @@ async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcemen
         assert result.user_role == LitellmUserRoles.PROXY_ADMIN
         limiter.is_end_user_within_model_budget.assert_not_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = (
-            flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
-        )
+        pass
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
@@ -602,8 +577,9 @@ async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcemen
     ],
 )
 async def test_master_key_budget_early_return_for_non_llm_routes(
+    monkeypatch,
     route,
-):  # test-quality-ok: structural assertion of mock wiring by design
+):
     """Branch coverage for ``_maybe_enforce_master_key_end_user_model_max_budget``.
 
     The flag and master-key guards in the helper are exercised by the
@@ -618,10 +594,7 @@ async def test_master_key_budget_early_return_for_non_llm_routes(
         _maybe_enforce_master_key_end_user_model_max_budget,
     )
 
-    flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = (
-        True  # test-quality-ok: feature-flag toggle required by design (PR description)
-    )
+    monkeypatch.setattr(litellm, "enforce_end_user_model_max_budget_on_master_key", True)
 
     try:
         valid_token = UserAPIKeyAuth(
@@ -634,17 +607,17 @@ async def test_master_key_budget_early_return_for_non_llm_routes(
             "litellm.proxy.proxy_server.model_max_budget_limiter.is_end_user_within_model_budget",
             new_callable=AsyncMock,
         ) as mock_check:
-            await _maybe_enforce_master_key_end_user_model_max_budget(
+            result = await _maybe_enforce_master_key_end_user_model_max_budget(
                 valid_token=valid_token,
                 request_data={"user": "customer-1", "model": MODEL},
                 route=route,
                 request=MagicMock(),
             )
+            assert result is None
+            assert valid_token.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
             mock_check.assert_not_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = (
-            flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
-        )
+        pass
 
 
 @pytest.mark.asyncio
