@@ -201,6 +201,8 @@ describe("TraceThread", () => {
     const thread = await screen.findByRole("region", { name: "Trace thread" });
     expect(await within(thread).findByText("End of thread")).toBeVisible();
     expect(within(thread).getAllByText("Agent exceeded its execution limit")).toHaveLength(1);
+    await user.click(within(thread).getByRole("button", { name: /^Worked/ }));
+    expect(within(thread).getAllByText("Agent exceeded its execution limit")).toHaveLength(1);
   });
 
   it("warns when a Claude Code trace recorded no assistant replies", async () => {
