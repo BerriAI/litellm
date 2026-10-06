@@ -1,8 +1,13 @@
 
 import copy
 import json
+from typing import Final
+from unittest.mock import MagicMock, patch
 
 import pytest
+
+import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
@@ -977,3 +982,46 @@ def test_vertex_ai_anthropic_compaction_keeps_the_betas_the_client_sent_as_heade
 
     assert sorted(headers["anthropic-beta"].split(",")) == ["compact-2026-09-04", "context-1m-2025-08-07"]
     assert "anthropic_beta" not in result
+
+
+_VERTEX_MESSAGE_RESPONSE: Final = {
+    "id": "msg_vrtx_test",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-6",
+    "content": [{"type": "text", "text": "pong"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 5, "output_tokens": 1},
+}
+
+
+def test_vertex_ai_anthropic_completion_sends_compact_2026_09_04_beta_on_the_wire(local_beta_headers_config):
+    """A chat completion with `compaction` on a Vertex Claude deployment reaches Vertex with the beta in the
+    anthropic-beta request header and never in the body field, the shape Vertex accepts (live, 2026-10-05)."""
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = json.dumps(_VERTEX_MESSAGE_RESPONSE)
+    mock_response.headers = {}
+    mock_response.json.return_value = _VERTEX_MESSAGE_RESPONSE
+    client: Final = MagicMock(spec=HTTPHandler)
+    client.post.return_value = mock_response
+
+    with patch(
+        "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+        return_value=("token", "test-project"),
+    ):
+        litellm.completion(
+            model="vertex_ai/claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Reply with the single word: pong"}],
+            compaction={"type": "summarize"},
+            vertex_project="test-project",
+            vertex_location="us-east5",
+            client=client,
+        )
+
+    sent: Final = client.post.call_args.kwargs
+    sent_body: Final = sent["json"] if "json" in sent else json.loads(sent["data"])
+    assert sent["headers"]["anthropic-beta"].split(",").count("compact-2026-09-04") == 1
+    assert sent_body["compaction"] == {"type": "summarize"}
+    assert "anthropic_beta" not in sent_body

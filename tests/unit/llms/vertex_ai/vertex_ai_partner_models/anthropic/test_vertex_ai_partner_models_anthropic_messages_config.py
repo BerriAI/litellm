@@ -1,14 +1,18 @@
 import copy
 import json
 import os
-from unittest.mock import MagicMock, patch
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
+import litellm
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
 from litellm.types.router import GenericLiteLLMParams
 
@@ -767,3 +771,48 @@ def test_no_compaction_signal_leaves_compact_2026_09_04_beta_out():
     headers = _validate_vertex_headers({}, [{"role": "user", "content": "Hello"}])
 
     assert "compact-2026-09-04" not in headers.get("anthropic-beta", "")
+
+
+_VERTEX_MESSAGE_RESPONSE: Final = {
+    "id": "msg_vrtx_test",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-6",
+    "content": [{"type": "text", "text": "pong"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 5, "output_tokens": 1},
+}
+
+
+@pytest.mark.asyncio
+async def test_vertex_messages_request_sends_compact_2026_09_04_beta_on_the_wire(local_beta_headers_config):
+    """A /v1/messages compaction request to a Vertex Claude deployment reaches Vertex with the beta in the
+    anthropic-beta request header and never in the body, the shape Vertex accepts (live, 2026-10-05)."""
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = json.dumps(_VERTEX_MESSAGE_RESPONSE)
+    mock_response.headers = httpx.Headers({})
+    mock_response.json.return_value = _VERTEX_MESSAGE_RESPONSE
+
+    with (
+        patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post,
+        patch(
+            "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+            return_value=("token", "test-project"),
+        ),
+    ):
+        await litellm.anthropic.messages.acreate(
+            model="vertex_ai/claude-sonnet-4-6",
+            max_tokens=64,
+            messages=[{"role": "user", "content": "Reply with the single word: pong"}],
+            compaction={"type": "summarize"},
+            vertex_project="test-project",
+            vertex_location="us-east5",
+        )
+
+    sent: Final = mock_post.call_args.kwargs
+    sent_body: Final = sent["json"] if "json" in sent else json.loads(sent["data"])
+    assert sent["headers"]["anthropic-beta"].split(",").count("compact-2026-09-04") == 1
+    assert sent_body["compaction"] == {"type": "summarize"}
+    assert "anthropic_beta" not in sent_body
