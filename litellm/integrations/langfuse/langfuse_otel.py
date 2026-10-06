@@ -190,31 +190,26 @@ class LangfuseOtelLogger(OpenTelemetry):
                                     }
                                 )
                     elif item_type == "message":
-                        message_content_parts = getattr(item, "content", []) or []
-                        text_chunks = []
-                        refusal_chunks = []
-                        for part in message_content_parts:
-                            part_type = getattr(part, "type", None) if not isinstance(part, dict) else part.get("type")
-                            if part_type == "output_text":
-                                part_text = getattr(part, "text", "") if not isinstance(part, dict) else part.get("text", "")
-                                if part_text:
-                                    text_chunks.append(part_text)
-                            elif part_type == "refusal":
-                                part_refusal = getattr(part, "refusal", "") if not isinstance(part, dict) else part.get("refusal", "")
-                                if part_refusal:
-                                    refusal_chunks.append(part_refusal)
-                            else:
-                                part_text = getattr(part, "text", None) if not isinstance(part, dict) else part.get("text")
-                                if part_text:
-                                    text_chunks.append(part_text)
-
-                        content_val = "".join(text_chunks)
-                        if not content_val and refusal_chunks:
-                            content_val = "".join(refusal_chunks)
+                        message_content_parts = getattr(item, "content", ()) or ()
+                        text_chunks = tuple(
+                            getattr(part, "text", "") if not isinstance(part, dict) else part.get("text", "")
+                            for part in message_content_parts
+                            if (getattr(part, "type", None) if not isinstance(part, dict) else part.get("type")) != "refusal"
+                            and (getattr(part, "text", "") if not isinstance(part, dict) else part.get("text", ""))
+                        )
+                        refusal_chunks = tuple(
+                            getattr(part, "refusal", "") if not isinstance(part, dict) else part.get("refusal", "")
+                            for part in message_content_parts
+                            if (getattr(part, "type", None) if not isinstance(part, dict) else part.get("type")) == "refusal"
+                            and (getattr(part, "refusal", "") if not isinstance(part, dict) else part.get("refusal", ""))
+                        )
+                        joined_text = "".join(text_chunks)
+                        content_val = joined_text if joined_text else "".join(refusal_chunks)
+                        item_role = getattr(item, "role", "assistant") if not isinstance(item, dict) else item.get("role", "assistant")
 
                         output_items_data.append(
                             {
-                                "role": getattr(item, "role", "assistant") if not isinstance(item, dict) else item.get("role", "assistant"),
+                                "role": item_role,
                                 "content": content_val,
                             }
                         )

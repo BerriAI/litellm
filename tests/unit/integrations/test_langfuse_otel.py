@@ -1035,18 +1035,15 @@ class TestLangfuseOtelResponsesAPI:
             raw = span.attributes.get(LangfuseSpanAttributes.OBSERVATION_OUTPUT.value)
             return json.loads(raw) if raw else None
 
-        # 1. Refusal content preserved
         res_refusal = get_output([{"type": "refusal", "refusal": "I cannot help with that."}])
         assert res_refusal == [{"role": "assistant", "content": "I cannot help with that."}]
 
-        # 2. Multiple text chunks joined
         res_multi = get_output([
             {"type": "output_text", "text": "Hello ", "annotations": []},
             {"type": "output_text", "text": "world!", "annotations": []},
         ])
         assert res_multi == [{"role": "assistant", "content": "Hello world!"}]
 
-        # 3. Empty content list does not raise IndexError
         res_empty = get_output([])
         assert res_empty == [{"role": "assistant", "content": ""}]
 
