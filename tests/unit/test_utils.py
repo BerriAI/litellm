@@ -4782,8 +4782,6 @@ async def test_router_aresponses_does_not_run_sdk_retries(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    retry_recorder: Final = AsyncMock(side_effect=RuntimeError("SDK retries should be skipped"))
-    monkeypatch.setattr(litellm, "aresponses_with_retries", retry_recorder)
     model_list: Final = [
         {
             "model_name": "responses-retry",
@@ -4812,7 +4810,6 @@ async def test_router_aresponses_does_not_run_sdk_retries(
                 await router.aresponses(model="responses-retry", input="hi", stream=stream)
 
         assert upstream.call_count == 3
-        retry_recorder.assert_not_awaited()
     finally:
         router.discard()
         litellm.in_memory_llm_clients_cache.flush_cache()
@@ -4860,9 +4857,6 @@ def test_router_responses_keeps_sdk_retries_for_sync_router_call(
 async def test_aresponses_uses_sdk_retries_without_router(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    retry_result: Final = object()
-    retry_recorder: Final = AsyncMock(return_value=retry_result)
-    monkeypatch.setattr(litellm, "aresponses_with_retries", retry_recorder)
 
     try:
         with respx.mock(assert_all_called=True) as respx_mock:
@@ -4873,18 +4867,16 @@ async def test_aresponses_uses_sdk_retries_without_router(monkeypatch: pytest.Mo
                     json={"error": {"message": "model is down", "type": "server_error"}},
                 )
             )
-            result: Final = await litellm.aresponses(
-                model="openai/gpt-4o-mini",
-                input="hi",
-                api_base="https://responses-direct.local/v1",
-                api_key="k",
-                num_retries=2,
-            )
+            with pytest.raises(litellm.ServiceUnavailableError):
+                await litellm.aresponses(
+                    model="openai/gpt-4o-mini",
+                    input="hi",
+                    api_base="https://responses-direct.local/v1",
+                    api_key="k",
+                    num_retries=2,
+                )
 
-        assert result is retry_result
-        assert upstream.call_count == 1
-        retry_recorder.assert_awaited_once()
-        assert retry_recorder.await_args.kwargs["num_retries"] == 2
+        assert upstream.call_count == 3
     finally:
         litellm.in_memory_llm_clients_cache.flush_cache()
 
@@ -4892,9 +4884,6 @@ async def test_aresponses_uses_sdk_retries_without_router(monkeypatch: pytest.Mo
 def test_responses_uses_sdk_retries_without_router(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    retry_result: Final = object()
-    retry_recorder: Final = MagicMock(return_value=retry_result)
-    monkeypatch.setattr(litellm, "responses_with_retries", retry_recorder)
 
     try:
         with respx.mock(assert_all_called=True) as respx_mock:
@@ -4905,18 +4894,16 @@ def test_responses_uses_sdk_retries_without_router(monkeypatch: pytest.MonkeyPat
                     json={"error": {"message": "model is down", "type": "server_error"}},
                 )
             )
-            result: Final = litellm.responses(
-                model="openai/gpt-4o-mini",
-                input="hi",
-                api_base="https://responses-sync.local/v1",
-                api_key="k",
-                num_retries=2,
-            )
+            with pytest.raises(litellm.ServiceUnavailableError):
+                litellm.responses(
+                    model="openai/gpt-4o-mini",
+                    input="hi",
+                    api_base="https://responses-sync.local/v1",
+                    api_key="k",
+                    num_retries=2,
+                )
 
-        assert result is retry_result
-        assert upstream.call_count == 1
-        retry_recorder.assert_called_once()
-        assert retry_recorder.call_args.kwargs["num_retries"] == 2
+        assert upstream.call_count == 3
     finally:
         litellm.in_memory_llm_clients_cache.flush_cache()
 
