@@ -133,6 +133,56 @@ describe("TraceConversation", () => {
     expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, "native-next"]);
   });
 
+  it("waits for an in-flight refresh before requesting another conversation page", async () => {
+    const user = userEvent.setup();
+    const first = { ...trace, spans: [root], next_cursor: "old-page" };
+    const refreshed = { ...first, next_cursor: "fresh-page" };
+    const second = { ...trace, spans: [tool], next_cursor: null };
+    const pending = Promise.withResolvers<Trace>();
+    vi.mocked(agentTraceCall)
+      .mockResolvedValueOnce(first)
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue(second);
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Conversation" }));
+    expect(await screen.findByText("Read the release notes")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Refresh run" }));
+    const more = screen.getByRole("button", { name: "Load next 20 entries" });
+    expect(more).toBeDisabled();
+    await user.click(more);
+    expect(agentTraceCall).toHaveBeenCalledTimes(2);
+    await act(async () => pending.resolve(refreshed));
+    await waitFor(() => expect(more).toBeEnabled());
+    await user.click(more);
+    expect(await screen.findByRole("button", { name: "Expand read_file tool call" })).toBeVisible();
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, null, "fresh-page"]);
+  });
+
+  it("can load the next conversation page after a refresh fails", async () => {
+    const user = userEvent.setup();
+    const first = { ...trace, spans: [root], next_cursor: "next-page" };
+    const second = { ...trace, spans: [tool], next_cursor: null };
+    vi.mocked(agentTraceCall)
+      .mockResolvedValueOnce(first)
+      .mockRejectedValueOnce(new Error("refresh unavailable"))
+      .mockResolvedValue(second);
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Conversation" }));
+    expect(await screen.findByText("Read the release notes")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Refresh run" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Previously received steps are still shown");
+    const more = screen.getByRole("button", { name: "Load next 20 entries" });
+    expect(more).toBeEnabled();
+    await user.click(more);
+    expect(await screen.findByRole("button", { name: "Expand read_file tool call" })).toBeVisible();
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, null, "next-page"]);
+    expect(screen.queryByText(/Could not load more conversation entries/)).not.toBeInTheDocument();
+  });
+
   it("renders a failed shell exchange in both views and preserves its raw result", async () => {
     const user = userEvent.setup();
     const command = "npm test -- checkout\nprintf 'finished\\n'";
