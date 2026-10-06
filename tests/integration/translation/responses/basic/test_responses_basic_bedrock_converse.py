@@ -10,7 +10,7 @@ from integration.translation.responses.bases.bedrock_converse import (
     CLAUDE_SONNET_5_5_TEST_CASE,
     CLAUDE_SONNET_5_TEST_CASE,
 )
-from integration.translation.runner import run
+from integration.translation.runner import assert_translation
 
 
 @pytest.mark.parametrize(
@@ -28,4 +28,4 @@ from integration.translation.runner import run
 def test_responses_basic_bedrock_converse(
     case: TranslationTestCase, gateway: Gateway, provider: SharedProvider
 ) -> None:
-    run(case, gateway, provider)
+    assert_translation(case, gateway, provider)

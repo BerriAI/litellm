@@ -9,7 +9,7 @@ from integration.translation.case import TranslationTestCase
 TRANSPORT_HEADERS: Final = frozenset({"host", "accept", "accept-encoding", "connection", "content-length", "user-agent"})
 
 
-def run(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
+def assert_translation(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
     provider.expect(Reply(body=json.dumps(case.mock_provider_response).encode()))
     response: Final = gateway.request("POST", case.litellm_endpoint, case.litellm_request)
     received: Final = provider.received()
