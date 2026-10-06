@@ -576,9 +576,9 @@ class ContextWindowExceededError(BadRequestError):
 class PaymentRequiredError(BadRequestError):
     def __init__(
         self,
-        message,
-        model,
-        llm_provider,
+        message: str,
+        model: str,
+        llm_provider: str,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
     ) -> None:
