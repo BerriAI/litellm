@@ -16,6 +16,34 @@ def stage_core_distribution(source: Path, destination: Path) -> None:
     version: Final = subprocess.run(
         ["uv", "version", "--short"], cwd=source, check=True, capture_output=True, text=True
     ).stdout.strip()
+    ignored: Final = frozenset(
+        source / name
+        for name in subprocess.run(
+            [
+                "git",
+                "ls-files",
+                "--ignored",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "--directory",
+                "-z",
+                "--",
+                *SOURCES,
+            ],
+            cwd=source,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split("\0")
+        if name
+    )
+
+    def ignored_sources(directory: str, names: list[str]) -> set[str]:
+        return {name for name in names if Path(directory) / name in ignored} | shutil.ignore_patterns(
+            "__pycache__", ".pytest_cache", ".ruff_cache", "target", ".git", "*.so", "*.pyd"
+        )(directory, names)
+
     destination.mkdir(parents=True, exist_ok=True)
     for name in SOURCES:
         path: Final = source / name
@@ -23,9 +51,7 @@ def stage_core_distribution(source: Path, destination: Path) -> None:
             shutil.copytree(
                 path,
                 destination / name,
-                ignore=shutil.ignore_patterns(
-                    "__pycache__", ".pytest_cache", ".ruff_cache", "target", ".git", "*.so", "*.pyd"
-                ),
+                ignore=ignored_sources,
             )
         else:
             shutil.copy2(path, destination / name)
