@@ -1,6 +1,7 @@
 import io
 import json
 from pathlib import Path
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -11,6 +12,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx import container_handler
 from litellm.llms.custom_httpx.container_handler import generic_container_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.containers.main import DeleteContainerFileResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager
 
@@ -34,6 +36,14 @@ def _async_client(response: httpx.Response) -> AsyncHTTPHandler:
     handler = AsyncHTTPHandler()
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: response))
     return handler
+
+
+def _endpoint_table_with_query_params_only_on(endpoint_name: str) -> str:
+    table = json.loads((Path(litellm.__file__).parent / "containers" / "endpoints.json").read_text())
+    for entry in table["endpoints"]:
+        if entry["name"] != endpoint_name:
+            entry.pop("query_params", None)
+    return json.dumps(table)
 
 
 def _handle(endpoint_name: str, client, **overrides):
@@ -106,18 +116,47 @@ def test_json_endpoint_still_raises_provider_error_message():
     assert exc_info.value.message == "File not found."
 
 
+def test_json_endpoint_sends_the_configured_route_and_parses_its_response_model():
+    handler: Final = HTTPHandler()
+    handler.client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "id": request.url.path,
+                    "object": "container.file.deleted",
+                    "deleted": request.method == "DELETE",
+                },
+            )
+        )
+    )
+
+    response: Final = _handle("delete_container_file", handler)
+
+    assert type(response) is DeleteContainerFileResponse
+    assert response.id.endswith("/containers/cntr_real/files/cfile_nonexistent")
+    assert response.deleted is True
+
+
 @pytest.mark.parametrize("endpoint_name", ["list_container_files", "retrieve_container_file"])
 def test_endpoint_reaches_the_provider_when_other_table_entries_lack_query_params(
     monkeypatch: pytest.MonkeyPatch, endpoint_name: str
 ):
-    table = json.loads((Path(litellm.__file__).parent / "containers" / "endpoints.json").read_text())
-    for entry in table["endpoints"]:
-        if entry["name"] != endpoint_name:
-            entry.pop("query_params", None)
-    monkeypatch.setattr(container_handler, "open", lambda _path: io.StringIO(json.dumps(table)), raising=False)
+    table: Final = _endpoint_table_with_query_params_only_on(endpoint_name)
+    monkeypatch.setattr(container_handler, "open", lambda _path: io.StringIO(table), raising=False)
 
     with pytest.raises(BaseLLMException) as exc_info:
         _handle(endpoint_name, _sync_client(httpx.Response(404, json=FILE_NOT_FOUND_BODY)))
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.message == "File not found."
+
+
+def test_delete_reaches_the_provider_when_other_table_entries_lack_query_params(monkeypatch: pytest.MonkeyPatch):
+    table: Final = _endpoint_table_with_query_params_only_on("delete_container_file")
+    monkeypatch.setattr(container_handler, "open", lambda _path: io.StringIO(table), raising=False)
+    deleted: Final = {"id": "cfile_nonexistent", "object": "container.file.deleted", "deleted": True}
+
+    response: Final = _handle("delete_container_file", _sync_client(httpx.Response(200, json=deleted)))
+
+    assert response == DeleteContainerFileResponse(**deleted)
