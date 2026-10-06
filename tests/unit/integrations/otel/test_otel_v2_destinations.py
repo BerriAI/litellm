@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Final
 
 import pytest
+from opentelemetry import trace as trace_api
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -1041,6 +1042,468 @@ class TestFanOut:
         in_fresh_context(run)
 
         assert len(built) == 1
+
+
+ARIZE_TEAM_PARAMS = {"arize_space_id": "space-team", "arize_api_key": "key-team"}
+
+
+def arize_destination(**rates: str) -> OtelDestination:
+    destination = destination_for("arize", {**ARIZE_TEAM_PARAMS, **rates})
+    assert destination is not None, "the fixture must resolve for the test to mean anything"
+    return destination
+
+
+class TestTenantSampling:
+    """A team's ``arize_success_sampling_rate`` and ``arize_error_sampling_rate`` decide how
+    much of its traffic the fan-out delivers to its space, the way they already decide what
+    the legacy Arize callback exports."""
+
+    NAMES = {"POST /v1/chat/completions", "auth /v1/chat/completions", "chat gpt-4"}
+
+    @staticmethod
+    def _fan_out(dest_exporter, draw=None, global_exporter=None):
+        provider = TracerProvider()
+        if global_exporter is not None:
+            provider.add_span_processor(_OverriddenBackendFilter(SimpleSpanProcessor(global_exporter), "arize"))
+        kwargs = {"processor_factory": lambda _d: SimpleSpanProcessor(dest_exporter)}
+        if draw is not None:
+            kwargs["sampling_draw"] = draw
+        provider.add_span_processor(TenantFanOutSpanProcessor(**kwargs))
+        return provider
+
+    @staticmethod
+    def _tree(provider, *, failed=False):
+        tracer = get_tracer(provider, "litellm")
+        with tracer.start_as_current_span("POST /v1/chat/completions"):
+            with tracer.start_as_current_span("auth /v1/chat/completions"):
+                pass
+            with tracer.start_as_current_span("chat gpt-4") as span:
+                if failed:
+                    span.set_status(Status(StatusCode.ERROR, "upstream 500"))
+
+    def _run(self, provider, destinations, *, failed=False, trees=1):
+        def run():
+            set_request_destinations(destinations)
+            for _ in range(trees):
+                self._tree(provider, failed=failed)
+
+        in_fresh_context(run)
+
+    def test_a_zero_rate_keeps_the_whole_tree_out_of_the_teams_space(self):
+        """The reported case: override mode, both rates 0.0, so the team's traffic goes nowhere."""
+        global_exporter, dest_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, global_exporter=global_exporter)
+
+        self._run(
+            provider,
+            (arize_destination(arize_success_sampling_rate="0.0", arize_error_sampling_rate="0.0"),),
+        )
+
+        assert dest_exporter.get_finished_spans() == ()
+        assert global_exporter.get_finished_spans() == ()
+
+    def test_a_rate_of_one_exports_the_whole_tree(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate="1.0"),))
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
+
+    def test_an_unset_rate_exports_everything(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.99)
+
+        self._run(provider, (arize_destination(),))
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
+
+    def test_a_failed_request_is_kept_whole_by_the_error_rate_when_the_success_rate_drops_the_rest(self):
+        """Mirrors the legacy callback, where a failed call answers to the error rate, at the
+        size of a request tree: the failed model call arrives with its parents."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(
+            provider,
+            (arize_destination(arize_success_sampling_rate="0.0", arize_error_sampling_rate="1.0"),),
+            failed=True,
+        )
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
+
+    def test_a_zero_error_rate_drops_the_whole_failed_request_the_success_rate_would_keep(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(
+            provider,
+            (arize_destination(arize_success_sampling_rate="1.0", arize_error_sampling_rate="0.0"),),
+            failed=True,
+        )
+
+        assert dest_exporter.get_finished_spans() == ()
+
+    def test_a_model_call_that_fails_after_the_server_span_ended_answers_to_the_error_rate(self):
+        """The model-call span is closed in the post-call callback, after the FastAPI server
+        span has ended, so a request whose only failed span ends late is still a failed
+        request: it is kept by an error rate of 1.0 that a success rate of 0.0 would drop."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+        destinations = (arize_destination(arize_success_sampling_rate="0.0", arize_error_sampling_rate="1.0"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                call = tracer.start_span("chat gpt-4")
+            assert dest_exporter.get_finished_spans() == (), "undecided while the model call is open"
+            call.set_status(Status(StatusCode.ERROR, "upstream 500"))
+            call.end()
+
+        in_fresh_context(run)
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == {"POST /v1/chat/completions", "chat gpt-4"}
+
+    def test_the_span_that_fills_a_tree_to_its_bound_still_counts_as_failed(self):
+        """A tree decided early because it hit the per-tree cap answers to the error rate
+        when the span that tripped the cap is the one that failed."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+        destinations = (arize_destination(arize_success_sampling_rate="1.0", arize_error_sampling_rate="0.0"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                for index in range(otel_providers._MAX_PENDING_SPANS_PER_TREE - 1):
+                    with tracer.start_as_current_span(f"chat {index}"):
+                        pass
+                with tracer.start_as_current_span("chat gpt-4") as call:
+                    call.set_status(Status(StatusCode.ERROR, "upstream 500"))
+
+        in_fresh_context(run)
+
+        assert dest_exporter.get_finished_spans() == ()
+
+    def test_a_span_that_ends_after_the_root_follows_the_requests_verdict(self):
+        """A post-call database write that starts after the whole request tree has ended
+        goes where the rest of the tree went, without a second draw."""
+        kept_exporter, dropped_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        kept = self._fan_out(kept_exporter, draw=lambda: 0.1)
+        dropped = self._fan_out(dropped_exporter, draw=lambda: 0.9)
+        destinations = (arize_destination(arize_success_sampling_rate="0.5"),)
+
+        def late_tree(provider):
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions") as root:
+                root_context = trace_api.set_span_in_context(root)
+            with tracer.start_as_current_span("postgres INSERT LiteLLM_SpendLogs", context=root_context):
+                pass
+
+        for provider in (kept, dropped):
+
+            def run(provider=provider):
+                set_request_destinations(destinations)
+                late_tree(provider)
+
+            in_fresh_context(run)
+
+        assert {s.name for s in kept_exporter.get_finished_spans()} == {
+            "POST /v1/chat/completions",
+            "postgres INSERT LiteLLM_SpendLogs",
+        }
+        assert dropped_exporter.get_finished_spans() == ()
+
+    def test_a_late_span_whose_verdict_was_forgotten_is_decided_on_its_own_not_stranded(self):
+        """Once enough other requests have been decided to evict a request's verdict, a span
+        of it that starts late (a post-call database write) opens and closes its own count,
+        so it is decided on a draw of its own as soon as it ends instead of waiting in a tree
+        nothing would ever close."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.1)
+        destinations = (arize_destination(arize_success_sampling_rate="0.5"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions") as root:
+                root_context = trace_api.set_span_in_context(root)
+            for index in range(otel_providers._MAX_REMEMBERED_VERDICTS):
+                with tracer.start_as_current_span(f"POST {index}", context=trace_api.Context()):
+                    pass
+            with tracer.start_as_current_span("postgres INSERT LiteLLM_SpendLogs", context=root_context):
+                pass
+
+        in_fresh_context(run)
+
+        names = [s.name for s in dest_exporter.get_finished_spans()]
+        assert names[0] == "POST /v1/chat/completions"
+        assert names[-1] == "postgres INSERT LiteLLM_SpendLogs", "exported as it ended, not held for a root"
+
+    def test_a_callers_traceparent_neither_steers_the_draw_nor_hides_the_root(self):
+        """The draw is random, not read from the trace id a caller may have chosen, and the
+        server span under a remote parent still closes the tree."""
+        dest_exporter = InMemorySpanExporter()
+        draws = iter([0.9, 0.1])
+        provider = self._fan_out(dest_exporter, draw=lambda: next(draws))
+        destinations = (arize_destination(arize_success_sampling_rate="0.5"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            for trace_id in (1, 2):
+                remote = trace_api.SpanContext(
+                    trace_id=trace_id, span_id=1, is_remote=True, trace_flags=trace_api.TraceFlags(0x01)
+                )
+                parent = trace_api.set_span_in_context(trace_api.NonRecordingSpan(remote))
+                with tracer.start_as_current_span("POST /v1/chat/completions", context=parent):
+                    with tracer.start_as_current_span("chat gpt-4"):
+                        pass
+
+        in_fresh_context(run)
+
+        kept = dest_exporter.get_finished_spans()
+        assert [s.name for s in kept] == ["chat gpt-4", "POST /v1/chat/completions"]
+        assert all(s.context.trace_id == 2 for s in kept), "the second request, whose draw of 0.1 passed"
+
+    def test_a_root_that_never_ends_holds_the_tree_only_up_to_the_bound(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.0)
+        destinations = (arize_destination(arize_success_sampling_rate="0.5"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                for index in range(otel_providers._MAX_PENDING_SPANS_PER_TREE):
+                    with tracer.start_as_current_span(f"chat {index}"):
+                        pass
+                assert len(dest_exporter.get_finished_spans()) == otel_providers._MAX_PENDING_SPANS_PER_TREE
+
+        in_fresh_context(run)
+
+    def test_a_flood_of_waiting_trees_decides_the_oldest_on_what_it_has(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.0)
+        destinations = (arize_destination(arize_success_sampling_rate="0.5"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            for index in range(otel_providers._MAX_PENDING_TREES + 1):
+                root = tracer.start_span(f"POST {index}", context=trace_api.Context())
+                tracer.start_span(f"chat {index}", context=trace_api.set_span_in_context(root)).end()
+                if index < otel_providers._MAX_PENDING_TREES:
+                    assert dest_exporter.get_finished_spans() == (), f"tree {index} is held while its root is open"
+
+        in_fresh_context(run)
+
+        assert [s.name for s in dest_exporter.get_finished_spans()] == ["chat 0"]
+
+    def test_a_flood_of_open_traces_forgets_the_oldest_and_decides_it_as_its_spans_end(self):
+        """The fan-out counts open spans for a bounded number of traces, a bound far above
+        what one process keeps in flight, since every trace of the provider is counted, not
+        only the sampled ones. A trace pushed out of that count is decided on what it has as
+        its next span ends, root still open, rather than held until a bound gets to it."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.0)
+        destinations = (arize_destination(arize_success_sampling_rate="0.5"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            root = tracer.start_span("POST /v1/chat/completions", context=trace_api.Context())
+            tracer.start_span("auth /v1/chat/completions", context=trace_api.set_span_in_context(root)).end()
+            for index in range(otel_providers._MAX_OPEN_TRACES):
+                tracer.start_span(f"POST {index}", context=trace_api.Context())
+            assert dest_exporter.get_finished_spans() == (), "still held before the count is forgotten"
+            tracer.start_span("chat gpt-4", context=trace_api.set_span_in_context(root)).end()
+            assert {s.name for s in dest_exporter.get_finished_spans()} == {
+                "auth /v1/chat/completions",
+                "chat gpt-4",
+            }
+            root.end()
+
+        in_fresh_context(run)
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
+
+    def test_shutdown_decides_what_is_still_held(self):
+        dest_exporter = InMemorySpanExporter()
+        fan_out = TenantFanOutSpanProcessor(
+            processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter), sampling_draw=lambda: 0.0
+        )
+        provider = TracerProvider()
+        provider.add_span_processor(fan_out)
+
+        def run():
+            set_request_destinations((arize_destination(arize_success_sampling_rate="0.5"),))
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                with tracer.start_as_current_span("chat gpt-4"):
+                    pass
+                assert dest_exporter.get_finished_spans() == ()
+                fan_out.shutdown()
+
+        in_fresh_context(run)
+
+        assert [s.name for s in dest_exporter.get_finished_spans()] == ["chat gpt-4"]
+
+    def test_a_span_that_ends_while_shutdown_flushes_is_decided_at_once_not_dropped(self):
+        """Shutdown decides the trees it finds, then closes. A sampled span of a trace it
+        did not find, ending while it flushes with its root still open, is decided on the
+        spot rather than held by a fan-out that will never forward again."""
+        dest_exporter = InMemorySpanExporter()
+        stragglers = []  # mutable-ok: the span the first export ends, mid-shutdown
+
+        class _EndsAStragglerOnExport(SimpleSpanProcessor):
+            def on_end(self, span):
+                for straggler in stragglers:
+                    if straggler.is_recording():
+                        straggler.end()
+                super().on_end(span)
+
+        fan_out = TenantFanOutSpanProcessor(
+            processor_factory=lambda _d: _EndsAStragglerOnExport(dest_exporter), sampling_draw=lambda: 0.0
+        )
+        provider = TracerProvider()
+        provider.add_span_processor(fan_out)
+
+        def run():
+            set_request_destinations((arize_destination(arize_success_sampling_rate="0.5"),))
+            tracer = get_tracer(provider, "litellm")
+            root = tracer.start_span("POST /v1/chat/completions", context=trace_api.Context())
+            tracer.start_span("chat gpt-4", context=trace_api.set_span_in_context(root)).end()
+            late_root = tracer.start_span("POST /v1/embeddings", context=trace_api.Context())
+            stragglers.append(tracer.start_span("embed ada", context=trace_api.set_span_in_context(late_root)))
+            fan_out.shutdown()
+
+        in_fresh_context(run)
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == {"chat gpt-4", "embed ada"}
+
+    def test_a_zero_rate_drops_even_a_draw_of_zero(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.0)
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate="0.0"),))
+
+        assert dest_exporter.get_finished_spans() == ()
+
+    def test_the_draw_is_compared_to_the_rate_the_way_the_legacy_callback_compares_it(self):
+        dropped_exporter, kept_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        destinations = (arize_destination(arize_success_sampling_rate="0.2"),)
+
+        self._run(self._fan_out(dropped_exporter, draw=lambda: 0.3), destinations)
+        self._run(self._fan_out(kept_exporter, draw=lambda: 0.2), destinations)
+
+        assert dropped_exporter.get_finished_spans() == ()
+        assert {s.name for s in kept_exporter.get_finished_spans()} == self.NAMES
+
+    def test_a_trace_is_kept_or_dropped_whole(self):
+        """One decision per request tree, not one per span, so the team never sees a trace with
+        its root missing."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate="0.5"),), trees=64)
+
+        by_trace = {}
+        for span in dest_exporter.get_finished_spans():
+            by_trace.setdefault(span.context.trace_id, set()).add(span.name)
+        assert all(names == self.NAMES for names in by_trace.values())
+        assert 0 < len(by_trace) < 64
+
+    def test_in_additive_mode_the_operators_own_copy_is_not_sampled(self, monkeypatch):
+        """The rates are the team's setting for the team's space; the operator's backbone keeps
+        every span."""
+        monkeypatch.setattr(litellm, "otel_tenant_destination_mode", "additive", raising=False)
+        global_exporter, dest_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, global_exporter=global_exporter)
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate="0.0"),))
+
+        assert dest_exporter.get_finished_spans() == ()
+        assert {s.name for s in global_exporter.get_finished_spans()} == self.NAMES
+
+    def test_a_rate_applies_only_to_the_destination_that_carries_it(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate="0.0"), LANGFUSE_DEST))
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
+
+    def test_two_views_of_one_exporter_each_draw_at_their_own_rate(self):
+        """Two destinations to the same space with different rates share an exporter, not a
+        verdict: the 1.0 view gets the tree once and the 0.0 view adds nothing."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(
+            provider,
+            (
+                arize_destination(arize_success_sampling_rate="1.0"),
+                arize_destination(arize_success_sampling_rate="0.0"),
+            ),
+        )
+
+        assert sorted(s.name for s in dest_exporter.get_finished_spans()) == sorted(self.NAMES)
+
+    def test_a_rate_does_not_split_the_teams_exporter(self):
+        """Sampling decides which spans reach the processor, not how it exports, so two views of
+        one account with different rates share one exporter."""
+        built = []
+
+        def factory(destination):
+            built.append(destination)
+            return SimpleSpanProcessor(InMemorySpanExporter())
+
+        provider = TracerProvider()
+        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=factory))
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate="1.0"), arize_destination()))
+
+        assert len(built) == 1
+
+    @pytest.mark.parametrize("bad", ["abc", "-0.1", "1.5", "nan"])
+    def test_an_unusable_rate_exports_rather_than_dropping(self, bad):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.99)
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate=bad),))
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
+
+    def test_a_team_entry_with_rates_is_sampled_from_auth_to_the_fan_out(self, monkeypatch):
+        """The whole path the ticket names: the team's callback vars resolve at auth, and the
+        fan-out honours them."""
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        auth = UserAPIKeyAuth(
+            team_metadata={
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            **ARIZE_TEAM_PARAMS,
+                            "arize_success_sampling_rate": "0.0",
+                            "arize_error_sampling_rate": "0.0",
+                        },
+                    }
+                ]
+            }
+        )
+        destinations = resolve_tenant_otel_destinations(auth)
+        assert destinations, "the fixture must resolve to a destination for the test to mean anything"
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(provider, destinations)
+
+        assert dest_exporter.get_finished_spans() == ()
 
 
 class TestProviderWiring:
