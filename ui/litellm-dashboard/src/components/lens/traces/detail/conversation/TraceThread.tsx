@@ -35,7 +35,6 @@ interface TraceThreadProps {
   paging?: ConversationTracePaging;
 }
 
-/** One turn per user prompt: the prompt, a folded "Worked" bar for everything the agent did, and its reply. */
 export function TraceThread({ trace, accessToken, onOpenStep, paging }: TraceThreadProps) {
   const { details, entries, complete, loading, failed, hasMore, loadMore } = useConversationDetails(trace, accessToken);
   const pending = pendingConversationBranches(trace.spans, details, Boolean(trace.next_cursor));
