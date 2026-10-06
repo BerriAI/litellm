@@ -3,7 +3,6 @@ from enum import Enum
 from typing import Final, Literal
 
 from pydantic import (
-    BaseModel,
     Field,
     SerializationInfo,
     SerializerFunctionWrapHandler,
