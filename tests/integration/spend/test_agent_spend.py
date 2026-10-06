@@ -25,14 +25,21 @@ class _Activity(BaseModel):
     results: tuple[_ActivityDay, ...]
 
 
-_CALL_TYPES: Final = {"message/send": "asend_message", "message/stream": "asend_message_streaming"}
+_CALL_TYPES: Final = {
+    "message/send": "asend_message",
+    "message/stream": "asend_message_streaming",
+    "SendMessage": "asend_message",
+    "SendStreamingMessage": "asend_message_streaming",
+}
 _PER_TOKEN: Final[dict[str, JsonValue]] = {"input_cost_per_token": 0.125, "output_cost_per_token": 0.5}
 _PER_TOKEN_COST: Final = 1 * 0.125 + 2 * 0.5
 
+_MESSAGE_V03: Final = {"kind": "message", "role": "user", "messageId": "", "parts": [{"kind": "text", "text": "ping"}]}
 
-def _peer_card(url: str, name: str) -> dict[str, JsonValue]:
+
+def _peer_card(url: str, name: str, version: str = "0.3") -> dict[str, JsonValue]:
     return {
-        "protocolVersion": "0.3",
+        "protocolVersion": version,
         "name": name,
         "description": "Synthetic peer",
         "version": "1.0.0",
@@ -85,7 +92,11 @@ def _upstream_reply(body: dict[str, JsonValue]) -> Reply:
 
 
 def _assert_a2a_calls_are_billed(
-    gateway: Gateway, pricing: dict[str, JsonValue], cost: float, methods: tuple[str, ...]
+    gateway: Gateway,
+    pricing: dict[str, JsonValue],
+    cost: float,
+    calls: tuple[tuple[str, str], ...],
+    version: str = "0.3",
 ) -> None:
     marker: Final = "a2aspend" + uuid.uuid4().hex[:12]
 
@@ -98,7 +109,11 @@ def _assert_a2a_calls_are_billed(
         created: Final = gateway.request(
             "POST",
             "/v1/agents",
-            {"agent_name": marker, "agent_card_params": _peer_card(wire.url, marker), "litellm_params": pricing},
+            {
+                "agent_name": marker,
+                "agent_card_params": _peer_card(wire.url, marker, version),
+                "litellm_params": pricing,
+            },
         )
         assert created.status_code == 200, created.text
         agent: Final = created.json()["agent_id"]
@@ -111,37 +126,57 @@ def _assert_a2a_calls_are_billed(
         scenario.cleanups.callback(cleanup)
         key: Final = scenario.key()
         digest: Final = sha256(key.encode()).hexdigest()
-        message: Final = {
-            "kind": "message",
-            "role": "user",
+        message: Final = (
+            {"kind": "message", "role": "user", "messageId": marker + "-in", "parts": [{"kind": "text", "text": "ping"}]}
+            if version == "0.3"
+            else {"role": "ROLE_USER", "messageId": marker + "-in", "parts": [{"text": "ping"}]}
+        )
+        wire_message: Final = {
+            **_MESSAGE_V03,
             "messageId": marker + "-in",
-            "parts": [{"kind": "text", "text": "ping"}],
         }
-        for method in methods:
+        methods: Final = tuple(method for method, _ in calls)
+        wire_methods: Final = tuple(
+            "message/stream" if "stream" in method.lower() else "message/send" for method in methods
+        )
+        for method, path in calls:
             payload = {"jsonrpc": "2.0", "id": f"{marker}-{method}", "method": method, "params": {"message": message}}
-            if method == "message/send":
-                sent = gateway.client.post(f"/a2a/{agent}", headers={"Authorization": f"Bearer {key}"}, json=payload)
+            headers: Final = {
+                "Authorization": f"Bearer {key}",
+                **({"a2a-version": version} if version == "1.0" else {}),
+            }
+            if "stream" not in method.lower():
+                sent = gateway.client.post(
+                    path.format(agent=agent, name=marker), headers=headers, json=payload
+                )
                 assert sent.status_code == 200, sent.text
-                assert sent.json()["result"]["parts"] == [{"kind": "text", "text": "billed"}], sent.text
+                result: Final = sent.json()["result"]
+                parts: Final = result["parts"] if version == "0.3" else result["message"]["parts"]
+                expected_parts: Final = (
+                    [{"kind": "text", "text": "billed"}] if version == "0.3" else [{"text": "billed"}]
+                )
+                assert parts == expected_parts, sent.text
                 continue
             with gateway.client.stream(
                 "POST",
-                f"/a2a/{agent}",
-                headers={"Authorization": f"Bearer {key}", "Accept": "text/event-stream"},
+                path.format(agent=agent, name=marker),
+                headers={**headers, "Accept": "text/event-stream"},
                 json=payload,
             ) as streamed:
                 text = streamed.read().decode()
                 assert streamed.status_code == 200, text
-            assert text.startswith("data: ") and '"state": "completed"' in text, text
+            assert text.startswith("data: ") and (
+                '"state": "completed"' in text if version == "0.3" else '"state": "TASK_STATE_COMPLETED"' in text
+            ), text
         forwarded: Final = tuple(json.loads(item.body) for item in wire.drain() if item.method == "POST")
         assert forwarded == tuple(
             {
                 "jsonrpc": "2.0",
                 "id": forwarded[index]["id"] if index < len(forwarded) else "<none>",
-                "method": method,
-                "params": {"configuration": {"blocking": True}, "message": message},
+                "method": wire_method,
+                "params": {"configuration": {"blocking": True}, "message": wire_message},
             }
-            for index, method in enumerate(methods)
+            for index, wire_method in enumerate(wire_methods)
         ), forwarded
         assert all(str(uuid.UUID(item["id"])) == item["id"] for item in forwarded), forwarded
 
@@ -153,7 +188,7 @@ def _assert_a2a_calls_are_billed(
                 (digest,),
             ),
             lambda rows: len(rows) == len(methods),
-            seconds=60,
+            seconds=30,
         )
         assert [{name: value for name, value in row.items() if name != "day"} for row in logs] == [
             {
@@ -169,12 +204,12 @@ def _assert_a2a_calls_are_billed(
         assert eventually(
             lambda: read_rows('SELECT spend FROM "LiteLLM_AgentsTable" WHERE agent_id=%s', (agent,)),
             lambda rows: rows == [{"spend": total}],
-            seconds=60,
+            seconds=20,
         ) == [{"spend": total}]
         assert eventually(
             lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)),
             lambda rows: rows == [{"spend": total}],
-            seconds=60,
+            seconds=20,
         ) == [{"spend": total}]
         requests_per_day: Final = {
             day: sum(1 for row in logs if row["day"] == day) for day in sorted({str(row["day"]) for row in logs})
@@ -187,7 +222,7 @@ def _assert_a2a_calls_are_billed(
                 (agent,),
             ),
             lambda rows: sum(int(str(row["api_requests"])) for row in rows) == len(methods),
-            seconds=90,
+            seconds=45,
         )
         assert daily == [
             {
@@ -217,14 +252,20 @@ def _assert_a2a_calls_are_billed(
         ] == [cost * count for _, count in sorted(requests_per_day.items(), reverse=True)], activity.text
 
 
+@pytest.mark.parametrize("version", ("0.3", "1.0"))
 def test_a2a_send_and_stream_bill_cost_per_query_to_the_agent_the_key_and_daily_agent_activity(
-    gateway: Gateway,
+    gateway: Gateway, version: str
 ) -> None:
-    _assert_a2a_calls_are_billed(gateway, {"cost_per_query": 0.25}, 0.25, ("message/send", "message/stream"))
+    calls: Final = (
+        (("message/send", "/a2a/{agent}"), ("message/stream", "/a2a/{agent}"))
+        if version == "0.3"
+        else (("SendMessage", "/v1/a2a/{agent}/message/send"), ("SendStreamingMessage", "/a2a/{name}"))
+    )
+    _assert_a2a_calls_are_billed(gateway, {"cost_per_query": 0.25}, 0.25, calls, version)
 
 
 def test_a2a_send_bills_input_and_output_tokens_at_the_agent_per_token_prices(gateway: Gateway) -> None:
-    _assert_a2a_calls_are_billed(gateway, _PER_TOKEN, _PER_TOKEN_COST, ("message/send",))
+    _assert_a2a_calls_are_billed(gateway, _PER_TOKEN, _PER_TOKEN_COST, (("message/send", "/a2a/{agent}"),))
 
 
 def test_a2a_stream_bills_input_and_output_tokens_at_the_agent_per_token_prices(gateway: Gateway) -> None:
@@ -233,4 +274,4 @@ def test_a2a_stream_bills_input_and_output_tokens_at_the_agent_per_token_prices(
         "with prompt_tokens 0 and completion_tokens 0, because A2AStreamingIterator reads text from the request "
         "Part RootModels without dumping them and ignores artifact-update text, while message/send bills 1.125"
     )
-    _assert_a2a_calls_are_billed(gateway, _PER_TOKEN, _PER_TOKEN_COST, ("message/stream",))
+    _assert_a2a_calls_are_billed(gateway, _PER_TOKEN, _PER_TOKEN_COST, (("message/stream", "/a2a/{agent}"),))

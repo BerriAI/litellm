@@ -8,6 +8,7 @@ import httpx
 import pytest
 from a2a.client import A2ACardResolver, ClientConfig, create_client
 from a2a.types import a2a_pb2
+from google.protobuf.json_format import MessageToDict
 from integration._support.client import Gateway, Scenario
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
@@ -340,13 +341,8 @@ def test_a2a_stream_relays_each_upstream_event_as_its_own_sse_frame_in_the_pinne
         if request.method == "GET":
             assert request.target == "/.well-known/agent-card.json", request.target
             return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
-        assert (request.method, request.target) == ("POST", "/"), request.target
-        assert request.headers["accept"] == "text/event-stream", request.headers
-        body: Final = json.loads(request.body)
-        assert (body["jsonrpc"], body["method"]) == ("2.0", "message/stream"), body
-        assert body["params"]["message"] == _MESSAGE_V03, body
         frames: Final = tuple(
-            f"data: {json.dumps({'jsonrpc': '2.0', 'id': body['id'], 'result': event})}\n\n".encode()
+            f"data: {json.dumps({'jsonrpc': '2.0', 'id': 'upstream-' + marker, 'result': event})}\n\n".encode()
             for event in _STREAM_EVENTS
         )
         return Reply(content_type="text/event-stream", chunks=frames, gate_after_first=first_frame_seen)
@@ -365,8 +361,10 @@ def test_a2a_stream_relays_each_upstream_event_as_its_own_sse_frame_in_the_pinne
             assert response.headers["content-type"] == "text/event-stream; charset=utf-8", response.headers
             pieces = response.iter_text()
             received = ""
-            while "\n\n" not in received:
-                received += next(pieces)
+            for piece in pieces:
+                received += piece
+                if "\n" in received:
+                    break
             first_frame_seen.set()
             received += "".join(pieces)
         frames: Final = received.split("\n\n")
@@ -374,8 +372,33 @@ def test_a2a_stream_relays_each_upstream_event_as_its_own_sse_frame_in_the_pinne
         parsed: Final = tuple(_JsonRpcResult.model_validate_json(frame.removeprefix("data: ")) for frame in frames[:-1])
         assert tuple(frame.result for frame in parsed) == _STREAM_RESULTS[version], received
         assert {(frame.jsonrpc, frame.id) for frame in parsed} == {("2.0", marker)}, received
-        actual: Final = wire.drain()
-        assert tuple(item.target for item in actual if item.method == "POST") == ("/",), actual
+        posts: Final = tuple(item for item in wire.drain() if item.method == "POST")
+        assert len(posts) == 1, posts
+        assert posts[0].target == "/", posts[0].target
+        assert posts[0].headers["accept"] == "text/event-stream", posts[0].headers
+        body: Final = json.loads(posts[0].body)
+        assert str(uuid.UUID(body["id"])) == body["id"] and body["id"] != marker, posts[0].body
+        assert body == {
+            "jsonrpc": "2.0",
+            "id": body["id"],
+            "method": "message/stream",
+            "params": {"configuration": {"blocking": True}, "message": _MESSAGE_V03},
+        }, posts[0].body
+
+
+_TRANSPORT_HEADERS: Final = frozenset(
+    {
+        "host",
+        "accept",
+        "accept-encoding",
+        "connection",
+        "content-length",
+        "content-type",
+        "user-agent",
+        "cache-control",
+        "a2a-version",
+    }
+)
 
 
 def test_a2a_send_forwards_configured_headers_and_minted_identity_but_never_spoofed_or_proxy_credentials(
@@ -430,7 +453,7 @@ def test_a2a_send_forwards_configured_headers_and_minted_identity_but_never_spoo
             posts, ((member, team, team_key), (solo_user, None, solo_key)), strict=True
         ):
             forwarded = {
-                name: value for name, value in post.headers.items() if name.startswith("x-") or name == "authorization"
+                name: value for name, value in post.headers.items() if name not in _TRANSPORT_HEADERS
             }
             expected = {
                 "authorization": "Bearer server-token",
@@ -452,7 +475,10 @@ def test_a2a_send_forwards_configured_headers_and_minted_identity_but_never_spoo
                 "params": {"configuration": {"blocking": True}, "message": _MESSAGE_V03},
             }, post.body
             assert forwarded["x-litellm-trace-id"] != "<missing>", post.headers
-            assert all(key not in value and gateway.key not in value for value in post.headers.values()), post.headers
+            assert all(
+                key not in value and gateway.key not in value and "leak" not in value
+                for value in post.headers.values()
+            ), post.headers
 
 
 @pytest.mark.parametrize("version", ("0.3", "1.0"))
@@ -471,6 +497,17 @@ def test_a2a_card_routes_front_the_agent_with_the_proxy_url_and_sdk_clients_call
         if request.method == "GET":
             return Reply(body=json.dumps(upstream_card()).encode())
         body: Final = json.loads(request.body)
+        if body["method"] in ("message/stream", "SendStreamingMessage"):
+            events: Final = (
+                _STREAM_EVENTS
+                if version == "0.3"
+                else tuple(_STREAM_RESULTS["1.0"][index] for index in range(len(_STREAM_EVENTS)))
+            )
+            frames: Final = tuple(
+                f"data: {json.dumps({'jsonrpc': '2.0', 'id': body['id'], 'result': event})}\n\n".encode()
+                for event in events
+            )
+            return Reply(content_type="text/event-stream", chunks=frames)
         if version == "0.3":
             return _message_reply(body, "via proxy")
         message: Final = {"messageId": "peer-message", "role": "ROLE_AGENT", "parts": [{"text": "via proxy"}]}
@@ -510,17 +547,43 @@ def test_a2a_card_routes_front_the_agent_with_the_proxy_url_and_sdk_clients_call
         resolved, events = asyncio.run(call_through_sdk())
         assert [interface.url for interface in resolved.supported_interfaces] == [proxy_url], resolved
         assert [event.message.parts[0].text for event in events] == ["via proxy"], events
+
+        async def stream_through_sdk() -> tuple[a2a_pb2.StreamResponse, ...]:
+            async with httpx.AsyncClient(headers={"Authorization": f"Bearer {gateway.key}"}, timeout=30) as http:
+                client = await create_client(resolved, ClientConfig(httpx_client=http, streaming=True))
+                request = a2a_pb2.SendMessageRequest(
+                    message=a2a_pb2.Message(
+                        message_id=marker + "-stream", role=a2a_pb2.Role.ROLE_USER, parts=[a2a_pb2.Part(text="ping")]
+                    )
+                )
+                return tuple([event async for event in client.send_message(request)])
+
+        stream_events: Final = asyncio.run(stream_through_sdk())
+        assert [MessageToDict(event, preserving_proto_field_name=False) for event in stream_events] == [
+            {"statusUpdate": {"taskId": "t1", "contextId": "c1", "status": {"state": "TASK_STATE_WORKING"}}},
+            {
+                "artifactUpdate": {
+                    "taskId": "t1",
+                    "contextId": "c1",
+                    "artifact": {"artifactId": "a1", "parts": [{"text": "chunk"}]},
+                }
+            },
+            {"statusUpdate": {"taskId": "t1", "contextId": "c1", "status": {"state": "TASK_STATE_COMPLETED"}}},
+        ], stream_events
         posts: Final = tuple(item for item in wire.drain() if item.method == "POST")
-        assert len(posts) == 1, posts
-        assert posts[0].headers["x-litellm-agent-id"] == identity, posts[0].headers
-        forwarded: Final = json.loads(posts[0].body)
-        assert str(uuid.UUID(forwarded["id"])) == forwarded["id"], posts[0].body
-        assert (
-            forwarded
-            == {
+        assert len(posts) == 2, posts
+        assert all(post.headers["x-litellm-agent-id"] == identity for post in posts), [
+            dict(post.headers) for post in posts
+        ]
+        forwarded: Final = tuple(json.loads(post.body) for post in posts)
+        assert all(
+            str(uuid.UUID(post["id"])) == post["id"] for post in forwarded
+        ), [post.body for post in posts]
+        assert forwarded == (
+            {
                 "0.3": {
                     "jsonrpc": "2.0",
-                    "id": forwarded["id"],
+                    "id": forwarded[0]["id"],
                     "method": "message/send",
                     "params": {
                         "configuration": {"blocking": True},
@@ -534,27 +597,66 @@ def test_a2a_card_routes_front_the_agent_with_the_proxy_url_and_sdk_clients_call
                 },
                 "1.0": {
                     "jsonrpc": "2.0",
-                    "id": forwarded["id"],
+                    "id": forwarded[0]["id"],
                     "method": "SendMessage",
                     "params": {
                         "configuration": {},
                         "message": {"messageId": marker + "-in", "role": "ROLE_USER", "parts": [{"text": "ping"}]},
                     },
                 },
-            }[version]
-        ), posts[0].body
+            }[version],
+            {
+                "0.3": {
+                    "jsonrpc": "2.0",
+                    "id": forwarded[1]["id"],
+                    "method": "message/stream",
+                    "params": {
+                        "configuration": {"blocking": True},
+                        "message": {
+                            "kind": "message",
+                            "messageId": marker + "-stream",
+                            "role": "user",
+                            "parts": [{"kind": "text", "text": "ping"}],
+                        },
+                    },
+                },
+                "1.0": {
+                    "jsonrpc": "2.0",
+                    "id": forwarded[1]["id"],
+                    "method": "SendStreamingMessage",
+                    "params": {
+                        "configuration": {},
+                        "message": {
+                            "messageId": marker + "-stream",
+                            "role": "ROLE_USER",
+                            "parts": [{"text": "ping"}],
+                        },
+                    },
+                },
+            }[version],
+        ), [post.body for post in posts]
 
 
+@pytest.mark.parametrize("streaming", (False, True), ids=("send", "stream"))
 def test_a2a_message_send_aliases_and_agent_name_reach_the_same_agent_with_the_same_conversion(
-    gateway: Gateway,
+    gateway: Gateway, streaming: bool
 ) -> None:
     marker: Final = "a2aalias" + uuid.uuid4().hex
+    method: Final = "SendStreamingMessage" if streaming else "SendMessage"
+    wire_method: Final = "message/stream" if streaming else "message/send"
 
     def upstream(request: Request) -> Reply:
         if request.method == "GET":
             return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
         assert (request.method, request.target) == ("POST", "/"), request.target
-        return _message_reply(json.loads(request.body), "alias pong")
+        body: Final = json.loads(request.body)
+        if body["method"] == "message/stream":
+            frames: Final = tuple(
+                f"data: {json.dumps({'jsonrpc': '2.0', 'id': 'upstream-' + str(body['id']), 'result': event})}\n\n".encode()
+                for event in _STREAM_EVENTS
+            )
+            return Reply(content_type="text/event-stream", chunks=frames)
+        return _message_reply(body, "alias pong")
 
     with wire_server(upstream) as wire, gateway.scenario() as scenario:
         identity: Final = _register_agent(
@@ -562,11 +664,30 @@ def test_a2a_message_send_aliases_and_agent_name_reach_the_same_agent_with_the_s
         )
         paths: Final = (f"/a2a/{identity}/message/send", f"/v1/a2a/{identity}/message/send", f"/a2a/{marker}")
         for path in paths:
-            response = gateway.client.post(
-                path,
-                headers={"Authorization": f"Bearer {gateway.key}", "a2a-version": "1.0"},
-                json={"jsonrpc": "2.0", "id": marker, "method": "SendMessage", "params": {"message": _MESSAGE_V10}},
-            )
+            headers: Final = {"Authorization": f"Bearer {gateway.key}", "a2a-version": "1.0"}
+            payload: Final = {
+                "jsonrpc": "2.0",
+                "id": marker,
+                "method": method,
+                "params": {"message": _MESSAGE_V10},
+            }
+            if streaming:
+                with gateway.client.stream(
+                    "POST", path, headers={**headers, "Accept": "text/event-stream"}, json=payload
+                ) as response:
+                    received: Final = response.read().decode()
+                    assert response.status_code == 200, f"{path}: {received}"
+                frames: Final = received.split("\n\n")
+                assert frames[-1] == "" and all(frame.startswith("data: ") for frame in frames[:-1]), (
+                    f"{path}: {received}"
+                )
+                parsed: Final = tuple(
+                    _JsonRpcResult.model_validate_json(frame.removeprefix("data: ")) for frame in frames[:-1]
+                )
+                assert tuple(frame.result for frame in parsed) == _STREAM_RESULTS["1.0"], f"{path}: {received}"
+                assert {(frame.jsonrpc, frame.id) for frame in parsed} == {("2.0", marker)}, f"{path}: {received}"
+                continue
+            response = gateway.client.post(path, headers=headers, json=payload)
             assert response.status_code == 200, f"{path}: {response.text}"
             assert _JsonRpcResult.model_validate_json(response.content) == _JsonRpcResult(
                 jsonrpc="2.0",
@@ -576,9 +697,17 @@ def test_a2a_message_send_aliases_and_agent_name_reach_the_same_agent_with_the_s
                 },
             ), f"{path}: {response.text}"
         posts: Final = tuple(json.loads(item.body) for item in wire.drain() if item.method == "POST")
-        assert [(post["method"], post["params"]["message"]) for post in posts] == [
-            ("message/send", _MESSAGE_V03)
-        ] * len(paths), posts
+        assert len(posts) == len(paths), posts
+        assert all(str(uuid.UUID(post["id"])) == post["id"] and post["id"] != marker for post in posts), posts
+        assert posts == tuple(
+            {
+                "jsonrpc": "2.0",
+                "id": post["id"],
+                "method": wire_method,
+                "params": {"configuration": {"blocking": True}, "message": _MESSAGE_V03},
+            }
+            for post in posts
+        ), posts
 
 
 def test_a2a_task_methods_pass_through_verbatim_and_push_callbacks_are_validated_before_forwarding(
@@ -590,6 +719,12 @@ def test_a2a_task_methods_pass_through_verbatim_and_push_callbacks_are_validated
         if request.method == "GET":
             return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
         body: Final = json.loads(request.body)
+        if body["method"] == "tasks/resubscribe":
+            frames: Final = tuple(
+                f"data: {json.dumps({'jsonrpc': '2.0', 'id': body['id'], 'result': event})}\n\n".encode()
+                for event in _STREAM_EVENTS
+            )
+            return Reply(content_type="text/event-stream", chunks=frames)
         result: JsonValue = (
             _peer_card(wire.url, marker)
             if body["method"] == "agent/getAuthenticatedExtendedCard"
@@ -609,28 +744,69 @@ def test_a2a_task_methods_pass_through_verbatim_and_push_callbacks_are_validated
                 json={"jsonrpc": "2.0", "id": marker + method, "method": method, "params": params},
             )
 
-        for method, canonical in (
-            ("tasks/get", "tasks/get"),
-            ("GetTask", "tasks/get"),
-            ("tasks/cancel", "tasks/cancel"),
-            ("CancelTask", "tasks/cancel"),
+        task_params: Final = {"id": "t1", "historyLength": 2}
+        push_params: Final = {"id": "t1", "pushNotificationConfigId": "c1"}
+        for method, canonical, params in (
+            ("tasks/get", "tasks/get", task_params),
+            ("GetTask", "tasks/get", task_params),
+            ("tasks/list", "tasks/list", {"contextId": "c1"}),
+            ("ListTasks", "tasks/list", {"contextId": "c1"}),
+            ("tasks/cancel", "tasks/cancel", {"id": "t1"}),
+            ("CancelTask", "tasks/cancel", {"id": "t1"}),
+            ("tasks/pushNotificationConfig/get", "tasks/pushNotificationConfig/get", push_params),
+            ("GetTaskPushNotificationConfig", "tasks/pushNotificationConfig/get", push_params),
+            ("tasks/pushNotificationConfig/list", "tasks/pushNotificationConfig/list", {"id": "t1"}),
+            ("ListTaskPushNotificationConfigs", "tasks/pushNotificationConfig/list", {"id": "t1"}),
+            ("tasks/pushNotificationConfig/delete", "tasks/pushNotificationConfig/delete", push_params),
+            ("DeleteTaskPushNotificationConfig", "tasks/pushNotificationConfig/delete", push_params),
         ):
-            response = call(method, {"id": "t1", "historyLength": 2})
-            assert response.status_code == 200, response.text
+            response = call(method, params)
+            assert response.status_code == 200, f"{method}: {response.text}"
             assert response.json() == {
                 "jsonrpc": "2.0",
                 "id": marker + method,
                 "result": {"kind": "task", "id": "t1", "contextId": "c1", "status": {"state": canonical}},
-            }, response.text
+            }, f"{method}: {response.text}"
             forwarded = tuple(json.loads(item.body) for item in wire.drain() if item.method == "POST")
             assert forwarded == (
                 {
                     "jsonrpc": "2.0",
                     "id": marker + method,
                     "method": canonical,
-                    "params": {"id": "t1", "historyLength": 2},
+                    "params": params,
                 },
-            ), forwarded
+            ), f"{method}: {forwarded}"
+
+        for method in ("tasks/resubscribe", "SubscribeToTask"):
+            with gateway.client.stream(
+                "POST",
+                f"/a2a/{identity}",
+                headers={"Authorization": f"Bearer {gateway.key}", "Accept": "text/event-stream"},
+                json={"jsonrpc": "2.0", "id": marker + method, "method": method, "params": {"id": "t1"}},
+            ) as response:
+                received: Final = response.read().decode()
+                assert response.status_code == 200, f"{method}: {received}"
+            assert response.headers["content-type"] == "text/event-stream; charset=utf-8", response.headers
+            frames: Final = received.split("\n\n")
+            assert frames[-1] == "" and all(frame.startswith("data: ") for frame in frames[:-1]), (
+                f"{method}: {received}"
+            )
+            parsed: Final = tuple(
+                _JsonRpcResult.model_validate_json(frame.removeprefix("data: ")) for frame in frames[:-1]
+            )
+            assert tuple(frame.result for frame in parsed) == _STREAM_EVENTS, f"{method}: {received}"
+            assert {(frame.jsonrpc, frame.id) for frame in parsed} == {("2.0", marker + method)}, (
+                f"{method}: {received}"
+            )
+            forwarded = tuple(json.loads(item.body) for item in wire.drain() if item.method == "POST")
+            assert forwarded == (
+                {
+                    "jsonrpc": "2.0",
+                    "id": marker + method,
+                    "method": "tasks/resubscribe",
+                    "params": {"id": "t1"},
+                },
+            ), f"{method}: {forwarded}"
 
         for callback, detail in (
             ("http://169.254.169.254/latest/meta-data/", "Push notification URL must use HTTPS"),
