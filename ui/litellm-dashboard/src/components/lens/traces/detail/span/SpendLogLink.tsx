@@ -66,6 +66,7 @@ export function SpendLogLink({
         onClose={() => setOpen(false)}
         logEntry={logQuery.data ?? null}
         accessToken={accessToken}
+        backLabel={span.agent ? `${span.agent} trace` : "agent trace"}
       />
     </>
   );

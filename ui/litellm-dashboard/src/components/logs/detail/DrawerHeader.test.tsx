@@ -1,4 +1,5 @@
 import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { render } from "../../../../tests/test-utils";
@@ -80,5 +81,37 @@ describe("DrawerHeader sidebar toggle", () => {
 
     const row = expandToggle().parentElement as HTMLElement;
     expect(within(row).getByText("170d64ea-69f0-431a-be72-332f8f78c18a")).toBeInTheDocument();
+  });
+});
+
+describe("DrawerHeader back link", () => {
+  const renderWithBack = (backLabel?: string) => {
+    const onClose = vi.fn();
+    render(
+      <DrawerHeader
+        log={logEntry({})}
+        onClose={onClose}
+        onPrevious={vi.fn()}
+        onNext={vi.fn()}
+        isSidebarCollapsed={false}
+        onToggleSidebar={vi.fn()}
+        statusLabel="Success"
+        statusColor="success"
+        environment="default"
+        backLabel={backLabel}
+      />,
+    );
+    return onClose;
+  };
+
+  it("names where the drawer was opened from and closes back to it", async () => {
+    const onClose = renderWithBack("moyai-devin trace");
+    await userEvent.click(screen.getByRole("button", { name: "Back to moyai-devin trace" }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("shows no back link when opened from the logs page", () => {
+    renderWithBack();
+    expect(screen.queryByRole("button", { name: /^Back to/ })).not.toBeInTheDocument();
   });
 });

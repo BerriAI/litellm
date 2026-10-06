@@ -28,6 +28,7 @@ export interface LogDetailsDrawerProps {
   allLogs?: LogEntry[];
   onSelectLog?: (log: LogEntry) => void;
   startTime?: string;
+  backLabel?: string;
 }
 
 const SIDEBAR_WIDTH_PX = 224;
@@ -119,6 +120,7 @@ export function LogDetailsDrawer({
   allLogs = [],
   onSelectLog,
   startTime,
+  backLabel,
 }: LogDetailsDrawerProps) {
   const isSessionMode = Boolean(sessionId);
   const [selectedSessionRequestId, setSelectedSessionRequestId] = useState<string | null>(null);
@@ -461,6 +463,7 @@ export function LogDetailsDrawer({
               statusLabel={statusLabel}
               statusColor={statusColor}
               environment={environment}
+              backLabel={backLabel}
             />
             <div className="flex-1 overflow-y-auto">
               <LogDetailContent

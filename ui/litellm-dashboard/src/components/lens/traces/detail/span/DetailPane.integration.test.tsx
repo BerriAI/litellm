@@ -18,10 +18,21 @@ vi.mock("../../../../networking", () => ({
 }));
 
 vi.mock("../../../../logs/detail", () => ({
-  LogDetailsDrawer: ({ open, logEntry }: { open: boolean; logEntry: { request_id: string } | null }) =>
+  LogDetailsDrawer: ({
+    open,
+    logEntry,
+    onClose,
+    backLabel,
+  }: {
+    open: boolean;
+    logEntry: { request_id: string } | null;
+    onClose: () => void;
+    backLabel?: string;
+  }) =>
     open && logEntry ? (
       <div role="dialog" aria-label="Request log">
         {logEntry.request_id}
+        {backLabel && <button onClick={onClose}>Back to {backLabel}</button>}
       </div>
     ) : null,
 }));
@@ -268,6 +279,17 @@ describe("DetailPane", () => {
     await user.click(link);
     expect(await screen.findByRole("dialog", { name: "Request log" })).toHaveTextContent("req_7f3a9c2e1b44");
     expect(vi.mocked(uiSpendLogsCall).mock.calls[0][0].params).toEqual({ request_id: "req_7f3a9c2e1b44" });
+  });
+
+  it("returns from the spend log to the same agent trace step", async () => {
+    const user = userEvent.setup();
+    vi.mocked(uiSpendLogsCall).mockResolvedValue({ data: [{ request_id: "req_7f3a9c2e1b44" }] });
+    renderPane(spanRow(llm));
+    await user.click(screen.getByRole("button", { name: "Open LiteLLM spend log req_7f3a9c2e1b44" }));
+    const drawer = await screen.findByRole("dialog", { name: "Request log" });
+    await user.click(within(drawer).getByRole("button", { name: "Back to support_triage_agent trace" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Request log" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Open LiteLLM spend log req_7f3a9c2e1b44" })).toBeVisible();
   });
 
   it.each([
