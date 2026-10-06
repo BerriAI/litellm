@@ -19,6 +19,7 @@ from openai._legacy_response import LegacyAPIResponse
 from openai._types import RequestOptions
 from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
+from openai.types.beta.threads.run_create_params import RunCreateParamsBase
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import overload
@@ -65,9 +66,13 @@ from .workload_identity import resolve_openai_workload_identity_config
 openaiOSeriesConfig: Final = OpenAIOSeriesConfig()
 openAIGPT5Config: Final = OpenAIGPT5Config()
 
+_RUN_CREATE_PARAMS_ADAPTER: Final = TypeAdapter(RunCreateParamsBase)
 
-def _present(**values: object) -> dict[str, object]:
-    return {name: value for name, value in values.items() if value is not None}
+
+def _present(**values: object) -> RunCreateParamsBase:
+    return _RUN_CREATE_PARAMS_ADAPTER.validate_python(
+        {name: value for name, value in values.items() if value is not None}
+    )
 
 
 def _serialize_thread_tool_resources(tool_resources: BaseModel | None) -> object | None:
