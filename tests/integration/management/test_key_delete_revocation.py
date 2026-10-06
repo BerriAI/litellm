@@ -181,6 +181,7 @@ def test_deleting_a_key_revokes_it_on_a_warmed_peer(gateway: Gateway, peer: Gate
         "delete warm primary " + uuid.uuid4().hex,
         "delete warm peer " + uuid.uuid4().hex,
         "delete reject peer " + uuid.uuid4().hex,
+        "delete reject peer fresh " + uuid.uuid4().hex,
     )
 
     def respond(request: Request) -> Reply:
@@ -218,4 +219,15 @@ def test_deleting_a_key_revokes_it_on_a_warmed_peer(gateway: Gateway, peer: Gate
         assert _ErrorResponse.model_validate_json(peer_refusal.content).error.type == "token_not_found_in_db", (
             peer_refusal.text
         )
+        wire.drain()
+        fresh_peer_refusal: Final = _chat(peer, model, key, prompts[3])
+        assert fresh_peer_refusal.status_code == 401, fresh_peer_refusal.text
+        assert _ErrorResponse.model_validate_json(fresh_peer_refusal.content).error.type == "token_not_found_in_db", (
+            fresh_peer_refusal.text
+        )
+        fresh_gateway_refusal: Final = _chat(gateway, model, key, prompts[3])
+        assert fresh_gateway_refusal.status_code == 401, fresh_gateway_refusal.text
+        assert _ErrorResponse.model_validate_json(fresh_gateway_refusal.content).error.type == (
+            "token_not_found_in_db"
+        ), fresh_gateway_refusal.text
         assert wire.drain() == (), "deleted-key requests reached the upstream"

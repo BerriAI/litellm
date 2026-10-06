@@ -310,20 +310,20 @@ def test_reset_spend_lifts_an_exhausted_key_on_both_workers_for_both_path_spelli
 
             identifier: Final = key if spelling == "plaintext" else key_hash
             for cycle, reset_to in enumerate((0, 0.02)):
-                prior_spend: Final = _spend(gateway, key_hash)
-                reset: Final = gateway.request("POST", f"/key/{identifier}/reset_spend", {"reset_to": reset_to})
+                prior_spend = _spend(gateway, key_hash)
+                reset = gateway.request("POST", f"/key/{identifier}/reset_spend", {"reset_to": reset_to})
                 assert reset.status_code == 200, reset.text
-                reset_result: Final = _ResetResponse.model_validate_json(reset.content)
+                reset_result = _ResetResponse.model_validate_json(reset.content)
                 assert reset_result.key_hash == key_hash, reset.text
                 assert reset_result.spend == pytest.approx(reset_to), reset.text
                 assert reset_result.previous_spend == pytest.approx(prior_spend), reset.text
-                info_after_reset: Final = gateway.request("GET", "/key/info", params={"key": key})
+                info_after_reset = gateway.request("GET", "/key/info", params={"key": key})
                 assert info_after_reset.status_code == 200, info_after_reset.text
                 assert _KeyInfoResponse.model_validate_json(info_after_reset.content).info.spend == pytest.approx(
                     reset_to
                 ), info_after_reset.text
                 assert _spend(gateway, key_hash) == pytest.approx(reset_to)
-                peer_info_after_reset: Final = eventually(
+                peer_info_after_reset = eventually(
                     lambda: second.request("GET", "/key/info", params={"key": key}),
                     lambda response, reset_to=reset_to: (
                         response.status_code == 200
@@ -334,25 +334,25 @@ def test_reset_spend_lifts_an_exhausted_key_on_both_workers_for_both_path_spelli
                 assert _KeyInfoResponse.model_validate_json(peer_info_after_reset.content).info.spend == pytest.approx(
                     reset_to
                 ), peer_info_after_reset.text
-                workers: Final = (gateway, second) if spelling == "plaintext" else (second, gateway)
-                first_chat: Final = _wire_chat(
+                workers = (gateway, second) if spelling == "plaintext" else (second, gateway)
+                first_chat = _wire_chat(
                     workers[0], model, key, prompts[3 + cycle * 4], max_tokens=10
                 )
                 _assert_wire_success(first_chat, _POST_RESET_USAGE)
-                first_reported_spend: Final = float(first_chat.headers["x-litellm-key-spend"])
+                first_reported_spend = float(first_chat.headers["x-litellm-key-spend"])
                 assert first_reported_spend == pytest.approx(reset_to + 0.03), first_chat.headers
                 eventually(
                     lambda: float(cache.get(f"spend:key:{key_hash}") or 0),
                     lambda counter, reset_to=reset_to: counter == pytest.approx(reset_to + 0.03),
                     seconds=30,
                 )
-                second_chat: Final = _wire_chat(
+                second_chat = _wire_chat(
                     workers[1], model, key, prompts[4 + cycle * 4], max_tokens=10
                 )
                 _assert_wire_success(second_chat, _POST_RESET_USAGE)
-                second_reported_spend: Final = float(second_chat.headers["x-litellm-key-spend"])
+                second_reported_spend = float(second_chat.headers["x-litellm-key-spend"])
                 assert reset_to + 0.03 <= second_reported_spend <= reset_to + 0.06, second_chat.headers
-                re_exhausted_spend: Final = eventually(
+                re_exhausted_spend = eventually(
                     lambda: _spend(gateway, key_hash),
                     lambda spend, reset_to=reset_to: spend >= reset_to + 0.06,
                     seconds=70,
