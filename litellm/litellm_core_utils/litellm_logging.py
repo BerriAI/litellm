@@ -728,6 +728,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # enqueue closure here instead of firing it immediately.
         self._defer_async_logging: bool = False
         self._enqueue_deferred_logging: Callable[[], None] | None = None
+        self._async_success_scheduled: bool = False
         self._on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -2269,6 +2270,15 @@ class Logging(LiteLLMLoggingBaseClass):
             return True
         except Exception:
             return True
+
+    def claim_async_success_log(self) -> bool:
+        """One async success log per request. The innermost @client wrapper always exits first,
+        since the outer one is awaiting it, so it claims the log here and the outer wrapper gets
+        False and schedules nothing."""
+        if self._async_success_scheduled:
+            return False
+        self._async_success_scheduled = True
+        return True
 
     def mark_logging_complete(
         self,
