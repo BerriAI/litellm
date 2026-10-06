@@ -1,7 +1,13 @@
 import os
+import re
 from typing import Any, Final
 
 import httpx
+
+_RDS_HOSTNAME_REGION_PATTERN: Final = re.compile(
+    r"(?:[^.]+\.){2}(?P<region>[a-z]{2}(?:-[a-z]+)+-\d+)\.rds\.amazonaws\.com(?:\.cn)?\.?",
+    re.IGNORECASE,
+)
 
 
 def init_rds_client(
@@ -151,6 +157,13 @@ def init_rds_client(
     return client
 
 
+def rds_region_from_hostname(db_host: str) -> str | None:
+    match: Final = _RDS_HOSTNAME_REGION_PATTERN.fullmatch(db_host)
+    if match is None:
+        return None
+    return match.group("region").lower()
+
+
 def generate_iam_auth_token(db_host, db_port, db_user, client: Any | None = None) -> str:
     from urllib.parse import quote
 
@@ -167,7 +180,12 @@ def generate_iam_auth_token(db_host, db_port, db_user, client: Any | None = None
     else:
         boto_client = client
 
-    token: Final = boto_client.generate_db_auth_token(DBHostname=db_host, Port=db_port, DBUsername=db_user)
+    token: Final = boto_client.generate_db_auth_token(
+        DBHostname=db_host,
+        Port=db_port,
+        DBUsername=db_user,
+        Region=rds_region_from_hostname(db_host),
+    )
     cleaned_token: Final = quote(token, safe="")
 
     return cleaned_token
