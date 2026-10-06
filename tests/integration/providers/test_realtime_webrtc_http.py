@@ -403,21 +403,19 @@ def _mint_transcription_and_redeem(gateway: Gateway, mint_route: str) -> tuple[s
         # alias == deployment model so the alias-as-transcription-model bug cannot hide
         name: Final = _deployment_named_like_its_model(scenario, gateway, wire, scenario_path)
         key: Final = scenario.key(models=[name])
-        if mint_route == "client_secrets":
-            minted: Final = gateway.request(
+        minted: Final = (
+            gateway.request(
                 "POST", "/v1/realtime/client_secrets", {"session": _nested_transcription_session(name)}, key=key
             )
-        else:
-            minted: Final = gateway.request(
-                "POST", "/v1/realtime/transcription_sessions", _beta_transcription_body(name), key=key
-            )
+            if mint_route == "client_secrets"
+            else gateway.request("POST", "/v1/realtime/transcription_sessions", _beta_transcription_body(name), key=key)
+        )
         assert minted.status_code == 200, minted.text
-        if mint_route == "client_secrets":
-            token: Final = ClientSecretCreateResponse.model_validate_json(minted.content).value
-        else:
-            token: Final = string_value(
-                _TranscriptionSessionResponse.model_validate_json(minted.content).client_secret["value"]
-            )
+        token: Final = (
+            ClientSecretCreateResponse.model_validate_json(minted.content).value
+            if mint_route == "client_secrets"
+            else string_value(_TranscriptionSessionResponse.model_validate_json(minted.content).client_secret["value"])
+        )
         answered: Final = _redeem(gateway, token)
         assert answered.status_code == CALLS_STATUS, answered.text
         assert answered.content == ANSWER, answered.text
