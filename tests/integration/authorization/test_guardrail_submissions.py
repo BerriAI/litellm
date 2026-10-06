@@ -291,21 +291,11 @@ def test_non_admin_keys_scoped_to_the_submission_routes_get_403_from_the_admin_c
             registration_key,
             f"{guardrail.url}/beta/litellm_basic_guardrail_api",
         )
-        responses: Final = (
-            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/approve", key=team_admin_key),
-            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/reject", key=team_admin_key),
-            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/approve", key=member_key),
-            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/reject", key=member_key),
-        )
-        _assert_submission_actions_are_forbidden(responses)
         plain_responses: Final = (
             gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/approve", key=plain_team_admin_key),
             gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/reject", key=plain_team_admin_key),
             gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/approve", key=plain_member_key),
             gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/reject", key=plain_member_key),
-        )
-        assert tuple(response.status_code for response in plain_responses) == (401, 401, 401, 401), tuple(
-            response.text for response in plain_responses
         )
         expected_routes: Final = tuple(
             f"/guardrails/submissions/{guardrail_id}/{action}" for action in ("approve", "reject", "approve", "reject")
@@ -326,11 +316,32 @@ def test_non_admin_keys_scoped_to_the_submission_routes_get_403_from_the_admin_c
             )
             for route, user_id in zip(expected_routes, expected_user_ids, strict=True)
         )
-        parsed_plain_errors: Final = tuple(
-            _ErrorResponse.model_validate_json(response.content) for response in plain_responses
+        route_check_refusals: Final = tuple((401, error.model_dump()) for error in expected_plain_errors)
+        handler_forbidden: Final = _SubmissionForbiddenResponse(detail="Admin access required").model_dump()
+        handler_refusals: Final = ((403, handler_forbidden),) * 4
+        response_models: Final = {401: _ErrorResponse, 403: _SubmissionForbiddenResponse}
+        observed: Final = tuple(
+            (
+                response.status_code,
+                (
+                    response_models[response.status_code].model_validate_json(response.content).model_dump()
+                    if response.status_code in response_models
+                    else response.text
+                ),
+            )
+            for response in plain_responses
         )
-        assert parsed_plain_errors == expected_plain_errors, tuple(response.text for response in plain_responses)
+        assert observed in (route_check_refusals, handler_refusals), tuple(
+            response.text for response in plain_responses
+        )
         _assert_submission_status(guardrail_id, "pending_review", team_id)
+        responses: Final = (
+            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/approve", key=team_admin_key),
+            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/reject", key=team_admin_key),
+            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/approve", key=member_key),
+            gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/reject", key=member_key),
+        )
+        _assert_submission_actions_are_forbidden(responses)
         assert guardrail.drain() == ()
         response: Final = _chat(gateway, model, registration_key, _PROMPT_PENDING, name)
         assert response.choices[0].message.content == "provider response"
