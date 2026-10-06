@@ -22,6 +22,7 @@ from litellm.proxy.management_endpoints.key_budget_change import (
     resolve_self_serve_budget_policy,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import _validate_update_key_data
+from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 
 _OWNER = "owner-1"
 _TEAM = "team-1"
@@ -280,5 +281,59 @@ async def test_ceiling_respects_team_key_generation_role_restriction(monkeypatch
             data=_RAISE_WEEKLY_WINDOW,
             existing=_key(**_TEAM_KEY_WITH_WEEKLY),
             team=_team(["/key/update", "/key/generate"]),
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["lower_only", "ceiling"])
+async def test_owner_cannot_override_a_cap_inherited_from_a_linked_budget(monkeypatch, policy):
+    with pytest.raises(HTTPException) as exc:
+        await _update(
+            monkeypatch,
+            policy=policy,
+            data=UpdateKeyRequest(key="sk-1", max_budget=100.0),
+            existing=_key(max_budget=None, budget_id="shared-tier-10"),
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_ceiling_cannot_leave_a_key_uncapped_when_an_upperbound_is_configured(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(max_budget=20.0)
+    )
+    with pytest.raises(HTTPException) as exc:
+        await _update(
+            monkeypatch,
+            policy="ceiling",
+            data=UpdateKeyRequest(key="sk-1", max_budget=None),
+            existing=_key(max_budget=10.0),
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_ceiling_checks_the_retained_max_budget_when_only_windows_change(monkeypatch):
+    with pytest.raises(HTTPException) as exc:
+        await _update(
+            monkeypatch,
+            policy="ceiling",
+            data=UpdateKeyRequest(key="sk-1", budget_limits=[]),
+            existing=_key(max_budget=100.0, budget_limits=[_WEEKLY]),
+            caller=_caller(max_budget=20.0),
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", [None, "disabled"])
+async def test_owner_cannot_clear_max_budget_by_default(monkeypatch, policy):
+    with pytest.raises(HTTPException) as exc:
+        await _update(
+            monkeypatch,
+            policy=policy,
+            data=UpdateKeyRequest(key="sk-1", max_budget=None),
+            existing=_key(max_budget=10.0),
         )
     assert exc.value.status_code == 403

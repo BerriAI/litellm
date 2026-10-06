@@ -103,6 +103,7 @@ from litellm.proxy.management_endpoints.key_budget_change import (
     KeyBudgetTightened,
     KeyBudgetUnchanged,
     classify_key_budget_change,
+    effective_key_budget,
     resolve_self_serve_budget_policy,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -3147,21 +3148,24 @@ async def _owner_may_change_key_budget(
                     team_id=team_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
-                    check_db_only=True,
                 )
             )
             if not _caller_may_generate_key(team_table=team_table, user_api_key_dict=user_api_key_dict):
                 return False
+            effective: Final = effective_key_budget(data=data, existing=existing_key_row)
+            upperbound: Final = litellm.upperbound_key_generate_params
+            if effective.max_budget is None and upperbound is not None and upperbound.max_budget is not None:
+                return False
             _enforce_budget_delegation_ceiling(
-                requested_max_budget=data.max_budget,
+                requested_max_budget=effective.max_budget,
                 requested_team_id=team_id,
-                budget_limits=data.budget_limits,
+                budget_limits=list(effective.budget_limits),
                 team_table=team_table,
                 user_api_key_dict=user_api_key_dict,
             )
             return True
         case _:
-            assert_never(budget_change)
+            return assert_never(budget_change)
 
 
 async def _validate_update_key_data(

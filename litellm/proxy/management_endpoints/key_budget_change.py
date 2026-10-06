@@ -94,8 +94,30 @@ def _budget_limits_change(data: UpdateKeyRequest, existing: LiteLLM_Verification
     return "tightened" if kept_or_lowered else "loosened"
 
 
+@dataclass(frozen=True, slots=True)
+class EffectiveKeyBudget:
+    max_budget: float | None
+    budget_limits: tuple[BudgetLimitEntry, ...]
+
+
+def effective_key_budget(data: UpdateKeyRequest, existing: LiteLLM_VerificationToken) -> EffectiveKeyBudget:
+    """The budget the key would carry after the update, with omitted fields keeping their stored values."""
+    max_budget: Final = data.max_budget if "max_budget" in data.model_fields_set else existing.max_budget
+    if "budget_limits" in data.model_fields_set:
+        return EffectiveKeyBudget(max_budget=max_budget, budget_limits=tuple(data.budget_limits or ()))
+    try:
+        stored: Final = tuple(_STORED_WINDOWS.validate_python(existing.budget_limits or []))
+    except ValidationError:
+        stored_fallback: Final[tuple[BudgetLimitEntry, ...]] = ()
+        return EffectiveKeyBudget(max_budget=max_budget, budget_limits=stored_fallback)
+    return EffectiveKeyBudget(max_budget=max_budget, budget_limits=stored)
+
+
 def classify_key_budget_change(data: UpdateKeyRequest, existing: LiteLLM_VerificationToken) -> KeyBudgetChange:
-    if data.spend is not None or "soft_budget" in data.model_fields_set:
+    overrides_linked_budget: Final = (
+        existing.budget_id is not None and _max_budget_change(data, existing) != "unchanged"
+    )
+    if data.spend is not None or "soft_budget" in data.model_fields_set or overrides_linked_budget:
         return KeyBudgetAdminOnly()
     changes: Final = frozenset((_max_budget_change(data, existing), _budget_limits_change(data, existing)))
     if "loosened" in changes:
