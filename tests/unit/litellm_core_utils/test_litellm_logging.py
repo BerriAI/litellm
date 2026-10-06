@@ -5975,7 +5975,7 @@ def _interactions_logging_obj(stream: bool, call_type: str = "acreate"):
         messages=[],
         stream=stream,
         call_type=call_type,
-        start_time=time.time(),
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc).timestamp(),
         litellm_call_id="interactions-call-id",
         function_id="interactions-fn-id",
     )
