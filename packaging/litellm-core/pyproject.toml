@@ -51,6 +51,8 @@ features = ["extension-module"]
 profile = "release"
 editable-profile = "dev"
 include = [
+    { path = "rust-toolchain.toml", format = "sdist" },
+    { path = ".cargo/config.toml", format = "sdist" },
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/model_insights_tasks.json",
