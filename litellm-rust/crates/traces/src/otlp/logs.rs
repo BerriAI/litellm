@@ -28,16 +28,31 @@ fn text<'a>(attributes: &'a [KeyValue], key: &str) -> &'a str {
     }
 }
 
-fn message(record: LogRecord) -> Span {
+fn absent_id(id: &[u8], length: usize) -> bool {
+    id.is_empty() || (id.len() == length && id.iter().all(|byte| *byte == 0))
+}
+
+struct LogContext {
+    missing_trace: bool,
+    missing_parent: bool,
+}
+
+fn message(record: LogRecord) -> (Span, LogContext) {
     let timestamp = if record.time_unix_nano == 0 {
         record.observed_time_unix_nano
     } else {
         record.time_unix_nano
     };
+    let missing_trace = absent_id(&record.trace_id, 16);
+    let missing_parent = absent_id(&record.span_id, 8);
     let mut hash = Sha256::new();
     hash.update(b"litellm.claude.message.v1\0");
-    hash.update(&record.trace_id);
-    hash.update(&record.span_id);
+    if !missing_trace {
+        hash.update(&record.trace_id);
+    }
+    if !missing_parent {
+        hash.update(&record.span_id);
+    }
     hash.update(text(&record.attributes, "event.name"));
     let uuid = text(&record.attributes, "message.uuid");
     if uuid.is_empty() {
@@ -50,28 +65,53 @@ fn message(record: LogRecord) -> Span {
     } else {
         hash.update(uuid);
     }
+    if missing_trace {
+        hash.update(b"\0unassigned\0");
+        hash.update(text(&record.attributes, "session.id"));
+    }
+    let identity = hash.finalize();
+    let trace_id = if missing_trace {
+        let session = text(&record.attributes, "session.id");
+        if session.is_empty() {
+            identity[..16].to_vec()
+        } else {
+            span::session_trace_id(session)
+        }
+    } else {
+        record.trace_id
+    };
     let failed = match value(&record.attributes, "success") {
         Some(Value::BoolValue(success)) => !success,
         Some(Value::StringValue(success)) => success == "false",
         _ => false,
     };
-    Span {
-        trace_id: record.trace_id,
-        span_id: hash.finalize()[..8].to_vec(),
-        parent_span_id: record.span_id,
-        name: format!("claude_code.{}", text(&record.attributes, "event.name")),
-        kind: 1,
-        start_time_unix_nano: timestamp,
-        end_time_unix_nano: timestamp,
-        status: (text(&record.attributes, "event.name") == "tool_result" && failed).then(|| {
-            Status {
-                code: 2,
-                message: text(&record.attributes, "error").to_owned(),
-            }
-        }),
-        attributes: record.attributes,
-        ..Span::default()
-    }
+    (
+        Span {
+            trace_id,
+            span_id: identity[..8].to_vec(),
+            parent_span_id: if missing_trace || missing_parent {
+                Vec::new()
+            } else {
+                record.span_id
+            },
+            name: format!("claude_code.{}", text(&record.attributes, "event.name")),
+            kind: 1,
+            start_time_unix_nano: timestamp,
+            end_time_unix_nano: timestamp,
+            status: (text(&record.attributes, "event.name") == "tool_result" && failed).then(
+                || Status {
+                    code: 2,
+                    message: text(&record.attributes, "error").to_owned(),
+                },
+            ),
+            attributes: record.attributes,
+            ..Span::default()
+        },
+        LogContext {
+            missing_trace,
+            missing_parent,
+        },
+    )
 }
 
 pub(super) fn flatten(
@@ -79,6 +119,7 @@ pub(super) fn flatten(
     limits: DecodeLimits,
 ) -> Result<Vec<DecodedSpan>, Error> {
     let mut count = 0usize;
+    let mut contexts = Vec::new();
     let mut resources = Vec::new();
     for resource in request.resource_logs {
         let mut scopes = Vec::new();
@@ -111,7 +152,11 @@ pub(super) fn flatten(
                                     text(&record.attributes, "query_source"),
                                 )))
                 })
-                .map(message)
+                .map(|record| {
+                    let (span, context) = message(record);
+                    contexts.push(context);
+                    span
+                })
                 .collect();
             scopes.push(ScopeSpans {
                 scope: scope.scope,
@@ -125,10 +170,23 @@ pub(super) fn flatten(
             schema_url: resource.schema_url,
         });
     }
-    span::flatten(
+    let (mut spans, mut budget) = span::flatten_with_budget(
         ExportTraceServiceRequest {
             resource_spans: resources,
         },
         limits,
-    )
+    )?;
+    budget.consume(contexts.len() * size_of::<LogContext>())?;
+    for (span, context) in spans.iter_mut().zip(contexts) {
+        if context.missing_trace {
+            span.attributes.remove("lens.original_trace_id");
+        }
+        if context.missing_trace || context.missing_parent {
+            let key = "lens.capture.warning";
+            let warning = "This native log has incomplete trace context. Its content is retained, but its execution parent is unconfirmed.";
+            budget.consume(key.len() + warning.len() + 96)?;
+            span.attributes.insert(key.to_owned(), warning.to_owned());
+        }
+    }
+    Ok(spans)
 }
