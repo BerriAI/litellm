@@ -607,6 +607,41 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str, monkeypat
     assert cost > usage.prompt_tokens * model_info["input_cost_per_token"]
 
 
+@pytest.mark.parametrize("decoder_available", (False, True))
+@pytest.mark.parametrize("invalid_streaminfo", (False, True))
+def test_gemini_cloud_tts_rejects_unbillable_flac(
+    monkeypatch: pytest.MonkeyPatch, decoder_available: bool, invalid_streaminfo: bool
+) -> None:
+    output: Final = io.BytesIO()
+    soundfile.write(output, (0.0,) * 24000, 48000, format="FLAC", subtype="PCM_16")
+    audio: Final = output.getvalue()
+    stream_info: Final = int.from_bytes(audio[18:26], "big") & ~((1 << 36) - 1)
+    metadata_header: Final = b"\x01\x00\x00\x22" if invalid_streaminfo else audio[4:8]
+    unknown_duration_audio: Final = audio[:4] + metadata_header + audio[8:18] + stream_info.to_bytes(8, "big") + audio[26:]
+    raw_response: Final = httpx.Response(
+        200, json={"audioContent": base64.b64encode(unknown_duration_audio).decode()}
+    )
+    logger: Final = MagicMock(
+        model_call_details={
+            "additional_args": {
+                "complete_input_dict": {
+                    "dict_body": {
+                        "input": {"text": "Hello"},
+                        "audioConfig": {"audioEncoding": "FLAC", "sampleRateHertz": 48000},
+                    }
+                }
+            }
+        }
+    )
+    if not decoder_available:
+        monkeypatch.setitem(sys.modules, "soundfile", None)
+
+    with pytest.raises(ValueError, match="Cannot determine Gemini TTS output duration"):
+        VertexAITextToSpeechConfig().transform_text_to_speech_response(
+            "gemini-3.1-flash-tts-preview", raw_response, logger
+        )
+
+
 @pytest.mark.parametrize("encoding", ["ALAW", "MULAW"])
 @pytest.mark.parametrize("audio", [b"\x12" * 24000, b"RIFF" + b"\x12" * 23996])
 def test_gemini_cloud_tts_returns_raw_g711_audio_when_duration_decoder_is_unavailable(encoding: str, audio: bytes):

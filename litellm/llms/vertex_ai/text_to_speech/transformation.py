@@ -718,7 +718,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             container_duration: Final = calculate_request_duration(binary_data)
             sample_rate: Final = audio_config.get("sampleRateHertz") or 24000
             duration: Final = (
-                container_duration
+                _fallback_gemini_tts_audio_duration(binary_data, "FLAC", sample_rate)
+                if audio_config["audioEncoding"] == "FLAC"
+                else container_duration
                 if container_duration is not None
                 else _fallback_gemini_tts_audio_duration(binary_data, audio_config["audioEncoding"], sample_rate)
             )
