@@ -34,7 +34,16 @@ def check_import() -> str:
     import litellm
 
     _require(bool(litellm.__file__), "litellm has no __file__")
-    return f"imported litellm {version('litellm')}"
+    from importlib.metadata import packages_distributions
+
+    from litellm._version import version as sdk_version
+
+    distributions = tuple(name for name in packages_distributions().get("litellm", ()) if name in ("litellm", "litellm-core"))
+    _require(len(distributions) == 1, f"expected one SDK distribution, found {distributions}")
+    distribution = distributions[0]
+    _require(sdk_version == version(distribution), "SDK version does not match installed metadata")
+    _require("litellm.proxy.proxy_cli" not in sys.modules, "SDK import loaded the proxy CLI")
+    return f"imported {distribution} {sdk_version}"
 
 
 def check_completion() -> str:
