@@ -1,8 +1,9 @@
 ### Hide pydantic namespace conflict warnings globally ###
 from __future__ import annotations
 
-from litellm._version import get_distribution_name
 import warnings
+
+from litellm._version import get_distribution_name
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
 # Suppress Pydantic 2.11+ deprecation warning about accessing model_fields on instances
@@ -32,12 +33,14 @@ if os.getenv("LITELLM_MODE", "DEV") == "DEV":
             raise
         if _dev_env_hot_reload_enabled():
             raise ImportError(
-                f'Environment-file reload requires python-dotenv. Install with pip install "{get_distribution_name()}[dotenv]"'
+                "Environment-file reload requires python-dotenv. "
+                f'Install with pip install "{get_distribution_name()}[dotenv]"'
             ) from _dotenv_error
         import logging as _env_logging
 
         _env_logging.getLogger("LiteLLM").debug(
-            f'Environment-file loading is unavailable. Use process environment variables or pip install "{get_distribution_name()}[dotenv]"'
+            "Environment-file loading is unavailable. Use process environment variables "
+            f'or pip install "{get_distribution_name()}[dotenv]"'
         )
     else:
         _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
