@@ -75,29 +75,35 @@ interface TurnHead {
   promptStart: number;
 }
 
+function lastReply(pieces: readonly Piece[]): { item: ConversationItem; message: TraceMessage } | null {
+  const direct = pieces.flatMap((p) => (p.work.kind === "step" ? [p.work.item] : []));
+  const nested = pieces.flatMap((p) => (p.work.kind === "subagent" ? flatItems(p.work.groups) : []));
+  const item = direct.findLast((i) => i.messages.some(isReply)) ?? nested.findLast((i) => i.messages.some(isReply));
+  const message = item?.messages.findLast(isReply);
+  return item && message ? { item, message } : null;
+}
+
 function closeTurn({ id, prompt, context, promptStart }: TurnHead, pieces: readonly Piece[]): ThreadTurn {
-  const replyIndex = pieces.findLastIndex((p) => p.work.kind === "step" && p.messages.some(isReply));
-  const replyPiece = replyIndex >= 0 ? pieces[replyIndex] : null;
-  const replyItem = replyPiece?.work.kind === "step" ? replyPiece.work.item : null;
-  const reply = replyItem ? replyItem.messages.findLast(isReply) ?? null : null;
-  const before = replyIndex >= 0 ? pieces.slice(0, replyIndex) : pieces;
-  const leftover = replyItem && reply ? stripMessages(replyItem, (message) => message !== reply) : null;
-  const work = [...before.map((p) => p.work), ...(leftover ? [{ kind: "step" as const, item: leftover }] : [])];
+  const found = lastReply(pieces);
+  const work = pieces.flatMap((p): ThreadWork[] => {
+    if (p.work.kind !== "step" || p.work.item !== found?.item) return [p.work];
+    const leftover = stripMessages(p.work.item, (message) => message !== found.message);
+    return leftover ? [{ kind: "step", item: leftover }] : [];
+  });
   const timed = pieces.filter((p) => Number.isFinite(p.start));
   return {
     id,
     prompt,
     context,
     work,
-    reply,
-    replyItem,
+    reply: found?.message ?? null,
+    replyItem: found?.item ?? null,
     startMs: Math.min(promptStart, ...timed.map((p) => p.start)),
     endMs: Math.max(...timed.map((p) => p.end), -Infinity),
     ...countWork(work),
   };
 }
 
-/** Splits a conversation into turns: each user prompt, the work it caused, and the final assistant reply. */
 export function buildThread(groups: readonly ConversationGroup[]): ThreadTurn[] {
   const pieces = groups.map(piece);
   const prompts = pieces.map((p) =>
