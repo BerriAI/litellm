@@ -57,9 +57,9 @@ export function stripState(
   queued = "Queued, waiting for a worker to pick this up",
 ): StripState {
   if (job.status === "failed") return { kind: "failed", message: job.error || "The investigation failed" };
+  if (job.status === "completed" || job.status === "cancelled") return { kind: "done" };
   const stepError = job.steps.findLast((step) => step.kind === "error");
   if (stepError && !job.reviews.length) return { kind: "failed", message: stepError.label };
-  if (job.status === "completed" || job.status === "cancelled") return { kind: "done" };
   if (job.reviews.length) return { kind: "reviewing", message: job.stage || "Reviewing traces" };
   if (job.status === "queued") return { kind: "waiting", message: queued };
   const { selected } = job.coverage;
