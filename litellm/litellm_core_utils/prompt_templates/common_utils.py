@@ -195,7 +195,7 @@ def get_str_from_messages(messages: list[AllMessageValues]) -> str:
     return text
 
 
-def get_str_from_messages_with_tools(messages: object) -> str:
+def get_semantic_cache_prompt_from_messages(messages: object) -> str:
     """
     ``get_str_from_messages`` that also keeps each conversation's tool calls and tool results, so agent turns
     that differ only in their tool exchange (Anthropic ``tool_use`` / ``tool_result``, OpenAI ``tool_calls``)

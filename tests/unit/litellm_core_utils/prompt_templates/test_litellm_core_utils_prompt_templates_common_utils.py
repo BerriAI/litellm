@@ -16,8 +16,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
     get_file_ids_from_messages,
     get_format_from_file_id,
+    get_semantic_cache_prompt_from_messages,
     get_str_from_messages,
-    get_str_from_messages_with_tools,
     handle_any_messages_to_chat_completion_str_messages_conversion,
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
@@ -2308,8 +2308,8 @@ _TASK: Final = {"role": "user", "content": "fix the failing test"}
         ),
     ],
 )
-def test_get_str_from_messages_with_tools_keeps_tool_exchange(messages: list[object], expected: str) -> None:
-    assert get_str_from_messages_with_tools(messages) == expected
+def test_get_semantic_cache_prompt_from_messages_keeps_tool_exchange(messages: list[object], expected: str) -> None:
+    assert get_semantic_cache_prompt_from_messages(messages) == expected
 
 
 @pytest.mark.parametrize(
@@ -2332,8 +2332,10 @@ def test_get_str_from_messages_with_tools_keeps_tool_exchange(messages: list[obj
         pytest.param([{"role": "assistant", "content": None}, {"role": "user"}], id="missing-content"),
     ],
 )
-def test_get_str_from_messages_with_tools_matches_get_str_from_messages_without_tools(messages: list[object]) -> None:
-    assert get_str_from_messages_with_tools(messages) == get_str_from_messages(messages)  # pyright: ignore[reportArgumentType]  # untyped fixtures
+def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_without_tools(
+    messages: list[object],
+) -> None:
+    assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)  # pyright: ignore[reportArgumentType]  # untyped fixtures
 
 
 def _parallel_reads(result_for_a: str, result_for_b: str, *, call_id_prefix: str = "c") -> list[object]:
@@ -2356,13 +2358,13 @@ def _results_in_swapped_order(result_for_a: str, result_for_b: str) -> list[obje
     return [call, answer_b, answer_a]
 
 
-def test_get_str_from_messages_with_tools_tells_apart_parallel_results_answering_different_calls() -> None:
-    assert get_str_from_messages_with_tools(_parallel_reads("empty", "secret")) != get_str_from_messages_with_tools(
-        _results_in_swapped_order("secret", "empty")
-    )
+def test_get_semantic_cache_prompt_from_messages_tells_apart_parallel_results_answering_different_calls() -> None:
+    assert get_semantic_cache_prompt_from_messages(
+        _parallel_reads("empty", "secret")
+    ) != get_semantic_cache_prompt_from_messages(_results_in_swapped_order("secret", "empty"))
 
 
-def test_get_str_from_messages_with_tools_ignores_call_ids_that_differ_between_sessions() -> None:
-    assert get_str_from_messages_with_tools(
+def test_get_semantic_cache_prompt_from_messages_ignores_call_ids_that_differ_between_sessions() -> None:
+    assert get_semantic_cache_prompt_from_messages(
         _parallel_reads("A", "B", call_id_prefix="toolu_")
-    ) == get_str_from_messages_with_tools(_parallel_reads("A", "B"))
+    ) == get_semantic_cache_prompt_from_messages(_parallel_reads("A", "B"))

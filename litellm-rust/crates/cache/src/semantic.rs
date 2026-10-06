@@ -1,6 +1,6 @@
 //! The embedding and prompt contract every semantic backend shares.
 //!
-//! Python's semantic caches all read their prompt through `get_str_from_messages_with_tools`, and
+//! Python's semantic caches all read their prompt through `get_semantic_cache_prompt_from_messages`, and
 //! `RedisSemanticCache._get_prompt_from_kwargs` (inherited by Valkey) adds Responses API
 //! `input`. Qdrant reads messages only. Each backend picks one of the two extractors here.
 
@@ -83,7 +83,7 @@ impl Embedder for PreparedEmbedding {
     }
 }
 
-/// `get_str_from_messages_with_tools`: every message's content text, tool calls and tool results,
+/// `get_semantic_cache_prompt_from_messages`: every message's content text, tool calls and tool results,
 /// then its OpenAI `tool_calls`, then its search results. Each tool result is encoded with the
 /// position of the call it answers.
 pub fn str_from_messages(messages: &[Value]) -> String {
