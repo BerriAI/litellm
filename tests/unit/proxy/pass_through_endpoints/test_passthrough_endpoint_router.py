@@ -1,4 +1,5 @@
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -410,8 +411,42 @@ def test_oidc_file_reference_outside_allowed_dirs_is_refused(tmp_path, monkeypat
     outside.write_text("not-allowed")
     monkeypatch.setenv("OPENAI_API_KEY", f"oidc/file/{outside}")
 
-    with pytest.raises(ValueError, match="outside the allowed credential directories"):
+    with pytest.raises(HTTPException) as excinfo:
         _passthrough_router(None).get_credentials(custom_llm_provider="openai", region_name=None)
+
+    assert excinfo.value.status_code == 401
+    assert f"oidc/file/{outside}" in str(excinfo.value.detail)
+    assert "outside the allowed credential directories" in str(excinfo.value.detail)
+
+
+def test_missing_oidc_token_file_is_a_clear_auth_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", f"oidc/file/{tmp_path / 'missing-token'}")
+
+    with pytest.raises(HTTPException) as excinfo:
+        _passthrough_router(None).get_credentials(custom_llm_provider="openai", region_name=None)
+
+    assert excinfo.value.status_code == 401
+    assert f"oidc/file/{tmp_path / 'missing-token'}" in str(excinfo.value.detail)
+
+
+def test_oidc_env_reference_is_resolved(monkeypatch):
+    monkeypatch.setenv("UPSTREAM_TOKEN", "env-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "oidc/env/UPSTREAM_TOKEN")
+
+    assert _passthrough_router(None).get_credentials(custom_llm_provider="openai", region_name=None) == "env-token"
+
+
+def test_oidc_env_path_reference_is_not_resolved(tmp_path, monkeypatch):
+    outside = tmp_path / "token"
+    outside.write_text("must-not-be-read")
+    monkeypatch.setenv("UPSTREAM_TOKEN_FILE", str(outside))
+    monkeypatch.setenv("OPENAI_API_KEY", "oidc/env_path/UPSTREAM_TOKEN_FILE")
+
+    assert (
+        _passthrough_router(None).get_credentials(custom_llm_provider="openai", region_name=None)
+        == "oidc/env_path/UPSTREAM_TOKEN_FILE"
+    )
 
 
 def test_network_backed_oidc_reference_is_not_fetched_inline(monkeypatch):

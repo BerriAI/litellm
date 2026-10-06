@@ -2,6 +2,8 @@ import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
 
+from fastapi import HTTPException
+
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
@@ -38,14 +40,21 @@ def _credential_identity(credentials: VERTEX_CREDENTIALS_TYPES | None) -> str | 
 
 
 # Network I/O prohibited; get_credentials() is synchronous inside async routes.
-_LOCAL_OIDC_PREFIXES: Final = ("oidc/file/", "oidc/env/", "oidc/env_path/")
+# oidc/env_path/ is excluded because it bypasses the oidc/file/ credential-directory allowlist.
+_LOCAL_OIDC_PREFIXES: Final = ("oidc/file/", "oidc/env/")
 
 
 def _resolve_oidc_reference(credential: str | None) -> str | None:
     """Resolve local ``oidc/...`` credentials on every call to pick up rotated tokens."""
-    if credential is not None and credential.startswith(_LOCAL_OIDC_PREFIXES):
+    if credential is None or not credential.startswith(_LOCAL_OIDC_PREFIXES):
+        return credential
+    try:
         return get_secret_str(credential)
-    return credential
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=401,
+            detail=f"pass-through credential {credential} could not be resolved: {exc}",
+        ) from exc
 
 
 class PassthroughEndpointRouter:
