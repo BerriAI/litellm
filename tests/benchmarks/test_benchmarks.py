@@ -6,10 +6,13 @@ in the litellm hot path: token counting, model info lookup, provider
 resolution, and cost calculation.
 """
 
+import threading
+
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.litellm_core_utils.token_counter import token_counter
 
 
@@ -205,3 +208,21 @@ def test_get_model_cost_key_exact_match():
 def test_get_model_cost_key_case_insensitive():
     """Benchmark model cost key lookup with case-insensitive fallback."""
     litellm.utils._get_model_cost_key("GPT-4o")
+
+
+# ---------------------------------------------------------------------------
+# Measurement hermeticity guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.benchmark
+def test_logging_executor_runs_inline():
+    """Guard that the shared logging executor runs submissions inline.
+
+    Deferred submissions execute on worker threads, and callgrind attributes
+    their instructions to whichever benchmark's measurement window is open when
+    the valgrind scheduler resumes them, making results nondeterministic.
+    """
+    future = executor.submit(threading.get_ident)
+    assert future.done()
+    assert future.result() == threading.get_ident()

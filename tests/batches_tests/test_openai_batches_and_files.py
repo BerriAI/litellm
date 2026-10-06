@@ -3,14 +3,10 @@
 import asyncio
 import json
 import os
-import sys
 import tempfile
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 
 import logging
 import time
@@ -103,99 +99,23 @@ def load_vertex_ai_credentials():
     print("created gcs path service account=", os.environ["GCS_PATH_SERVICE_ACCOUNT"])
 
 
-@pytest.mark.parametrize("provider", ["openai"])  # , "azure"
-@pytest.mark.asyncio
-@skip_if_no_openai_network
-async def test_create_batch(provider, tmp_path):
-    """
-    1. Create File for Batch completion
-    2. Create Batch Request
-    3. Retrieve the specific batch
-    """
-    if provider == "azure":
-        # Don't have anymore Azure Quota
-        return
-    file_name = "openai_batch_completions.jsonl"
-    _current_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(_current_dir, file_name)
-
-    with open(file_path, "rb") as batch_file:
-        file_obj = await litellm.acreate_file(
-            file=batch_file,
-            purpose="batch",
-            custom_llm_provider=provider,
-        )
-    print("Response from creating file=", file_obj)
-
-    batch_input_file_id = file_obj.id
-    assert (
-        batch_input_file_id is not None
-    ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
-
-    await asyncio.sleep(1)
-    create_batch_response = await litellm.acreate_batch(
-        completion_window="24h",
-        endpoint="/v1/chat/completions",
-        input_file_id=batch_input_file_id,
-        custom_llm_provider=provider,
-        metadata={"key1": "value1", "key2": "value2"},
-    )
-
-    print("response from litellm.create_batch=", create_batch_response)
-    await asyncio.sleep(6)
-
-    assert (
-        create_batch_response.id is not None
-    ), f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
-    assert (
-        create_batch_response.endpoint == "/v1/chat/completions"
-        or create_batch_response.endpoint == "/chat/completions"
-    ), f"Failed to create batch, expected endpoint to be /v1/chat/completions but got {create_batch_response.endpoint}"
-    assert (
-        create_batch_response.input_file_id == batch_input_file_id
-    ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
-
-    retrieved_batch = await litellm.aretrieve_batch(
-        batch_id=create_batch_response.id, custom_llm_provider=provider
-    )
-    print("retrieved batch=", retrieved_batch)
-    # just assert that we retrieved a non None batch
-
-    assert retrieved_batch.id == create_batch_response.id
-
-    # list all batches
-    list_batches = await litellm.alist_batches(custom_llm_provider=provider, limit=2)
-    print("list_batches=", list_batches)
-
-    file_content = await litellm.afile_content(
-        file_id=batch_input_file_id, custom_llm_provider=provider
-    )
-
-    result = file_content.content
-
-    result_file_path = tmp_path / "batch_job_results_furniture.jsonl"
-    result_file_path.write_bytes(result)
-
-    # Cancel Batch - handle race condition where batch may already be completed
+async def cancel_batch_unless_already_terminal(batch_id: str, provider: str) -> None:
     try:
-        cancel_batch_response = await litellm.acancel_batch(
-            batch_id=create_batch_response.id,
-            custom_llm_provider=provider,
-        )
-        print("cancel_batch_response=", cancel_batch_response)
+        cancel_batch_response = await litellm.acancel_batch(batch_id=batch_id, custom_llm_provider=provider)
     except openai.ConflictError as e:
-        # Only allow to pass if it's specifically the "batch already completed" error
         if "Cannot cancel a batch with status 'completed'" in str(e):
             print(f"Batch already completed, cannot cancel: {e}")
-        else:
-            # Re-raise other ConflictError types
+            return
+        if "Cannot cancel a batch with status 'failed'" not in str(e):
             raise
-    except Exception as e:
-        # Re-raise any other unexpected errors
-        print(f"Unexpected error during batch cancellation: {e}")
-        raise
-
-    pass
+        failed_batch = await litellm.aretrieve_batch(batch_id=batch_id, custom_llm_provider=provider)
+        print(f"Batch failed before cancel, errors={failed_batch.errors}")
+        failure_codes = {err.code for err in (failed_batch.errors.data if failed_batch.errors else None) or []}
+        assert failure_codes == {"token_limit_exceeded"}, (
+            f"batch failed for a reason other than the org's enqueued token limit: {failed_batch.errors}"
+        )
+        return
+    print("cancel_batch_response=", cancel_batch_response)
 
 
 class TestCustomLogger(CustomLogger):
@@ -395,24 +315,7 @@ async def test_async_create_batch(provider, tmp_path):
     result_file_path = tmp_path / "batch_job_results_furniture.jsonl"
     result_file_path.write_bytes(file_content.content)
 
-    # Cancel Batch - handle race condition where batch may already be completed
-    try:
-        cancel_batch_response = await litellm.acancel_batch(
-            batch_id=create_batch_response.id,
-            custom_llm_provider=provider,
-        )
-        print("cancel_batch_response=", cancel_batch_response)
-    except openai.ConflictError as e:
-        # Only allow to pass if it's specifically the "batch already completed" error
-        if "Cannot cancel a batch with status 'completed'" in str(e):
-            print(f"Batch already completed, cannot cancel: {e}")
-        else:
-            # Re-raise other ConflictError types
-            raise
-    except Exception as e:
-        # Re-raise any other unexpected errors
-        print(f"Unexpected error during batch cancellation: {e}")
-        raise
+    await cancel_batch_unless_already_terminal(batch_id=create_batch_response.id, provider=provider)
 
 
 mock_file_response = {
@@ -513,25 +416,26 @@ async def test_avertex_batch_prediction(monkeypatch):
             mock_response.status_code = 200
         return mock_response
 
-    # Batch jsonl file creation now streams to a GCS resumable session via
-    # _aresumable_chunked_upload (httpx send), not AsyncHTTPHandler.post, so mock
-    # that entry point to return the GCS object response. The resumable protocol
-    # itself is covered in test_vertex_ai_files_streaming.py.
-    mock_upload_response = httpx.Response(
-        200,
-        json=mock_file_response,
-        request=httpx.Request("PUT", "https://storage.googleapis.com/upload"),
-    )
+    # Batch jsonl creation now stages the body to a temp file and issues a single
+    # uploadType=media POST against the raw httpx.AsyncClient (client.client) inside
+    # _astage_and_upload_media, not AsyncHTTPHandler.post. Patch that raw POST so the
+    # real staging/upload + response transform run while the GCS object response is
+    # mocked; AsyncHTTPHandler.post still handles the batch-prediction call.
     with (
         patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             side_effect=mock_side_effect,
-        ) as mock_global_post,
-        patch(
-            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler._aresumable_chunked_upload",
-            new_callable=AsyncMock,
-            return_value=mock_upload_response,
         ),
+        patch.object(
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=httpx.Response(
+                200,
+                json=mock_file_response,
+                request=httpx.Request("POST", "https://storage.googleapis.com/upload"),
+            ),
+        ) as mock_gcs_upload,
     ):
         litellm.set_verbose = True
         litellm._turn_on_debug()
@@ -550,6 +454,15 @@ async def test_avertex_batch_prediction(monkeypatch):
         assert (
             file_obj.id
             == "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb"
+        )
+
+        mock_gcs_upload.assert_awaited_once()
+        upload_url = str(mock_gcs_upload.call_args.args[0])
+        assert "uploadType=media" in upload_url
+        assert "/b/litellm-local/o" in upload_url
+        assert (
+            mock_gcs_upload.call_args.kwargs["headers"]["Content-Type"]
+            == "application/json"
         )
 
         # Create batch

@@ -4,7 +4,7 @@ SSE Stream Iterator for Vertex AI Agent Engine.
 Handles Server-Sent Events (SSE) streaming responses from Vertex AI Reasoning Engines.
 """
 
-from typing import Any, Union
+from typing import Any, Final
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import ChatCompletionUsageBlock
@@ -27,9 +27,7 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
     def __init__(self, streaming_response: Any, sync_stream: bool) -> None:
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream)
 
-    def chunk_parser(
-        self, chunk: dict
-    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         """
         Parse a Vertex Agent Engine response chunk into ModelResponseStream.
 
@@ -49,8 +47,8 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
         """
         # Extract text from content.parts
         text = None
-        content = chunk.get("content", {})
-        parts = content.get("parts", [])
+        content: Final = chunk.get("content", {})
+        parts: Final = content.get("parts", [])
         for part in parts:
             if isinstance(part, dict) and "text" in part:
                 text = part["text"]
@@ -58,7 +56,7 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
 
         # Extract finish_reason
         finish_reason = None
-        raw_finish_reason = chunk.get("finish_reason")
+        raw_finish_reason: Final = chunk.get("finish_reason")
         if raw_finish_reason == "STOP":
             finish_reason = "stop"
         elif raw_finish_reason:
@@ -66,7 +64,7 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
 
         # Extract usage from usage_metadata
         usage = None
-        usage_metadata = chunk.get("usage_metadata", {})
+        usage_metadata: Final = chunk.get("usage_metadata", {})
         if usage_metadata:
             usage = ChatCompletionUsageBlock(
                 prompt_tokens=usage_metadata.get("prompt_token_count", 0),

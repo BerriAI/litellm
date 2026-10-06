@@ -8,14 +8,12 @@ across different providers (OpenAI, xAI, etc.)
 import asyncio
 import json
 import os
-import sys
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple, Union
 
 import pytest
 import websockets
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 
@@ -218,13 +216,6 @@ class BaseRealtimeTest(ABC):
             error_details.append(
                 f"exception: {type(caught_exception).__name__}: {caught_exception}"
             )
-
-        # Skip on transient connection failures
-        if (
-            not websocket_client.connection_successful
-            and websocket_client.close_code is not None
-        ):
-            pytest.skip(f"Transient connection failure: {'; '.join(error_details)}")
 
         # Assertions
         assert (

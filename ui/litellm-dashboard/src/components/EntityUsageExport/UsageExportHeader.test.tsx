@@ -2,7 +2,6 @@ import { renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import UsageExportHeader from "./UsageExportHeader";
-import type { EntitySpendData } from "./types";
 
 vi.mock("./EntityUsageExportModal", () => ({
   default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
@@ -16,16 +15,7 @@ vi.mock("./EntityUsageExportModal", () => ({
 const defaultProps = {
   dateValue: { from: new Date("2025-01-01"), to: new Date("2025-01-31") },
   entityType: "team" as const,
-  spendData: {
-    results: [],
-    metadata: {
-      total_spend: 0,
-      total_api_requests: 0,
-      total_successful_requests: 0,
-      total_failed_requests: 0,
-      total_tokens: 0,
-    },
-  } satisfies EntitySpendData,
+  onExport: vi.fn().mockResolvedValue(new Blob(["data"])),
 };
 
 describe("UsageExportHeader", () => {
@@ -69,5 +59,78 @@ describe("UsageExportHeader", () => {
       />,
     );
     expect(screen.getByText("Team")).toBeInTheDocument();
+  });
+
+  it("should render a caller-supplied filter and its label without any built-in options", () => {
+    renderWithProviders(
+      <UsageExportHeader
+        {...defaultProps}
+        filterLabel="Filter by user"
+        filterSlot={<div data-testid="custom-filter" />}
+      />,
+    );
+
+    expect(screen.getByText("Filter by user")).toBeInTheDocument();
+    expect(screen.getByTestId("custom-filter")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
+
+  it("should keep the filter visible and disabled with an explanation when the caller has no options", () => {
+    renderWithProviders(
+      <UsageExportHeader
+        {...defaultProps}
+        entityType="tag"
+        showFilters
+        filterLabel="Filter by tag"
+        filterPlaceholder="Select tag to filter..."
+        filterOptions={[]}
+        onFiltersChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Filter by tag")).toBeInTheDocument();
+    const input = screen.getByPlaceholderText("No tags with usage in this range");
+    expect(input).toBeDisabled();
+    expect(screen.queryByPlaceholderText("Select tag to filter...")).not.toBeInTheDocument();
+  });
+
+  it("should stay usable when a carried-over selection outlives its options", async () => {
+    const user = userEvent.setup();
+    const onFiltersChange = vi.fn();
+    renderWithProviders(
+      <UsageExportHeader
+        {...defaultProps}
+        entityType="tag"
+        showFilters
+        filterLabel="Filter by tag"
+        filterPlaceholder="Select tag to filter..."
+        filterOptions={[]}
+        selectedFilters={["prod"]}
+        onFiltersChange={onFiltersChange}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText("No tags with usage in this range")).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Clear Filter by tag" }));
+    expect(onFiltersChange).toHaveBeenCalledWith([]);
+  });
+
+  it("should leave the filter enabled with its normal placeholder when options exist", () => {
+    renderWithProviders(
+      <UsageExportHeader
+        {...defaultProps}
+        entityType="tag"
+        showFilters
+        filterLabel="Filter by tag"
+        filterPlaceholder="Select tag to filter..."
+        filterOptions={[{ label: "prod", value: "prod" }]}
+        onFiltersChange={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByPlaceholderText("Select tag to filter...");
+    expect(input).toBeEnabled();
+    expect(screen.queryByPlaceholderText("No tags with usage in this range")).not.toBeInTheDocument();
   });
 });

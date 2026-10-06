@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import { RegenerateKeyModal } from "./RegenerateKeyModal";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import { toast } from "@/lib/toast";
 
 // Mock the networking call
 const mockRegenerateKeyCall = vi.fn();
@@ -10,14 +11,7 @@ vi.mock("../networking", () => ({
   regenerateKeyCall: (...args: unknown[]) => mockRegenerateKeyCall(...args),
 }));
 
-const mockNotificationFromBackend = vi.fn();
-const mockNotificationSuccess = vi.fn();
-vi.mock("../molecules/notifications_manager", () => ({
-  default: {
-    fromBackend: (...args: unknown[]) => mockNotificationFromBackend(...args),
-    success: (...args: unknown[]) => mockNotificationSuccess(...args),
-  },
-}));
+const mockNotificationFromBackend = vi.mocked(toast.fromError);
 
 const makeToken = (overrides: Partial<KeyResponse> = {}): KeyResponse =>
   ({
@@ -432,5 +426,22 @@ describe("RegenerateKeyModal", () => {
         expect.any(Object),
       );
     });
+  });
+
+  it("should report the rotated hash from token_id when the API leaves token null", async () => {
+    const user = userEvent.setup();
+    mockRegenerateKeyCall.mockResolvedValue({
+      key: "sk-new-regenerated-key",
+      token: null,
+      token_id: "rotated-hash-456",
+    });
+
+    renderWithProviders(<RegenerateKeyModal {...defaultProps} />);
+    await user.click(screen.getByRole("button", { name: /Regenerate/ }));
+
+    await waitFor(() => {
+      expect(mockOnKeyUpdate).toHaveBeenCalledOnce();
+    });
+    expect(mockOnKeyUpdate.mock.calls[0][0].token).toBe("rotated-hash-456");
   });
 });

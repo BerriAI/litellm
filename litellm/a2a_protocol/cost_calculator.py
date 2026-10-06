@@ -5,7 +5,7 @@ Supports dynamic cost parameters that allow platform owners
 to define custom costs per agent query or per token.
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -18,7 +18,7 @@ else:
 class A2ACostCalculator:
     @staticmethod
     def calculate_a2a_cost(
-        litellm_logging_obj: Optional[LitellmLoggingObject],
+        litellm_logging_obj: LitellmLoggingObject | None,
     ) -> float:
         """
         Calculate the cost of an A2A send_message call.
@@ -42,23 +42,23 @@ class A2ACostCalculator:
         if litellm_logging_obj is None:
             return 0.0
 
-        model_call_details = litellm_logging_obj.model_call_details
+        model_call_details: Final = litellm_logging_obj.model_call_details
 
         # Check if user set a custom response cost (backward compatibility)
-        response_cost = model_call_details.get("response_cost", None)
+        response_cost: Final = model_call_details.get("response_cost", None)
         if response_cost is not None:
             return float(response_cost)
 
         # Get litellm_params for cost parameters
-        litellm_params = model_call_details.get("litellm_params", {}) or {}
+        litellm_params: Final = model_call_details.get("litellm_params", {}) or {}
 
         # Check for cost_per_query (fixed cost per query)
         if litellm_params.get("cost_per_query") is not None:
             return float(litellm_params["cost_per_query"])
 
         # Check for token-based pricing
-        input_cost_per_token = litellm_params.get("input_cost_per_token")
-        output_cost_per_token = litellm_params.get("output_cost_per_token")
+        input_cost_per_token: Final = litellm_params.get("input_cost_per_token")
+        output_cost_per_token: Final = litellm_params.get("output_cost_per_token")
 
         if input_cost_per_token is not None or output_cost_per_token is not None:
             return A2ACostCalculator._calculate_token_based_cost(
@@ -73,8 +73,8 @@ class A2ACostCalculator:
     @staticmethod
     def _calculate_token_based_cost(
         model_call_details: dict,
-        input_cost_per_token: Optional[float],
-        output_cost_per_token: Optional[float],
+        input_cost_per_token: float | None,
+        output_cost_per_token: float | None,
     ) -> float:
         """
         Calculate cost based on token usage and per-token pricing.
@@ -88,20 +88,16 @@ class A2ACostCalculator:
             float: The calculated cost
         """
         # Get usage from model_call_details
-        usage = model_call_details.get("usage")
+        usage: Final = model_call_details.get("usage")
         if usage is None:
             return 0.0
 
         # Get token counts
-        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-        completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+        prompt_tokens: Final = getattr(usage, "prompt_tokens", 0) or 0
+        completion_tokens: Final = getattr(usage, "completion_tokens", 0) or 0
 
         # Calculate costs
-        input_cost = prompt_tokens * (
-            float(input_cost_per_token) if input_cost_per_token else 0.0
-        )
-        output_cost = completion_tokens * (
-            float(output_cost_per_token) if output_cost_per_token else 0.0
-        )
+        input_cost: Final = prompt_tokens * (float(input_cost_per_token) if input_cost_per_token else 0.0)
+        output_cost: Final = completion_tokens * (float(output_cost_per_token) if output_cost_per_token else 0.0)
 
         return input_cost + output_cost

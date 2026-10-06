@@ -1,16 +1,17 @@
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
-    from .bitbucket_prompt_manager import BitBucketPromptManager
-    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
+
+    from .bitbucket_prompt_manager import BitBucketPromptManager
 
 from litellm.types.prompts.init_prompts import SupportedPromptIntegrations
 
 from .bitbucket_prompt_manager import BitBucketPromptManager
 
 # Global instances
-global_bitbucket_config: Optional[dict] = None
+global_bitbucket_config: Final[dict | None] = None
 
 
 def set_global_bitbucket_config(config: dict) -> None:
@@ -26,25 +27,21 @@ def set_global_bitbucket_config(config: dict) -> None:
     """
     import litellm
 
-    litellm.global_bitbucket_config = config  # type: ignore
+    litellm.global_bitbucket_config = config
 
 
-def prompt_initializer(
-    litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec"
-) -> "CustomPromptManagement":
+def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec") -> "CustomPromptManagement":
     """
     Initialize a prompt from a BitBucket repository.
     """
-    bitbucket_config = getattr(litellm_params, "bitbucket_config", None)
-    prompt_id = getattr(litellm_params, "prompt_id", None)
+    bitbucket_config: Final = getattr(litellm_params, "bitbucket_config", None)
+    prompt_id: Final = getattr(litellm_params, "prompt_id", None)
 
     if not bitbucket_config:
-        raise ValueError(
-            "bitbucket_config is required for BitBucket prompt integration"
-        )
+        raise ValueError("bitbucket_config is required for BitBucket prompt integration")
 
     try:
-        bitbucket_prompt_manager = BitBucketPromptManager(
+        bitbucket_prompt_manager: Final = BitBucketPromptManager(
             bitbucket_config=bitbucket_config,
             prompt_id=prompt_id,
         )
@@ -54,13 +51,13 @@ def prompt_initializer(
         raise e
 
 
-prompt_initializer_registry = {
+prompt_initializer_registry: Final = {
     SupportedPromptIntegrations.BITBUCKET.value: prompt_initializer,
 }
 
 # Export public API
 __all__ = [
     "BitBucketPromptManager",
-    "set_global_bitbucket_config",
     "global_bitbucket_config",
+    "set_global_bitbucket_config",
 ]

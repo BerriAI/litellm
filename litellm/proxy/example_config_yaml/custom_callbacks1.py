@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Final, Literal, Optional
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -8,9 +8,7 @@ from litellm.types.utils import CallTypesLiteral
 
 # This file includes the custom callbacks for LiteLLM Proxy
 # Once defined, these can be passed in proxy_config.yaml
-class MyCustomHandler(
-    CustomLogger
-):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
+class MyCustomHandler(CustomLogger):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
     def __init__(self):
         pass
@@ -61,4 +59,4 @@ class MyCustomHandler(
         pass
 
 
-proxy_handler_instance = MyCustomHandler()
+proxy_handler_instance: Final = MyCustomHandler()

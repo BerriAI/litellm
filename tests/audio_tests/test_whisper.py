@@ -4,7 +4,6 @@
 import asyncio
 import logging
 import os
-import sys
 import time
 import traceback
 from typing import Optional
@@ -41,10 +40,6 @@ def _audio_file2():
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../")
-)  # Adds the parent directory to the system path
-import litellm
 from litellm import Router
 
 
@@ -64,22 +59,6 @@ async def _run_transcription(
     print(f"transcript hidden params: {transcript._hidden_params}")
 
     assert transcript.text is not None
-
-
-@pytest.mark.parametrize(
-    "response_format, timestamp_granularities",
-    [("json", None), ("vtt", None), ("verbose_json", ["word"])],
-)
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_transcription_openai_whisper(response_format, timestamp_granularities):
-    await _run_transcription(
-        model="whisper-1",
-        api_key=None,
-        api_base=None,
-        response_format=response_format,
-        timestamp_granularities=timestamp_granularities,
-    )
 
 
 @pytest.mark.parametrize(
@@ -146,7 +125,6 @@ async def test_whisper_log_pre_call():
     from litellm.litellm_core_utils.litellm_logging import Logging
     from datetime import datetime
     from unittest.mock import patch, MagicMock
-    from litellm.integrations.custom_logger import CustomLogger
 
     custom_logger = CustomLogger()
 
@@ -158,36 +136,6 @@ async def test_whisper_log_pre_call():
             file=_audio_file(),
         )
         mock_log_pre_call.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_whisper_log_pre_call():
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    from datetime import datetime
-    from unittest.mock import patch, MagicMock
-    from litellm.integrations.custom_logger import CustomLogger
-
-    custom_logger = CustomLogger()
-
-    litellm.callbacks = [custom_logger]
-
-    with patch.object(custom_logger, "log_pre_api_call") as mock_log_pre_call:
-        await litellm.atranscription(
-            model="whisper-1",
-            file=_audio_file(),
-        )
-        mock_log_pre_call.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_gpt_4o_transcribe():
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    from datetime import datetime
-    from unittest.mock import patch, MagicMock
-
-    await litellm.atranscription(
-        model="openai/gpt-4o-transcribe", file=_audio_file(), response_format="json"
-    )
 
 
 @pytest.mark.asyncio

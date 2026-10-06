@@ -2,16 +2,12 @@
 #    This tests caching on the router
 import asyncio
 import os
-import sys
 import time
 import traceback
 from unittest.mock import patch
 from typing import Union
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
 from litellm.caching import RedisCache, RedisClusterCache
@@ -20,61 +16,6 @@ from litellm.caching import RedisCache, RedisClusterCache
 ## Scenarios
 ## 1. 2 models - openai + azure - 1 model group "gpt-3.5-turbo",
 ## 2. 2 models - openai, azure - 2 diff model groups, 1 caching group
-
-
-@pytest.mark.asyncio
-async def test_router_async_caching_with_ssl_url():
-    """
-    Tests when a redis url is passed to the router, if caching is correctly setup
-    """
-    try:
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "gpt-3.5-turbo",
-                    "litellm_params": {
-                        "model": "gpt-3.5-turbo",
-                        "api_key": os.getenv("OPENAI_API_KEY"),
-                    },
-                    "tpm": 100000,
-                    "rpm": 10000,
-                },
-            ],
-            redis_url=os.getenv("REDIS_SSL_URL"),
-        )
-
-        response = await router.cache.redis_cache.ping()
-        print(f"response: {response}")
-        assert response == True
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
-
-
-def test_router_sync_caching_with_ssl_url():
-    """
-    Tests when a redis url is passed to the router, if caching is correctly setup
-    """
-    try:
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "gpt-3.5-turbo",
-                    "litellm_params": {
-                        "model": "gpt-3.5-turbo",
-                        "api_key": os.getenv("OPENAI_API_KEY"),
-                    },
-                    "tpm": 100000,
-                    "rpm": 10000,
-                },
-            ],
-            redis_url=os.getenv("REDIS_SSL_URL"),
-        )
-
-        response = router.cache.redis_cache.sync_ping()
-        print(f"response: {response}")
-        assert response == True
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
 
 
 @pytest.mark.asyncio

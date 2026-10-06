@@ -3,25 +3,21 @@ RBAC tests
 """
 
 import os
-import sys
+import re
 import traceback
 from litellm._uuid import uuid
 from datetime import datetime
 
 from dotenv import load_dotenv
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.routing import APIRoute
 
 load_dotenv()
 import io
-import os
 import time
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import logging
 from unittest.mock import MagicMock
@@ -77,10 +73,10 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_s
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
-from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import *
+from tests._master_key import MASTER_KEY
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -138,7 +134,7 @@ async def test_create_new_user_in_organization(prisma_client, user_role):
 
     Add a member to an organization and assert the user object is created with the correct organization memberships / roles
     """
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
     setattr(litellm.proxy.proxy_server, "llm_router", MagicMock())
@@ -203,7 +199,7 @@ async def test_org_admin_create_team_permissions(prisma_client):
     """
     import json
 
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
     setattr(litellm.proxy.proxy_server, "llm_router", MagicMock())
@@ -276,7 +272,7 @@ async def test_org_admin_create_user_permissions(prisma_client):
     """
     import json
 
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
     setattr(litellm.proxy.proxy_server, "llm_router", MagicMock())
@@ -349,7 +345,7 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
     """
     import json
 
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
     setattr(litellm.proxy.proxy_server, "llm_router", MagicMock())
@@ -412,18 +408,17 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
 
     request.body = return_body
 
-    try:
+    with pytest.raises(
+        Exception, match=re.escape("You do not have a role within the selected organization. Passed organization_id")
+    ) as exc_info:
         response = await user_api_key_auth(request=request, api_key="Bearer " + new_key)
-        pytest.fail(
-            f"This should have failed!. creating a user in an org without admins"
-        )
-    except Exception as e:
-        print("got exception", e)
-        print("exception.message", e.message)
-        assert (
-            "You do not have a role within the selected organization. Passed organization_id"
-            in e.message
-        )
+    e = exc_info.value
+    print("got exception", e)
+    print("exception.message", e.message)
+    assert (
+        "You do not have a role within the selected organization. Passed organization_id"
+        in e.message
+    )
 
     # Create /team/new request in organization=org_without_admins -> expect fail
     request = Request(scope={"type": "http"})
@@ -435,18 +430,9 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
 
     request.body = return_body
 
-    try:
-        response = await user_api_key_auth(request=request, api_key="Bearer " + new_key)
-        pytest.fail(
-            f"This should have failed!. Org Admin creating a team in an org where they are not an admin"
-        )
-    except Exception as e:
-        print("got exception", e)
-        print("exception.message", e.message)
-        assert (
-            "You do not have the required role to call" in e.message
-            and org2_id in e.message
-        )
+    with pytest.raises(Exception, match="You do not have the required role to call") as exc_info:
+        await user_api_key_auth(request=request, api_key="Bearer " + new_key)
+    assert org2_id in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -497,13 +483,13 @@ async def test_user_role_permissions(prisma_client, route, user_role, expected_r
     try:
         # Setup
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
         await litellm.proxy.proxy_server.prisma_client.connect()
 
         # Admin - admin creates a new user
         user_api_key_dict = UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key=MASTER_KEY,
             user_id="1234",
         )
 
@@ -530,7 +516,7 @@ async def test_user_role_permissions(prisma_client, route, user_role, expected_r
             print(f"Auth passed as expected for {route} with role {user_role}")
         else:
             # Should raise an error
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises((ProxyException, HTTPException)) as exc_info:
                 await user_api_key_auth(request=request, api_key=bearer_token)
             print(f"Auth failed as expected for {route} with role {user_role}")
             print(f"Error message: {str(exc_info.value)}")

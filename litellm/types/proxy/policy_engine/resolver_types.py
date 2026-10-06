@@ -6,31 +6,33 @@ the final guardrails list.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class PolicyMatchContext(BaseModel):
+class PolicyMatchContext(LiteLLMBaseModel):
     """
     Context used to match a request against policies.
 
     Contains the team alias, key alias, and model from the incoming request.
     """
 
-    team_alias: Optional[str] = Field(
+    team_alias: str | None = Field(
         default=None,
         description="Team alias from the request.",
     )
-    key_alias: Optional[str] = Field(
+    key_alias: str | None = Field(
         default=None,
         description="API key alias from the request.",
     )
-    model: Optional[str] = Field(
+    model: str | None = Field(
         default=None,
         description="Model name from the request.",
     )
-    tags: Optional[List[str]] = Field(
+    tags: list[str] | None = Field(
         default=None,
         description="Tags from key/team metadata.",
     )
@@ -38,7 +40,7 @@ class PolicyMatchContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ResolvedPolicy(BaseModel):
+class ResolvedPolicy(LiteLLMBaseModel):
     """
     Result of resolving a policy with its inheritance chain.
 
@@ -46,11 +48,11 @@ class ResolvedPolicy(BaseModel):
     """
 
     policy_name: str = Field(description="Name of the resolved policy.")
-    guardrails: List[str] = Field(
+    guardrails: list[str] = Field(
         default_factory=list,
         description="Final list of guardrail names to apply.",
     )
-    inheritance_chain: List[str] = Field(
+    inheritance_chain: list[str] = Field(
         default_factory=list,
         description="List of policy names in the inheritance chain (from root to this policy).",
     )
@@ -63,57 +65,57 @@ class ResolvedPolicy(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PolicyScopeResponse(BaseModel):
+class PolicyScopeResponse(LiteLLMBaseModel):
     """Scope configuration for a policy."""
 
-    teams: List[str] = Field(default_factory=list)
-    keys: List[str] = Field(default_factory=list)
-    models: List[str] = Field(default_factory=list)
-    tags: List[str] = Field(default_factory=list)
+    teams: list[str] = Field(default_factory=list)
+    keys: list[str] = Field(default_factory=list)
+    models: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
 
 
-class PolicyGuardrailsResponse(BaseModel):
+class PolicyGuardrailsResponse(LiteLLMBaseModel):
     """Guardrails configuration for a policy."""
 
-    add: List[str] = Field(default_factory=list)
-    remove: List[str] = Field(default_factory=list)
+    add: list[str] = Field(default_factory=list)
+    remove: list[str] = Field(default_factory=list)
 
 
-class PolicyInfoResponse(BaseModel):
+class PolicyInfoResponse(LiteLLMBaseModel):
     """Response for /policy/info/{policy_name} endpoint."""
 
     policy_name: str
-    inherit: Optional[str] = None
+    inherit: str | None = None
     scope: PolicyScopeResponse
     guardrails: PolicyGuardrailsResponse
-    resolved_guardrails: List[str]
-    inheritance_chain: List[str]
+    resolved_guardrails: list[str]
+    inheritance_chain: list[str]
 
 
-class PolicySummaryItem(BaseModel):
+class PolicySummaryItem(LiteLLMBaseModel):
     """Summary of a single policy for list endpoint."""
 
-    inherit: Optional[str] = None
+    inherit: str | None = None
     scope: PolicyScopeResponse
     guardrails: PolicyGuardrailsResponse
-    resolved_guardrails: List[str]
-    inheritance_chain: List[str]
+    resolved_guardrails: list[str]
+    inheritance_chain: list[str]
 
 
-class PolicyListResponse(BaseModel):
+class PolicyListResponse(LiteLLMBaseModel):
     """Response for /policy/list endpoint."""
 
-    policies: Dict[str, PolicySummaryItem]
+    policies: dict[str, PolicySummaryItem]
     total_count: int
 
 
-class PolicyTestResponse(BaseModel):
+class PolicyTestResponse(LiteLLMBaseModel):
     """Response for /policy/test endpoint."""
 
     context: PolicyMatchContext
-    matching_policies: List[str]
-    resolved_guardrails: List[str]
-    message: Optional[str] = None
+    matching_policies: list[str]
+    resolved_guardrails: list[str]
+    message: str | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -121,79 +123,79 @@ class PolicyTestResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PolicyConditionRequest(BaseModel):
+class PolicyConditionRequest(LiteLLMBaseModel):
     """Condition for when a policy applies."""
 
-    model: Optional[str] = Field(
+    model: str | None = Field(
         default=None,
         description="Model name pattern (exact match or regex) for when policy applies.",
     )
 
 
-class PolicyCreateRequest(BaseModel):
+class PolicyCreateRequest(LiteLLMBaseModel):
     """Request body for creating a new policy."""
 
     policy_name: str = Field(description="Unique name for the policy.")
-    inherit: Optional[str] = Field(
+    inherit: str | None = Field(
         default=None,
         description="Name of parent policy to inherit from.",
     )
-    description: Optional[str] = Field(
+    description: str | None = Field(
         default=None,
         description="Human-readable description of the policy.",
     )
-    guardrails_add: Optional[List[str]] = Field(
+    guardrails_add: list[str] | None = Field(
         default=None,
         description="List of guardrail names to add.",
     )
-    guardrails_remove: Optional[List[str]] = Field(
+    guardrails_remove: list[str] | None = Field(
         default=None,
         description="List of guardrail names to remove (from inherited).",
     )
-    condition: Optional[PolicyConditionRequest] = Field(
+    condition: PolicyConditionRequest | None = Field(
         default=None,
         description="Condition for when this policy applies.",
     )
-    pipeline: Optional[Dict[str, Any]] = Field(
+    pipeline: dict[str, Any] | None = Field(
         default=None,
         description="Optional guardrail pipeline for ordered execution. Contains 'mode' and 'steps'.",
     )
 
 
-class PolicyUpdateRequest(BaseModel):
+class PolicyUpdateRequest(LiteLLMBaseModel):
     """Request body for updating a policy."""
 
-    policy_name: Optional[str] = Field(
+    policy_name: str | None = Field(
         default=None,
         description="New name for the policy.",
     )
-    inherit: Optional[str] = Field(
+    inherit: str | None = Field(
         default=None,
         description="Name of parent policy to inherit from.",
     )
-    description: Optional[str] = Field(
+    description: str | None = Field(
         default=None,
         description="Human-readable description of the policy.",
     )
-    guardrails_add: Optional[List[str]] = Field(
+    guardrails_add: list[str] | None = Field(
         default=None,
         description="List of guardrail names to add.",
     )
-    guardrails_remove: Optional[List[str]] = Field(
+    guardrails_remove: list[str] | None = Field(
         default=None,
         description="List of guardrail names to remove (from inherited).",
     )
-    condition: Optional[PolicyConditionRequest] = Field(
+    condition: PolicyConditionRequest | None = Field(
         default=None,
         description="Condition for when this policy applies.",
     )
-    pipeline: Optional[Dict[str, Any]] = Field(
+    pipeline: dict[str, Any] | None = Field(
         default=None,
         description="Optional guardrail pipeline for ordered execution. Contains 'mode' and 'steps'.",
     )
 
 
-class PolicyDBResponse(BaseModel):
+class PolicyDBResponse(LiteLLMBaseModel):
     """Response for a policy from the database."""
 
     policy_id: str = Field(description="Unique ID of the policy.")
@@ -203,53 +205,33 @@ class PolicyDBResponse(BaseModel):
         default="production",
         description="One of: draft, published, production.",
     )
-    parent_version_id: Optional[str] = Field(
-        default=None, description="Policy ID this version was cloned from."
-    )
+    parent_version_id: str | None = Field(default=None, description="Policy ID this version was cloned from.")
     is_latest: bool = Field(
         default=True,
         description="True if this is the latest version by version_number.",
     )
-    published_at: Optional[datetime] = Field(
-        default=None, description="When this version was published."
-    )
-    production_at: Optional[datetime] = Field(
-        default=None, description="When this version was promoted to production."
-    )
-    inherit: Optional[str] = Field(default=None, description="Parent policy name.")
-    description: Optional[str] = Field(default=None, description="Policy description.")
-    guardrails_add: List[str] = Field(
-        default_factory=list, description="Guardrails to add."
-    )
-    guardrails_remove: List[str] = Field(
-        default_factory=list, description="Guardrails to remove."
-    )
-    condition: Optional[Dict[str, Any]] = Field(
-        default=None, description="Policy condition."
-    )
-    pipeline: Optional[Dict[str, Any]] = Field(
-        default=None, description="Optional guardrail pipeline."
-    )
-    created_at: Optional[datetime] = Field(
-        default=None, description="When the policy was created."
-    )
-    updated_at: Optional[datetime] = Field(
-        default=None, description="When the policy was last updated."
-    )
-    created_by: Optional[str] = Field(
-        default=None, description="Who created the policy."
-    )
-    updated_by: Optional[str] = Field(
-        default=None, description="Who last updated the policy."
+    published_at: datetime | None = Field(default=None, description="When this version was published.")
+    production_at: datetime | None = Field(default=None, description="When this version was promoted to production.")
+    inherit: str | None = Field(default=None, description="Parent policy name.")
+    description: str | None = Field(default=None, description="Policy description.")
+    guardrails_add: list[str] = Field(default_factory=list, description="Guardrails to add.")
+    guardrails_remove: list[str] = Field(default_factory=list, description="Guardrails to remove.")
+    condition: dict[str, Any] | None = Field(default=None, description="Policy condition.")
+    pipeline: dict[str, Any] | None = Field(default=None, description="Optional guardrail pipeline.")
+    created_at: datetime | None = Field(default=None, description="When the policy was created.")
+    updated_at: datetime | None = Field(default=None, description="When the policy was last updated.")
+    created_by: str | None = Field(default=None, description="Who created the policy.")
+    updated_by: str | None = Field(default=None, description="Who last updated the policy.")
+    definition_location: Literal["db", "config"] = Field(
+        default="db",
+        description="Where this policy is defined: 'db' (database) or 'config' (config.yaml).",
     )
 
 
-class PolicyListDBResponse(BaseModel):
+class PolicyListDBResponse(LiteLLMBaseModel):
     """Response for listing policies from the database."""
 
-    policies: List[PolicyDBResponse] = Field(
-        default_factory=list, description="List of policies."
-    )
+    policies: list[PolicyDBResponse] = Field(default_factory=list, description="List of policies.")
     total_count: int = Field(default=0, description="Total number of policies.")
 
 
@@ -258,16 +240,16 @@ class PolicyListDBResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PolicyVersionCreateRequest(BaseModel):
+class PolicyVersionCreateRequest(LiteLLMBaseModel):
     """Request body for creating a new policy version (draft)."""
 
-    source_policy_id: Optional[str] = Field(
+    source_policy_id: str | None = Field(
         default=None,
         description="Policy ID to clone from. If None, clone from current production version.",
     )
 
 
-class PolicyVersionStatusUpdateRequest(BaseModel):
+class PolicyVersionStatusUpdateRequest(LiteLLMBaseModel):
     """Request body for updating a policy version's status."""
 
     version_status: str = Field(
@@ -275,22 +257,22 @@ class PolicyVersionStatusUpdateRequest(BaseModel):
     )
 
 
-class PolicyVersionListResponse(BaseModel):
+class PolicyVersionListResponse(LiteLLMBaseModel):
     """Response for listing all versions of a policy."""
 
     policy_name: str = Field(description="Name of the policy.")
-    versions: List[PolicyDBResponse] = Field(
+    versions: list[PolicyDBResponse] = Field(
         default_factory=list, description="All versions ordered by version_number desc."
     )
     total_count: int = Field(default=0, description="Total number of versions.")
 
 
-class PolicyVersionCompareResponse(BaseModel):
+class PolicyVersionCompareResponse(LiteLLMBaseModel):
     """Response for comparing two policy versions."""
 
     version_a: PolicyDBResponse = Field(description="First version.")
     version_b: PolicyDBResponse = Field(description="Second version.")
-    field_diffs: Dict[str, Dict[str, Any]] = Field(
+    field_diffs: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
         description="Field name -> {version_a: val, version_b: val} for differing fields.",
     )
@@ -301,60 +283,74 @@ class PolicyVersionCompareResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PolicyAttachmentCreateRequest(BaseModel):
+class PolicyAttachmentCreateRequest(LiteLLMBaseModel):
     """Request body for creating a policy attachment."""
 
     policy_name: str = Field(description="Name of the policy to attach.")
-    scope: Optional[str] = Field(
+    scope: str | None = Field(
         default=None,
         description="Use '*' for global scope (applies to all requests).",
     )
-    teams: Optional[List[str]] = Field(
+    teams: list[str] | None = Field(
         default=None,
         description="Team aliases or patterns this attachment applies to.",
     )
-    keys: Optional[List[str]] = Field(
+    keys: list[str] | None = Field(
         default=None,
         description="Key aliases or patterns this attachment applies to.",
     )
-    models: Optional[List[str]] = Field(
+    models: list[str] | None = Field(
         default=None,
         description="Model names or patterns this attachment applies to.",
     )
-    tags: Optional[List[str]] = Field(
+    tags: list[str] | None = Field(
         default=None,
         description="Tag patterns this attachment applies to. Supports wildcards (e.g., health-*).",
     )
+    priority: int | None = Field(
+        default=None,
+        ge=-2147483648,
+        le=2147483647,
+        description="Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
+    )
+    default: bool = Field(
+        default=False,
+        description="Apply this attachment only when no non-default attachment matches the request.",
+    )
 
 
-class PolicyAttachmentDBResponse(BaseModel):
+class PolicyAttachmentDBResponse(LiteLLMBaseModel):
     """Response for a policy attachment from the database."""
 
     attachment_id: str = Field(description="Unique ID of the attachment.")
     policy_name: str = Field(description="Name of the attached policy.")
-    scope: Optional[str] = Field(default=None, description="Scope of the attachment.")
-    teams: List[str] = Field(default_factory=list, description="Team patterns.")
-    keys: List[str] = Field(default_factory=list, description="Key patterns.")
-    models: List[str] = Field(default_factory=list, description="Model patterns.")
-    tags: List[str] = Field(default_factory=list, description="Tag patterns.")
-    created_at: Optional[datetime] = Field(
-        default=None, description="When the attachment was created."
+    scope: str | None = Field(default=None, description="Scope of the attachment.")
+    teams: list[str] = Field(default_factory=list, description="Team patterns.")
+    keys: list[str] = Field(default_factory=list, description="Key patterns.")
+    models: list[str] = Field(default_factory=list, description="Model patterns.")
+    tags: list[str] = Field(default_factory=list, description="Tag patterns.")
+    priority: int | None = Field(
+        default=None,
+        description="Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
     )
-    updated_at: Optional[datetime] = Field(
-        default=None, description="When the attachment was last updated."
+    default: bool = Field(
+        default=False,
+        description="Apply this attachment only when no non-default attachment matches the request.",
     )
-    created_by: Optional[str] = Field(
-        default=None, description="Who created the attachment."
-    )
-    updated_by: Optional[str] = Field(
-        default=None, description="Who last updated the attachment."
+    created_at: datetime | None = Field(default=None, description="When the attachment was created.")
+    updated_at: datetime | None = Field(default=None, description="When the attachment was last updated.")
+    created_by: str | None = Field(default=None, description="Who created the attachment.")
+    updated_by: str | None = Field(default=None, description="Who last updated the attachment.")
+    definition_location: Literal["db", "config"] = Field(
+        default="db",
+        description="Where this attachment is defined: 'db' (database) or 'config' (config.yaml).",
     )
 
 
-class PolicyAttachmentListResponse(BaseModel):
+class PolicyAttachmentListResponse(LiteLLMBaseModel):
     """Response for listing policy attachments."""
 
-    attachments: List[PolicyAttachmentDBResponse] = Field(
+    attachments: list[PolicyAttachmentDBResponse] = Field(
         default_factory=list, description="List of policy attachments."
     )
     total_count: int = Field(default=0, description="Total number of attachments.")
@@ -365,51 +361,47 @@ class PolicyAttachmentListResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PipelineTestRequest(BaseModel):
+class PipelineTestRequest(LiteLLMBaseModel):
     """Request body for testing a guardrail pipeline with sample messages."""
 
-    pipeline: Dict[str, Any] = Field(
+    pipeline: dict[str, Any] = Field(
         description="Pipeline definition with 'mode' and 'steps'.",
     )
-    test_messages: List[Dict[str, str]] = Field(
+    test_messages: list[dict[str, str]] = Field(
         description="Test messages to run through the pipeline, e.g. [{'role': 'user', 'content': '...'}].",
     )
 
 
-class PolicyResolveRequest(BaseModel):
+class PolicyResolveRequest(LiteLLMBaseModel):
     """Request body for resolving effective policies/guardrails for a context."""
 
-    team_alias: Optional[str] = Field(
-        default=None, description="Team alias to resolve for."
-    )
-    key_alias: Optional[str] = Field(
-        default=None, description="Key alias to resolve for."
-    )
-    model: Optional[str] = Field(default=None, description="Model name to resolve for.")
-    tags: Optional[List[str]] = Field(default=None, description="Tags to resolve for.")
+    team_alias: str | None = Field(default=None, description="Team alias to resolve for.")
+    key_alias: str | None = Field(default=None, description="Key alias to resolve for.")
+    model: str | None = Field(default=None, description="Model name to resolve for.")
+    tags: list[str] | None = Field(default=None, description="Tags to resolve for.")
 
 
-class PolicyMatchDetail(BaseModel):
+class PolicyMatchDetail(LiteLLMBaseModel):
     """Details about why a specific policy matched."""
 
     policy_name: str = Field(description="Name of the matched policy.")
     matched_via: str = Field(
         description="How the policy was matched (e.g., 'tag:healthcare', 'team:health-team', 'scope:*')."
     )
-    guardrails_added: List[str] = Field(
+    guardrails_added: list[str] = Field(
         default_factory=list,
         description="Guardrails this policy contributes.",
     )
 
 
-class PolicyResolveResponse(BaseModel):
+class PolicyResolveResponse(LiteLLMBaseModel):
     """Response for resolving effective policies/guardrails for a context."""
 
-    effective_guardrails: List[str] = Field(
+    effective_guardrails: list[str] = Field(
         default_factory=list,
         description="Final list of guardrails that would be applied.",
     )
-    matched_policies: List[PolicyMatchDetail] = Field(
+    matched_policies: list[PolicyMatchDetail] = Field(
         default_factory=list,
         description="Details about each matched policy and why it matched.",
     )
@@ -420,7 +412,7 @@ class PolicyResolveResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class AttachmentImpactResponse(BaseModel):
+class AttachmentImpactResponse(LiteLLMBaseModel):
     """Response for estimating the impact of a policy attachment."""
 
     affected_keys_count: int = Field(
@@ -431,17 +423,13 @@ class AttachmentImpactResponse(BaseModel):
         default=0,
         description="Number of teams that would be affected (named + unnamed).",
     )
-    unnamed_keys_count: int = Field(
-        default=0, description="Number of affected keys without an alias."
-    )
-    unnamed_teams_count: int = Field(
-        default=0, description="Number of affected teams without an alias."
-    )
-    sample_keys: List[str] = Field(
+    unnamed_keys_count: int = Field(default=0, description="Number of affected keys without an alias.")
+    unnamed_teams_count: int = Field(default=0, description="Number of affected teams without an alias.")
+    sample_keys: list[str] = Field(
         default_factory=list,
         description="Sample of affected key aliases (up to 10).",
     )
-    sample_teams: List[str] = Field(
+    sample_teams: list[str] = Field(
         default_factory=list,
         description="Sample of affected team aliases (up to 10).",
     )

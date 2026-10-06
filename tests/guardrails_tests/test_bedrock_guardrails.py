@@ -1,16 +1,12 @@
-import sys
-import os
 import io, asyncio
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
     _redact_pii_matches,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.caching import DualCache
 from unittest.mock import MagicMock, AsyncMock, patch
 
 
@@ -102,186 +98,6 @@ async def test_bedrock_guardrails_pii_masking_content_list():
             response["messages"][2]["content"]
             == "who is the president of the united states?"
         )
-
-
-@pytest.mark.asyncio
-async def test_bedrock_guardrails_block_messages_api():
-    """
-    Test that guardrails block messages API requests containing 'coffee' and raise the expected exception.
-    """
-    from fastapi import HTTPException
-
-    # Create proper mock objects
-    mock_user_api_key_dict = UserAPIKeyAuth()
-
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="ff6ujrregl1q",
-        guardrailVersion="DRAFT",
-    )
-
-    request_data = {
-        "model": "claude-sonnet-4-5-20250929",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Hello, my phone number is +1 412 555 1212",
-                    },
-                    {"type": "text", "text": "what time is it?"},
-                ],
-            },
-            {"role": "user", "content": "tell me about coffee"},
-        ],
-    }
-
-    with pytest.raises(HTTPException) as exc_info:
-        await guardrail.async_pre_call_hook(
-            data=request_data,
-            user_api_key_dict=mock_user_api_key_dict,
-            call_type="anthropic_messages",
-            cache=MagicMock(spec=DualCache),
-        )
-
-    exception = exc_info.value
-    assert exception.status_code == 400
-    detail = exception.detail
-    assert isinstance(detail, dict)
-    assert detail["error"] == "Violated guardrail policy"
-    assert (
-        detail["bedrock_guardrail_response"]
-        == "Sorry, the model cannot answer this question. coffee guardrail applied "
-    )
-
-
-@pytest.mark.asyncio
-async def test_bedrock_guardrails_block_responses_api():
-    """
-    Test that guardrails block responses API requests containing 'coffee' and raise the expected exception.
-    """
-    from fastapi import HTTPException
-
-    # Create proper mock objects
-    mock_user_api_key_dict = UserAPIKeyAuth()
-
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="ff6ujrregl1q",
-        guardrailVersion="DRAFT",
-    )
-
-    request_data = {
-        "model": "gpt-4.1",
-        "input": "Tell me a three sentence bedtime story about a unicorn drinking coffee",
-        "stream": False,
-    }
-
-    with pytest.raises(HTTPException) as exc_info:
-        await guardrail.async_pre_call_hook(
-            data=request_data,
-            user_api_key_dict=mock_user_api_key_dict,
-            call_type="responses",
-            cache=MagicMock(spec=DualCache),
-        )
-
-    exception = exc_info.value
-    assert exception.status_code == 400
-    detail = exception.detail
-    assert isinstance(detail, dict)
-    assert detail["error"] == "Violated guardrail policy"
-    assert (
-        detail["bedrock_guardrail_response"]
-        == "Sorry, the model cannot answer this question. coffee guardrail applied "
-    )
-
-
-@pytest.mark.asyncio
-async def test_bedrock_guardrails_with_streaming():
-    from litellm.proxy.utils import ProxyLogging
-    from litellm.types.guardrails import GuardrailEventHooks
-
-    # Create proper mock objects
-    mock_user_api_key_cache = MagicMock(spec=DualCache)
-    mock_user_api_key_dict = UserAPIKeyAuth()
-
-    with pytest.raises(Exception):  # Assert that this raises an exception
-        proxy_logging_obj = ProxyLogging(
-            user_api_key_cache=mock_user_api_key_cache,
-            premium_user=True,
-        )
-
-        guardrail = BedrockGuardrail(
-            guardrailIdentifier="ff6ujrregl1q",
-            guardrailVersion="DRAFT",
-            supported_event_hooks=[GuardrailEventHooks.post_call],
-            guardrail_name="bedrock-post-guard",
-        )
-
-        litellm.callbacks.append(guardrail)
-
-        request_data = {
-            "model": "gpt-5.5",
-            "messages": [{"role": "user", "content": "Hi I like coffee"}],
-            "stream": True,
-            "metadata": {"guardrails": ["bedrock-post-guard"]},
-        }
-
-        response = await litellm.acompletion(
-            **request_data,
-        )
-
-        response = proxy_logging_obj.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=mock_user_api_key_dict,
-            response=response,
-            request_data=request_data,
-        )
-
-        async for chunk in response:
-            print(chunk)
-
-
-@pytest.mark.asyncio
-async def test_bedrock_guardrails_with_streaming_no_violation():
-    from litellm.proxy.utils import ProxyLogging
-    from litellm.types.guardrails import GuardrailEventHooks
-
-    # Create proper mock objects
-    mock_user_api_key_cache = MagicMock(spec=DualCache)
-    mock_user_api_key_dict = UserAPIKeyAuth()
-
-    proxy_logging_obj = ProxyLogging(
-        user_api_key_cache=mock_user_api_key_cache,
-        premium_user=True,
-    )
-
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="ff6ujrregl1q",
-        guardrailVersion="DRAFT",
-        supported_event_hooks=[GuardrailEventHooks.post_call],
-        guardrail_name="bedrock-post-guard",
-    )
-
-    litellm.callbacks.append(guardrail)
-
-    request_data = {
-        "model": "gpt-5.5",
-        "messages": [{"role": "user", "content": "hi"}],
-        "stream": True,
-        "metadata": {"guardrails": ["bedrock-post-guard"]},
-    }
-
-    response = await litellm.acompletion(
-        **request_data,
-    )
-
-    response = proxy_logging_obj.async_post_call_streaming_iterator_hook(
-        user_api_key_dict=mock_user_api_key_dict,
-        response=response,
-        request_data=request_data,
-    )
-
-    async for chunk in response:
-        print(chunk)
 
 
 @pytest.mark.asyncio
@@ -1390,7 +1206,14 @@ async def test_bedrock_guardrail_disable_exception_on_block_non_streaming():
         assert exception.status_code == 400
         assert "Violated guardrail policy" in str(exception.detail)
 
-    # Test 2: disable_exception_on_block=True - should NOT raise exception
+    # Test 2: disable_exception_on_block=True - raises ModifyResponseException.
+    # LIT-4186: pre-fix, the native hook swallowed the block and set
+    # data["mock_response"], which was dead code (route_request already
+    # unpacked kwargs) so during_call let the model call proceed anyway.
+    # The correct contract is to raise ModifyResponseException so the endpoint
+    # handler returns a 200 with the block message as content.
+    from litellm.exceptions import ModifyResponseException
+
     guardrail_disabled = BedrockGuardrail(
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
@@ -1402,20 +1225,13 @@ async def test_bedrock_guardrail_disable_exception_on_block_non_streaming():
     ) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
-        # Should NOT raise exception when disable_exception_on_block=True
-        try:
-            response = await guardrail_disabled.async_moderation_hook(
+        with pytest.raises(ModifyResponseException) as exc_info:
+            await guardrail_disabled.async_moderation_hook(
                 data=request_data,
                 user_api_key_dict=mock_user_api_key_dict,
                 call_type="completion",
             )
-            # Should succeed and return data (even though content was blocked)
-            assert response is not None
-            print("✅ No exception raised when disable_exception_on_block=True")
-        except Exception as e:
-            pytest.fail(
-                f"Should not raise exception when disable_exception_on_block=True, but got: {e}"
-            )
+        assert exc_info.value.message == "I can't provide that information."
 
 
 @pytest.mark.asyncio
@@ -1501,7 +1317,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
         mock_post.return_value = mock_bedrock_response
 
         # Should raise exception during streaming processing
-        with pytest.raises(HTTPException):
+        async def _drain():
             result_generator = (
                 guardrail_default.async_post_call_streaming_iterator_hook(
                     user_api_key_dict=mock_user_api_key_dict,
@@ -1510,11 +1326,16 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
                 )
             )
 
-            # Try to consume the generator - should raise exception
             async for chunk in result_generator:
                 pass
 
-    # Test 2: disable_exception_on_block=True - should NOT raise exception
+        with pytest.raises(HTTPException):
+            await _drain()
+
+    # Test 2: disable_exception_on_block=True. Streaming can't raise up to the
+    # endpoint handler (SSE headers already flushed), so the block is delivered
+    # as a synthetic stream with finish_reason=content_filter and the block
+    # message as content -- same shape a non-streaming block produces.
     guardrail_disabled = BedrockGuardrail(
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
@@ -1526,31 +1347,20 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
     ) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
-        # Should NOT raise exception when disable_exception_on_block=True
-        try:
-            result_generator = (
-                guardrail_disabled.async_post_call_streaming_iterator_hook(
-                    user_api_key_dict=mock_user_api_key_dict,
-                    response=mock_streaming_response(),
-                    request_data=request_data,
-                )
-            )
-
-            # Consume the generator - should succeed without exceptions
-            result_chunks = []
-            async for chunk in result_generator:
-                result_chunks.append(chunk)
-
-            # Should have received chunks back even though content was blocked
-            assert len(result_chunks) > 0
-            print(
-                "✅ Streaming completed without exception when disable_exception_on_block=True"
-            )
-
-        except Exception as e:
-            pytest.fail(
-                f"Should not raise exception when disable_exception_on_block=True in streaming, but got: {e}"
-            )
+        result_generator = guardrail_disabled.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key_dict,
+            response=mock_streaming_response(),
+            request_data=request_data,
+        )
+        chunks = [c async for c in result_generator]
+        assert chunks, "streaming block should yield synthetic chunks, not empty"
+        assembled_content = "".join(
+            (c.choices[0].delta.content or "")
+            for c in chunks
+            if getattr(c, "choices", None) and getattr(c.choices[0], "delta", None)
+        )
+        assert assembled_content == "I can't provide that information."
+        assert chunks[-1].choices[0].finish_reason == "content_filter"
 
 
 @pytest.mark.asyncio

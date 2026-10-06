@@ -1,11 +1,8 @@
 import os
-import sys
 import pytest
 import asyncio
-from typing import Optional
 from unittest.mock import patch, AsyncMock
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 import json
@@ -21,6 +18,9 @@ from base_responses_api import BaseResponsesAPITest
 
 
 class TestAzureResponsesAPITest(BaseResponsesAPITest):
+    test_multiturn_responses_api = None
+    test_responses_api_with_tool_calls = None
+
     def get_base_completion_call_args(self):
         return {
             "model": "azure/gpt-4.1-mini",
@@ -29,10 +29,6 @@ class TestAzureResponsesAPITest(BaseResponsesAPITest):
             "api_key": os.getenv("AZURE_AI_API_KEY"),
             "api_version": "2025-03-01-preview",
         }
-
-    def get_advanced_model_for_shell_tool(self) -> Optional[str]:
-        """If specified, overrides the model used by test_responses_api_shell_tool_streaming_sees_shell_output (e.g. openai/gpt-5.2 for shell support)."""
-        return "azure/gpt-5-mini"
 
 
 @pytest.mark.asyncio
@@ -57,7 +53,7 @@ async def test_azure_responses_api_status_error():
     Test that 'status' field is not sent in the final request body to Azure API.
     The status field should be filtered out from input messages before making the API call.
     """
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
     import json
 
     request_data = {
@@ -198,7 +194,6 @@ async def test_azure_responses_api_headers_with_llm_provider_prefix():
     in response._hidden_params["headers"] instead of additional_headers, making them
     accessible via completion.headers in the same way as the completion API.
     """
-    import json
     import httpx
 
     mock_response_data = {

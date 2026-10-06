@@ -5,8 +5,9 @@ model_list:
       api_key: my-fake-key
       api_base: os.environ/FAKE_OPENAI_API_BASE
 
-litellm_settings:
-  cache: True
-  cache_params:
-    type: redis
+general_settings:
+  coordination_redis:
+    host: os.environ/REDIS_HOST
+    port: os.environ/REDIS_PORT
+    password: os.environ/REDIS_PASSWORD
 

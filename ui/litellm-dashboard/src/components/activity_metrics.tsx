@@ -1,187 +1,429 @@
+import {
+  AreaChart,
+  BarChart,
+  type ChartTooltipProps,
+  CustomLegend,
+  CustomTooltip,
+  formatCategoryName,
+  LineChart,
+  ValueTooltip,
+} from "@/components/shared/charts";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { resolveTeamAliasFromTeamID } from "@/utils/teamUtils";
-import { AreaChart, BarChart, Card, Grid, Text, Title } from "@tremor/react";
-import { Collapse } from "antd";
-import React from "react";
-import { CustomLegend, CustomTooltip } from "./common_components/chartUtils";
+import { Card, CardContent } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { ChevronDown } from "lucide-react";
+import React, { useRef, useState } from "react";
 import { Team } from "./key_team_helpers/key_list";
 import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
-import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData, TopModelData } from "./UsagePage/types";
-import { valueFormatter } from "./UsagePage/utils/value_formatters";
+import { keyActivityLabel } from "./UsagePage/keyActivityLabel";
+import type { ModelTopKeysResponse } from "./UsagePage/dailyActivityApi";
+import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopModelData } from "./UsagePage/types";
+import { averageResponseTimeMs, formatResponseTime, valueFormatter } from "./UsagePage/utils/value_formatters";
 
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
+  summaryMetrics?: ModelActivityData;
+  summaryTitle?: string;
   hidePromptCachingMetrics?: boolean;
+  fetchTopApiKeys?: (model: string) => Promise<ModelTopKeysResponse>;
 }
 
-const ModelSection = ({
+const modelAverageResponseTimeMs = (metrics: ModelActivityData): number | null =>
+  averageResponseTimeMs(metrics.total_response_time_ms ?? 0, metrics.total_timed_requests ?? 0);
+
+export const ResponseTimeTooltip = ({ active, payload, label }: ChartTooltipProps) => (
+  <ValueTooltip
+    active={active}
+    payload={payload?.map((item) => ({ ...item, name: formatCategoryName(String(item.dataKey ?? "")) }))}
+    label={label}
+    valueFormatter={formatResponseTime}
+  />
+);
+
+const ModelTopKeys = ({
+  modelName,
+  fetchTopApiKeys,
+}: {
+  modelName: string;
+  fetchTopApiKeys: (model: string) => Promise<ModelTopKeysResponse>;
+}) => {
+  interface ModelTopKeyRow {
+    api_key: string;
+    key_alias: string | null;
+    team_id: string | null;
+    user: string | null;
+    spend: number;
+    requests: number;
+    tokens: number;
+  }
+  const [settled, setSettled] = useState<{
+    modelName: string;
+    fetchTopApiKeys: (model: string) => Promise<ModelTopKeysResponse>;
+    rows: ModelTopKeyRow[];
+    failed: boolean;
+  } | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    fetchTopApiKeys(modelName)
+      .then((response) => {
+        if (cancelled) return;
+        setSettled({
+          modelName,
+          fetchTopApiKeys,
+          rows: response.api_keys.map((row) => ({
+            api_key: row.api_key,
+            key_alias: row.metadata.key_alias ?? null,
+            team_id: row.metadata.team_id ?? null,
+            user: row.metadata.user_email ?? row.metadata.user_id ?? null,
+            spend: row.metrics.spend,
+            requests: row.metrics.api_requests,
+            tokens: row.metrics.total_tokens,
+          })),
+          failed: false,
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error(`Failed to fetch top keys for ${modelName}:`, error);
+        setSettled({ modelName, fetchTopApiKeys, rows: [], failed: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [modelName, fetchTopApiKeys, retryToken]);
+
+  const current = settled?.modelName === modelName && settled.fetchTopApiKeys === fetchTopApiKeys ? settled : null;
+
+  if (current === null) {
+    return (
+      <Card className="mt-4">
+        <CardContent>
+          <h3 className="text-lg font-medium text-foreground">Top Virtual Keys by Spend</h3>
+          <p className="mt-3 text-sm text-muted-foreground">Loading top keys...</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (current.failed) {
+    return (
+      <Card className="mt-4">
+        <CardContent>
+          <h3 className="text-lg font-medium text-foreground">Top Virtual Keys by Spend</h3>
+          <p className="mt-3 text-sm text-muted-foreground">
+            Could not load top keys.{" "}
+            <button
+              type="button"
+              className="font-medium text-foreground underline"
+              onClick={() => {
+                setSettled(null);
+                setRetryToken((token) => token + 1);
+              }}
+            >
+              Retry
+            </button>
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const rows = current.rows;
+  if (rows.length === 0) return null;
+
+  return (
+    <Card className="mt-4">
+      <CardContent>
+        <h3 className="text-lg font-medium text-foreground">Top Virtual Keys by Spend</h3>
+        <div className="mt-3">
+          <div className="grid grid-cols-1 gap-2">
+            {rows.map((keyData) => {
+              const keyLabel = keyData.key_alias || `${keyData.api_key.substring(0, 10)}...`;
+              return (
+                <div key={keyData.api_key} className="flex justify-between items-center p-3 bg-muted rounded-lg">
+                  <div>
+                    <p className="font-medium">{keyLabel}</p>
+                    {keyData.team_id && <p className="text-xs text-muted-foreground">Team: {keyData.team_id}</p>}
+                    {keyData.user && keyData.user !== keyLabel && (
+                      <p className="text-xs text-muted-foreground">User: {keyData.user}</p>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <p className="font-medium">${formatNumberWithCommas(keyData.spend, 2)}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {keyData.requests.toLocaleString()} requests | {keyData.tokens.toLocaleString()} tokens
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+export const ModelSection = ({
   modelName,
   metrics,
   hidePromptCachingMetrics = false,
+  fetchTopApiKeys,
 }: {
   modelName: string;
   metrics: ModelActivityData;
   hidePromptCachingMetrics?: boolean;
+  fetchTopApiKeys?: (model: string) => Promise<ModelTopKeysResponse>;
 }) => {
   return (
     <div className="space-y-2">
       {/* Summary Cards */}
-      <Grid numItems={4} className="gap-4">
+      <div className="grid grid-cols-5 gap-4">
         <Card>
-          <Text>Total Requests</Text>
-          <Title>{metrics.total_requests.toLocaleString()}</Title>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">Total Requests</p>
+            <h3 className="text-lg font-medium text-foreground">{metrics.total_requests.toLocaleString()}</h3>
+          </CardContent>
         </Card>
         <Card>
-          <Text>Total Successful Requests</Text>
-          <Title>{metrics.total_successful_requests.toLocaleString()}</Title>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">Total Successful Requests</p>
+            <h3 className="text-lg font-medium text-foreground">
+              {metrics.total_successful_requests.toLocaleString()}
+            </h3>
+          </CardContent>
         </Card>
         <Card>
-          <Text>Total Tokens</Text>
-          <Title>{metrics.total_tokens.toLocaleString()}</Title>
-          <Text>{Math.round(metrics.total_tokens / metrics.total_successful_requests)} avg per successful request</Text>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">Total Tokens</p>
+            <h3 className="text-lg font-medium text-foreground">{metrics.total_tokens.toLocaleString()}</h3>
+            <p className="text-sm text-muted-foreground">
+              {Math.round(metrics.total_tokens / metrics.total_successful_requests)} avg per successful request
+            </p>
+          </CardContent>
         </Card>
         <Card>
-          <Text>Total Spend</Text>
-          <Title>${formatNumberWithCommas(metrics.total_spend, 2)}</Title>
-          <Text>
-            ${formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3)} per successful request
-          </Text>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">Total Spend</p>
+            <h3 className="text-lg font-medium text-foreground">${formatNumberWithCommas(metrics.total_spend, 2)}</h3>
+            <p className="text-sm text-muted-foreground">
+              ${formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3)} per successful
+              request
+            </p>
+          </CardContent>
         </Card>
-      </Grid>
+        <Card>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">Avg Response Time</p>
+            <h3 className="text-lg font-medium text-foreground">
+              {formatResponseTime(modelAverageResponseTimeMs(metrics))}
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              over {(metrics.total_timed_requests ?? 0).toLocaleString()} timed successful requests
+            </p>
+          </CardContent>
+        </Card>
+      </div>
 
-      {metrics.top_api_keys && metrics.top_api_keys.length > 0 && (
-        <Card className="mt-4">
-          <Title>Top Virtual Keys by Spend</Title>
-          <div className="mt-3">
-            <div className="grid grid-cols-1 gap-2">
-              {metrics.top_api_keys.map((keyData, index) => (
-                <div key={keyData.api_key} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                  <div>
-                    <Text className="font-medium">{keyData.key_alias || `${keyData.api_key.substring(0, 10)}...`}</Text>
-                    {keyData.team_id && <Text className="text-xs text-gray-500">Team: {keyData.team_id}</Text>}
-                  </div>
-                  <div className="text-right">
-                    <Text className="font-medium">${formatNumberWithCommas(keyData.spend, 2)}</Text>
-                    <Text className="text-xs text-gray-500">
-                      {keyData.requests.toLocaleString()} requests | {keyData.tokens.toLocaleString()} tokens
-                    </Text>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Card>
-      )}
+      {fetchTopApiKeys && <ModelTopKeys modelName={modelName} fetchTopApiKeys={fetchTopApiKeys} />}
 
       {metrics.top_models && metrics.top_models.length > 0 && <KeyModelUsageView topModels={metrics.top_models} />}
 
       {/* Spend per day - Full width card */}
       <Card className="mt-4">
-        <div className="flex justify-between items-center">
-          <Title>Spend per day</Title>
-          <CustomLegend categories={["metrics.spend"]} colors={["green"]} />
-        </div>
-        <BarChart
-          className="mt-4"
-          data={metrics.daily_data}
-          index="date"
-          categories={["metrics.spend"]}
-          colors={["green"]}
-          valueFormatter={(value: number) => `$${formatNumberWithCommas(value, 2, true)}`}
-          yAxisWidth={72}
-        />
-      </Card>
-
-      {/* Charts */}
-      <Grid numItems={2} className="gap-4 mt-4">
-        <Card>
+        <CardContent>
           <div className="flex justify-between items-center">
-            <Title>Total Tokens</Title>
-            <CustomLegend
-              categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
-              colors={["blue", "cyan", "indigo"]}
-            />
-          </div>
-          <AreaChart
-            className="mt-4"
-            data={metrics.daily_data}
-            index="date"
-            categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
-            colors={["blue", "cyan", "indigo"]}
-            valueFormatter={valueFormatter}
-            customTooltip={CustomTooltip}
-            showLegend={false}
-          />
-        </Card>
-
-        <Card>
-          <div className="flex justify-between items-center">
-            <Title>Requests per day</Title>
-            <CustomLegend categories={["metrics.api_requests"]} colors={["blue"]} />
+            <h3 className="text-lg font-medium text-foreground">Spend per day</h3>
+            <CustomLegend categories={["metrics.spend"]} colors={["green"]} />
           </div>
           <BarChart
             className="mt-4"
             data={metrics.daily_data}
             index="date"
-            categories={["metrics.api_requests"]}
-            colors={["blue"]}
-            valueFormatter={valueFormatter}
-            customTooltip={CustomTooltip}
-            showLegend={false}
+            categories={["metrics.spend"]}
+            colors={["green"]}
+            valueFormatter={(value: number) => `$${formatNumberWithCommas(value, 2, true)}`}
+            yAxisWidth={72}
           />
-        </Card>
+        </CardContent>
+      </Card>
 
+      {/* Charts */}
+      <div className="grid grid-cols-2 gap-4 mt-4">
         <Card>
-          <div className="flex justify-between items-center">
-            <Title>Success vs Failed Requests</Title>
-            <CustomLegend
-              categories={["metrics.successful_requests", "metrics.failed_requests"]}
-              colors={["green", "red"]}
-            />
-          </div>
-          <AreaChart
-            className="mt-4"
-            data={metrics.daily_data}
-            index="date"
-            categories={["metrics.successful_requests", "metrics.failed_requests"]}
-            colors={["green", "red"]}
-            valueFormatter={valueFormatter}
-            customTooltip={CustomTooltip}
-            showLegend={false}
-          />
-        </Card>
-
-        {!hidePromptCachingMetrics && (
-          <Card>
+          <CardContent>
             <div className="flex justify-between items-center">
-              <Title>Prompt Caching Metrics</Title>
+              <h3 className="text-lg font-medium text-foreground">Total Tokens</h3>
               <CustomLegend
-                categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
-                colors={["cyan", "purple"]}
+                categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
+                colors={["blue", "cyan", "indigo"]}
               />
-            </div>
-            <div className="mb-2">
-              <Text>Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</Text>
-              <Text>Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</Text>
             </div>
             <AreaChart
               className="mt-4"
               data={metrics.daily_data}
               index="date"
-              categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
-              colors={["cyan", "purple"]}
+              categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
+              colors={["blue", "cyan", "indigo"]}
               valueFormatter={valueFormatter}
               customTooltip={CustomTooltip}
               showLegend={false}
             />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent>
+            <div className="flex justify-between items-center">
+              <h3 className="text-lg font-medium text-foreground">Requests per day</h3>
+              <CustomLegend categories={["metrics.api_requests"]} colors={["blue"]} />
+            </div>
+            <BarChart
+              className="mt-4"
+              data={metrics.daily_data}
+              index="date"
+              categories={["metrics.api_requests"]}
+              colors={["blue"]}
+              valueFormatter={valueFormatter}
+              customTooltip={CustomTooltip}
+              showLegend={false}
+            />
+          </CardContent>
+        </Card>
+
+        {(metrics.total_timed_requests ?? 0) > 0 && (
+          <Card>
+            <CardContent>
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-medium text-foreground">Avg Response Time per day</h3>
+                <CustomLegend categories={["metrics.avg_response_time_ms"]} colors={["amber"]} />
+              </div>
+              <LineChart
+                className="mt-4"
+                data={metrics.daily_data}
+                index="date"
+                categories={["metrics.avg_response_time_ms"]}
+                colors={["amber"]}
+                valueFormatter={formatResponseTime}
+                customTooltip={ResponseTimeTooltip}
+                connectNulls={true}
+                showLegend={false}
+              />
+            </CardContent>
           </Card>
         )}
-      </Grid>
+
+        <Card>
+          <CardContent>
+            <div className="flex justify-between items-center">
+              <h3 className="text-lg font-medium text-foreground">Success vs Failed Requests</h3>
+              <CustomLegend
+                categories={["metrics.successful_requests", "metrics.failed_requests"]}
+                colors={["green", "red"]}
+              />
+            </div>
+            <AreaChart
+              className="mt-4"
+              data={metrics.daily_data}
+              index="date"
+              categories={["metrics.successful_requests", "metrics.failed_requests"]}
+              colors={["green", "red"]}
+              valueFormatter={valueFormatter}
+              customTooltip={CustomTooltip}
+              showLegend={false}
+            />
+          </CardContent>
+        </Card>
+
+        {!hidePromptCachingMetrics && (
+          <Card>
+            <CardContent>
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-medium text-foreground">Prompt Caching Metrics</h3>
+                <CustomLegend
+                  categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
+                  colors={["cyan", "purple"]}
+                />
+              </div>
+              <div className="mb-2">
+                <p className="text-sm">
+                  Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens
+                </p>
+                <p className="text-sm">
+                  Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens
+                </p>
+              </div>
+              <AreaChart
+                className="mt-4"
+                data={metrics.daily_data}
+                index="date"
+                categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
+                colors={["cyan", "purple"]}
+                valueFormatter={valueFormatter}
+                customTooltip={CustomTooltip}
+                showLegend={false}
+              />
+            </CardContent>
+          </Card>
+        )}
+      </div>
     </div>
   );
 };
 
-export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, hidePromptCachingMetrics = false }) => {
+export const ModelCollapsible = ({
+  defaultOpen,
+  header,
+  children,
+  onFirstOpen,
+}: {
+  defaultOpen: boolean;
+  header: React.ReactNode;
+  children: React.ReactNode;
+  onFirstOpen?: () => void;
+}) => {
+  const [open, setOpen] = useState(defaultOpen);
+  const [everOpened, setEverOpened] = useState(defaultOpen);
+  const firstOpenRef = useRef(defaultOpen);
+
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={(next: boolean) => {
+        setOpen(next);
+        if (next) {
+          setEverOpened(true);
+          if (!firstOpenRef.current) {
+            firstOpenRef.current = true;
+            onFirstOpen?.();
+          }
+        }
+      }}
+      className="border-b last:border-b-0"
+    >
+      <CollapsibleTrigger className="flex w-full items-center gap-2 px-4 py-3 text-left">
+        <ChevronDown
+          className={`size-4 shrink-0 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`}
+        />
+        {header}
+      </CollapsibleTrigger>
+      <CollapsibleContent keepMounted={everOpened} className="px-4 pb-4">
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+};
+
+export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
+  modelMetrics,
+  summaryMetrics,
+  summaryTitle = "Overall Usage",
+  hidePromptCachingMetrics = false,
+  fetchTopApiKeys,
+}) => {
   const modelNames = Object.keys(modelMetrics).sort((a, b) => {
     if (a === "") return 1;
     if (b === "") return -1;
@@ -249,106 +491,141 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
   });
 
   // Convert daily_data object to array and sort by date
-  const sortedDailyData = Object.entries(totalMetrics.daily_data)
-    .map(([date, metrics]) => ({ date, metrics }))
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  const sortedDailyData =
+    summaryMetrics?.daily_data ??
+    Object.entries(totalMetrics.daily_data)
+      .map(([date, metrics]) => ({ date, metrics }))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  const totalRequests = summaryMetrics?.total_requests ?? totalMetrics.total_requests;
+  const totalSuccessfulRequests = summaryMetrics?.total_successful_requests ?? totalMetrics.total_successful_requests;
+  const totalTokens = summaryMetrics?.total_tokens ?? totalMetrics.total_tokens;
+  const totalSpend = summaryMetrics?.total_spend ?? totalMetrics.total_spend;
 
   return (
     <div className="space-y-8">
       {/* Global Summary */}
       <div className="border rounded-lg p-4">
-        <Title>Overall Usage</Title>
-        <Grid numItems={4} className="gap-4 mb-4">
+        <h3 className="text-lg font-medium text-foreground">{summaryTitle}</h3>
+        <div className="grid grid-cols-4 gap-4 mb-4">
           <Card>
-            <Text>Total Requests</Text>
-            <Title>{totalMetrics.total_requests.toLocaleString()}</Title>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">Total Requests</p>
+              <h3 className="text-lg font-medium text-foreground">{totalRequests.toLocaleString()}</h3>
+            </CardContent>
           </Card>
           <Card>
-            <Text>Total Successful Requests</Text>
-            <Title>{totalMetrics.total_successful_requests.toLocaleString()}</Title>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">Total Successful Requests</p>
+              <h3 className="text-lg font-medium text-foreground">{totalSuccessfulRequests.toLocaleString()}</h3>
+            </CardContent>
           </Card>
           <Card>
-            <Text>Total Tokens</Text>
-            <Title>{totalMetrics.total_tokens.toLocaleString()}</Title>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">Total Tokens</p>
+              <h3 className="text-lg font-medium text-foreground">{totalTokens.toLocaleString()}</h3>
+            </CardContent>
           </Card>
           <Card>
-            <Text>Total Spend</Text>
-            <Title>${formatNumberWithCommas(totalMetrics.total_spend, 2)}</Title>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">Total Spend</p>
+              <h3 className="text-lg font-medium text-foreground">${formatNumberWithCommas(totalSpend, 2)}</h3>
+            </CardContent>
           </Card>
-        </Grid>
+        </div>
 
-        <Grid numItems={2} className="gap-4">
+        <div className="grid grid-cols-2 gap-4">
           <Card>
-            <div className="flex justify-between items-center">
-              <Title>Total Tokens Over Time</Title>
-              <CustomLegend
+            <CardContent>
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-medium text-foreground">Total Tokens Over Time</h3>
+                <CustomLegend
+                  categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
+                  colors={["blue", "cyan", "indigo"]}
+                />
+              </div>
+              <AreaChart
+                className="mt-4"
+                data={sortedDailyData}
+                index="date"
                 categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
                 colors={["blue", "cyan", "indigo"]}
+                valueFormatter={valueFormatter}
+                customTooltip={CustomTooltip}
+                showLegend={false}
+                yAxisWidth={80}
               />
-            </div>
-            <AreaChart
-              className="mt-4"
-              data={sortedDailyData}
-              index="date"
-              categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
-              colors={["blue", "cyan", "indigo"]}
-              valueFormatter={valueFormatter}
-              customTooltip={CustomTooltip}
-              showLegend={false}
-            />
+            </CardContent>
           </Card>
           <Card>
-            <div className="flex justify-between items-center">
-              <Title>Total Requests Over Time</Title>
-              <CustomLegend
+            <CardContent>
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-medium text-foreground">Total Requests Over Time</h3>
+                <CustomLegend
+                  categories={["metrics.successful_requests", "metrics.failed_requests"]}
+                  colors={["emerald", "red"]}
+                />
+              </div>
+              <AreaChart
+                className="mt-4"
+                data={sortedDailyData}
+                index="date"
                 categories={["metrics.successful_requests", "metrics.failed_requests"]}
                 colors={["emerald", "red"]}
+                valueFormatter={valueFormatter}
+                customTooltip={CustomTooltip}
+                showLegend={false}
+                yAxisWidth={80}
               />
-            </div>
-            <AreaChart
-              className="mt-4"
-              data={sortedDailyData}
-              index="date"
-              categories={["metrics.successful_requests", "metrics.failed_requests"]}
-              colors={["emerald", "red"]}
-              valueFormatter={(number: number) => number.toLocaleString()}
-              customTooltip={CustomTooltip}
-              showLegend={false}
-            />
+            </CardContent>
           </Card>
-        </Grid>
+        </div>
       </div>
 
       {/* Individual Model Sections */}
-      <Collapse defaultActiveKey={modelNames[0]}>
-        {modelNames.map((modelName) => (
-          <Collapse.Panel
-            key={modelName}
-            header={
-              <div className="flex justify-between items-center w-full">
-                <Title>{modelMetrics[modelName].label || "Unknown Item"}</Title>
-                <div className="flex space-x-4 text-sm text-gray-500">
-                  <span>${formatNumberWithCommas(modelMetrics[modelName].total_spend, 2)}</span>
-                  <span>{modelMetrics[modelName].total_requests.toLocaleString()} requests</span>
+      {modelNames.length > 0 && (
+        <div className="rounded-lg border">
+          {modelNames.map((modelName) => (
+            <ModelCollapsible
+              key={modelName}
+              defaultOpen={modelName === modelNames[0]}
+              header={
+                <div className="flex justify-between items-center w-full">
+                  <h3 className="text-lg font-medium text-foreground">
+                    {modelMetrics[modelName].label || "Unknown Item"}
+                  </h3>
+                  <div className="flex space-x-4 text-sm text-muted-foreground">
+                    <span>${formatNumberWithCommas(modelMetrics[modelName].total_spend, 2)}</span>
+                    <span>{modelMetrics[modelName].total_requests.toLocaleString()} requests</span>
+                    {modelAverageResponseTimeMs(modelMetrics[modelName]) != null && (
+                      <span>
+                        {formatResponseTime(modelAverageResponseTimeMs(modelMetrics[modelName]))} avg response
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </div>
-            }
-          >
-            <ModelSection
-              modelName={modelName || "Unknown Model"}
-              metrics={modelMetrics[modelName]}
-              hidePromptCachingMetrics={hidePromptCachingMetrics}
-            />
-          </Collapse.Panel>
-        ))}
-      </Collapse>
+              }
+            >
+              <ModelSection
+                modelName={modelName || "Unknown Model"}
+                metrics={modelMetrics[modelName]}
+                hidePromptCachingMetrics={hidePromptCachingMetrics}
+                fetchTopApiKeys={fetchTopApiKeys}
+              />
+            </ModelCollapsible>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
 
 // Helper function to format key label
-export const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string, teams: Team[]): string => {
-  const keyAlias = modelData.metadata.key_alias || `key-hash-${model}`;
+export const formatKeyLabel = (
+  modelData: Pick<KeyMetricWithMetadata, "metadata">,
+  model: string,
+  teams: Team[],
+): string => {
+  const keyAlias = keyActivityLabel(modelData.metadata, `key-hash-${model}`);
   const teamId = modelData.metadata.team_id;
   if (teamId) {
     const teamAlias = resolveTeamAliasFromTeamID(teamId, teams);
@@ -360,7 +637,7 @@ export const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string, 
 // Process data function
 export const processActivityData = (
   dailyActivity: { results: DailyData[] },
-  key: "models" | "api_keys" | "mcp_servers" | "entities",
+  key: "models" | "model_groups" | "api_keys" | "mcp_servers" | "entities",
   teams: Team[] = [],
 ): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
@@ -375,6 +652,7 @@ export const processActivityData = (
               : key === "entities"
                 ? (modelData as any).metadata?.agent_name || (modelData as any).metadata?.team_alias || model
                 : model,
+          ...(key === "api_keys" ? { key_metadata: (modelData as KeyMetricWithMetadata).metadata } : {}),
           total_requests: 0,
           total_successful_requests: 0,
           total_failed_requests: 0,
@@ -384,11 +662,14 @@ export const processActivityData = (
           total_spend: 0,
           total_cache_read_input_tokens: 0,
           total_cache_creation_input_tokens: 0,
-          top_api_keys: [],
+          total_response_time_ms: 0,
+          total_timed_requests: 0,
           top_models: [],
           daily_data: [],
         };
       }
+      const dayResponseTimeMs = modelData.metrics.total_response_time_ms || 0;
+      const dayTimedRequests = modelData.metrics.timed_requests || 0;
       // Update totals
       modelMetrics[model].total_requests += modelData.metrics.api_requests;
       modelMetrics[model].prompt_tokens += modelData.metrics.prompt_tokens;
@@ -399,6 +680,9 @@ export const processActivityData = (
       modelMetrics[model].total_failed_requests += modelData.metrics.failed_requests;
       modelMetrics[model].total_cache_read_input_tokens += modelData.metrics.cache_read_input_tokens || 0;
       modelMetrics[model].total_cache_creation_input_tokens += modelData.metrics.cache_creation_input_tokens || 0;
+      modelMetrics[model].total_response_time_ms =
+        (modelMetrics[model].total_response_time_ms ?? 0) + dayResponseTimeMs;
+      modelMetrics[model].total_timed_requests = (modelMetrics[model].total_timed_requests ?? 0) + dayTimedRequests;
 
       // Add daily data
       modelMetrics[model].daily_data.push({
@@ -413,45 +697,11 @@ export const processActivityData = (
           failed_requests: modelData.metrics.failed_requests,
           cache_read_input_tokens: modelData.metrics.cache_read_input_tokens || 0,
           cache_creation_input_tokens: modelData.metrics.cache_creation_input_tokens || 0,
+          avg_response_time_ms: averageResponseTimeMs(dayResponseTimeMs, dayTimedRequests),
         },
       });
     });
   });
-
-  // Process Virtual Key breakdowns for each metric (skip if key is 'api_keys' to avoid duplication)
-  if (key !== "api_keys") {
-    Object.entries(modelMetrics).forEach(([model, _]) => {
-      const apiKeyBreakdown: Record<string, TopApiKeyData> = {};
-
-      // Aggregate Virtual Key data across all days
-      dailyActivity.results.forEach((day) => {
-        const modelData = day.breakdown[key]?.[model];
-        if (modelData && "api_key_breakdown" in modelData) {
-          Object.entries(modelData.api_key_breakdown || {}).forEach(([apiKey, keyData]) => {
-            if (!apiKeyBreakdown[apiKey]) {
-              apiKeyBreakdown[apiKey] = {
-                api_key: apiKey,
-                key_alias: keyData.metadata.key_alias,
-                team_id: keyData.metadata.team_id,
-                spend: 0,
-                requests: 0,
-                tokens: 0,
-              };
-            }
-
-            apiKeyBreakdown[apiKey].spend += keyData.metrics.spend;
-            apiKeyBreakdown[apiKey].requests += keyData.metrics.api_requests;
-            apiKeyBreakdown[apiKey].tokens += keyData.metrics.total_tokens;
-          });
-        }
-      });
-
-      // Sort by spend and take top 5
-      modelMetrics[model].top_api_keys = Object.values(apiKeyBreakdown)
-        .sort((a, b) => b.spend - a.spend)
-        .slice(0, 5);
-    });
-  }
 
   // Process Model breakdowns for each API key (only when key is 'api_keys')
   if (key === "api_keys") {

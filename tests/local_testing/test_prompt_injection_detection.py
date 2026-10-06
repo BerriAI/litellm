@@ -7,11 +7,7 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm.proxy.hooks.prompt_injection_detection import (
@@ -30,7 +26,7 @@ async def test_prompt_injection_attack_valid_attack():
     """
     prompt_injection_detection = _OPTIONAL_PromptInjectionDetection()
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
     try:
@@ -61,7 +57,7 @@ async def test_prompt_injection_attack_invalid_attack():
     litellm.set_verbose = True
     prompt_injection_detection = _OPTIONAL_PromptInjectionDetection()
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
     try:
@@ -119,7 +115,7 @@ async def test_prompt_injection_llm_eval():
         ),
     )
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
     try:

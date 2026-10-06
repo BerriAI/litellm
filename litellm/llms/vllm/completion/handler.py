@@ -1,5 +1,6 @@
-import time  # type: ignore
-from typing import Callable
+import time
+from collections.abc import Callable
+from typing import Final
 
 import httpx
 
@@ -18,16 +19,14 @@ class VLLMError(Exception):
         self.message = message
         self.request = httpx.Request(method="POST", url="http://0.0.0.0:8000")
         self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
 # check if vllm is installed
 def validate_environment(model: str):
     global llm
     try:
-        from vllm import LLM, SamplingParams  # type: ignore
+        from vllm import LLM, SamplingParams
 
         if llm is None:
             llm = LLM(model=model)
@@ -53,10 +52,10 @@ def completion(
         llm, SamplingParams = validate_environment(model=model)
     except Exception as e:
         raise VLLMError(status_code=0, message=str(e))
-    sampling_params = SamplingParams(**optional_params)
+    sampling_params: Final = SamplingParams(**optional_params)
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
-        model_prompt_details = custom_prompt_dict[model]
+        model_prompt_details: Final = custom_prompt_dict[model]
         prompt = custom_prompt(
             role_dict=model_prompt_details["roles"],
             initial_prompt_value=model_prompt_details["initial_prompt_value"],
@@ -74,11 +73,9 @@ def completion(
     )
 
     if llm:
-        outputs = llm.generate(prompt, sampling_params)
+        outputs: Final = llm.generate(prompt, sampling_params)
     else:
-        raise VLLMError(
-            status_code=0, message="Need to pass in a model name to initialize vllm"
-        )
+        raise VLLMError(status_code=0, message="Need to pass in a model name to initialize vllm")
 
     ## COMPLETION CALL
     if "stream" in optional_params and optional_params["stream"] is True:
@@ -93,15 +90,15 @@ def completion(
         )
         print_verbose(f"raw model_response: {outputs}")
         ## RESPONSE OBJECT
-        model_response.choices[0].message.content = outputs[0].outputs[0].text  # type: ignore
+        model_response.choices[0].message.content = outputs[0].outputs[0].text
 
         ## CALCULATING USAGE
-        prompt_tokens = len(outputs[0].prompt_token_ids)
-        completion_tokens = len(outputs[0].outputs[0].token_ids)
+        prompt_tokens: Final = len(outputs[0].prompt_token_ids)
+        completion_tokens: Final = len(outputs[0].outputs[0].token_ids)
 
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
@@ -110,9 +107,7 @@ def completion(
         return model_response
 
 
-def batch_completions(
-    model: str, messages: list, optional_params=None, custom_prompt_dict={}
-):
+def batch_completions(model: str, messages: list, optional_params=None, custom_prompt_dict={}):
     """
     Example usage:
     import litellm
@@ -141,13 +136,13 @@ def batch_completions(
     try:
         llm, SamplingParams = validate_environment(model=model)
     except Exception as e:
-        error_str = str(e)
+        error_str: Final = str(e)
         raise VLLMError(status_code=0, message=error_str)
-    sampling_params = SamplingParams(**optional_params)
-    prompts = []
+    sampling_params: Final = SamplingParams(**optional_params)
+    prompts: Final = []
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
-        model_prompt_details = custom_prompt_dict[model]
+        model_prompt_details: Final = custom_prompt_dict[model]
         for message in messages:
             prompt = custom_prompt(
                 role_dict=model_prompt_details["roles"],
@@ -162,17 +157,15 @@ def batch_completions(
             prompts.append(prompt)
 
     if llm:
-        outputs = llm.generate(prompts, sampling_params)
+        outputs: Final = llm.generate(prompts, sampling_params)
     else:
-        raise VLLMError(
-            status_code=0, message="Need to pass in a model name to initialize vllm"
-        )
+        raise VLLMError(status_code=0, message="Need to pass in a model name to initialize vllm")
 
-    final_outputs = []
+    final_outputs: Final = []
     for output in outputs:
         model_response = ModelResponse()
         ## RESPONSE OBJECT
-        model_response.choices[0].message.content = output.outputs[0].text  # type: ignore
+        model_response.choices[0].message.content = output.outputs[0].text
 
         ## CALCULATING USAGE
         prompt_tokens = len(output.prompt_token_ids)

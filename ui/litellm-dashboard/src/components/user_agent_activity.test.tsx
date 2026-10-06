@@ -1,18 +1,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import UserAgentActivity from "./user_agent_activity";
 import * as networking from "./networking";
-
-// Polyfill ResizeObserver for test environment
-beforeAll(() => {
-  if (typeof window !== "undefined" && !window.ResizeObserver) {
-    window.ResizeObserver = class ResizeObserver {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    } as any;
-  }
-});
 
 // Mock the networking module
 vi.mock("./networking", () => ({
@@ -135,8 +124,8 @@ describe("UserAgentActivity", () => {
 
     // Check that user agent cards are displayed
     await waitFor(() => {
-      expect(screen.getByText("Chrome/1.0")).toBeInTheDocument();
-      expect(screen.getByText("Firefox/2.0")).toBeInTheDocument();
+      expect(screen.getAllByText("Chrome/1.0").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Firefox/2.0").length).toBeGreaterThan(0);
     });
 
     // Check that metrics are displayed
@@ -188,8 +177,121 @@ describe("UserAgentActivity", () => {
     // Check that filter label is present
     expect(screen.getByText("Filter by User Agents")).toBeInTheDocument();
 
-    // The Ant Design Select component should be in the document with placeholder
-    const selectElement = screen.getByText("All User Agents");
-    expect(selectElement).toBeInTheDocument();
+    // One library paints the prompt as its own text node and the other leaves it on the input's
+    // placeholder attribute, so either one means the user is being told what the filter does.
+    const prompts =
+      screen.queryAllByText("All User Agents").length + screen.queryAllByPlaceholderText("All User Agents").length;
+    expect(prompts).toBeGreaterThan(0);
+  });
+
+  // Walks up from the panel's heading to the nearest ancestor that owns a chart, so the
+  // assertions do not depend on how many wrappers the tab library puts around a panel.
+  const chartForTitle = (title: string): HTMLElement => {
+    let node: HTMLElement | null = screen.getByText(title);
+    while (node && !node.querySelector('[data-slot="chart"]')) {
+      node = node.parentElement;
+    }
+    const chart = node?.querySelector('[data-slot="chart"]') ?? null;
+    expect(chart).not.toBeNull();
+    return chart as HTMLElement;
+  };
+
+  const expectStackedTwoCategoryChart = (chart: HTMLElement, firstBucketLabel: string) => {
+    expect(chart.querySelectorAll(".recharts-bar")).toHaveLength(2);
+
+    const rectangles = Array.from(chart.querySelectorAll("path.recharts-rectangle"));
+    const fills = new Set(rectangles.map((rect) => rect.getAttribute("fill")));
+    expect(fills).toEqual(new Set(["var(--color-blue-500, #3b82f6)", "var(--color-cyan-500, #06b6d4)"]));
+
+    const xPositions = new Set(rectangles.map((rect) => rect.getAttribute("d")?.match(/^M\s*([\d.]+)/)?.[1]));
+    expect(xPositions.size).toBe(1);
+
+    expect(chart).toHaveTextContent(/Chrome\/1\.0/);
+    expect(chart).toHaveTextContent(/Firefox\/2\.0/);
+    expect(chart).toHaveTextContent(new RegExp(firstBucketLabel));
+
+    const tickTexts = Array.from(chart.querySelectorAll(".recharts-cartesian-axis-tick-value")).map(
+      (tick) => tick.textContent ?? "",
+    );
+    expect(tickTexts.some((tick) => /^\d+K$/.test(tick))).toBe(true);
+  };
+
+  it("keeps every tab panel mounted so switching tabs does not reset their state", async () => {
+    render(<UserAgentActivity {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockTagDauCall).toHaveBeenCalled();
+    });
+
+    // No tab has been clicked: the inactive DAU/WAU/MAU panels are mounted alongside the active one.
+    expect(screen.getByText("Daily Active Users - Last 7 Days")).toBeInTheDocument();
+    expect(screen.getByText("Weekly Active Users - Last 7 Weeks")).toBeInTheDocument();
+    expect(screen.getByText("Monthly Active Users - Last 7 Months")).toBeInTheDocument();
+
+    // And so is the second panel of the outer tab group.
+    expect(screen.getByText("Per User Usage")).toBeInTheDocument();
+  });
+
+  it("renders the DAU chart stacked with default color cycle and abbreviated axis ticks", async () => {
+    const firstBucketDate = new Date();
+    firstBucketDate.setDate(firstBucketDate.getDate() - 6);
+    const todayStr = new Date().toISOString().split("T")[0];
+    mockTagDauCall.mockResolvedValue({
+      results: [
+        { tag: "User-Agent: Chrome/1.0", active_users: 4000, date: todayStr },
+        { tag: "User-Agent: Firefox/2.0", active_users: 2600, date: todayStr },
+      ],
+    });
+
+    render(<UserAgentActivity {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(
+        chartForTitle("Daily Active Users - Last 7 Days").querySelectorAll("path.recharts-rectangle"),
+      ).toHaveLength(2);
+    });
+
+    expectStackedTwoCategoryChart(
+      chartForTitle("Daily Active Users - Last 7 Days"),
+      firstBucketDate.toISOString().split("T")[0],
+    );
+  });
+
+  it("renders the WAU chart stacked with week buckets and abbreviated axis ticks", async () => {
+    mockTagWauCall.mockResolvedValue({
+      results: [
+        { tag: "User-Agent: Chrome/1.0", active_users: 2000, date: "Week 3 (Jan 15)" },
+        { tag: "User-Agent: Firefox/2.0", active_users: 1500, date: "Week 3 (Jan 15)" },
+      ],
+    });
+
+    render(<UserAgentActivity {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(
+        chartForTitle("Weekly Active Users - Last 7 Weeks").querySelectorAll("path.recharts-rectangle"),
+      ).toHaveLength(2);
+    });
+
+    expectStackedTwoCategoryChart(chartForTitle("Weekly Active Users - Last 7 Weeks"), "Week 1");
+  });
+
+  it("renders the MAU chart stacked with month buckets and abbreviated axis ticks", async () => {
+    mockTagMauCall.mockResolvedValue({
+      results: [
+        { tag: "User-Agent: Chrome/1.0", active_users: 5000, date: "Month 2 (Feb)" },
+        { tag: "User-Agent: Firefox/2.0", active_users: 3000, date: "Month 2 (Feb)" },
+      ],
+    });
+
+    render(<UserAgentActivity {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(
+        chartForTitle("Monthly Active Users - Last 7 Months").querySelectorAll("path.recharts-rectangle"),
+      ).toHaveLength(2);
+    });
+
+    expectStackedTwoCategoryChart(chartForTitle("Monthly Active Users - Last 7 Months"), "Month 1");
   });
 });

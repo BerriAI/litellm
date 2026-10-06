@@ -1,31 +1,31 @@
-from typing import List, Optional, Tuple
+from typing import Final
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
-ZAI_API_BASE = "https://api.z.ai/api/paas/v4"
+ZAI_API_BASE: Final = "https://api.z.ai/api/paas/v4"
 
 
 class ZAIChatConfig(OpenAIGPTConfig):
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "zai"
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("ZAI_API_BASE") or ZAI_API_BASE
-        dynamic_api_key = api_key or get_secret_str("ZAI_API_KEY")
+        dynamic_api_key: Final = api_key or get_secret_str("ZAI_API_KEY")
         return api_base, dynamic_api_key
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,
-        messages: List[AllMessageValues],
-        tools: Optional[List[ChatCompletionToolParam]] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[List[ChatCompletionToolParam]]]:
+        messages: list[AllMessageValues],
+        tools: list[ChatCompletionToolParam] | None = None,
+    ) -> tuple[list[AllMessageValues], list[ChatCompletionToolParam] | None]:
         """
         Override to preserve cache_control for GLM/ZAI.
         GLM supports cache_control - don't strip it.
@@ -34,7 +34,7 @@ class ZAIChatConfig(OpenAIGPTConfig):
         return messages, tools
 
     def get_supported_openai_params(self, model: str) -> list:
-        base_params = [
+        base_params: Final = [
             "max_tokens",
             "stream",
             "stream_options",
@@ -48,9 +48,7 @@ class ZAIChatConfig(OpenAIGPTConfig):
         import litellm
 
         try:
-            if litellm.supports_reasoning(
-                model=model, custom_llm_provider=self.custom_llm_provider
-            ):
+            if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 base_params.append("thinking")
         except Exception:
             pass

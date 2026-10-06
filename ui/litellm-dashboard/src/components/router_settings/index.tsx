@@ -1,6 +1,6 @@
-import { Button } from "antd";
 import React, { useEffect, useState } from "react";
-import NotificationsManager from "../molecules/notifications_manager";
+import { Button } from "@/components/ui/button";
+import { toast } from "@/lib/toast";
 import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "./RouterSettingsForm";
 
@@ -30,7 +30,6 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       return;
     }
     getCallbacksCall(accessToken, userID, userRole).then((data) => {
-      console.log("callbacks", data);
       let router_settings = data.router_settings;
       if ("model_group_retry_policy" in router_settings) {
         delete router_settings["model_group_retry_policy"];
@@ -44,7 +43,6 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       }));
     });
     getRouterSettingsCall(accessToken).then((data) => {
-      console.log("router settings from API", data);
       if (data.fields) {
         // Build metadata map for easy lookup
         const fieldsMap: { [key: string]: any } = {};
@@ -81,16 +79,18 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     });
   }, [accessToken, userRole, userID]);
 
-  const handleSaveChanges = () => {
+  const handleSaveChanges = async () => {
     if (!accessToken) {
       return;
     }
 
     const router_settings = formValue.routerSettings;
-    console.log("router_settings", router_settings);
 
     const numberKeys = new Set(["allowed_fails", "cooldown_time", "num_retries", "timeout", "retry_after"]);
-    const jsonKeys = new Set(["model_group_alias", "retry_policy"]);
+    const jsonKeys = new Set(["model_group_alias"]);
+    // retry_policy and model_group_retry_policy are owned by the Model Retry Settings tab;
+    // routing_groups is owned by the Routing Groups tab. This page must not read or write them.
+    const tabOwnedKeys = new Set(["retry_policy", "model_group_retry_policy", "routing_groups"]);
 
     const parseInputValue = (key: string, raw: string | undefined, fallback: unknown) => {
       if (raw === undefined) return fallback;
@@ -128,6 +128,9 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     const updatedVariables = Object.fromEntries(
       Object.entries(settingsToUpdate)
         .map(([key, value]) => {
+          if (tabOwnedKeys.has(key)) {
+            return null;
+          }
           if (key !== "routing_strategy_args" && key !== "routing_strategy" && key !== "enable_tag_filtering") {
             const inputEl = document.querySelector(`input[name="${key}"]`) as HTMLInputElement | null;
             const parsed = parseInputValue(key, inputEl?.value, value);
@@ -152,26 +155,23 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
               setRoutingStrategyArgs["ttl"] = Number(ttlElement.value);
             }
 
-            console.log(`setRoutingStrategyArgs: ${setRoutingStrategyArgs}`);
             return ["routing_strategy_args", setRoutingStrategyArgs];
           }
           return null;
         })
         .filter((entry) => entry !== null && entry !== undefined) as Iterable<[string, unknown]>,
     );
-    console.log("updatedVariables", updatedVariables);
 
     const payload = {
       router_settings: updatedVariables,
     };
 
     try {
-      setCallbacksCall(accessToken, payload);
+      await setCallbacksCall(accessToken, payload);
+      toast.success("router settings updated successfully");
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to update router settings: " + error);
+      toast.fromError("Failed to update router settings: " + error);
     }
-
-    NotificationsManager.success("router settings updated successfully");
   };
 
   if (!accessToken) {
@@ -189,11 +189,11 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       />
 
       {/* Actions - Sticky at bottom */}
-      <div className="border-t border-gray-200 pt-6 flex justify-end gap-3">
-        <Button onClick={() => window.location.reload()}>Reset</Button>
-        <Button type="primary" onClick={handleSaveChanges}>
-          Save Changes
+      <div className="border-t border-border pt-6 flex justify-end gap-3">
+        <Button variant="outline" onClick={() => window.location.reload()}>
+          Reset
         </Button>
+        <Button onClick={handleSaveChanges}>Save Changes</Button>
       </div>
     </div>
   );

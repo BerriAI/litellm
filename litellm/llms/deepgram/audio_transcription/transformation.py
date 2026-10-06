@@ -2,10 +2,12 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to Deepgram's `/v1/listen`
 """
 
-from typing import List, Optional, Union
+from collections.abc import Iterable, Mapping
+from typing import Final
 from urllib.parse import urlencode
 
 from httpx import Headers, Response
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -22,11 +24,12 @@ from ...base_llm.audio_transcription.transformation import (
 )
 from ..common_utils import DeepgramException
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+
 
 class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         return ["language"]
 
     def map_openai_params(
@@ -36,18 +39,14 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
                 optional_params[k] = v
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return DeepgramException(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+        return DeepgramException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_audio_transcription_request(
         self,
@@ -68,13 +67,11 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             AudioTranscriptionRequestData with binary data and no files.
         """
         # Use common utility to process the audio file
-        processed_audio = process_audio_file(audio_file)
+        processed_audio: Final = process_audio_file(audio_file)
 
         # Return structured data with binary content and no files
         # For Deepgram, we send binary data directly as request body
-        return AudioTranscriptionRequestData(
-            data=processed_audio.file_content, files=None
-        )
+        return AudioTranscriptionRequestData(data=processed_audio.file_content, files=None)
 
     def transform_audio_transcription_response(
         self,
@@ -84,11 +81,11 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Transforms the raw response from Deepgram to the TranscriptionResponse format
         """
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
 
             # Get the first alternative from the first channel
-            first_channel = response_json["results"]["channels"][0]
-            first_alternative = first_channel["alternatives"][0]
+            first_channel: Final = response_json["results"]["channels"][0]
+            first_alternative: Final = first_channel["alternatives"][0]
 
             # Detect if diarization is active by checking if words have 'speaker' field
             has_diarization = False
@@ -107,13 +104,13 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 text = self._reconstruct_diarized_transcript(first_alternative["words"])
 
             # Create TranscriptionResponse object
-            response = TranscriptionResponse(text=text)
+            response: Final = TranscriptionResponse(text=text)
 
             # Add additional metadata matching OpenAI format
             response["task"] = "transcribe"
 
             # Use detected_language if available, otherwise default to "en"
-            detected_language = first_channel.get("detected_language")
+            detected_language: Final = _JSON_OBJECT.validate_python(first_channel).get("detected_language")
             response["language"] = detected_language if detected_language else "en"
 
             response["duration"] = response_json["metadata"]["duration"]
@@ -122,7 +119,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             if "words" in first_alternative:
                 response["words"] = [
                     {"word": word["word"], "start": word["start"], "end": word["end"]}
-                    for word in first_alternative["words"]
+                    for word in _JSON_OBJECTS.validate_python(first_alternative["words"])
                 ]
 
             # Store full response in hidden params
@@ -131,9 +128,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return response
 
         except Exception as e:
-            raise ValueError(
-                f"Error transforming Deepgram response: {str(e)}\nResponse: {raw_response.text}"
-            )
+            raise ValueError(f"Error transforming Deepgram response: {e}\nResponse: {raw_response.text}")
 
     def _reconstruct_diarized_transcript(self, words: list) -> str:
         """
@@ -148,7 +143,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if not words:
             return ""
 
-        segments = []
+        segments: Final = []
         current_speaker = None
         current_words: list[str] = []
 
@@ -160,9 +155,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             if speaker != current_speaker:
                 # New speaker: save previous segment and start new one
                 if current_words:
-                    segments.append(
-                        f"Speaker {current_speaker}: {' '.join(current_words)}"
-                    )
+                    segments.append(f"Speaker {current_speaker}: {' '.join(current_words)}")
                 current_speaker = speaker
                 current_words = [word_text]
             else:
@@ -177,30 +170,28 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         if api_base is None:
-            api_base = (
-                get_secret_str("DEEPGRAM_API_BASE") or "https://api.deepgram.com/v1"
-            )
+            api_base = get_secret_str("DEEPGRAM_API_BASE") or "https://api.deepgram.com/v1"
         api_base = api_base.rstrip("/")  # Remove trailing slash if present
 
         # Build query parameters including the model
-        all_query_params = {"model": model}
+        all_query_params: Final = {"model": model}
 
         # Add filtered optional parameters
-        additional_params = self._build_query_params(optional_params, model)
+        additional_params: Final = self._build_query_params(optional_params, model)
         all_query_params.update(additional_params)
 
         # Construct URL with proper query string encoding
-        base_url = f"{api_base}/listen"
-        query_string = urlencode(all_query_params)
-        url = f"{base_url}?{query_string}"
+        base_url: Final = f"{api_base}/listen"
+        query_string: Final = urlencode(all_query_params)
+        url: Final = f"{base_url}?{query_string}"
 
         return url
 
@@ -229,8 +220,8 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Returns:
             Dictionary of filtered and formatted query parameters
         """
-        query_params = {}
-        provider_specific_params = self.get_provider_specific_params(
+        query_params: Final = {}
+        provider_specific_params: Final = self.get_provider_specific_params(
             optional_params=optional_params,
             model=model,
             openai_params=self.get_supported_openai_params(model),
@@ -247,11 +238,11 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         api_key = api_key or get_secret_str("DEEPGRAM_API_KEY")
         return {

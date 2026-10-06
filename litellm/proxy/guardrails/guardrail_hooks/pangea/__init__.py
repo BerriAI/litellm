@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -11,11 +11,11 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    guardrail_name = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("Pangea guardrail name is required")
 
-    _pangea_callback = PangeaHandler(
+    _pangea_callback: Final = PangeaHandler(
         guardrail_name=guardrail_name,
         pangea_input_recipe=litellm_params.pangea_input_recipe,
         pangea_output_recipe=litellm_params.pangea_output_recipe,
@@ -23,17 +23,18 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         api_key=litellm_params.api_key,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_pangea_callback)
 
     return _pangea_callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.PANGEA.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.PANGEA.value: PangeaHandler,
 }

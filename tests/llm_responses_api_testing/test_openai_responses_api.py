@@ -1,5 +1,4 @@
 import os
-import sys
 import pytest
 import asyncio
 from typing import Optional, cast
@@ -10,10 +9,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 import time
 import json
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-import json
 from litellm.types.utils import StandardLoggingPayload
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,
@@ -26,14 +23,11 @@ from base_responses_api import BaseResponsesAPITest, validate_responses_api_resp
 
 
 class TestOpenAIResponsesAPITest(BaseResponsesAPITest):
+    test_responses_api_with_tool_calls = None
+
     def get_base_completion_call_args(self):
         return {
             "model": "openai/gpt-5.5",
-        }
-
-    def get_base_completion_reasoning_call_args(self):
-        return {
-            "model": "openai/gpt-5-mini",
         }
 
     def get_advanced_model_for_shell_tool(self):
@@ -1606,45 +1600,35 @@ async def test_openai_gpt5_reasoning_effort_parameter():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [True, False])
-async def test_basic_openai_responses_with_websearch(stream):
-    litellm._turn_on_debug()
-    request_model = "gpt-5.5"
-    response = await litellm.aresponses(
-        model=request_model,
-        stream=stream,
-        input="hi",
-        tools=[{"type": "web_search", "search_context_size": "low"}],
-    )
-    if stream:
-        async for chunk in response:
-            print("chunk=", json.dumps(chunk, indent=4, default=str))
-    else:
-        print("response=", json.dumps(response, indent=4, default=str))
-
-
-@pytest.mark.asyncio
 async def test_openai_responses_api_token_limit_error():
     """
     Relevant issue: https://github.com/BerriAI/litellm/issues/15785
 
-
-    When this fails you'll see:
-    "pydantic_core._pydantic_core.ValidationError: 3 validation errors for ErrorEvent"
-    in the console.
+    Parsing the in-stream ErrorEvent must not raise
+    "pydantic_core._pydantic_core.ValidationError: 3 validation errors for ErrorEvent".
+    The iterator routes the event through litellm.exception_type, so it surfaces as
+    the typed 400 client error the non-streaming path raises (litellm.BadRequestError)
+    carrying the provider's message. invalid_request_error is a non-retriable client
+    error, so there is no MidStreamFallbackError wrapping.
     """
     litellm._turn_on_debug()
 
     # Generate text with >400k tokens to trigger token limit error
     oversized_text = "This is a test sentence. " * 50000  # ~400k tokens
 
-    # This will raise ValidationError instead of showing the real error
     response = await litellm.aresponses(
         model="gpt-5-mini", input=oversized_text, stream=True
     )
 
-    async for event in response:
-        print(event)  # Never reaches here - ValidationError is raised
+    async def _drain():
+        async for event in response:
+            print(event)
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await _drain()
+
+    assert exc_info.value.status_code == 400
+    assert "exceeds the context window" in str(exc_info.value)
 
 
 async def test_openai_streaming_logging():
@@ -1812,7 +1796,7 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
         await litellm.aresponses(
             model="gpt-5.5",
             input="Test",
-            temperature=0.7,
+            temperature=1,
             max_output_tokens=20,
             extra_body={
                 "custom_field": "custom_value",

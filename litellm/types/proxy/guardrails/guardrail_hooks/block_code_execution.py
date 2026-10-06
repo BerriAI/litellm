@@ -1,6 +1,6 @@
 """Types for the Block Code Execution guardrail."""
 
-from typing import Any, List, Literal, Optional, TypedDict, cast
+from typing import Final, Literal, TypedDict
 
 from pydantic import Field
 
@@ -11,7 +11,7 @@ CodeBlockActionTaken = Literal["block", "allow", "log_only"]
 # Supported language tags for the blocked_languages multiselect dropdown.
 # Only canonical names are listed; LANGUAGE_ALIASES in the guardrail normalizes
 # aliases (e.g. js→javascript, sh→bash) when matching.
-BLOCKED_LANGUAGES_OPTIONS = [
+BLOCKED_LANGUAGES_OPTIONS: Final = [
     "python",
     "javascript",
     "typescript",
@@ -35,20 +35,17 @@ class CodeBlockDetection(TypedDict, total=False):
     language: str
     confidence: float
     action_taken: CodeBlockActionTaken
-    evidence: Optional[str]
-    snippet: Optional[str]
+    evidence: str | None
+    snippet: str | None
 
 
 class BlockCodeExecutionGuardrailConfigModel(GuardrailConfigModel):
     """Configuration for the Block Code Execution guardrail."""
 
-    blocked_languages: Optional[List[str]] = Field(
+    blocked_languages: list[str] | None = Field(
         default=None,
         description="Language tags to block (e.g. python, javascript, bash). Empty or None = block all fenced code blocks.",
-        json_schema_extra=cast(
-            Any,
-            {"ui_type": "multiselect", "options": BLOCKED_LANGUAGES_OPTIONS},
-        ),
+        json_schema_extra={"ui_type": "multiselect", "options": list(BLOCKED_LANGUAGES_OPTIONS)},
     )
     action: Literal["block", "mask"] = Field(
         default="block",
@@ -59,16 +56,13 @@ class BlockCodeExecutionGuardrailConfigModel(GuardrailConfigModel):
         ge=0.0,
         le=1.0,
         description="Only block or mask when detection confidence >= this value; below threshold, allow or log_only.",
-        json_schema_extra=cast(
-            Any,
-            {
-                "ui_type": "percentage",
-                "min": 0.0,
-                "max": 1.0,
-                "step": 0.1,
-                "default_value": 0.5,
-            },
-        ),
+        json_schema_extra={
+            "ui_type": "percentage",
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.1,
+            "default_value": 0.5,
+        },
     )
     detect_execution_intent: bool = Field(
         default=True,

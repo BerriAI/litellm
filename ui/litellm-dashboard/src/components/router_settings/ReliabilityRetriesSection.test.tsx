@@ -36,6 +36,9 @@ describe("ReliabilityRetriesSection", () => {
     expect(inputNames).not.toContain("routing_strategy_args");
     expect(inputNames).not.toContain("routing_strategy");
     expect(inputNames).not.toContain("enable_tag_filtering");
+    // Owned exclusively by the Model Retry Settings tab, never editable here
+    expect(inputNames).not.toContain("retry_policy");
+    expect(inputNames).not.toContain("model_group_retry_policy");
   });
 
   it("should use ui_field_name from metadata as the label", () => {
@@ -58,12 +61,12 @@ describe("ReliabilityRetriesSection", () => {
   });
 
   it("should render object values stringified into the input", () => {
-    const settings = { retry_policy: { "rate-limited": 2 } };
+    const settings = { model_group_alias: { "gpt-4": "gpt-4-turbo" } };
     render(<ReliabilityRetriesSection routerSettings={settings} routerFieldsMetadata={{}} />);
     // HTML input type=text strips newlines, so check that the key/value appears
-    const input = screen.getByRole("textbox", { name: /retry_policy/i }) as HTMLInputElement;
-    expect(input.value).toContain('"rate-limited"');
-    expect(input.value).toContain("2");
+    const input = screen.getByRole("textbox", { name: /model_group_alias/i }) as HTMLInputElement;
+    expect(input.value).toContain('"gpt-4"');
+    expect(input.value).toContain('"gpt-4-turbo"');
   });
 
   it("should render no inputs when routerSettings is empty", () => {

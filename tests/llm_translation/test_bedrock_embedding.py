@@ -1,18 +1,12 @@
 import json
 import os
-import sys
-from datetime import datetime
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 import pytest
 import base64
-import httpx
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 titan_embedding_response = {"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}
 
@@ -34,6 +28,11 @@ img_base_64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIh
             "text",
             titan_embedding_response,
         ),  # V2 text model
+        (
+            "bedrock/amazon.titan-embed-g1-text-02",
+            "text",
+            titan_embedding_response,
+        ),  # G1 text model
         (
             "bedrock/amazon.titan-embed-image-v1",
             "image",
@@ -393,8 +392,6 @@ def test_bedrock_embedding_uses_correct_region_when_specified():
             os.environ["AWS_REGION_NAME"] = original_region_name
         else:
             os.environ.pop("AWS_REGION_NAME", None)
-
-
 def test_bedrock_embedding_region_bug_reproduction():
     """
     Reproduces the bug where aws_region_name is ignored when passed explicitly.
@@ -442,9 +439,7 @@ def test_bedrock_embedding_region_bug_reproduction():
                 print(
                     "❌ BUG REPRODUCED: Using wrong region from env var instead of explicit parameter"
                 )
-                assert (
-                    False
-                ), f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}"
+                pytest.fail(f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}")
             else:
                 print(
                     "✓ Bug NOT reproduced: Using correct region from explicit parameter"

@@ -8,11 +8,13 @@ Has 4 methods:
     - async_get_cache
 """
 
+import heapq
 import json
 import sys
+import threading
 import time
-import heapq
-from typing import TYPE_CHECKING, Any, List, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from litellm.types.caching import RedisPipelineIncrementOperation
@@ -23,31 +25,33 @@ from litellm.constants import MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
 
 from .base_cache import BaseCache
 
+DEFAULT_MAX_SIZE_IN_MEMORY: Final = 200
+
 
 class InMemoryCache(BaseCache):
     def __init__(
         self,
-        max_size_in_memory: Optional[int] = 200,
-        default_ttl: Optional[
-            int
-        ] = 600,  # default ttl is 10 minutes. At maximum litellm rate limiting logic requires objects to be in memory for 1 minute
-        max_size_per_item: Optional[int] = 1024,  # 1MB = 1024KB
+        max_size_in_memory: int | None = DEFAULT_MAX_SIZE_IN_MEMORY,
+        default_ttl: int
+        | None = 600,  # default ttl is 10 minutes. At maximum litellm rate limiting logic requires objects to be in memory for 1 minute
+        max_size_per_item: int | None = 1024,  # 1MB = 1024KB
+        clock: Callable[[], float] | None = None,
     ):
         """
         max_size_in_memory [int]: Maximum number of items in cache. done to prevent memory leaks. Use 200 items as a default
         """
         self.max_size_in_memory = (
-            max_size_in_memory if max_size_in_memory is not None else 200
+            max_size_in_memory if max_size_in_memory is not None else DEFAULT_MAX_SIZE_IN_MEMORY
         )  # set an upper bound of 200 items in-memory
         self.default_ttl = default_ttl or 600
-        self.max_size_per_item = (
-            max_size_per_item or MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
-        )  # 1MB = 1024KB
+        self.max_size_per_item = max_size_per_item or MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB  # 1MB = 1024KB
 
         # in-memory cache
         self.cache_dict: dict = {}
         self.ttl_dict: dict = {}
         self.expiration_heap: list[tuple[float, str]] = []
+        self._increment_lock = threading.Lock()
+        self._clock = clock if clock is not None else lambda: time.time()
 
     def check_value_size(self, value: Any):
         """
@@ -58,8 +62,7 @@ class InMemoryCache(BaseCache):
             # Fast path for common primitive types that are typically small
             if (
                 isinstance(value, (bool, int, float, str))
-                and len(str(value))
-                < self.max_size_per_item * MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
+                and len(str(value)) < self.max_size_per_item * MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
             ):  # Conservative estimate
                 return True
 
@@ -69,13 +72,11 @@ class InMemoryCache(BaseCache):
 
             # Handle special types without full conversion when possible
             if hasattr(value, "__sizeof__"):  # Use __sizeof__ if available
-                size = value.__sizeof__() / 1024
+                size: Final = value.__sizeof__() / 1024
                 return size <= self.max_size_per_item
 
             # Fallback for complex types
-            if isinstance(value, BaseModel) and hasattr(
-                value, "model_dump"
-            ):  # Pydantic v2
+            if isinstance(value, BaseModel) and hasattr(value, "model_dump"):  # Pydantic v2
                 value = value.model_dump()
             elif hasattr(value, "isoformat"):  # datetime objects
                 return True  # datetime strings are always small
@@ -93,7 +94,7 @@ class InMemoryCache(BaseCache):
         """
         Check if a specific key is expired
         """
-        return key in self.ttl_dict and time.time() > self.ttl_dict[key]
+        return key in self.ttl_dict and self._clock() > self.ttl_dict[key]
 
     def _remove_key(self, key: str) -> None:
         """
@@ -115,7 +116,7 @@ class InMemoryCache(BaseCache):
         - 3. the size of in-memory cache is bounded
 
         """
-        current_time = time.time()
+        current_time: Final = self._clock()
 
         # Step 1: Remove expired or outdated items
         while self.expiration_heap:
@@ -148,10 +149,8 @@ class InMemoryCache(BaseCache):
         """
         Check if ttl is set for a key
         """
-        ttl_time = self.ttl_dict.get(key)
-        if ttl_time is None:  # if ttl is not set, allow override
-            return True
-        elif float(ttl_time) < time.time():  # if ttl is expired, allow override
+        ttl_time: Final = self.ttl_dict.get(key)
+        if ttl_time is None or float(ttl_time) < self._clock():  # if ttl is not set, allow override
             return True
         else:
             return False
@@ -171,10 +170,10 @@ class InMemoryCache(BaseCache):
         self.cache_dict[key] = value
         if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
             if "ttl" in kwargs and kwargs["ttl"] is not None:
-                self.ttl_dict[key] = time.time() + float(kwargs["ttl"])
+                self.ttl_dict[key] = self._clock() + float(kwargs["ttl"])
                 heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
             else:
-                self.ttl_dict[key] = time.time() + self.default_ttl
+                self.ttl_dict[key] = self._clock() + self.default_ttl
                 heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
 
     async def async_set_cache(self, key, value, **kwargs):
@@ -187,12 +186,12 @@ class InMemoryCache(BaseCache):
             else:
                 self.set_cache(key=cache_key, value=cache_value)
 
-    async def async_set_cache_sadd(self, key, value: List, ttl: Optional[float]):
+    async def async_set_cache_sadd(self, key, value: list, ttl: float | None):
         """
         Add value to set
         """
         # get the value
-        init_value = self.get_cache(key=key) or set()
+        init_value: Final = self.get_cache(key=key) or set()
         for val in value:
             init_value.add(val)
         self.set_cache(key, init_value, ttl=ttl)
@@ -213,7 +212,7 @@ class InMemoryCache(BaseCache):
         if key in self.cache_dict:
             if self.evict_element_if_expired(key):
                 return None
-            original_cached_response = self.cache_dict[key]
+            original_cached_response: Final = self.cache_dict[key]
             try:
                 cached_response = json.loads(original_cached_response)
             except Exception:
@@ -222,44 +221,39 @@ class InMemoryCache(BaseCache):
         return None
 
     def batch_get_cache(self, keys: list, **kwargs):
-        return_val = []
+        return_val: Final = []
         for k in keys:
             val = self.get_cache(key=k, **kwargs)
             return_val.append(val)
         return return_val
 
-    def increment_cache(self, key, value: int, **kwargs) -> int:
-        # get the value
-        init_value = self.get_cache(key=key) or 0
-        value = init_value + value
-        self.set_cache(key, value, **kwargs)
-        return value
+    def increment_cache(self, key, value: float, **kwargs) -> float:
+        with self._increment_lock:
+            # keep read-modify-write atomic
+            init_value: Final = self.get_cache(key=key) or 0
+            value = init_value + value
+            self.set_cache(key, value, **kwargs)
+            return value
 
     async def async_get_cache(self, key, **kwargs):
         return self.get_cache(key=key, **kwargs)
 
     async def async_batch_get_cache(self, keys: list, **kwargs):
-        return_val = []
+        return_val: Final = []
         for k in keys:
             val = self.get_cache(key=k, **kwargs)
             return_val.append(val)
         return return_val
 
     async def async_increment(self, key, value: float, **kwargs) -> float:
-        # get the value
-        init_value = await self.async_get_cache(key=key) or 0
-        value = init_value + value
-        await self.async_set_cache(key, value, **kwargs)
-        return value
+        return self.increment_cache(key=key, value=value, **kwargs)
 
     async def async_increment_pipeline(
-        self, increment_list: List["RedisPipelineIncrementOperation"], **kwargs
-    ) -> Optional[List[float]]:
-        results = []
+        self, increment_list: list["RedisPipelineIncrementOperation"], **kwargs
+    ) -> list[float] | None:
+        results: Final = []
         for increment in increment_list:
-            result = await self.async_increment(
-                increment["key"], increment["increment_value"], **kwargs
-            )
+            result = await self.async_increment(increment["key"], increment["increment_value"], **kwargs)
             results.append(result)
         return results
 
@@ -274,16 +268,16 @@ class InMemoryCache(BaseCache):
     def delete_cache(self, key):
         self._remove_key(key)
 
-    async def async_get_ttl(self, key: str) -> Optional[int]:
+    async def async_get_ttl(self, key: str) -> int | None:
         """
         Get the remaining TTL of a key in in-memory cache
         """
         return self.ttl_dict.get(key, None)
 
-    async def async_get_oldest_n_keys(self, n: int) -> List[str]:
+    async def async_get_oldest_n_keys(self, n: int) -> list[str]:
         """
         Get the oldest n keys in the cache
         """
         # sorted ttl dict by ttl
-        sorted_ttl_dict = sorted(self.ttl_dict.items(), key=lambda x: x[1])
+        sorted_ttl_dict: Final = sorted(self.ttl_dict.items(), key=lambda x: x[1])
         return [key for key, _ in sorted_ttl_dict[:n]]

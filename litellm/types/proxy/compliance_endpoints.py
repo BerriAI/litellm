@@ -1,9 +1,7 @@
-from typing import List, Optional
-
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class ComplianceCheckResult(BaseModel):
+class ComplianceCheckResult(LiteLLMBaseModel):
     """Result of a single compliance check."""
 
     check_name: str
@@ -12,22 +10,22 @@ class ComplianceCheckResult(BaseModel):
     detail: str
 
 
-class ComplianceResponse(BaseModel):
+class ComplianceResponse(LiteLLMBaseModel):
     """Response from a compliance check endpoint."""
 
     compliant: bool
     regulation: str
-    checks: List[ComplianceCheckResult]
+    checks: list[ComplianceCheckResult]
 
 
-class ComplianceCheckRequest(BaseModel):
+class ComplianceCheckRequest(LiteLLMBaseModel):
     """Request payload for compliance check endpoints.
 
     Mirrors the spend log fields needed for compliance evaluation.
     """
 
     request_id: str
-    user_id: Optional[str] = None
-    model: Optional[str] = None
-    timestamp: Optional[str] = None
-    guardrail_information: Optional[List[dict]] = None
+    user_id: str | None = None
+    model: str | None = None
+    timestamp: str | None = None
+    guardrail_information: list[dict] | None = None

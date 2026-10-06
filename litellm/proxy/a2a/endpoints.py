@@ -9,11 +9,11 @@ admin pick which ones to expose through the proxy. The actual merge into a
 LiteLLM-fronted card happens when the agent is saved via ``POST /v1/agents``.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -24,11 +24,12 @@ from litellm.proxy.a2a.discovery import (
     fetch_well_known_card,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.llms.base import LiteLLMBaseModel
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
-class DiscoverAgentRequest(BaseModel):
+class DiscoverAgentRequest(LiteLLMBaseModel):
     url: str = Field(
         ...,
         description=(
@@ -49,7 +50,7 @@ class DiscoverAgentRequest(BaseModel):
             "query parameter."
         ),
     )
-    params: Optional[Dict[str, Any]] = Field(
+    params: dict[str, Any] | None = Field(
         default=None,
         description=(
             "Mode-specific parameters. ``langgraph_platform`` requires "
@@ -58,9 +59,9 @@ class DiscoverAgentRequest(BaseModel):
     )
 
 
-class DiscoverAgentResponse(BaseModel):
+class DiscoverAgentResponse(LiteLLMBaseModel):
     url: str
-    agent_card: Dict[str, Any]
+    agent_card: dict[str, Any]
 
 
 @router.post(
@@ -91,14 +92,11 @@ async def discover_agent_card(
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=403,
-            detail=(
-                "Only proxy admins can discover agent cards. "
-                f"Your role={user_api_key_dict.user_role}"
-            ),
+            detail=(f"Only proxy admins can discover agent cards. Your role={user_api_key_dict.user_role}"),
         )
 
     try:
-        card = await fetch_well_known_card(
+        card: Final = await fetch_well_known_card(
             request.url,
             discovery_mode=request.discovery_mode,
             params=request.params,
@@ -107,7 +105,7 @@ async def discover_agent_card(
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         verbose_proxy_logger.exception("Unexpected error during A2A discovery: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Discovery failed: {exc!s}")
+        raise HTTPException(status_code=500, detail=f"Discovery failed: {exc}")
 
     return JSONResponse(
         content={"url": request.url, "agent_card": card},

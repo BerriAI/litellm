@@ -11,7 +11,7 @@ import json
 import os
 import threading
 import time
-from typing import Literal, Optional
+from typing import Final, Literal
 
 import litellm
 from litellm.constants import (
@@ -28,8 +28,8 @@ class BudgetManager:
         self,
         project_name: str,
         client_type: str = "local",
-        api_base: Optional[str] = None,
-        headers: Optional[dict] = None,
+        api_base: str | None = None,
+        headers: dict | None = None,
     ):
         self.client_type = client_type
         self.project_name = project_name
@@ -60,16 +60,12 @@ class BudgetManager:
             self.print_verbose(f"user dict from local: {self.user_dict}")
         elif self.client_type == "hosted":
             # Load the user_dict from hosted db
-            url = self.api_base + "/get_budget"
-            data = {"project_name": self.project_name}
-            response = litellm.module_level_client.post(
-                url, headers=self.headers, json=data
-            )
+            url: Final = self.api_base + "/get_budget"
+            data: Final = {"project_name": self.project_name}
+            response = litellm.module_level_client.post(url, headers=self.headers, json=data)
             response = response.json()
             if response["status"] == "error":
-                self.user_dict = (
-                    {}
-                )  # assume this means the user dict hasn't been stored yet
+                self.user_dict = {}  # assume this means the user dict hasn't been stored yet
             else:
                 self.user_dict = response["data"]
 
@@ -77,7 +73,7 @@ class BudgetManager:
         self,
         total_budget: float,
         user: str,
-        duration: Optional[Literal["daily", "weekly", "monthly", "yearly"]] = None,
+        duration: Literal["daily", "weekly", "monthly", "yearly"] | None = None,
         created_at: float = time.time(),
     ):
         self.user_dict[user] = {"total_budget": total_budget}
@@ -93,9 +89,7 @@ class BudgetManager:
         elif duration == "yearly":
             duration_in_days = DAYS_IN_A_YEAR
         else:
-            raise ValueError(
-                """duration needs to be one of ["daily", "weekly", "monthly", "yearly"]"""
-            )
+            raise ValueError("""duration needs to be one of ["daily", "weekly", "monthly", "yearly"]""")
         self.user_dict[user] = {
             "total_budget": total_budget,
             "duration": duration_in_days,
@@ -106,13 +100,11 @@ class BudgetManager:
         return self.user_dict[user]
 
     def projected_cost(self, model: str, messages: list, user: str):
-        text = "".join(message["content"] for message in messages)
-        prompt_tokens = litellm.token_counter(model=model, text=text)
-        prompt_cost, _ = litellm.cost_per_token(
-            model=model, prompt_tokens=prompt_tokens, completion_tokens=0
-        )
-        current_cost = self.user_dict[user].get("current_cost", 0)
-        projected_cost = prompt_cost + current_cost
+        text: Final = "".join(message["content"] for message in messages)
+        prompt_tokens: Final = litellm.token_counter(model=model, text=text)
+        prompt_cost, _ = litellm.cost_per_token(model=model, prompt_tokens=prompt_tokens, completion_tokens=0)
+        current_cost: Final = self.user_dict[user].get("current_cost", 0)
+        projected_cost: Final = prompt_cost + current_cost
         return projected_cost
 
     def get_total_budget(self, user: str):
@@ -121,18 +113,14 @@ class BudgetManager:
     def update_cost(
         self,
         user: str,
-        completion_obj: Optional[ModelResponse] = None,
-        model: Optional[str] = None,
-        input_text: Optional[str] = None,
-        output_text: Optional[str] = None,
+        completion_obj: ModelResponse | None = None,
+        model: str | None = None,
+        input_text: str | None = None,
+        output_text: str | None = None,
     ):
         if model and input_text and output_text:
-            prompt_tokens = litellm.token_counter(
-                model=model, messages=[{"role": "user", "content": input_text}]
-            )
-            completion_tokens = litellm.token_counter(
-                model=model, messages=[{"role": "user", "content": output_text}]
-            )
+            prompt_tokens = litellm.token_counter(model=model, messages=[{"role": "user", "content": input_text}])
+            completion_tokens = litellm.token_counter(model=model, messages=[{"role": "user", "content": output_text}])
             (
                 prompt_tokens_cost_usd_dollar,
                 completion_tokens_cost_usd_dollar,
@@ -144,21 +132,15 @@ class BudgetManager:
             cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
         elif completion_obj:
             cost = litellm.completion_cost(completion_response=completion_obj)
-            model = completion_obj[
-                "model"
-            ]  # if this throws an error try, model = completion_obj['model']
+            model = completion_obj["model"]  # if this throws an error try, model = completion_obj['model']
         else:
             raise ValueError(
                 "Either a chat completion object or the text response needs to be passed in. Learn more - https://docs.litellm.ai/docs/budget_manager"
             )
 
-        self.user_dict[user]["current_cost"] = cost + self.user_dict[user].get(
-            "current_cost", 0
-        )
+        self.user_dict[user]["current_cost"] = cost + self.user_dict[user].get("current_cost", 0)
         if "model_cost" in self.user_dict[user]:
-            self.user_dict[user]["model_cost"][model] = cost + self.user_dict[user][
-                "model_cost"
-            ].get(model, 0)
+            self.user_dict[user]["model_cost"][model] = cost + self.user_dict[user]["model_cost"].get(model, 0)
         else:
             self.user_dict[user]["model_cost"] = {model: cost}
 
@@ -196,13 +178,11 @@ class BudgetManager:
 
     def reset_on_duration(self, user: str):
         # Get current and creation time
-        last_updated_at = self.user_dict[user]["last_updated_at"]
-        current_time = time.time()
+        last_updated_at: Final = self.user_dict[user]["last_updated_at"]
+        current_time: Final = time.time()
 
         # Convert duration from days to seconds
-        duration_in_seconds = (
-            self.user_dict[user]["duration"] * HOURS_IN_A_DAY * 60 * 60
-        )
+        duration_in_seconds: Final = self.user_dict[user]["duration"] * HOURS_IN_A_DAY * 60 * 60
 
         # Check if duration has elapsed
         if current_time - last_updated_at >= duration_in_seconds:
@@ -217,9 +197,7 @@ class BudgetManager:
                 self.reset_on_duration(user)
 
     def _save_data_thread(self):
-        thread = threading.Thread(
-            target=self.save_data
-        )  # [Non-Blocking]: saves data without blocking execution
+        thread: Final = threading.Thread(target=self.save_data)  # [Non-Blocking]: saves data without blocking execution
         thread.start()
 
     def save_data(self):
@@ -228,15 +206,11 @@ class BudgetManager:
 
             # save the user dict
             with open("user_cost.json", "w") as json_file:
-                json.dump(
-                    self.user_dict, json_file, indent=4
-                )  # Indent for pretty formatting
+                json.dump(self.user_dict, json_file, indent=4)  # Indent for pretty formatting
             return {"status": "success"}
         elif self.client_type == "hosted":
-            url = self.api_base + "/set_budget"
-            data = {"project_name": self.project_name, "user_dict": self.user_dict}
-            response = litellm.module_level_client.post(
-                url, headers=self.headers, json=data
-            )
+            url: Final = self.api_base + "/set_budget"
+            data: Final = {"project_name": self.project_name, "user_dict": self.user_dict}
+            response = litellm.module_level_client.post(url, headers=self.headers, json=data)
             response = response.json()
             return response

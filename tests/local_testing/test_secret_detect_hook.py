@@ -2,12 +2,10 @@
 ## This tests the llm guard integration
 
 import asyncio
-import os
 import random
 
 # What is this?
 ## Unit test for presidio pii masking
-import sys
 import time
 import traceback
 from datetime import datetime
@@ -15,11 +13,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 from fastapi import Request, Response
 from starlette.datastructures import URL
@@ -34,7 +28,6 @@ from litellm_enterprise.enterprise_callbacks.secret_detection import (
 )
 from litellm.proxy.proxy_server import chat_completion
 from litellm.proxy.utils import ProxyLogging, hash_token
-from litellm.router import Router
 
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
@@ -50,8 +43,8 @@ async def test_basic_secret_detection_chat():
     It should mask the following API_KEY = 'sk_1234567890abcdef' and  OPENAI_API_KEY = 'sk_1234567890abcdef'
     """
     secret_instance = _ENTERPRISE_SecretDetection()
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-98765"
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -118,8 +111,8 @@ async def test_basic_secret_detection_text_completion():
     It should mask the following API_KEY = 'sk_1234567890abcdef' and  OPENAI_API_KEY = 'sk_1234567890abcdef'
     """
     secret_instance = _ENTERPRISE_SecretDetection()
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-98765"
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -137,7 +130,7 @@ async def test_basic_secret_detection_text_completion():
         call_type="completion",
     )
 
-    test_data == {
+    assert test_data == {
         "prompt": "Hey, how's it going, API_KEY = '[REDACTED]', my OPENAI_API_KEY = '[REDACTED]' and i want to know what is the weather",
         "model": "gpt-3.5-turbo",
     }
@@ -156,8 +149,8 @@ async def test_basic_secret_detection_embeddings():
     It should mask the following API_KEY = 'sk_1234567890abcdef' and  OPENAI_API_KEY = 'sk_1234567890abcdef'
     """
     secret_instance = _ENTERPRISE_SecretDetection()
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-98765"
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -194,8 +187,8 @@ async def test_basic_secret_detection_embeddings_list():
     It should mask the following API_KEY = 'sk_1234567890abcdef' and  OPENAI_API_KEY = 'sk_1234567890abcdef'
     """
     secret_instance = _ENTERPRISE_SecretDetection()
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-98765"
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -249,7 +242,7 @@ router = Router(
             "litellm_params": {
                 "model": "openai/fake",
                 "api_base": FAKE_OPENAI_API_BASE,
-                "api_key": "sk-12345",
+                "api_key": "sk-98765",
             },
         }
     ]
@@ -279,6 +272,7 @@ async def test_chat_completion_request_with_redaction():
         scope={
             "type": "http",
             "method": "POST",
+            "path": "/chat/completions",
             "headers": [(b"content-type", b"application/json")],
             "query_string": query_params.encode(),
         }
@@ -287,15 +281,15 @@ async def test_chat_completion_request_with_redaction():
     request._url = URL(url="/chat/completions")
 
     async def return_body():
-        return b'{"model": "fake-model", "messages": [{"role": "user", "content": "Hello here is my OPENAI_API_KEY = sk-12345"}]}'
+        return b'{"model": "fake-model", "messages": [{"role": "user", "content": "Hello here is my OPENAI_API_KEY = sk-98765"}]}'
 
     request.body = return_body
 
     response = await chat_completion(
         request=request,
         user_api_key_dict=UserAPIKeyAuth(
-            api_key="sk-12345",
-            token="hashed_sk-12345",
+            api_key="sk-98765",
+            token="hashed_sk-98765",
         ),
         fastapi_response=Response(),
     )

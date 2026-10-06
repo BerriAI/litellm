@@ -1,17 +1,18 @@
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 if TYPE_CHECKING:
-    from .prompt_manager import PromptManager, PromptTemplate
-    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
+
+    from .prompt_manager import PromptManager, PromptTemplate
 
 from litellm.types.prompts.init_prompts import SupportedPromptIntegrations
 
 from .dotprompt_manager import DotpromptManager
 
 # Global instances
-global_prompt_directory: Optional[str] = None
-global_prompt_manager: Optional["PromptManager"] = None
+global_prompt_directory: Final[str | None] = None
+global_prompt_manager: Final[Optional["PromptManager"]] = None
 
 
 def set_global_prompt_directory(directory: str) -> None:
@@ -23,7 +24,7 @@ def set_global_prompt_directory(directory: str) -> None:
     """
     import litellm
 
-    litellm.global_prompt_directory = directory  # type: ignore
+    litellm.global_prompt_directory = directory
 
 
 def _get_prompt_data_from_dotprompt_content(dotprompt_content: str) -> dict:
@@ -35,40 +36,42 @@ def _get_prompt_data_from_dotprompt_content(dotprompt_content: str) -> dict:
     from .prompt_manager import PromptManager
 
     # Parse the dotprompt content to extract frontmatter and content
-    temp_manager = PromptManager()
+    temp_manager: Final = PromptManager()
     metadata, content = temp_manager._parse_frontmatter(dotprompt_content)
 
     # Convert to prompt_data format
     return {"content": content.strip(), "metadata": metadata}
 
 
-def prompt_initializer(
-    litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec"
-) -> "CustomPromptManagement":
+def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec") -> "CustomPromptManagement":
     """
     Initialize a prompt from a .prompt file.
     """
-    prompt_directory = getattr(litellm_params, "prompt_directory", None)
+    prompt_directory: Final = getattr(litellm_params, "prompt_directory", None)
     prompt_data = getattr(litellm_params, "prompt_data", None)
-    prompt_id = getattr(litellm_params, "prompt_id", None)
+    prompt_id: Final = getattr(litellm_params, "prompt_id", None)
     if prompt_directory:
         raise ValueError(
             "Cannot set prompt_directory when working with prompt_initializer. Needs to be a specific dotprompt file"
         )
 
-    prompt_file = getattr(litellm_params, "prompt_file", None)
+    prompt_file: Final = getattr(litellm_params, "prompt_file", None)
 
     # Handle dotprompt_content from database
-    dotprompt_content = getattr(litellm_params, "dotprompt_content", None)
+    dotprompt_content: Final = getattr(litellm_params, "dotprompt_content", None)
     if dotprompt_content and not prompt_data and not prompt_file:
         prompt_data = _get_prompt_data_from_dotprompt_content(dotprompt_content)
 
+    from .prompt_manager import strip_version_suffix
+
+    registration_prompt_id: Final = prompt_id or strip_version_suffix(prompt_spec.prompt_id) or prompt_spec.prompt_id
+
     try:
-        dot_prompt_manager = DotpromptManager(
+        dot_prompt_manager: Final = DotpromptManager(
             prompt_directory=prompt_directory,
             prompt_data=prompt_data,
             prompt_file=prompt_file,
-            prompt_id=prompt_id,
+            prompt_id=registration_prompt_id,
         )
 
         return dot_prompt_manager
@@ -76,16 +79,16 @@ def prompt_initializer(
         raise e
 
 
-prompt_initializer_registry = {
+prompt_initializer_registry: Final = {
     SupportedPromptIntegrations.DOT_PROMPT.value: prompt_initializer,
 }
 
 # Export public API
 __all__ = [
-    "PromptManager",
     "DotpromptManager",
+    "PromptManager",
     "PromptTemplate",
-    "set_global_prompt_directory",
     "global_prompt_directory",
     "global_prompt_manager",
+    "set_global_prompt_directory",
 ]
