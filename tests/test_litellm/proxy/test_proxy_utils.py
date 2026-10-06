@@ -164,6 +164,29 @@ async def test_proxy_only_error_log_keeps_litellm_metadata_in_litellm_params():
 
 
 @pytest.mark.asyncio
+async def test_proxy_only_error_log_drops_caller_logging_fields_and_keeps_key_details():
+    request_data: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_metadata": {"tags": ["t"]},
+        "langsmith_base_url": "https://caller.invalid",
+        "standard_callback_dynamic_params": {"gcs_path_service_account": "/caller/sa.json"},
+    }
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", team_id="team-a", request_route="/v1/chat/completions"),
+        route="/v1/chat/completions",
+        original_exception=Exception("bad key"),
+    )
+
+    details: Final = request_data["litellm_logging_obj"].model_call_details
+    assert "caller" not in str(details["standard_callback_dynamic_params"])
+    assert "langsmith_base_url" not in details
+    assert details["litellm_params"]["metadata"]["user_api_key_team_id"] == "team-a"
+
+
+@pytest.mark.asyncio
 async def test_proxy_only_error_log_keeps_the_request_litellm_call_id(monkeypatch: pytest.MonkeyPatch):
     """LIT-7836: a route that already stamped the caller's litellm_call_id must
     keep it when the failure is a proxy-only error, so the spend-log row and the
