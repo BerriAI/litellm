@@ -155,9 +155,10 @@ const WINDOW_FORMAT: Intl.DateTimeFormatOptions = {
   minute: "2-digit",
 };
 
+export const shortTime = (iso: string) => new Date(iso).toLocaleString(undefined, WINDOW_FORMAT);
+
 export function windowLabel(job: Job): string {
-  const fmt = (iso: string) => new Date(iso).toLocaleString(undefined, WINDOW_FORMAT);
-  return `${fmt(job.start)} → ${fmt(job.end)}`;
+  return `${shortTime(job.start)} → ${shortTime(job.end)}`;
 }
 
 export function inboxFinding(row: InboxRow): Finding {

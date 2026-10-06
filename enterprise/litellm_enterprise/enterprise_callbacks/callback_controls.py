@@ -7,7 +7,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.llm_request_utils import (
     get_proxy_server_request_headers,
 )
-from litellm.proxy._types import CommonProxyErrors
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
@@ -86,6 +85,7 @@ class EnterpriseCallbackControls:
     @staticmethod
     def _should_allow_dynamic_callback_disabling():
         import litellm
+        from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import premium_user
 
         # Check if admin has disabled this feature

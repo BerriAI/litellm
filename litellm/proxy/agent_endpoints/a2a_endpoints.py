@@ -674,7 +674,7 @@ async def invoke_agent_a2a(
     )
 
     body: dict[str, Any] = {}
-    request_data: dict[str, Any] = body
+    request_data: dict[str, object] = body
     try:
         body = await request.json()
         request_data = body
@@ -892,7 +892,7 @@ async def invoke_agent_a2a(
                     logging_obj._enqueue_deferred_logging = None
                     _enqueue_fn()
 
-            response_dict: Final[dict[str, Any]] = (
+            response_dict: Final[dict[str, object]] = (
                 response.model_dump(mode="json", exclude_none=True)
                 if hasattr(response, "model_dump")
                 else response

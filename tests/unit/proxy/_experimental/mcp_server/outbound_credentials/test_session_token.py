@@ -156,7 +156,7 @@ def test_key_rotation_invalidates_outstanding_tokens():
 @pytest.mark.parametrize(
     "candidate,expected",
     [
-        ("sk-1234", NotASessionToken),
+        ("sk-9876", NotASessionToken),
         ("llm_env_something", NotASessionToken),
         ("", NotASessionToken),
         (SESSION_TOKEN_PREFIX, SessionMalformed),
