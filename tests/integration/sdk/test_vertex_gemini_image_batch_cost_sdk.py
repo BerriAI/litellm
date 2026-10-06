@@ -192,7 +192,7 @@ _SDK_SCRIPT: Final = textwrap.dedent(
             }
         )
         litellm.user_url_validation = False
-        litellm.disable_vertex_batch_output_transformation = True
+        litellm.disable_vertex_batch_output_transformation = os.environ["TRANSFORM_OUTPUT"] != "1"
         litellm.register_model({model: pricing}, persist_across_reloads=False)
         info: Final = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
         assert info["key"] == model, info
@@ -304,6 +304,7 @@ def _subprocess_environment(
     credentials: str,
     proxy_url: str,
     scenario: _BatchScenario,
+    transform_output: bool,
 ) -> dict[str, str]:
     repo_root: Final = Path(__file__).resolve().parents[3]
     python_path: Final = os.pathsep.join(path for path in (str(repo_root), os.environ.get("PYTHONPATH")) if path)
@@ -320,13 +321,17 @@ def _subprocess_environment(
         "VERTEX_CREDENTIALS": credentials,
         "VERTEX_PROJECT": _PROJECT,
         "OMIT_IMAGE_BATCH_RATE": "1" if scenario.omit_image_batch_rate else "0",
+        "TRANSFORM_OUTPUT": "1" if transform_output else "0",
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
         "PYTHONPATH": python_path,
     }
 
 
+@pytest.mark.parametrize("transform_output", (False, True), ids=("untransformed", "transformed"))
 @pytest.mark.parametrize("scenario", _SCENARIOS, ids=tuple(case.name for case in _SCENARIOS))
-def test_aretrieve_batch_costs_native_gemini_image_tokens(scenario: _BatchScenario, tmp_path: Path) -> None:
+def test_aretrieve_batch_costs_native_gemini_image_tokens(
+    scenario: _BatchScenario, transform_output: bool, tmp_path: Path
+) -> None:
     certificate, key = write_self_signed_cert(tmp_path, names=("storage.googleapis.com",))
     tls: Final = server_context(certificate, key)
     row: Final = _prediction_jsonl(scenario)
@@ -337,7 +342,9 @@ def test_aretrieve_batch_costs_native_gemini_image_tokens(scenario: _BatchScenar
             gcs_port: Final = urlsplit(gcs.url).port
             assert gcs_port is not None
             with connect_tunnel("storage.googleapis.com", 443, "127.0.0.1", gcs_port) as proxy_url:
-                environment: Final = _subprocess_environment(api, certificate, credentials, proxy_url, scenario)
+                environment: Final = _subprocess_environment(
+                    api, certificate, credentials, proxy_url, scenario, transform_output
+                )
                 outcome: Final = subprocess.run(
                     [sys.executable, "-P", "-c", _SDK_SCRIPT],
                     env=environment,
