@@ -124,12 +124,12 @@ def check_tokenizer_dependencies() -> str:
         _require(bool(native.encode("hello")), "native tokenizer returned no tokens")
         _require(isinstance(HuggingFaceTokenizer(native), HuggingFace), "runtime alias rejects native tokenizers")
     if importlib.util.find_spec("tokenizers") is not None:
-        python_tokenizer = tokenizer._python_tokenizer().from_str(claude_json_str)
+        python_tokenizer = tokenizer.from_str(claude_json_str)
         _require(bool(python_tokenizer.encode("hello").ids), "Python tokenizer returned no tokens")
         _require(isinstance(python_tokenizer, HuggingFace), "runtime alias rejects Python tokenizers")
         return "installed Python tokenizer and available native tokenizer work"
     try:
-        tokenizer._python_tokenizer()
+        tokenizer.from_str(claude_json_str)
     except ImportError as error:
         _require("pip install tokenizers" in str(error), f"missing tokenizer guidance: {error}")
     else:
