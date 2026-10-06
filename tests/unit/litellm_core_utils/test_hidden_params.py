@@ -26,6 +26,19 @@ def test_get_and_set_hidden_params_on_plain_object() -> None:
     assert get_hidden_params(response) is replacement
 
 
+def test_get_and_set_hidden_params_on_dict() -> None:
+    response: Final = {"_hidden_params": {"existing": True}}
+    stored: Final = get_hidden_params(response)
+
+    assert stored is response["_hidden_params"]
+
+    replacement: Final = {"replacement": True}
+    set_hidden_params(response, replacement)
+
+    assert response["_hidden_params"] is replacement
+    assert get_hidden_params(response) is replacement
+
+
 def test_get_or_create_hidden_params_sets_empty_dict_on_plain_object() -> None:
     class PlainResponse:
         pass
