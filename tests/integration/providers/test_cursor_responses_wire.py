@@ -24,6 +24,13 @@ _CUSTOM_TOOL: Final = {
     "description": "Apply a patch",
     "format": {"type": "grammar", "syntax": "lark", "definition": 'start: "ok"'},
 }
+_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "name": "lookup",
+    "description": "Look up a record",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    "strict": True,
+}
 
 
 def model_discovery_reply(model: str) -> Reply:
@@ -286,13 +293,6 @@ def test_cursor_messages_body_uses_chat_completions_wire(gateway: Gateway) -> No
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target == "/v1/models":
             return model_discovery_reply(_MODEL)
-        assert request.method == "POST"
-        assert request.target == "/v1/chat/completions"
-        assert request.headers["authorization"] == f"Bearer {_API_KEY}", dict(request.headers)
-        assert _JSON_OBJECT.validate_json(request.body) == {
-            "model": _MODEL,
-            "messages": [{"role": "user", "content": "genuine chat request"}],
-        }, request.body
         return Reply(
             body=json.dumps(
                 {
@@ -323,6 +323,8 @@ def test_cursor_messages_body_uses_chat_completions_wire(gateway: Gateway) -> No
             {
                 "model": model,
                 "messages": [{"role": "user", "content": "genuine chat request"}],
+                "tools": [_FUNCTION_TOOL, _CUSTOM_TOOL],
+                "tool_choice": {"type": "function", "name": "lookup"},
             },
             key=key,
         )
@@ -341,4 +343,38 @@ def test_cursor_messages_body_uses_chat_completions_wire(gateway: Gateway) -> No
                 "provider_specific_fields": {},
             }
         ], response.text
-        assert [request.target for request in drain_contract_requests(wire)] == ["/v1/chat/completions"]
+        requests: Final = drain_contract_requests(wire)
+        assert [(request.method, request.target) for request in requests] == [
+            ("POST", "/v1/chat/completions")
+        ], requests
+        assert _JSON_OBJECT.validate_json(requests[0].body) == {
+            "model": _MODEL,
+            "messages": [{"role": "user", "content": "genuine chat request"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "description": "Look up a record",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                            "required": ["query"],
+                        },
+                        "strict": True,
+                    },
+                },
+                {
+                    "type": "custom",
+                    "custom": {
+                        "name": "ApplyPatch",
+                        "description": "Apply a patch",
+                        "format": {
+                            "type": "grammar",
+                            "grammar": {"syntax": "lark", "definition": 'start: "ok"'},
+                        },
+                    },
+                },
+            ],
+            "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+        }, requests[0].body

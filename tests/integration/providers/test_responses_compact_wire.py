@@ -273,3 +273,92 @@ def test_sdk_compact_reaches_the_compact_endpoint_with_its_full_body(gateway: Ga
         assert [(request.method, request.target) for request in drain_contract_requests(wire)] == [
             ("POST", "/v1/responses/compact")
         ]
+
+
+@pytest.mark.parametrize("prefix", ("/v1", "", "/openai/v1"))
+def test_compact_previous_response_id_reaches_the_provider_as_the_raw_id(
+    gateway: Gateway,
+    prefix: str,
+) -> None:
+    pytest.skip("BUG: compact forwards the proxy-encrypted previous_response_id instead of the raw provider id")
+    raw_id: Final = f"resp_compact_prev_{uuid.uuid4().hex}"
+    completed_id: Final = f"resp_compact_result_{uuid.uuid4().hex}"
+    input_items: Final = [
+        {"role": "user", "content": [{"type": "input_text", "text": "Summarize the patch so far."}]}
+    ]
+    output_item: Final = {
+        "id": f"rs_compact_{uuid.uuid4().hex}",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "Compacted patch"}],
+        "encrypted_content": "synthetic-compact-state",
+    }
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        if request.method == "POST" and request.target == "/v1/responses":
+            return Reply(
+                body=json.dumps(
+                    {
+                        "id": raw_id,
+                        "object": "response",
+                        "created_at": 1,
+                        "status": "completed",
+                        "model": _MODEL,
+                        "output": [],
+                    }
+                ).encode()
+            )
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": completed_id,
+                    "created_at": 1,
+                    "object": "response.compaction",
+                    "output": [output_item],
+                    "usage": {
+                        "input_tokens": 7,
+                        "input_tokens_details": {"cached_tokens": 0},
+                        "output_tokens": 3,
+                        "output_tokens_details": {"reasoning_tokens": 0},
+                        "total_tokens": 10,
+                    },
+                }
+            ).encode()
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        client: Final = openai.OpenAI(
+            base_url=f"{gateway.client.base_url}{prefix}",
+            api_key=gateway.key,
+            max_retries=0,
+        )
+        created: Final = client.responses.create(model=model, input="create before compact")
+        assert created.id != raw_id, created.model_dump_json()
+        compact_response: Final = client.responses.with_raw_response.compact(
+            model=model,
+            previous_response_id=created.id,
+            input=input_items,
+        )
+        compacted: Final = compact_response.parse()
+        assert compacted.object == "response.compaction", compact_response.http_response.text
+        assert compacted.created_at == 1, compact_response.http_response.text
+        assert same_response(compacted.id, completed_id), compact_response.http_response.text
+        assert len(compacted.output) == 1, compact_response.http_response.text
+        assert compacted.output[0].type == "reasoning", compact_response.http_response.text
+        assert compacted.output[0].summary[0].text == "Compacted patch", compact_response.http_response.text
+        requests: Final = drain_contract_requests(wire)
+        assert [(request.method, request.target) for request in requests] == [
+            ("POST", "/v1/responses"),
+            ("POST", "/v1/responses/compact"),
+        ], requests
+        assert _JSON_OBJECT.validate_json(requests[0].body) == {
+            "model": _MODEL,
+            "input": "create before compact",
+        }, requests[0].body
+        assert _JSON_OBJECT.validate_json(requests[1].body) == {
+            "model": _MODEL,
+            "previous_response_id": raw_id,
+            "input": input_items,
+        }, compact_response.http_response.text

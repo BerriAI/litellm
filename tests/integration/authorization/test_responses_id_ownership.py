@@ -6,7 +6,7 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -17,9 +17,10 @@ from integration._support.process import owned_proxy
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai.types.responses import Response as ResponsesAPIResponse
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
+from litellm.responses.utils import ResponsesAPIRequestUtils
 
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-responses-key"
@@ -41,6 +42,14 @@ _UNMANAGED_DETAIL: Final = (
     "To let keys address responses this proxy did not issue, set "
     "general_settings::allow_unmanaged_response_ids to True in the config.yaml file."
 )
+
+
+class _DeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    object: Literal["response"]
+    deleted: bool
 
 
 def _deployments_in_group(gateway: Gateway, group: str) -> int:
@@ -145,25 +154,15 @@ def test_response_ids_are_scoped_to_the_issuing_user_and_team(gateway: Gateway, 
         body: Final = _JSON_OBJECT.validate_json(request.body) if request.body else {}
         if request.method == "POST" and request.target == "/v1/responses":
             if body.get("input") == "create owned response":
-                assert body == {"model": _MODEL, "input": "create owned response"}, request.body
                 return Reply(body=_response(raw_id))
-            assert body == {
-                "model": _MODEL,
-                "input": "owned follow-up",
-                "previous_response_id": raw_id,
-            }, request.body
             return Reply(body=_response(raw_id))
         if request.method == "GET" and urlsplit(request.target).path.endswith("/input_items"):
-            assert urlsplit(request.target).path == f"/v1/responses/{raw_id}/input_items", request.target
             return Reply(body=b'{"data":[],"has_more":false,"object":"list"}')
         if request.method == "GET":
-            assert request.target == f"/v1/responses/{raw_id}", request.target
             return Reply(body=_response(raw_id))
         if request.method == "DELETE":
-            assert request.target == f"/v1/responses/{raw_id}", request.target
             return Reply(body=json.dumps({"id": raw_id, "object": "response", "deleted": True}).encode())
         if request.method == "POST" and request.target.endswith("/cancel"):
-            assert request.target == f"/v1/responses/{raw_id}/cancel", request.target
             return Reply(body=_response(raw_id, "cancelled"))
         raise AssertionError(f"Unexpected upstream request: {request.method} {request.target}")
 
@@ -180,7 +179,14 @@ def test_response_ids_are_scoped_to_the_issuing_user_and_team(gateway: Gateway, 
         created: Final = client_a.responses.create(model=model, input="create owned response")
         client_id: Final = created.id
         assert client_id.startswith("resp_") and client_id != raw_id, created.model_dump_json()
-        assert [(request.method, request.target) for request in _contract_requests(wire)] == [("POST", "/v1/responses")]
+        created_requests: Final = _contract_requests(wire)
+        assert [(request.method, request.target, request.body) for request in created_requests] == [
+            ("POST", "/v1/responses", created_requests[0].body)
+        ], created_requests
+        assert _JSON_OBJECT.validate_json(created_requests[0].body) == {
+            "model": _MODEL,
+            "input": "create owned response",
+        }, created_requests[0].body
 
         for call in _every_id_route(other_user_client, model, client_id):
             _refused(call, _OTHER_USER_DETAIL)
@@ -188,14 +194,47 @@ def test_response_ids_are_scoped_to_the_issuing_user_and_team(gateway: Gateway, 
             _refused(call, _OTHER_TEAM_DETAIL)
         assert _contract_requests(wire) == ()
 
-        retrieved: Final = client_a.responses.retrieve(client_id)
-        assert retrieved.id != raw_id and same_response(retrieved.id, client_id), retrieved.model_dump_json()
+        retrieved_response: Final = client_a.responses.with_raw_response.retrieve(client_id)
+        retrieved: Final = retrieved_response.parse()
+        assert retrieved.id != raw_id and same_response(retrieved.id, client_id), retrieved_response.text
+        assert retrieved.model_dump(mode="json", exclude_none=True) == {
+            "id": retrieved.id,
+            "object": "response",
+            "created_at": 1.0,
+            "status": "completed",
+            "model": _MODEL,
+            "output": [],
+            "parallel_tool_calls": False,
+            "tool_choice": "auto",
+            "tools": [],
+        }, retrieved_response.text
         deleted: Final = client_a.responses.with_raw_response.delete(client_id)
         assert deleted.status_code == 200, deleted.text
-        cancelled: Final = client_a.responses.cancel(client_id)
-        assert cancelled.status == "cancelled", cancelled.model_dump_json()
-        page: Final = client_a.responses.input_items.list(client_id)
-        assert page.data == [], page.model_dump_json()
+        deleted_response: Final = _DeleteResponse.model_validate_json(deleted.content)
+        assert deleted_response.model_dump(exclude={"id"}) == {"object": "response", "deleted": True}, deleted.text
+        assert same_response(deleted_response.id, client_id), deleted.text
+        cancelled_response: Final = client_a.responses.with_raw_response.cancel(client_id)
+        cancelled: Final = cancelled_response.parse()
+        assert cancelled.status == "cancelled", cancelled_response.text
+        assert cancelled.id != raw_id and same_response(cancelled.id, client_id), cancelled_response.text
+        assert cancelled.model_dump(mode="json", exclude_none=True) == {
+            "id": cancelled.id,
+            "object": "response",
+            "created_at": 1.0,
+            "status": "cancelled",
+            "model": _MODEL,
+            "output": [],
+            "parallel_tool_calls": False,
+            "tool_choice": "auto",
+            "tools": [],
+        }, cancelled_response.text
+        page_response: Final = client_a.responses.input_items.with_raw_response.list(client_id)
+        page: Final = page_response.parse()
+        assert page.model_dump(mode="json", exclude_none=True) == {
+            "data": [],
+            "has_more": False,
+            "object": "list",
+        }, page_response.text
         followed: Final = client_a.responses.create(
             model=model,
             input="owned follow-up",
@@ -217,13 +256,8 @@ def test_response_ids_are_scoped_to_the_issuing_user_and_team(gateway: Gateway, 
         }, requests[-1].body
 
         unmanaged_id: Final = f"resp_vendor_{uuid.uuid4().hex}"
-        _refused(lambda: client_a.responses.retrieve(unmanaged_id), _UNMANAGED_DETAIL)
-        _refused(
-            lambda: client_a.responses.create(
-                model=model, input="unmanaged follow-up", previous_response_id=unmanaged_id
-            ),
-            _UNMANAGED_DETAIL,
-        )
+        for call in _every_id_route(client_a, model, unmanaged_id):
+            _refused(call, _UNMANAGED_DETAIL)
         assert _contract_requests(wire) == ()
 
 
@@ -232,18 +266,12 @@ def test_allow_unmanaged_response_ids_forwards_previous_id_unchanged(
     tmp_path: Path,
 ) -> None:
     raw_id: Final = f"resp_vendor_{uuid.uuid4().hex}"
+    raw_followup_id: Final = f"resp_followup_{uuid.uuid4().hex}"
 
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target == "/v1/models":
             return _model_discovery_reply()
-        assert request.method == "POST"
-        assert request.target == "/v1/responses"
-        assert _JSON_OBJECT.validate_json(request.body) == {
-            "model": _MODEL,
-            "input": "allowed vendor follow-up",
-            "previous_response_id": raw_id,
-        }, request.body
-        return Reply(body=_response(f"resp_followup_{uuid.uuid4().hex}"))
+        return Reply(body=_response(raw_followup_id))
 
     config: Final = tmp_path / "allow_unmanaged_responses.yaml"
     config.write_text("general_settings:\n  allow_unmanaged_response_ids: true\n")
@@ -270,6 +298,24 @@ def test_allow_unmanaged_response_ids_forwards_previous_id_unchanged(
             )
             assert response.status_code == 200, response.text
             parsed_response: Final = ResponsesAPIResponse.model_validate_json(response.content)
-            assert parsed_response.id.startswith("resp_"), response.text
+            assert parsed_response.id != raw_followup_id, response.text
+            assert same_response(parsed_response.id, raw_followup_id), response.text
+            assert ResponsesAPIRequestUtils.get_model_id_from_response_id(parsed_response.id) is None, response.text
+            assert parsed_response.model_dump(mode="json", exclude_none=True) == {
+                "id": parsed_response.id,
+                "object": "response",
+                "created_at": 1.0,
+                "status": "completed",
+                "model": model,
+                "output": [],
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": [],
+            }, response.text
         requests: Final = _contract_requests(wire)
-        assert [(request.method, request.target) for request in requests] == [("POST", "/v1/responses")]
+        assert [(request.method, request.target) for request in requests] == [("POST", "/v1/responses")], requests
+        assert _JSON_OBJECT.validate_json(requests[0].body) == {
+            "model": _MODEL,
+            "input": "allowed vendor follow-up",
+            "previous_response_id": raw_id,
+        }, requests[0].body
