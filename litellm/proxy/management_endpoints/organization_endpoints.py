@@ -119,7 +119,7 @@ class _ObjectPermissionRow(Protocol):
 class _UserTableClient(Protocol):
     async def find_unique(self, where: Mapping[str, object]) -> "PrismaUserTable | None": ...
 
-    async def find_many(self, where: Mapping[str, object]) -> "Sequence[PrismaUserTable]": ...
+    async def find_many(self, where: Mapping[str, object], take: int | None = None) -> "Sequence[PrismaUserTable]": ...
 
 
 class _BudgetTableClient(Protocol):
@@ -1417,7 +1417,7 @@ async def find_member_if_email(user_email: str, prisma_client: PrismaClient) -> 
         },
     )
     existing_user_email_rows: Final = await _table(UserRepository(prisma_client)).find_many(
-        where={"user_email": user_email}
+        where={"user_email": user_email}, take=2
     )
     if len(existing_user_email_rows) != 1:
         raise not_unique_user_email_error
@@ -1648,7 +1648,7 @@ async def add_member_to_organization(
             )
 
         existing_user_email_rows: Final = (
-            await _table(UserRepository(prisma_client)).find_many(where={"user_email": member.user_email})
+            await _table(UserRepository(prisma_client)).find_many(where={"user_email": member.user_email}, take=2)
             if existing_user_id_row is None and member.user_email is not None
             else ()
         )
@@ -1669,6 +1669,13 @@ async def add_member_to_organization(
             raise HTTPException(
                 status_code=400,
                 detail={"error": "Multiple users with this email found in db. Please use 'user_id' instead."},
+            )
+        elif existing_user_email_rows and member.user_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"user_email '{member.user_email}' and user_id '{member.user_id}' do not belong to the same user."
+                },
             )
         elif existing_user_email_rows:
             user_object = LiteLLM_UserTable.model_validate(existing_user_email_rows[0].model_dump())

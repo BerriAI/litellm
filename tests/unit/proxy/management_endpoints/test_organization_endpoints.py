@@ -1580,14 +1580,18 @@ class _PrismaLikeUserTable:
 
     def __init__(self, rows: tuple) -> None:
         self.rows = rows
+        self.most_rows_read = 0
 
     async def find_unique(self, where: Mapping[str, object]):
         if set(where) != {"user_id"}:
             raise ValueError(f"Could not find field at `findUniqueLiteLLM_UserTable.where.{next(iter(where))}`")
         return next((row for row in self.rows if row.user_id == where["user_id"]), None)
 
-    async def find_many(self, where: Mapping[str, object]):
-        return [row for row in self.rows if all(getattr(row, k) == v for k, v in where.items())]
+    async def find_many(self, where: Mapping[str, object], take: int | None = None):
+        matches = [row for row in self.rows if all(getattr(row, k) == v for k, v in where.items())]
+        read = matches if take is None else matches[:take]
+        self.most_rows_read = max(self.most_rows_read, len(read))
+        return read
 
 
 def _org_prisma_with_users(monkeypatch, users: tuple):
@@ -1639,15 +1643,10 @@ async def _add_org_member(member: dict):
     "member, expected_user_id, expected_email",
     [
         ({"user_email": "alice@example.com", "role": "internal_user"}, "alice-id", "alice@example.com"),
-        (
-            {"user_id": "new-id", "user_email": "alice@example.com", "role": "internal_user"},
-            "alice-id",
-            "alice@example.com",
-        ),
         ({"user_id": "new-id", "user_email": "bob@example.com", "role": "org_admin"}, "new-id", "bob@example.com"),
         ({"user_email": "bob@example.com", "role": "internal_user"}, None, "bob@example.com"),
     ],
-    ids=["email-of-existing-user", "unknown-id-with-existing-email", "unknown-id-with-new-email", "new-email-only"],
+    ids=["email-of-existing-user", "unknown-id-with-new-email", "new-email-only"],
 )
 async def test_organization_member_add_resolves_member_by_email(member, expected_user_id, expected_email, monkeypatch):
     from litellm.proxy._types import LiteLLM_UserTable
@@ -1669,21 +1668,34 @@ async def test_organization_member_add_resolves_member_by_email(member, expected
 
 
 @pytest.mark.asyncio
-async def test_organization_member_add_duplicate_email_returns_400(monkeypatch):
+@pytest.mark.parametrize(
+    "member, expected_error",
+    [
+        ({"user_email": "dup@example.com", "role": "internal_user"}, "Multiple users with this email"),
+        (
+            {"user_id": "new-id", "user_email": "alice@example.com", "role": "internal_user"},
+            "user_email 'alice@example.com' and user_id 'new-id' do not belong to the same user",
+        ),
+    ],
+    ids=["email-shared-by-several-users", "unknown-id-with-another-users-email"],
+)
+async def test_organization_member_add_rejects_an_ambiguous_member_with_400(member, expected_error, monkeypatch):
     from litellm.proxy._types import LiteLLM_UserTable, ProxyException
 
-    _org_prisma_with_users(
-        monkeypatch,
-        tuple(
+    users: Final = (
+        LiteLLM_UserTable(user_id="alice-id", user_email="alice@example.com", user_role="internal_user"),
+        *(
             LiteLLM_UserTable(user_id=user_id, user_email="dup@example.com", user_role="internal_user")
-            for user_id in ("dup-1", "dup-2")
+            for user_id in ("dup-1", "dup-2", "dup-3")
         ),
     )
+    prisma = _org_prisma_with_users(monkeypatch, users)
 
     with pytest.raises(ProxyException) as exc:
-        await _add_org_member({"user_email": "dup@example.com", "role": "internal_user"})
+        await _add_org_member(member)
     assert int(exc.value.code) == 400, exc.value.message
-    assert "Multiple users with this email" in str(exc.value.message)
+    assert expected_error in str(exc.value.message)
+    assert prisma.db.litellm_usertable.most_rows_read <= 2, "an email lookup must not load every duplicate row"
 
 
 @pytest.mark.asyncio
