@@ -16,8 +16,10 @@ from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARAT
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
+    from semantic_router.routers.base import Route
 
     from litellm.router import Router
+    from litellm.router_strategy.auto_router.litellm_encoder import LiteLLMRouterEncoder
 
 
 class SemanticToolFilterContextWindowError(Exception):
@@ -105,7 +107,7 @@ class SemanticMCPToolFilter:
                 return
 
             # Fetch tools from all servers in parallel
-            all_tools: Final = []
+            all_tools: Final[list[object]] = []
             for server_id, server in registry.items():
                 try:
                     tools = await global_mcp_server_manager.get_tools_for_server(server_id)
@@ -148,14 +150,53 @@ class SemanticMCPToolFilter:
 
         return name, description
 
-    def _build_router(self, tools: list) -> None:
-        """Build semantic router with tools (MCPTool objects or OpenAI function dicts)."""
-        from semantic_router.routers import SemanticRouter
-        from semantic_router.routers.base import Route
-
+    def _new_encoder(self) -> "LiteLLMRouterEncoder":
         from litellm.router_strategy.auto_router.litellm_encoder import (
             LiteLLMRouterEncoder,
         )
+
+        return LiteLLMRouterEncoder(
+            litellm_router_instance=self.router_instance,
+            model_name=self.embedding_model,
+            score_threshold=self.similarity_threshold,
+        )
+
+    def _tools_to_routes_and_map(self, tools: Sequence[object]) -> tuple[list["Route"], dict[str, object]]:
+        from semantic_router.routers.base import Route
+
+        routes: list[Route] = []
+        tool_map: dict[str, object] = {}
+        for tool in tools:
+            name, description = self._extract_tool_info(tool)
+            tool_map[name] = tool
+            routes.append(
+                Route(
+                    name=name,
+                    description=description,
+                    utterances=[description],
+                    score_threshold=self.similarity_threshold,
+                )
+            )
+        return routes, tool_map
+
+    def _handle_build_error(self, error: Exception) -> bool:
+        """True when the failure was recorded as a context-window overflow; False when the caller should re-raise."""
+        verbose_logger.error("Failed to build semantic router: %s", error)
+        self.tool_router = None
+        if _is_context_window_error(error):
+            self.context_window_error = str(error)
+            return True
+        return False
+
+    def _build_router(self, tools: Sequence[object]) -> None:
+        """
+        Sync index build for the default (awaited) startup path.
+
+        Embedding happens inside the SemanticRouter constructor via
+        auto_sync="local", so this blocks the caller until the index exists.
+        That blocking is the intended contract when defer_index_build is off.
+        """
+        from semantic_router.routers import SemanticRouter
 
         if not tools:
             self.tool_router = None
@@ -163,60 +204,30 @@ class SemanticMCPToolFilter:
 
         try:
             self.context_window_error = None
-            # Convert tools to routes
-            routes: Final = []
-            self._tool_map = {}
-
-            for tool in tools:
-                name, description = self._extract_tool_info(tool)
-                self._tool_map[name] = tool
-
-                routes.append(
-                    Route(
-                        name=name,
-                        description=description,
-                        utterances=[description],
-                        score_threshold=self.similarity_threshold,
-                    )
-                )
-
+            routes, tool_map = self._tools_to_routes_and_map(tools)
             self.tool_router = SemanticRouter(
                 routes=routes,
-                encoder=LiteLLMRouterEncoder(
-                    litellm_router_instance=self.router_instance,
-                    model_name=self.embedding_model,
-                    score_threshold=self.similarity_threshold,
-                ),
+                encoder=self._new_encoder(),
                 auto_sync="local",
             )
+            self._tool_map = tool_map
 
             verbose_logger.info("Built semantic router with %s tools", len(routes))
 
         except Exception as e:
-            verbose_logger.error("Failed to build semantic router: %s", e)
-            self.tool_router = None
-            if _is_context_window_error(e):
-                self.context_window_error = str(e)
+            if self._handle_build_error(e):
                 return
             raise
 
     async def _abuild_router(self, tools: Sequence[object]) -> None:
         """
-        Async variant of _build_router for the deferred startup build.
+        Async index build for the deferred startup path.
 
-        SemanticRouter's auto_sync init embeds through the SYNC encoder, which
-        would block the event loop inside the lifespan. Here the router starts
-        empty with init_async_index=True and routes land via aadd, so every
-        embedding goes through aembedding. aadd still probes index dimensions
-        through the sync encoder on first use, so dimensions are seeded from an
-        async probe up front.
+        The router starts empty with init_async_index=True and routes land via
+        aadd, so every embedding goes through aembedding instead of blocking
+        the event loop like the constructor's sync auto_sync path does.
         """
         from semantic_router.routers import SemanticRouter
-        from semantic_router.routers.base import Route
-
-        from litellm.router_strategy.auto_router.litellm_encoder import (
-            LiteLLMRouterEncoder,
-        )
 
         if not tools:
             self.tool_router = None
@@ -224,27 +235,8 @@ class SemanticMCPToolFilter:
 
         try:
             self.context_window_error = None
-            encoder: Final = LiteLLMRouterEncoder(
-                litellm_router_instance=self.router_instance,
-                model_name=self.embedding_model,
-                score_threshold=self.similarity_threshold,
-            )
-            routes: Final[list[Route]] = []
-            tool_map: Final[dict[str, object]] = {}
-
-            for tool in tools:
-                name, description = self._extract_tool_info(tool)
-                tool_map[name] = tool
-
-                routes.append(
-                    Route(
-                        name=name,
-                        description=description,
-                        utterances=[description],
-                        score_threshold=self.similarity_threshold,
-                    )
-                )
-
+            routes, tool_map = self._tools_to_routes_and_map(tools)
+            encoder: Final = self._new_encoder()
             router: Final = SemanticRouter(
                 routes=[],
                 encoder=encoder,
@@ -252,6 +244,8 @@ class SemanticMCPToolFilter:
                 top_k=self.top_k,
             )
 
+            # aadd's lazy init probes index dimensions through the sync encoder,
+            # so dimensions are seeded with an async probe to keep the build async.
             dims_probe: Final = await encoder.aencode_queries(["test"])
             router.index.dimensions = len(dims_probe[0])
             await router.aadd(routes)
@@ -262,10 +256,7 @@ class SemanticMCPToolFilter:
             verbose_logger.info("Built semantic router with %s tools via async index build", len(routes))
 
         except Exception as e:
-            verbose_logger.error("Failed to build semantic router: %s", e)
-            self.tool_router = None
-            if _is_context_window_error(e):
-                self.context_window_error = str(e)
+            if self._handle_build_error(e):
                 return
             raise
 
