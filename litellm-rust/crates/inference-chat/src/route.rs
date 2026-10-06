@@ -27,9 +27,9 @@ impl ChatCompletionsRoute {
     pub fn machine(
         self,
         call: ChatCompletionsCall,
-        options: impl Into<crate::CallOptions>,
+        options: impl Into<litellm_inference::CallOptions>,
     ) -> HostedMachine<ChatCompletions> {
-        let crate::CallOptions {
+        let litellm_inference::CallOptions {
             cache: cache_options,
             observers,
         } = options.into();
@@ -59,7 +59,7 @@ impl ChatCompletionsRoute {
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
-        crate::diagnostic::unary(async {
+        litellm_inference::diagnostic::unary(async {
             let request = ChatCompletionsRequest {
                 model: &call.model,
                 messages: call.messages,
@@ -77,6 +77,6 @@ impl ChatCompletionsRoute {
     }
 }
 
-impl crate::caching::Cachable for ChatCompletions {
+impl litellm_inference::caching::Cachable for ChatCompletions {
     const SURFACE: &'static str = "chat_completions";
 }

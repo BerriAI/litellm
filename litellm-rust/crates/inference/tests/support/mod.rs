@@ -9,22 +9,12 @@ use std::{
 };
 
 use litellm_http::HttpClientConfig;
-use litellm_inference::test_support::{http_config, no_secrets, provider_http, resources};
 use litellm_secrets::source::SecretSource;
 use serde_json::Value;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
 
 /// A port nothing listens on, for calls that must fail before any request is sent.
 pub const UNREACHABLE_BASE: &str = "http://127.0.0.1:1";
-
-pub fn chat_completions_route() -> litellm_inference::chat_completions::ChatCompletionsRoute {
-    let resources = resources();
-    litellm_inference::chat_completions::ChatCompletionsRoute::new(
-        provider_http(&resources, &http_config()),
-        resources.auth,
-        no_secrets(),
-    )
-}
 
 pub fn build_ocr_route(
     resources: &litellm_inference::resources::CoreResources,

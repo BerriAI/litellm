@@ -10,10 +10,10 @@ use super::{
     Error,
     common_utils::{chat_completions_provider, string_headers},
 };
-use crate::chat_completions::types::{
+use crate::types::{
     ChatCompletionsRequest, ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest,
 };
-use crate::provider::resolve_llm_provider;
+use litellm_inference::provider::resolve_llm_provider;
 
 pub(super) struct ResolvedProvider {
     pub(super) model: String,
@@ -136,7 +136,7 @@ mod tests {
     use serde_json::{Map, Value, json};
 
     use super::{prepare_provider_request, resolve_request};
-    use crate::chat_completions::{
+    use crate::{
         Error,
         types::{ChatCompletionsRequest, ProviderChatCompletionsRequest},
     };
@@ -473,7 +473,7 @@ mod tests {
         )
         .await
         .expect("resolves");
-        let signed = crate::chat_completions::handler::outbound_request(
+        let signed = crate::handler::outbound_request(
             authenticated,
             prepared.url,
             &prepared.body,
@@ -532,7 +532,7 @@ mod tests {
         )
         .await
         .expect("resolves");
-        let error = crate::chat_completions::handler::outbound_request(
+        let error = crate::handler::outbound_request(
             authenticated,
             prepared.url,
             &prepared.body,

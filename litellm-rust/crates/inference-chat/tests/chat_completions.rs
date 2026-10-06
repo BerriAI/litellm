@@ -6,7 +6,7 @@ use litellm_host::{
 use std::time::Duration;
 
 use litellm_http::transport::Error as TransportError;
-use litellm_inference::chat_completions::{Error, types::ChatCompletionsRequest};
+use litellm_inference_chat::{Error, types::ChatCompletionsRequest};
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
@@ -258,7 +258,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
     #[case] hosted: bool,
 ) {
     use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
-    use litellm_inference::chat_completions::route::ChatCompletions;
+    use litellm_inference_chat::route::ChatCompletions;
 
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
     let base = upstream.uri();

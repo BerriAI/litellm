@@ -1,17 +1,18 @@
 use litellm_host::observation::ObservationSender;
 pub mod route;
 pub mod types;
-pub use crate::error::RouteError as Error;
+pub use litellm_inference::RouteError as Error;
 mod common_utils;
+pub mod constants;
 pub(crate) mod handler;
 mod prepare;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use prepare::{prepare_provider_request, resolve_request};
 
-use crate::chat_completions::types::ChatCompletionsRequest;
 use litellm_auth::AuthServices;
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
+use types::ChatCompletionsRequest;
 
 #[derive(Clone)]
 pub struct ChatCompletionsRoute {
@@ -46,9 +47,9 @@ impl ChatCompletionsRoute {
         &self,
         request: ChatCompletionsRequest<'_>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
-        options: impl Into<crate::CallOptions>,
+        options: impl Into<litellm_inference::CallOptions>,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let crate::CallOptions {
+        let litellm_inference::CallOptions {
             cache: cache_options,
             observers,
         } = options.into();
@@ -77,7 +78,7 @@ impl ChatCompletionsRoute {
             .resolve(&resolved.config.secret_names())
             .await?;
         let prepared = prepare_provider_request(resolved, snapshot)?;
-        crate::diagnostic::provider(&prepared.model, &prepared.custom_llm_provider);
+        litellm_inference::diagnostic::provider(&prepared.model, &prepared.custom_llm_provider);
         let execute: futures_util::future::BoxFuture<'_, Result<ChatCompletionsResponse, Error>> =
             Box::pin(handler::execute(
                 &self.http,
