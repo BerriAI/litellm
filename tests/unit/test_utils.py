@@ -945,6 +945,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_parallel_tool_use_config": {"type": "boolean"},
                 "supports_pdf_input": {"type": "boolean"},
                 "prompt_cache_min_tokens": {"type": "number"},
+                "prompt_cache_mode": {"type": "string", "enum": ["explicit", "implicit"]},
+                "prompt_cache_default_ttl_seconds": {"type": "integer", "minimum": 1},
                 "supports_prompt_cache_breakpoint": {"type": "boolean"},
                 "supports_thinking_cache_preservation": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},

@@ -17,9 +17,7 @@ from pydantic import ConfigDict, Field, JsonValue, TypeAdapter
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import (
-    get_litellm_metadata_from_kwargs,  # pyright: ignore[reportUnknownVariableType]  # legacy metadata boundary validated below
-)
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.logging_worker import optional_callback_budget
 from litellm.llms.anthropic.prompt_cache_prediction import (
     CountedPromptCachePlan,
@@ -50,7 +48,7 @@ from litellm.proxy.spend_tracking.savings import (
     _proxy_llm_router,  # pyright: ignore[reportPrivateUsage]  # existing optional proxy-router owner
     _resolve_model,  # pyright: ignore[reportPrivateUsage]  # shared model identity resolver
 )
-from litellm.router_utils.baseline_request import CACHE_SETTINGS, baseline_request, capture_baseline_parameters
+from litellm.router_utils.baseline_request import baseline_request, capture_baseline_parameters
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import CallTypes, ModelInfo, Usage
@@ -100,6 +98,7 @@ class BaselineCacheContext:
     estimated_request: PreparedCacheRequest | None = None
     estimated: bool = False
     baseline_parameters: Mapping[str, JsonValue] | None = field(default=None, repr=False)
+    selected_parameters: Mapping[str, JsonValue] | None = field(default=None, repr=False)
     native_capture: _NativeCapture | CapturedBaselineObservation | None = field(default=None, repr=False)
     invalidated: str | None = None
     finalization: asyncio.Task[CapturedBaselineObservation] | None = field(default=None, repr=False, compare=False)
@@ -173,7 +172,8 @@ class AutoRouterBaselineCache(CustomLogger):
         ):
             return
         try:
-            metadata: Final = _METADATA.validate_python(get_litellm_metadata_from_kwargs({"litellm_params": kwargs}))
+            raw_metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
+            metadata: Final = raw_metadata if isinstance(raw_metadata, Mapping) else {}
             if metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
                 return
             if logging_obj.baseline_cache_context is not None:
@@ -228,7 +228,7 @@ class AutoRouterBaselineCache(CustomLogger):
             )
             scope: Final = "autorouter-baseline:v3:" + _digest(
                 (
-                    "pre_routing_settings_v1",
+                    "pre_routing_settings_v2",
                     request.user_api_key_hash,
                     session,
                     request.route.router_name,
@@ -270,6 +270,7 @@ class AutoRouterBaselineCache(CustomLogger):
                 estimated_request,
                 estimated,
                 capture_baseline_parameters(projected) if projected is not None else None,
+                capture_baseline_parameters(kwargs),
             )
         except Exception:  # noqa: BLE001  # optional observation cannot fail inference
             verbose_proxy_logger.warning("Auto-router baseline observation could not be initialized")
@@ -467,7 +468,13 @@ def _prepare_native_capture(
     body: Final = _JSON_BODY.validate_json(wire.content)
     from litellm.llms.anthropic.prompt_cache_prediction import project_baseline_body
 
-    projected: Final = project_baseline_body(body, context.baseline_parameters, target.model)
+    same: Final = (
+        logging_obj.get_router_model_id() == context.baseline_deployment_id
+        and body.get("model") == target.model
+        and context.baseline_parameters is not None
+        and context.baseline_parameters == context.selected_parameters
+    )
+    projected: Final = body if same else project_baseline_body(body, context.baseline_parameters, target.model)
     if projected is None:
         return context.capture.model_copy(
             update={
@@ -476,9 +483,6 @@ def _prepare_native_capture(
                 )
             }
         )
-    same: Final = logging_obj.get_router_model_id() == context.baseline_deployment_id and all(
-        body.get(key) == projected.get(key) for key in ("model", "messages", "cache_control", *CACHE_SETTINGS)
-    )
     minimum: Final = get_prompt_cache_min_tokens(target.model)
     captured: Final = context.capture.model_copy(
         update=MappingProxyType(

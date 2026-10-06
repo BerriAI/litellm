@@ -102,10 +102,18 @@ def baseline_request(
     configured: Final = capture_baseline_parameters(deployment)
     if configured is None:
         return None
+    configured_tools: Final = configured.get("tools")
+    caller_tools: Final = caller.get("tools")
+    merged_tools: Final = (
+        {"tools": [*configured_tools, *caller_tools]}
+        if isinstance(configured_tools, list) and isinstance(caller_tools, list)
+        else {}
+    )
     return MappingProxyType(
         {
             **{key: value for key, value in kwargs.items() if key not in (*BASELINE_PARAMETERS, "extra_body")},
-            **caller,
             **{key: value for key, value in configured.items() if value is not None},
+            **caller,
+            **merged_tools,
         }
     )

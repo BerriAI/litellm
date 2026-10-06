@@ -51,14 +51,16 @@ if TYPE_CHECKING:
 
 
 def without_prompt_cache_breakpoint(value: Mapping[str, object]) -> Mapping[str, object]:
+    def without_marker(item: object) -> object:
+        if not isinstance(item, Mapping) or "prompt_cache_breakpoint" not in item:
+            return item
+        return {key: part for key, part in cast(Mapping[str, object], item).items() if key != "prompt_cache_breakpoint"}
+
     def clean(key: str, item: object) -> object:
         if key == "content" and isinstance(item, list):
-            return [
-                without_prompt_cache_breakpoint(cast(Mapping[str, object], block)) if isinstance(block, dict) else block
-                for block in cast(list[object], item)
-            ]
-        if key == "function" and isinstance(item, dict):
-            return without_prompt_cache_breakpoint(cast(Mapping[str, object], item))
+            return [without_marker(block) for block in cast(list[object], item)]
+        if key == "function":
+            return without_marker(item)
         return item
 
     filtered: Final = {key: clean(key, item) for key, item in value.items() if key != "prompt_cache_breakpoint"}

@@ -43,7 +43,7 @@ _MESSAGES_JSON: Final = """[{"role":"user","content":[
 _MODELS: Final = _MESSAGES.validate_json("""[
     {"model_name":"test-router","litellm_params":{"model":"auto_router/complexity_router",
       "complexity_router_config":{"tiers":{"SIMPLE":"sonnet","MEDIUM":"sonnet","COMPLEX":"sonnet",
-      "REASONING":"opus"},"session_affinity":false,
+      "REASONING":{"model_name":"opus","litellm_params":{"max_tokens":16}}},"session_affinity":false,
       "keyword_tier_rules":[{"keywords":["USE_OPUS"],"tier":"REASONING"}]}}},
     {"model_name":"sonnet","litellm_params":{"model":"anthropic/claude-sonnet-5","api_key":"test-selected"},
       "model_info":{"id":"selected"}},
@@ -83,7 +83,9 @@ class _CallContext(TypedDict):
 
 
 def _kwargs(logging_obj: Logging, trusted: bool = True, *, explicit_logging: bool = True) -> _CallContext:
-    context: Final = _OBJECTS.validate_json('{"litellm_metadata":{"user_api_key_hash":"test-caller-hash"}}')
+    context: Final = _OBJECTS.validate_json(
+        '{"max_tokens":16,"litellm_metadata":{"user_api_key_hash":"test-caller-hash"}}'
+    )
     Router._record_routing_decision(  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage]  # production trusted stamp owner
         context,
         StandardLoggingRoutingDecision(
@@ -996,3 +998,76 @@ async def test_native_count_finishing_after_quarter_worker_budget_keeps_plan_and
     finally:
         release.set()
         await worker.stop()
+
+
+@pytest.mark.parametrize(
+    "options",
+    (
+        {"thinking": {"type": "enabled", "budget_tokens": 2048}},
+        {"extra_body": {"speed": "fast", "output_config": {"effort": "high"}}},
+    ),
+)
+async def test_native_baseline_identity_keeps_the_actual_transformed_body(
+    monkeypatch: pytest.MonkeyPatch, options: dict[str, JsonValue]
+) -> None:
+    rig: Final = _Rig(monkeypatch)
+    log: Final = rig.logging()
+    with _transport(_upstream):
+        await rig.router.anthropic_messages(
+            model="test-router",
+            max_tokens=16,
+            messages=_MESSAGES.validate_json(_MESSAGES_JSON.replace("question", "question USE_OPUS")),
+            litellm_logging_obj=log,
+            litellm_call_id=rig.call_id,
+            litellm_metadata={"user_api_key_hash": "test-caller-hash"},
+            litellm_session_id="native-identical",
+            **options,
+        )
+        observed: Final = _observation(await rig.capture.payload()).observation
+    assert observed.outcome == "complete"
+    assert log.baseline_cache_context is not None
+    assert observed.baseline_equivalent and observed.usage is not None, (
+        log.baseline_cache_context.baseline_parameters,
+        log.baseline_cache_context.selected_parameters,
+    )
+
+
+@pytest.mark.parametrize("tier_limit", (8, 16))
+async def test_native_baseline_identity_respects_caller_limit_and_tier_override(
+    monkeypatch: pytest.MonkeyPatch, tier_limit: int
+) -> None:
+    models: Final = _MESSAGES.validate_python(
+        [
+            {
+                "model_name": "test-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": {"model_name": "opus", "litellm_params": {"max_tokens": tier_limit}},
+                            "MEDIUM": {"model_name": "opus", "litellm_params": {"max_tokens": tier_limit}},
+                            "COMPLEX": "opus",
+                            "REASONING": "opus",
+                        },
+                        "session_affinity": False,
+                    },
+                },
+            },
+            {**_MODELS[2], "litellm_params": {**_MODELS[2]["litellm_params"], "max_tokens": 64}},
+        ]
+    )
+    rig: Final = _Rig(monkeypatch, models=models)
+    with _transport(_upstream) as route:
+        await rig.router.anthropic_messages(
+            model="test-router",
+            max_tokens=8,
+            messages=_MESSAGES.validate_json(_MESSAGES_JSON),
+            litellm_logging_obj=rig.logging(),
+            litellm_call_id=rig.call_id,
+            litellm_metadata={"user_api_key_hash": "test-caller-hash"},
+            litellm_session_id="native-limits",
+        )
+        observed: Final = _observation(await rig.capture.payload()).observation
+        wire: Final = _JSON_OBJECT.validate_json(route.calls.last.request.content)
+    assert wire["max_tokens"] == tier_limit
+    assert observed.baseline_equivalent == (tier_limit == 8)
