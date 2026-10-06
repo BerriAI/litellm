@@ -396,8 +396,8 @@ def test_coralbricks_cost_map_rows_declare_same_endpoints_as_providers_json():
         Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json",
     )
     for cost_map_path in cost_map_paths:
-        cost_map: Final = json.loads(cost_map_path.read_text())
-        coralbricks_rows: Final = {
+        cost_map = json.loads(cost_map_path.read_text())
+        coralbricks_rows = {
             key: row for key, row in cost_map.items() if key.startswith("coralbricks/")
         }
         assert coralbricks_rows
