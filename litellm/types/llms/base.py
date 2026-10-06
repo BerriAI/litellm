@@ -16,6 +16,7 @@ class LiteLLMBaseModel(BaseModel):
     def model_post_init(self, context: object, /) -> None:
         # Instances built by a parent's validator or by model_construct skip this class's own
         # first-use build, leaving a MockValSer that fails when the instance is serialized as Any
+        # TODO: drop once pydantic ships a fix for https://github.com/pydantic/pydantic/issues/13647
         model = type(self)
         if not model.__pydantic_complete__:
             model.model_rebuild(raise_errors=False)
