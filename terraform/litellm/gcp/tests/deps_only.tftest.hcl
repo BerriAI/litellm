@@ -201,4 +201,9 @@ run "skip_read_replica" {
     condition     = length([for line in local.database_url_fragment : line if strcontains(line, "DATABASE_URL_READ_REPLICA")]) == 0
     error_message = "Writer-only mode must not export DATABASE_URL_READ_REPLICA."
   }
+
+  assert {
+    condition     = anytrue([for line in local.database_url_fragment : startswith(line, "export DATABASE_URL=")])
+    error_message = "Writer-only mode must still export DATABASE_URL."
+  }
 }
