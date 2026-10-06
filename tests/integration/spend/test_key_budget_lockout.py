@@ -166,10 +166,16 @@ def _serve_both(
     with ThreadPoolExecutor(max_workers=2) as executor:
         first_call: Final = executor.submit(_wire_chat, first, model, key, prompts[0], 1)
         second_call: Final = executor.submit(_wire_chat, second, model, key, prompts[1], 1)
-        return (
-            _assert_wire_success(first_call.result(), _RESET_USAGE),
-            _assert_wire_success(second_call.result(), _RESET_USAGE),
+        responses: Final = (first_call.result(), second_call.result())
+    pair: Final = (
+        _assert_wire_success(responses[0], _RESET_USAGE),
+        _assert_wire_success(responses[1], _RESET_USAGE),
+    )
+    for response in responses:
+        assert float(response.headers["x-litellm-key-spend"]) == pytest.approx(0.003), (
+            f"{response.headers} {response.text}"
         )
+    return pair
 
 
 def test_an_exhausted_key_is_refused_inference_but_can_still_read_its_own_info(gateway: Gateway) -> None:

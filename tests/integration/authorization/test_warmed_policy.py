@@ -117,7 +117,8 @@ def _model_is_available(gateway: Gateway, model: str) -> bool:
     return model in tuple(entry.id for entry in models.data)
 
 
-def test_key_block_and_unblock_reach_both_warmed_workers(gateway: Gateway, peer: Gateway) -> None:
+@pytest.mark.parametrize("hashed", (False, True), ids=("plaintext", "hashed"))
+def test_key_block_and_unblock_reach_both_warmed_workers(gateway: Gateway, peer: Gateway, hashed: bool) -> None:
     backend: Final = "integration-keys-auth-block"
     prompts: Final = (
         "block warm primary " + uuid.uuid4().hex,
@@ -143,6 +144,7 @@ def test_key_block_and_unblock_reach_both_warmed_workers(gateway: Gateway, peer:
         eventually(lambda: _model_is_available(peer, model), bool, seconds=30)
         key: Final = scenario.key(models=[model])
         key_hash: Final = sha256(key.encode()).hexdigest()
+        endpoint_key: Final = key_hash if hashed else key
         warmed: Final = tuple(
             _assert_wire_success(_wire_chat(worker, model, key, prompt))
             for worker, prompt in zip((gateway, peer), prompts[:2], strict=True)
@@ -150,7 +152,7 @@ def test_key_block_and_unblock_reach_both_warmed_workers(gateway: Gateway, peer:
         assert len(warmed) == 2
         assert tuple((request.method, request.target) for request in wire.drain()) == (_EXPECTED_CHAT,) * 2
 
-        blocked: Final = gateway.request("POST", "/key/block", {"key": key})
+        blocked: Final = gateway.request("POST", "/key/block", {"key": endpoint_key})
         assert blocked.status_code == 200, blocked.text
         assert _KeyInfo.model_validate_json(blocked.content).blocked is True, blocked.text
         primary_refusal: Final = _wire_chat(gateway, model, key, prompts[2])
@@ -173,7 +175,7 @@ def test_key_block_and_unblock_reach_both_warmed_workers(gateway: Gateway, peer:
         )
         assert blocked_rows == (_BlockedRow(blocked=True),)
 
-        unblocked: Final = gateway.request("POST", "/key/unblock", {"key": key})
+        unblocked: Final = gateway.request("POST", "/key/unblock", {"key": endpoint_key})
         assert unblocked.status_code == 200, unblocked.text
         assert _KeyInfo.model_validate_json(unblocked.content).blocked is False, unblocked.text
         served: Final = tuple(

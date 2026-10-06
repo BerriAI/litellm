@@ -224,8 +224,9 @@ def _assert_success(response: httpx.Response) -> _ChatResponse:
     return payload
 
 
+@pytest.mark.parametrize("spelling", ("body", "path"))
 def test_regenerate_with_a_grace_period_keeps_the_old_key_serving_billed_to_the_new_row(
-    gateway: Gateway,
+    gateway: Gateway, spelling: str
 ) -> None:
     assert os.environ.get("LITELLM_KEY_ROTATION_GRACE_PERIOD") is None
     backend: Final = "integration-keys-auth-grace"
@@ -258,7 +259,11 @@ def test_regenerate_with_a_grace_period_keeps_the_old_key_serving_billed_to_the_
         scenario.cleanups.callback(delete_key_if_present, gateway, key_one)
         hash_one: Final = sha256(key_one.encode()).hexdigest()
 
-        generated_two: Final = gateway.request("POST", "/key/regenerate", {"key": key_one, "grace_period": "1h"})
+        generated_two: Final = (
+            gateway.request("POST", "/key/regenerate", {"key": key_one, "grace_period": "1h"})
+            if spelling == "body"
+            else gateway.request("POST", f"/key/{hash_one}/regenerate", {"grace_period": "1h"})
+        )
         assert generated_two.status_code == 200, generated_two.text
         key_two: Final = _GenerateKeyResponse.model_validate_json(generated_two.content).key
         scenario.cleanups.callback(delete_key_if_present, gateway, key_two)
@@ -313,7 +318,11 @@ def test_regenerate_with_a_grace_period_keeps_the_old_key_serving_billed_to_the_
         assert deprecated[0].active_token_id == hash_two
         assert deprecated[0].grace_seconds == pytest.approx(3600, abs=120)
 
-        generated_three: Final = gateway.request("POST", "/key/regenerate", {"key": key_two})
+        generated_three: Final = (
+            gateway.request("POST", "/key/regenerate", {"key": key_two})
+            if spelling == "body"
+            else gateway.request("POST", f"/key/{hash_two}/regenerate", {})
+        )
         assert generated_three.status_code == 200, generated_three.text
         key_three: Final = _GenerateKeyResponse.model_validate_json(generated_three.content).key
         scenario.cleanups.callback(delete_key_if_present, gateway, key_three)

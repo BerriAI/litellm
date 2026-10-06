@@ -119,8 +119,8 @@ def _model_is_available(gateway: Gateway, model: str) -> bool:
     return model in tuple(entry.id for entry in models.data)
 
 
-@pytest.mark.parametrize("by_alias", (False, True), ids=("keys", "key_aliases"))
-def test_deleting_a_key_revokes_it(gateway: Gateway, by_alias: bool) -> None:
+@pytest.mark.parametrize("spelling", ("keys", "hashed_keys", "key_aliases"))
+def test_deleting_a_key_revokes_it(gateway: Gateway, spelling: str) -> None:
     backend: Final = "integration-keys-auth-delete"
     prompts: Final = (
         "delete warm " + uuid.uuid4().hex,
@@ -149,11 +149,11 @@ def test_deleting_a_key_revokes_it(gateway: Gateway, by_alias: bool) -> None:
         _assert_success(_chat(gateway, model, key, prompts[0]))
         assert tuple((request.method, request.target) for request in wire.drain()) == (_EXPECTED_CHAT,)
 
-        delete_body: Final = {"key_aliases": [alias]} if by_alias else {"keys": [key]}
+        identifier: Final = {"keys": key, "hashed_keys": key_hash, "key_aliases": alias}[spelling]
+        delete_body: Final = {"key_aliases" if spelling == "key_aliases" else "keys": [identifier]}
         deleted: Final = gateway.request("POST", "/key/delete", delete_body)
         assert deleted.status_code == 200, deleted.text
-        expected_deleted: Final = alias if by_alias else key
-        assert _DeleteResponse.model_validate_json(deleted.content).deleted_keys == (expected_deleted,), deleted.text
+        assert _DeleteResponse.model_validate_json(deleted.content).deleted_keys == (identifier,), deleted.text
         primary_refusal: Final = _chat(gateway, model, key, prompts[1])
         assert primary_refusal.status_code == 401, primary_refusal.text
         assert _ErrorResponse.model_validate_json(primary_refusal.content).error.type == "token_not_found_in_db", (

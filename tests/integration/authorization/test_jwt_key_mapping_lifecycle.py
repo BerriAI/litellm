@@ -6,10 +6,11 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from hashlib import sha256
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import jwt
+import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -294,11 +295,17 @@ def _create_key(gateway: Gateway, model: str) -> str:
     return _KeyResponse.model_validate_json(response.content).key
 
 
-def _create_mapping(gateway: Gateway, key: str, client_id: str, issuer: str | None = None) -> _JWTMappingResponse:
+def _create_mapping(
+    gateway: Gateway,
+    key: str,
+    client_id: str,
+    issuer: str | None = None,
+    spelling: Literal["key", "token"] = "key",
+) -> _JWTMappingResponse:
     body: Final = {
         "jwt_claim_name": _CLIENT_CLAIM,
         "jwt_claim_value": client_id,
-        "key": key,
+        spelling: key if spelling == "key" else sha256(key.encode()).hexdigest(),
         **({"jwt_issuer": issuer} if issuer is not None else {}),
     }
     response: Final = gateway.request("POST", "/jwt/key/mapping/new", body)
@@ -384,6 +391,8 @@ def test_updating_a_warmed_mapping_deactivates_and_repoints_it_on_both_workers(
         "mapping inactive peer " + uuid.uuid4().hex,
         "mapping repointed primary " + uuid.uuid4().hex,
         "mapping repointed peer " + uuid.uuid4().hex,
+        "mapping restored primary " + uuid.uuid4().hex,
+        "mapping restored peer " + uuid.uuid4().hex,
     )
     token: Final = _signed_jwt(private_key, client_id)
 
@@ -445,8 +454,26 @@ def test_updating_a_warmed_mapping_deactivates_and_repoints_it_on_both_workers(
                 _assert_chat(second, model, token, prompts[5], new_hash)
                 _assert_upstream_requests(upstream, (_EXPECTED_CHAT,) * 2)
 
+                restored_response: Final = first.request(
+                    "POST",
+                    "/jwt/key/mapping/update",
+                    {"id": mapping.id, "key": old_key},
+                )
+                assert restored_response.status_code == 200, restored_response.text
+                restored: Final = _JWTMappingResponse.model_validate_json(restored_response.content)
+                assert restored.is_active is True, restored_response.text
+                assert _mapping_info(first, mapping.id).is_active is True
+                restored_row: Final = _mapping_row(first, mapping.id)
+                assert restored_row.token == old_hash and restored_row.is_active is True
+                _assert_chat(first, model, token, prompts[6], old_hash)
+                _assert_chat(second, model, token, prompts[7], old_hash)
+                _assert_upstream_requests(upstream, (_EXPECTED_CHAT,) * 2)
 
-def test_regenerating_a_jwt_mapped_key_moves_jwt_callers_to_the_new_hash(gateway: Gateway, tmp_path: Path) -> None:
+
+@pytest.mark.parametrize("spelling", ("body", "path"))
+def test_regenerating_a_jwt_mapped_key_moves_jwt_callers_to_the_new_hash(
+    gateway: Gateway, tmp_path: Path, spelling: str
+) -> None:
     private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     model: Final = "jwt-key-mapping-" + uuid.uuid4().hex
     backend: Final = model
@@ -475,7 +502,11 @@ def test_regenerating_a_jwt_mapped_key_moves_jwt_callers_to_the_new_hash(gateway
                 _assert_chat(second, model, token, prompts[1], old_hash)
                 _assert_upstream_requests(upstream, (_EXPECTED_MODEL_DISCOVERY,) * 2 + (_EXPECTED_CHAT,) * 2)
 
-                regenerated_response: Final = first.request("POST", "/key/regenerate", {"key": old_key})
+                regenerated_response: Final = (
+                    first.request("POST", "/key/regenerate", {"key": old_key})
+                    if spelling == "body"
+                    else first.request("POST", f"/key/{old_hash}/regenerate", {})
+                )
                 assert regenerated_response.status_code == 200, regenerated_response.text
                 new_key: Final = _KeyResponse.model_validate_json(regenerated_response.content).key
                 scenario.cleanups.callback(delete_key_if_present, first, new_key)
@@ -565,7 +596,7 @@ def test_issuer_scoped_mappings_with_the_same_claim_resolve_per_issuer(gateway: 
                 hash_a: Final = sha256(key_a.encode()).hexdigest()
                 hash_b: Final = sha256(key_b.encode()).hexdigest()
                 mapping_a: Final = _create_mapping(candidate, key_a, client_id, issuer_a)
-                mapping_b: Final = _create_mapping(candidate, key_b, client_id, issuer_b)
+                mapping_b: Final = _create_mapping(candidate, key_b, client_id, issuer_b, spelling="token")
                 scenario.cleanups.callback(_delete_mapping_if_present, candidate, mapping_a.id)
                 scenario.cleanups.callback(_delete_mapping_if_present, candidate, mapping_b.id)
 
