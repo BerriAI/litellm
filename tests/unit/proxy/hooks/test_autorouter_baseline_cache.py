@@ -247,10 +247,32 @@ class _Rig:
 
 
 def _observation(payload: Mapping[str, object]) -> CapturedBaselineObservation:
+    from litellm.proxy.db.baseline_accounting import BaselineAccountingRecord
+    from litellm.proxy.spend_tracking.savings import BaselineCostSnapshot
+
     encoded: Final = payload["autorouter_baseline_observation"]
     assert isinstance(encoded, str)
     assert "test-selected" not in encoded and "stable" not in encoded and "x-api-key" not in encoded
-    return CapturedBaselineObservation.model_validate_json(encoded)
+    captured: Final = CapturedBaselineObservation.model_validate_json(encoded)
+    record: Final = BaselineAccountingRecord(
+        scope=captured.scope,
+        api_key=captured.api_key,
+        session_id=captured.session_id,
+        router_name=captured.router_name,
+        baseline_model=captured.baseline_model,
+        observation=captured.observation,
+        pricing=BaselineCostSnapshot(
+            model=captured.model,
+            provider=captured.provider,
+            prices=captured.prices,
+            actual_spend=0.0,
+            actual_token_cost=None,
+        ),
+        turn=None,
+        daily=None,
+    )
+    assert record.observation == captured.observation
+    return captured
 
 
 @pytest.mark.parametrize("stream,baseline", ((False, False), (True, False), (False, True), (True, True)))

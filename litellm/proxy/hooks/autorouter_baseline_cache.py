@@ -226,8 +226,9 @@ class AutoRouterBaselineCache(CustomLogger):
                 if estimated and projected is not None
                 else None
             )
-            scope: Final = "autorouter-baseline:v4:" + _digest(
+            scope: Final = "autorouter-baseline:v3:" + _digest(
                 (
+                    "pre_routing_settings_v1",
                     request.user_api_key_hash,
                     session,
                     request.route.router_name,
