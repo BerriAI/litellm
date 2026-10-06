@@ -144,7 +144,7 @@ mod tests {
     use strum::VariantArray;
 
     use super::{DeploymentHooks, LegacyPython, Logging, Streaming, Wrapper};
-    use crate::test_support::PYTHON_CONTRACT;
+    use crate::inference::test_support::PYTHON_CONTRACT;
 
     #[test]
     fn every_borrowed_function_is_in_the_python_contract() {

@@ -3,7 +3,7 @@
 
 use pyo3::{exceptions::PyException, prelude::*};
 
-use crate::{LegacyCallbacks, PythonLogger};
+use crate::inference::{LegacyCallbacks, PythonLogger};
 
 pub(crate) struct PendingSuccess {
     pub(crate) logger: PythonLogger,
@@ -66,13 +66,14 @@ impl PendingLogging {
 mod tests {
     use std::ffi::CStr;
 
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
+    use pyo3::{prelude::*, types::PyDict};
     use rstest::rstest;
 
     use super::{PendingLogging, PendingSuccess};
-    use crate::PythonLogger;
-    use crate::test_support::{local, namespace, run};
+    use crate::inference::{
+        PythonLogger,
+        test_support::{local, namespace, run},
+    };
 
     /// A deferred success for the namespace's `logger` and `response`, bound as `pending`.
     fn defer<'py>(py: Python<'py>, script: &CStr) -> Bound<'py, PyDict> {

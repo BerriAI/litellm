@@ -2,14 +2,11 @@
 //! raises is answered with the same `Logging` calls, in the same order, as the Python
 //! `@client` path makes them.
 
-use crate::LoggingOperation;
-use litellm_host_python::PythonOwned;
-
 use litellm_host::{
     interceptors::{RawResponse, RequestContext, WireRequest},
     lifecycle::{FailureOrigin, Timing, epoch_seconds},
 };
-use litellm_host_python::{HookStep, from_py, missing_state, to_py};
+use litellm_host_python::{HookStep, PythonOwned, from_py, missing_state, to_py};
 use pyo3::{
     exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
@@ -18,8 +15,8 @@ use pyo3::{
 };
 use serde_json::Value;
 
-use crate::{
-    DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
+use crate::inference::{
+    DeploymentHooks, LegacyCallbacks, Operation, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call,
     python::Streaming,
@@ -44,8 +41,8 @@ struct LoggedRequest {
     context: RequestContext,
 }
 
-pub struct LegacyLogging {
-    operation: LoggingOperation,
+pub struct InferenceAdapter {
+    operation: Operation,
     call: PublicCall,
     logger: Option<PythonLogger>,
     start: Py<PyAny>,
@@ -67,13 +64,8 @@ fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
     !error.is_instance_of::<PyException>(py)
 }
 
-impl LegacyLogging {
-    pub fn new(
-        py: Python<'_>,
-        operation: LoggingOperation,
-        call: PublicCall,
-        asynchronous: bool,
-    ) -> Self {
+impl InferenceAdapter {
+    pub fn new(py: Python<'_>, operation: Operation, call: PublicCall, asynchronous: bool) -> Self {
         Self {
             operation,
             call,
@@ -92,34 +84,32 @@ impl LegacyLogging {
 
     fn call_type(&self) -> &'static str {
         match (self.operation, self.asynchronous) {
-            (LoggingOperation::Completion, false) => "completion",
-            (LoggingOperation::Completion, true) => "acompletion",
-            (LoggingOperation::Responses, false) => "responses",
-            (LoggingOperation::Responses, true) => "aresponses",
-            (LoggingOperation::Messages, _) => "anthropic_messages",
-            (LoggingOperation::Ocr, false) => "ocr",
-            (LoggingOperation::Ocr, true) => "aocr",
+            (Operation::Completion, false) => "completion",
+            (Operation::Completion, true) => "acompletion",
+            (Operation::Responses, false) => "responses",
+            (Operation::Responses, true) => "aresponses",
+            (Operation::Messages, _) => "anthropic_messages",
+            (Operation::Ocr, false) => "ocr",
+            (Operation::Ocr, true) => "aocr",
         }
     }
 
     fn input_description(&self) -> &'static str {
         match self.operation {
-            LoggingOperation::Completion => "Chat completions",
-            LoggingOperation::Responses => "Responses",
-            LoggingOperation::Messages => "Messages",
-            LoggingOperation::Ocr => "OCR document processing",
+            Operation::Completion => "Chat completions",
+            Operation::Responses => "Responses",
+            Operation::Messages => "Messages",
+            Operation::Ocr => "OCR document processing",
         }
     }
 
     fn stream_billing(&self) -> Option<PassThroughStream> {
         match self.operation {
-            LoggingOperation::Messages => Some(PassThroughStream {
+            Operation::Messages => Some(PassThroughStream {
                 url_route: "/v1/messages",
                 endpoint_type: "anthropic",
             }),
-            LoggingOperation::Completion | LoggingOperation::Responses | LoggingOperation::Ocr => {
-                None
-            }
+            Operation::Completion | Operation::Responses | Operation::Ocr => None,
         }
     }
 
@@ -300,7 +290,7 @@ impl LegacyLogging {
     }
 }
 
-impl LegacyLogging {
+impl InferenceAdapter {
     fn resume_begin(
         &mut self,
         py: Python<'_>,
@@ -340,7 +330,7 @@ impl LegacyLogging {
     }
 }
 
-impl LegacyLogging {
+impl InferenceAdapter {
     pub(crate) fn prepare_call(
         &mut self,
         py: Python<'_>,
@@ -450,7 +440,7 @@ impl LegacyLogging {
             .cast_into::<PyDict>()?
             .copy()?;
         params.set_item("custom_llm_provider", &facts.provider.provider)?;
-        crate::python::Logging::Update.call(
+        crate::inference::python::Logging::Update.call(
             py,
             (
                 &logger,
@@ -553,7 +543,7 @@ impl LegacyLogging {
     }
 }
 
-impl PythonOwned for LegacyLogging {
+impl PythonOwned for InferenceAdapter {
     fn close(&mut self, py: Python<'_>) {
         if let Some(logger) = self.logger.take()
             && let Err(error) = logger.restore_context(py)
@@ -588,23 +578,23 @@ impl PythonOwned for LegacyLogging {
 mod deployment_hooks_tests {
     use std::ffi::CStr;
 
-    use litellm_host::hooks::CallHooks;
-    use litellm_host::lifecycle::{FailureOrigin, Timing};
+    use litellm_host::{
+        hooks::CallHooks,
+        lifecycle::{FailureOrigin, Timing},
+    };
     use litellm_host_python::{HookStep, PythonCallEvent};
-    use pyo3::exceptions::asyncio::CancelledError;
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
+    use pyo3::{exceptions::asyncio::CancelledError, prelude::*, types::PyDict};
     use rstest::rstest;
 
-    use super::LegacyLogging;
-    use crate::test_support::{legacy_call, local, namespace, run};
+    use super::InferenceAdapter;
+    use crate::inference::test_support::{legacy_call, local, namespace, run};
 
     fn resume<T>(
-        logging: &mut LegacyLogging,
-        step: HookStep<LegacyLogging, T>,
+        logging: &mut InferenceAdapter,
+        step: HookStep<InferenceAdapter, T>,
         py: Python<'_>,
         value: PyResult<Py<PyAny>>,
-    ) -> PyResult<HookStep<LegacyLogging, T>> {
+    ) -> PyResult<HookStep<InferenceAdapter, T>> {
         let HookStep::Await(_, continuation) = step else {
             panic!("expected suspension")
         };
@@ -625,7 +615,7 @@ kwargs = {'logger': logger, 'document': document}
         py: Python<'py>,
         locals: &Bound<'py, PyDict>,
         asynchronous: bool,
-    ) -> (LegacyLogging, HookStep<LegacyLogging, Py<PyDict>>) {
+    ) -> (InferenceAdapter, HookStep<InferenceAdapter, Py<PyDict>>) {
         let mut logging = legacy_call(py, locals, asynchronous);
         let kwargs = local(locals, "kwargs")
             .cast_into::<PyDict>()
@@ -637,7 +627,7 @@ kwargs = {'logger': logger, 'document': document}
 
     fn arguments<'py>(
         py: Python<'py>,
-        step: HookStep<LegacyLogging, Py<PyDict>>,
+        step: HookStep<InferenceAdapter, Py<PyDict>>,
     ) -> Bound<'py, PyDict> {
         let HookStep::Ready(arguments) = step else {
             panic!("expected the prepared arguments");
@@ -645,28 +635,28 @@ kwargs = {'logger': logger, 'document': document}
         arguments.into_bound(py)
     }
 
-    fn awaits_deployment_hook<T>(step: &HookStep<LegacyLogging, T>) -> bool {
+    fn awaits_deployment_hook<T>(step: &HookStep<InferenceAdapter, T>) -> bool {
         matches!(step, HookStep::Await(_, _))
     }
 
     #[rstest]
-    #[case::sync_completion(crate::LoggingOperation::Completion, false, "completion")]
-    #[case::async_completion(crate::LoggingOperation::Completion, true, "acompletion")]
-    #[case::sync_responses(crate::LoggingOperation::Responses, false, "responses")]
-    #[case::async_responses(crate::LoggingOperation::Responses, true, "aresponses")]
-    #[case::sync_messages(crate::LoggingOperation::Messages, false, "anthropic_messages")]
-    #[case::async_messages(crate::LoggingOperation::Messages, true, "anthropic_messages")]
-    #[case::sync_ocr(crate::LoggingOperation::Ocr, false, "ocr")]
-    #[case::async_ocr(crate::LoggingOperation::Ocr, true, "aocr")]
+    #[case::sync_completion(crate::inference::Operation::Completion, false, "completion")]
+    #[case::async_completion(crate::inference::Operation::Completion, true, "acompletion")]
+    #[case::sync_responses(crate::inference::Operation::Responses, false, "responses")]
+    #[case::async_responses(crate::inference::Operation::Responses, true, "aresponses")]
+    #[case::sync_messages(crate::inference::Operation::Messages, false, "anthropic_messages")]
+    #[case::async_messages(crate::inference::Operation::Messages, true, "anthropic_messages")]
+    #[case::sync_ocr(crate::inference::Operation::Ocr, false, "ocr")]
+    #[case::async_ocr(crate::inference::Operation::Ocr, true, "aocr")]
     fn operation_selects_the_legacy_setup_and_deployment_hook_contract(
-        #[case] operation: crate::LoggingOperation,
+        #[case] operation: crate::inference::Operation,
         #[case] asynchronous: bool,
         #[case] expected: &str,
     ) {
         Python::initialize();
         Python::attach(|py| {
             let locals = namespace(py, CALL);
-            let mut logging = LegacyLogging {
+            let mut logging = InferenceAdapter {
                 operation,
                 ..legacy_call(py, &locals, asynchronous)
             };
@@ -919,19 +909,25 @@ mod payload_tests {
     use std::ffi::CStr;
 
     use litellm_auth::SecretValue;
-    use litellm_host::hooks::CallHooks;
-    use litellm_host::interceptors::{RawResponse, RequestContext, WireRequest};
-    use litellm_host::lifecycle::ExecutionEvent;
+    use litellm_host::{
+        hooks::CallHooks,
+        interceptors::{RawResponse, RequestContext, WireRequest},
+        lifecycle::ExecutionEvent,
+    };
     use litellm_host_python::{HookStep, PythonCallEvent, PythonOwned, to_py};
     use proptest::prelude::*;
-    use pyo3::gc::{PyTraverseError, PyVisit};
-    use pyo3::prelude::*;
+    use pyo3::{
+        gc::{PyTraverseError, PyVisit},
+        prelude::*,
+    };
     use rstest::rstest;
     use serde_json::{Map, Value, json};
 
-    use super::LegacyLogging;
-    use crate::PythonLogger;
-    use crate::test_support::{legacy_call, local, namespace, run};
+    use super::InferenceAdapter;
+    use crate::inference::{
+        PythonLogger,
+        test_support::{legacy_call, local, namespace, run},
+    };
 
     /// The payload phases of `Logging` on top of `StubLogger`, with `pre_call` handing the
     /// payload to the case's `on_pre_call`.
@@ -999,7 +995,7 @@ check = lambda: None
                 locals.set_item(name, to_py(py, value).unwrap()).unwrap();
             }
             run(py, &locals, script);
-            let mut logging = LegacyLogging {
+            let mut logging = InferenceAdapter {
                 logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
                 ..legacy_call(py, &locals, false)
             };
@@ -1028,12 +1024,12 @@ check = lambda: None
     /// delivers it, so `pre_call` and `post_call` have both seen the retained payload.
     fn send_and_receive<'a>(
         py: Python<'_>,
-        logging: &'a mut LegacyLogging,
+        logging: &'a mut InferenceAdapter,
         wire: WireRequest,
         context: &RequestContext,
     ) -> (
-        &'a mut LegacyLogging,
-        HookStep<LegacyLogging, Box<WireRequest>>,
+        &'a mut InferenceAdapter,
+        HookStep<InferenceAdapter, Box<WireRequest>>,
     ) {
         let step = logging
             .before_provider_request(py, Box::new(wire), context)
@@ -1073,11 +1069,11 @@ check = lambda: None
         }
     }
 
-    /// A Python object owning one `LegacyLogging`, so the interpreter's collector sees the
+    /// A Python object owning one `InferenceAdapter`, so the interpreter's collector sees the
     /// edges the adapter reports and clears them the way the driver's `Execution` does.
     #[pyclass(weakref)]
     struct Retained {
-        logging: Option<LegacyLogging>,
+        logging: Option<InferenceAdapter>,
     }
 
     #[pymethods]
@@ -1095,12 +1091,12 @@ check = lambda: None
     }
 
     #[rstest]
-    #[case::completion(crate::LoggingOperation::Completion, "Chat completions")]
-    #[case::responses(crate::LoggingOperation::Responses, "Responses")]
-    #[case::messages(crate::LoggingOperation::Messages, "Messages")]
-    #[case::ocr(crate::LoggingOperation::Ocr, "OCR document processing")]
+    #[case::completion(crate::inference::Operation::Completion, "Chat completions")]
+    #[case::responses(crate::inference::Operation::Responses, "Responses")]
+    #[case::messages(crate::inference::Operation::Messages, "Messages")]
+    #[case::ocr(crate::inference::Operation::Ocr, "OCR document processing")]
     fn prepared_arguments_replace_the_legacy_view_without_losing_callback_aliases(
-        #[case] operation: crate::LoggingOperation,
+        #[case] operation: crate::inference::Operation,
         #[case] description: &str,
     ) {
         Python::initialize();
@@ -1116,7 +1112,7 @@ kwargs['pages'] = original
 prepared = {'pages': replacement}
 ",
             );
-            let mut logging = LegacyLogging {
+            let mut logging = InferenceAdapter {
                 operation,
                 logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
                 ..legacy_call(py, &locals, false)
@@ -1150,7 +1146,7 @@ assert original == [0]
         Python::initialize();
         Python::attach(|py| {
             let locals = namespace(py, PAYLOAD_LOGGER);
-            let mut logging = LegacyLogging {
+            let mut logging = InferenceAdapter {
                 logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
                 ..legacy_call(py, &locals, false)
             };
@@ -1186,7 +1182,7 @@ assert reference() is None
         Python::initialize();
         Python::attach(|py| {
             let locals = namespace(py, PAYLOAD_LOGGER);
-            let mut logging = LegacyLogging {
+            let mut logging = InferenceAdapter {
                 logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
                 ..legacy_call(py, &locals, false)
             };
@@ -1629,26 +1625,31 @@ def check():
 mod terminal_tests {
     use std::ffi::CStr;
 
-    use litellm_host::hooks::CallHooks;
-    use litellm_host::lifecycle::{FailureOrigin, Timing};
+    use litellm_host::{
+        hooks::CallHooks,
+        lifecycle::{FailureOrigin, Timing},
+    };
     use litellm_host_python::{HookStep, PythonCallEvent, PythonOwned};
-    use pyo3::exceptions::PyRuntimeError;
-    use pyo3::exceptions::asyncio::CancelledError;
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
+    use pyo3::{
+        exceptions::{PyRuntimeError, asyncio::CancelledError},
+        prelude::*,
+        types::PyDict,
+    };
     use rstest::rstest;
 
-    use super::LegacyLogging;
-    use crate::PythonLogger;
-    use crate::test_support::{legacy_call, local, namespace, run};
+    use super::InferenceAdapter;
+    use crate::inference::{
+        PythonLogger,
+        test_support::{legacy_call, local, namespace, run},
+    };
 
     const TIMING: Timing = Timing {
         start_time: 0.0,
         end_time: 1.0,
     };
 
-    fn logged(py: Python<'_>, locals: &Bound<'_, PyDict>, asynchronous: bool) -> LegacyLogging {
-        LegacyLogging {
+    fn logged(py: Python<'_>, locals: &Bound<'_, PyDict>, asynchronous: bool) -> InferenceAdapter {
+        InferenceAdapter {
             logger: Some(PythonLogger::new(local(locals, "logger").unbind())),
             ..legacy_call(py, locals, asynchronous)
         }
@@ -1657,8 +1658,8 @@ mod terminal_tests {
     fn succeed(
         py: Python<'_>,
         locals: &Bound<'_, PyDict>,
-        logging: &mut LegacyLogging,
-    ) -> HookStep<LegacyLogging, ()> {
+        logging: &mut InferenceAdapter,
+    ) -> HookStep<InferenceAdapter, ()> {
         let response = local(locals, "response").unbind();
         logging
             .on_event(
@@ -1674,8 +1675,8 @@ mod terminal_tests {
     fn fail(
         py: Python<'_>,
         locals: &Bound<'_, PyDict>,
-        logging: &mut LegacyLogging,
-    ) -> HookStep<LegacyLogging, ()> {
+        logging: &mut InferenceAdapter,
+    ) -> HookStep<InferenceAdapter, ()> {
         let failure = PyErr::from_value(local(locals, "failure"));
         logging
             .on_event(
@@ -1769,8 +1770,8 @@ assert logger.calls[1][1] is response
         Python::initialize();
         Python::attach(|py| {
             let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None\nhead = {'additional_headers': {'request-id': 'req_native'}}");
-            let mut logging = LegacyLogging {
-                operation: crate::LoggingOperation::Messages,
+            let mut logging = InferenceAdapter {
+                operation: crate::inference::Operation::Messages,
                 ..logged(py, &locals, true)
             };
             logging
@@ -1811,7 +1812,7 @@ assert chunks[1] is last
         Python::initialize();
         Python::attach(|py| {
             let locals = namespace(py, c"failure = ValueError('provider')");
-            let mut logging = LegacyLogging {
+            let mut logging = InferenceAdapter {
                 internal: true,
                 ..logged(py, &locals, asynchronous)
             };
@@ -1833,7 +1834,7 @@ assert chunks[1] is last
         Python::initialize();
         Python::attach(|py| {
             let locals = namespace(py, c"response = object()");
-            let mut logging = LegacyLogging {
+            let mut logging = InferenceAdapter {
                 internal: true,
                 ..logged(py, &locals, true)
             };

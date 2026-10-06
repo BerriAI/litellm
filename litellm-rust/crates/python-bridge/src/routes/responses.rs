@@ -19,8 +19,9 @@ fn run_public(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
+    use litellm_callbacks_legacy_python::inference::Operation;
+
     use super::inference::InferenceHost;
-    use litellm_callbacks_legacy_python::LoggingOperation;
     let host = InferenceHost::new(
         request.clone().unbind(),
         "litellm.rust_bridge.responses.route_host",
@@ -71,7 +72,7 @@ fn run_public(
     crate::cache::admit_native(py, &kwargs, cache_call_type)?;
     let (arguments, hooks) = crate::routes::call_hooks(
         py,
-        LoggingOperation::Responses,
+        Operation::Responses,
         &request,
         &args,
         &kwargs,

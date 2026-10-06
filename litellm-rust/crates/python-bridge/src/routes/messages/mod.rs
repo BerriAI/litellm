@@ -1,7 +1,7 @@
 mod host;
 
 use host::MessagesPythonHost;
-use litellm_callbacks_legacy_python::LoggingOperation;
+use litellm_callbacks_legacy_python::inference::Operation;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
@@ -16,7 +16,7 @@ fn run_messages(
 ) -> PyResult<Py<PyAny>> {
     let (arguments, hooks) = crate::routes::call_hooks(
         py,
-        LoggingOperation::Messages,
+        Operation::Messages,
         &request,
         &args,
         &kwargs,

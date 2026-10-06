@@ -5,7 +5,7 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
-use crate::python::{self, Wrapper};
+use crate::inference::python::{self, Wrapper};
 
 /// The `Logging` instance one call fans out through.
 pub struct PythonLogger {

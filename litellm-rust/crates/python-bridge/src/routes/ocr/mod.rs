@@ -4,7 +4,7 @@ mod host;
 mod project;
 
 use host::OcrPythonHost;
-use litellm_callbacks_legacy_python::LoggingOperation;
+use litellm_callbacks_legacy_python::inference::Operation;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::to_py;
 use litellm_inference_ocr::provider_config;
@@ -36,14 +36,8 @@ fn run_ocr(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let (arguments, hooks) = crate::routes::call_hooks(
-        py,
-        LoggingOperation::Ocr,
-        &request,
-        &args,
-        &kwargs,
-        asynchronous,
-    )?;
+    let (arguments, hooks) =
+        crate::routes::call_hooks(py, Operation::Ocr, &request, &args, &kwargs, asynchronous)?;
     crate::routes::run_public_call(
         py,
         arguments,

@@ -6,8 +6,10 @@ use litellm_host::interceptors::{RequestContext, WireRequest};
 use litellm_host_python::to_py;
 use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
 
-use crate::logger::PythonLogger;
-use crate::python::{Logging, Wrapper};
+use crate::inference::{
+    logger::PythonLogger,
+    python::{Logging, Wrapper},
+};
 
 pub trait LegacyCallbacks {
     /// `Logging.update_from_kwargs`: what the logger is told about the request it is
