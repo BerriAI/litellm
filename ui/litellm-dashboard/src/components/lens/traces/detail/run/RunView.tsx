@@ -2,7 +2,7 @@
 
 import { QueryErrorResetBoundary, useQueryClient, useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
-import { Suspense, useDeferredValue, useEffect, useMemo } from "react";
+import { Suspense, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { ErrorBoundary } from "react-error-boundary";
 
 import { LoadingState } from "@/components/shared/LoadingState";
@@ -91,6 +91,7 @@ function LoadedRun({
 }: RunViewProps & { switching: boolean }) {
   const traces = useTracesApi(accessToken);
   const queryClient = useQueryClient();
+  const [live, setLive] = useState(traces.live);
   const queryKey = ["agentTrace", traceId, traceRef, accessToken];
   const traceQueryOptions = {
     queryKey,
@@ -98,9 +99,10 @@ function LoadedRun({
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage: Trace) => lastPage.next_cursor ?? undefined,
     staleTime: 30_000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnWindowFocus: live,
+    refetchOnReconnect: live,
+    refetchOnMount: true,
+    refetchInterval: live ? 30_000 : (false as const),
     retry: traceReadRetry,
     retryDelay: traceReadRetryDelay,
   };
@@ -140,6 +142,11 @@ function LoadedRun({
         handoff={traces.handoff(trace.summary.trace_id, null, trace.summary.trace_ref)}
         onBack={onBack}
         embedded={embedded}
+        refreshing={traceQuery.isFetching}
+        onRefresh={() => void traceQuery.refetch()}
+        live={live}
+        canLive={traces.live}
+        onLiveChange={() => setLive((enabled) => !enabled)}
       />
       {(traceQuery.hasNextPage || failure) && (
         <PagingBanner
