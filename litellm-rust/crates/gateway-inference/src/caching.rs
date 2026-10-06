@@ -1,8 +1,6 @@
 use std::time::Duration;
 
-use litellm_cache_response::{
-    CacheAccess, CacheCredential, CacheOptions, CachePolicy, CacheScope,
-};
+use litellm_cache_response::{CacheAccess, CacheCredential, CacheOptions, CachePolicy, CacheScope};
 use litellm_gateway_auth::AuthenticatedRequest;
 use serde::Deserialize;
 use serde_json::{Map, Value};

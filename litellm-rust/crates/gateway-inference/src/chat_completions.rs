@@ -1,4 +1,3 @@
-use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{
@@ -6,6 +5,7 @@ use axum::{
     extract::{Path, State},
     response::{IntoResponse, Response},
 };
+use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_inference_chat::types::ChatCompletionsCall;
 use serde_json::{Map, Value};
 

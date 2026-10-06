@@ -130,14 +130,13 @@ fn log_environment_fallback(py: Python<'_>, name: &str, error: &PyErr) -> PyResu
 mod tests {
     use std::sync::{Arc, Mutex, MutexGuard};
 
+    use litellm_host_python::PythonContext;
     use litellm_secrets::{
         FailurePolicy, KeyManagementSettings, KeyManagementSystem, OidcResolver, SecretManager,
         SecretManagerState, SecretResolver,
     };
     use pyo3::{prelude::*, types::PyDict};
     use rstest::rstest;
-
-    use litellm_host_python::PythonContext;
 
     use super::{HANDLER_MODULE, PythonSecretManager, python_name};
     use crate::secrets::python_error;

@@ -1,9 +1,11 @@
-use litellm_host::lifecycle::ExecutionEvent;
-use litellm_host::observation::ObservationSender;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use litellm_host::interceptors::{Interceptors, RawResponse, WireRequest};
+use litellm_host::{
+    interceptors::{Interceptors, RawResponse, WireRequest},
+    lifecycle::ExecutionEvent,
+    observation::ObservationSender,
+};
 use litellm_llms::base_llm::auth::{Authenticated, resolve_auth};
 
 use super::{

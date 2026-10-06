@@ -1,9 +1,8 @@
-use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::Mutex;
 
 use litellm_host::{
     interceptors::{ExecutionFacts, RequestContext, ResultSource, WireRequest},
-    lifecycle::CallEvent,
+    lifecycle::{CallEvent, ExecutionEvent},
 };
 use litellm_inference_messages::{MessagesCallResponse, route::Messages};
 use litellm_inference_testing::{RecordingSecrets, no_secrets};

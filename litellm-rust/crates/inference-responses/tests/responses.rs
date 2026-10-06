@@ -1,11 +1,11 @@
-use litellm_host::{
-    interceptors::{ExecutionFacts, ResultSource},
-    lifecycle::ExecutionEvent,
-};
 use std::sync::Arc;
 
 use futures_util::TryStreamExt;
-use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
+use litellm_host::{
+    call::HostedCompletion,
+    interceptors::{ExecutionFacts, ResultSource},
+    lifecycle::{CallEvent, ExecutionEvent},
+};
 use litellm_inference_responses::{
     route::Responses,
     types::{ResponsesCall, ResponsesOutput},

@@ -37,13 +37,8 @@ impl ResponsesRoute {
             call,
             observers,
             move |call, _, interceptors, observers| async move {
-                self.run(
-                    call,
-                    cache_options,
-                    &interceptors,
-                    observers.as_ref(),
-                )
-                .await
+                self.run(call, cache_options, &interceptors, observers.as_ref())
+                    .await
             },
         )
     }

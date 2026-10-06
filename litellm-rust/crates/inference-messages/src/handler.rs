@@ -1,10 +1,10 @@
-use crate::constants::MESSAGES_TIMEOUT_SECS;
 use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use litellm_host::interceptors::{Interceptors, ProviderIdentity, RequestContext, WireRequest};
 use litellm_http::transport::Error as TransportError;
+use litellm_inference::{caching::CachePlan, context::CallContext, outbound::outbound_request};
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     messages::{
@@ -20,7 +20,7 @@ use super::{
     Error, MessagesCallResponse, MessagesRoute, common_utils::truncate_error_body,
     prepare::ProviderMessagesRequest,
 };
-use litellm_inference::{caching::CachePlan, context::CallContext, outbound::outbound_request};
+use crate::constants::MESSAGES_TIMEOUT_SECS;
 
 pub(super) struct ProviderCall {
     pub identity: ProviderIdentity,

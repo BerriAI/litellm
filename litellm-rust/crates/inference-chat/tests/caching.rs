@@ -1,9 +1,15 @@
 mod support;
-use litellm_cache_memory::InMemoryCache;
-use litellm_cache_response::{
-    CacheContext, CacheOptions, ResponseCache, ResponseCacheConfig,
-    ResponseCacheService,
+use std::{
+    num::NonZeroUsize,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
 };
+
+use litellm_cache_memory::InMemoryCache;
+use litellm_cache_response::{CacheOptions, CacheScope, ResponseCache, ResponseCacheService};
 use litellm_host::{
     interceptors::{
         ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext, ResultSource,
@@ -15,14 +21,6 @@ use litellm_host::{
 use litellm_inference::RouteError;
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
-use std::{
-    num::NonZeroUsize,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
 #[fixture]
 fn cache() -> Arc<dyn ResponseCacheService> {
     cache_with_limit(4096)
@@ -34,10 +32,7 @@ fn cache_with_limit(max_entry_bytes: usize) -> Arc<dyn ResponseCacheService> {
             Some(100),
             Some(Duration::from_secs(60)),
         )))
-        .with_config(ResponseCacheConfig {
-            namespace: "test".into(),
-            max_entry_bytes,
-        }),
+        .with_max_entry_bytes(max_entry_bytes),
     )
 }
 
@@ -362,9 +357,9 @@ async fn the_model_group_decides_cache_reuse(
                 &hooks,
                 CallOptions {
                     cache: Some(CacheOptions {
-                        context: CacheContext {
+                        scope: CacheScope {
                             model_group: Some(model_group.into()),
-                            ..CacheContext::default()
+                            ..CacheScope::default()
                         },
                         ..CacheOptions::default()
                     }),

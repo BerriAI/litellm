@@ -12,9 +12,8 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheContext, CacheCredential, CacheKey, CacheKeyInput, CacheOptions, CachePolicy, Deployment,
-    ResponseCache,
-    ResponseCacheConfig, ResponseCacheService,
+    CacheAccess, CacheCredential, CacheKey, CacheKeyInput, CacheOptions, CachePolicy, CacheScope,
+    Deployment, ResponseCache, ResponseCacheService,
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
@@ -155,10 +154,7 @@ fn cache_with_limit(max_entry_bytes: usize) -> Arc<dyn ResponseCacheService> {
             Some(100),
             Some(Duration::from_secs(60)),
         )))
-        .with_config(ResponseCacheConfig {
-            namespace: "test".into(),
-            max_entry_bytes,
-        }),
+        .with_max_entry_bytes(max_entry_bytes),
     )
 }
 
@@ -189,21 +185,32 @@ async fn call(
 }
 
 #[rstest]
-#[case::normal(CacheOptions::default(), true, true)]
-#[case::no_cache(CacheOptions { policy: CachePolicy { no_cache: true, ..CachePolicy::default() }, ..CacheOptions::default() }, false, true)]
-#[case::no_store(CacheOptions { policy: CachePolicy { no_store: true, ..CachePolicy::default() }, ..CacheOptions::default() }, true, false)]
-#[case::disabled(CacheOptions { policy: CachePolicy { caching: Some(false), ..CachePolicy::default() }, ..CacheOptions::default() }, false, false)]
+#[case::normal(CacheAccess::READ_WRITE)]
+#[case::no_cache(CacheAccess { reads: false, writes: true })]
+#[case::no_store(CacheAccess { reads: true, writes: false })]
+#[case::disabled(CacheAccess::NONE)]
 #[tokio::test]
 async fn cache_controls_apply_to_both_reads_and_writes(
     cache: Arc<dyn ResponseCacheService>,
-    #[case] options: CacheOptions,
-    #[case] reads: bool,
-    #[case] writes: bool,
+    #[case] access: CacheAccess,
 ) {
+    let CacheAccess { reads, writes } = access;
     let calls = AtomicUsize::new(0);
-    let options = Some(options);
+    let options = Some(CacheOptions {
+        policy: CachePolicy {
+            access,
+            ..CachePolicy::default()
+        },
+        ..CacheOptions::default()
+    });
     let first = call(&cache, options.clone(), &calls, json!({"model":"test"})).await;
-    let second = call(&cache, Some(CacheOptions::default()), &calls, json!({"model":"test"})).await;
+    let second = call(
+        &cache,
+        Some(CacheOptions::default()),
+        &calls,
+        json!({"model":"test"}),
+    )
+    .await;
     assert_eq!(first == second, writes);
     let third = call(&cache, options, &calls, json!({"model":"test"})).await;
     assert_eq!(second == third, reads);
@@ -235,7 +242,7 @@ async fn request_identity_is_canonical_and_scoped(cache: Arc<dyn ResponseCacheSe
     let other = call(
         &cache,
         Some(CacheOptions {
-            context: CacheContext {
+            scope: CacheScope {
                 credential: Some(CacheCredential::new("test", "other-tenant", "key")),
                 model_group: None,
             },
@@ -499,16 +506,16 @@ struct InvalidEntryCache(
 );
 
 impl ResponseCacheService for InvalidEntryCache {
-    fn config(&self) -> &ResponseCacheConfig {
-        self.0.config()
+    fn max_entry_bytes(&self) -> Option<usize> {
+        self.0.max_entry_bytes()
     }
 
     fn key<'a>(
         &'a self,
         input: &'a CacheKeyInput,
-        context: &'a CacheContext,
+        scope: &'a CacheScope,
     ) -> futures_util::future::BoxFuture<'a, Result<CacheKey, litellm_cache::Error>> {
-        ResponseCacheService::key(&self.0, input, context)
+        ResponseCacheService::key(&self.0, input, scope)
     }
 
     fn lookup<'a>(
@@ -536,20 +543,19 @@ impl ResponseCacheService for InvalidEntryCache {
 }
 
 struct ResolveFailureCache {
-    config: ResponseCacheConfig,
     lookups: AtomicUsize,
     stores: AtomicUsize,
 }
 
 impl ResponseCacheService for ResolveFailureCache {
-    fn config(&self) -> &ResponseCacheConfig {
-        &self.config
+    fn max_entry_bytes(&self) -> Option<usize> {
+        Some(4096)
     }
 
     fn key<'a>(
         &'a self,
         _: &'a CacheKeyInput,
-        _: &'a CacheContext,
+        _: &'a CacheScope,
     ) -> futures_util::future::BoxFuture<'a, Result<CacheKey, litellm_cache::Error>> {
         Box::pin(async { Err(litellm_cache::Error::Unavailable) })
     }
@@ -580,10 +586,6 @@ impl ResponseCacheService for ResolveFailureCache {
 #[tokio::test]
 async fn key_resolution_failure_skips_cache_and_runs_provider() {
     let cache = Arc::new(ResolveFailureCache {
-        config: ResponseCacheConfig {
-            namespace: "test".into(),
-            max_entry_bytes: 4096,
-        },
         lookups: AtomicUsize::new(0),
         stores: AtomicUsize::new(0),
     });
@@ -608,7 +610,13 @@ async fn an_invalid_cached_envelope_is_replaced_by_a_provider_result(#[case] poi
     ));
     let request = json!({"input":"hello"});
     let calls = AtomicUsize::new(0);
-    let first = call(&cache, Some(CacheOptions::default()), &calls, request.clone()).await;
+    let first = call(
+        &cache,
+        Some(CacheOptions::default()),
+        &calls,
+        request.clone(),
+    )
+    .await;
     let second = call(&cache, Some(CacheOptions::default()), &calls, request).await;
     assert_eq!(first, second);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -647,12 +655,8 @@ impl litellm_cache::BaseCache for UnavailableCache {
 #[rstest]
 #[tokio::test]
 async fn backend_failures_do_not_fail_inference() {
-    let cache: Arc<dyn ResponseCacheService> = Arc::new(
-        ResponseCache::new(Arc::new(UnavailableCache)).with_config(ResponseCacheConfig {
-            namespace: "test".into(),
-            max_entry_bytes: 4096,
-        }),
-    );
+    let cache: Arc<dyn ResponseCacheService> =
+        Arc::new(ResponseCache::new(Arc::new(UnavailableCache)).with_max_entry_bytes(4096));
     let calls = AtomicUsize::new(0);
     let first = call(&cache, Some(CacheOptions::default()), &calls, json!({})).await;
     let second = call(&cache, Some(CacheOptions::default()), &calls, json!({})).await;
@@ -737,7 +741,13 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
             .unwrap()
         )
     } else {
-        unary_call(&cache, Some(CacheOptions::default()), &provider_calls, request.clone()).await
+        unary_call(
+            &cache,
+            Some(CacheOptions::default()),
+            &provider_calls,
+            request.clone(),
+        )
+        .await
     };
     let result = if streaming_route {
         match execute_streaming::<TestRoute, _, _>(
@@ -815,25 +825,42 @@ async fn unary_call(
 }
 
 #[rstest]
-#[case::normal(CacheOptions::default(), true, true)]
-#[case::no_cache(CacheOptions { policy: CachePolicy { no_cache: true, ..CachePolicy::default() }, ..CacheOptions::default() }, false, true)]
-#[case::no_store(CacheOptions { policy: CachePolicy { no_store: true, ..CachePolicy::default() }, ..CacheOptions::default() }, true, false)]
-#[case::disabled(CacheOptions { policy: CachePolicy { caching: Some(false), ..CachePolicy::default() }, ..CacheOptions::default() }, false, false)]
+#[case::normal(CacheAccess::READ_WRITE)]
+#[case::no_cache(CacheAccess { reads: false, writes: true })]
+#[case::no_store(CacheAccess { reads: true, writes: false })]
+#[case::disabled(CacheAccess::NONE)]
 #[tokio::test]
 async fn unary_cache_controls_do_not_change_the_shared_service(
     cache: Arc<dyn ResponseCacheService>,
-    #[case] options: CacheOptions,
-    #[case] reads: bool,
-    #[case] writes: bool,
+    #[case] access: CacheAccess,
 ) {
+    let CacheAccess { reads, writes } = access;
     let calls = AtomicUsize::new(0);
-    let options = Some(options);
+    let options = Some(CacheOptions {
+        policy: CachePolicy {
+            access,
+            ..CachePolicy::default()
+        },
+        ..CacheOptions::default()
+    });
     let first = unary_call(&cache, options.clone(), &calls, json!({"input":"hello"})).await;
-    let second = unary_call(&cache, Some(CacheOptions::default()), &calls, json!({"input":"hello"})).await;
+    let second = unary_call(
+        &cache,
+        Some(CacheOptions::default()),
+        &calls,
+        json!({"input":"hello"}),
+    )
+    .await;
     assert_eq!(first == second, writes);
     let third = unary_call(&cache, options, &calls, json!({"input":"hello"})).await;
     assert_eq!(second == third, reads);
-    let fourth = unary_call(&cache, Some(CacheOptions::default()), &calls, json!({"input":"hello"})).await;
+    let fourth = unary_call(
+        &cache,
+        Some(CacheOptions::default()),
+        &calls,
+        json!({"input":"hello"}),
+    )
+    .await;
     assert_eq!(fourth, if !reads && writes { third } else { second });
     assert_eq!(
         calls.load(Ordering::SeqCst),
@@ -843,47 +870,26 @@ async fn unary_cache_controls_do_not_change_the_shared_service(
 
 #[rstest]
 #[tokio::test]
-async fn namespaces_and_surfaces_isolate_entries_on_shared_storage() {
-    let storage = Arc::new(InMemoryCache::default());
-    let first_cache: Arc<dyn ResponseCacheService> = Arc::new(
-        ResponseCache::new(storage.clone()).with_config(ResponseCacheConfig {
-            namespace: "first".into(),
-            max_entry_bytes: 4096,
-        }),
-    );
-    let second_cache: Arc<dyn ResponseCacheService> = Arc::new(
-        ResponseCache::new(storage).with_config(ResponseCacheConfig {
-            namespace: "second".into(),
-            max_entry_bytes: 4096,
-        }),
-    );
+async fn surfaces_isolate_entries_on_shared_storage(cache: Arc<dyn ResponseCacheService>) {
     let calls = AtomicUsize::new(0);
     let first = call(
-        &first_cache,
-        Some(CacheOptions::default()),
-        &calls,
-        json!({"input":"hello"}),
-    )
-    .await;
-    let different_namespace = call(
-        &second_cache,
+        &cache,
         Some(CacheOptions::default()),
         &calls,
         json!({"input":"hello"}),
     )
     .await;
     let different_surface = unary_call(
-        &first_cache,
+        &cache,
         Some(CacheOptions::default()),
         &calls,
         json!({"input":"hello"}),
     )
     .await;
-    assert_ne!(first, different_namespace);
     assert_ne!(first, different_surface);
     assert_eq!(
         call(
-            &first_cache,
+            &cache,
             Some(CacheOptions::default()),
             &calls,
             json!({"input":"hello"})
@@ -892,18 +898,8 @@ async fn namespaces_and_surfaces_isolate_entries_on_shared_storage() {
         first
     );
     assert_eq!(
-        call(
-            &second_cache,
-            Some(CacheOptions::default()),
-            &calls,
-            json!({"input":"hello"})
-        )
-        .await,
-        different_namespace
-    );
-    assert_eq!(
         unary_call(
-            &first_cache,
+            &cache,
             Some(CacheOptions::default()),
             &calls,
             json!({"input":"hello"})
@@ -911,5 +907,5 @@ async fn namespaces_and_surfaces_isolate_entries_on_shared_storage() {
         .await,
         different_surface
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }

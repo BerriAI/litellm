@@ -1,7 +1,15 @@
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheContext, CacheKey, CacheKeyInput, CacheOptions, Deployment, ResponseCache,
-    ResponseCacheConfig, ResponseCacheService, ResponseEnvelope,
+    CacheKey, CacheKeyInput, CacheOptions, CacheScope, Deployment, ResponseCache,
+    ResponseCacheService, ResponseEnvelope,
 };
 use litellm_host::interceptors::{Interceptors, ProviderIdentity};
 use litellm_inference::{
@@ -10,13 +18,6 @@ use litellm_inference::{
 };
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
 struct CacheRequest {
     identity: ProviderIdentity,
     deployment: Deployment,
@@ -85,10 +86,7 @@ fn cache_with_limit(max_entry_bytes: usize) -> Arc<dyn ResponseCacheService> {
             Some(100),
             Some(Duration::from_secs(60)),
         )))
-        .with_config(ResponseCacheConfig {
-            namespace: "test".into(),
-            max_entry_bytes,
-        }),
+        .with_max_entry_bytes(max_entry_bytes),
     )
 }
 
@@ -98,16 +96,16 @@ struct InvalidEntryCache(
 );
 
 impl ResponseCacheService for InvalidEntryCache {
-    fn config(&self) -> &ResponseCacheConfig {
-        self.0.config()
+    fn max_entry_bytes(&self) -> Option<usize> {
+        self.0.max_entry_bytes()
     }
 
     fn key<'a>(
         &'a self,
         input: &'a CacheKeyInput,
-        context: &'a CacheContext,
+        scope: &'a CacheScope,
     ) -> futures_util::future::BoxFuture<'a, Result<CacheKey, litellm_cache::Error>> {
-        ResponseCacheService::key(&self.0, input, context)
+        ResponseCacheService::key(&self.0, input, scope)
     }
 
     fn lookup<'a>(

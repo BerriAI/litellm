@@ -1,7 +1,14 @@
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheKeyInput, CacheOptions, Deployment, ResponseCache, ResponseCacheConfig,
-    ResponseCacheService,
+    CacheKeyInput, CacheOptions, Deployment, ResponseCache, ResponseCacheService,
 };
 use litellm_host::interceptors::{Interceptors, ProviderIdentity};
 use litellm_inference::{
@@ -10,13 +17,6 @@ use litellm_inference::{
 };
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
 struct CacheRequest {
     identity: ProviderIdentity,
     deployment: Deployment,
@@ -74,10 +74,7 @@ fn cache_with_limit(max_entry_bytes: usize) -> Arc<dyn ResponseCacheService> {
             Some(100),
             Some(Duration::from_secs(60)),
         )))
-        .with_config(ResponseCacheConfig {
-            namespace: "test".into(),
-            max_entry_bytes,
-        }),
+        .with_max_entry_bytes(max_entry_bytes),
     )
 }
 
@@ -369,7 +366,10 @@ async fn forwarded_headers_and_the_deployment_decide_messages_cache_reuse(
         shaping: Default::default(),
     };
     for change in ["none", change] {
-        route.execute(call(change), &hooks, CacheOptions::default()).await.unwrap();
+        route
+            .execute(call(change), &hooks, CacheOptions::default())
+            .await
+            .unwrap();
     }
     assert_eq!(
         matches!(

@@ -1,4 +1,3 @@
-use crate::execution::{run_async, run_sync};
 use litellm_host_python::from_py_argument;
 use litellm_inference_transcription::{
     AudioTranscriptionRoute, Error, types::AudioTranscriptionRequest,
@@ -8,6 +7,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     errors::route_error_to_pyerr,
+    execution::{run_async, run_sync},
     marshal::{RouteOptions, extra_headers_argument, optional_params_argument, optional_timeout},
 };
 

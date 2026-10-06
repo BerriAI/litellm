@@ -1,6 +1,5 @@
 //! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
 
-use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{
@@ -10,6 +9,7 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
+use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_host_http::Sse;
 use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};

@@ -1,12 +1,12 @@
+use std::time::Duration;
+
+use bytes::Bytes;
 use litellm_cache_response::{CacheKeyInput, Deployment, extra_headers};
+use litellm_host::call::CallOutput;
 use litellm_inference::{
     RouteError,
     caching::{Cachable, CacheKeyProjection},
 };
-use std::time::Duration;
-
-use bytes::Bytes;
-use litellm_host::call::CallOutput;
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, responses::transformation::BaseResponsesApiConfig,
 };
@@ -45,7 +45,11 @@ impl CacheKeyProjection for ResponsesCall {
     fn cache_key_input(&self) -> Result<CacheKeyInput, RouteError> {
         Ok(CacheKeyInput::forwarded(
             <crate::route::Responses as Cachable>::SURFACE,
-            Deployment::new(&self.model, self.custom_llm_provider.as_deref(), self.api_base.as_deref()),
+            Deployment::new(
+                &self.model,
+                self.custom_llm_provider.as_deref(),
+                self.api_base.as_deref(),
+            ),
             self.optional_params
                 .clone()
                 .into_iter()

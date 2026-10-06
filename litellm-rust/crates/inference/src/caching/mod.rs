@@ -3,15 +3,13 @@ mod plan;
 mod session;
 mod stream;
 
+pub use key::CacheKeyProjection;
 use litellm_host::protocol::Protocol;
+pub use plan::CachePlan;
+pub use session::{CacheSession, CachedOutput, execute_streaming, execute_unary};
+pub use stream::StreamCachable;
 
 use crate::RouteError;
-
-pub use key::CacheKeyProjection;
-pub use plan::CachePlan;
-pub use session::CacheSession;
-pub use session::{CachedOutput, execute_streaming, execute_unary};
-pub use stream::StreamCachable;
 
 pub trait Cachable: Protocol<Error = RouteError> {
     const SURFACE: &'static str;

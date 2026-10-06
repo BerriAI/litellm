@@ -3,8 +3,7 @@ use std::time::Duration;
 use futures_util::future::BoxFuture;
 use litellm_cache::Error;
 use litellm_cache_response::{
-    CacheKey, CacheKeyInput, CacheScope, ResponseCacheService,
-    ResponseEnvelope,
+    CacheKey, CacheKeyInput, CacheScope, ResponseCacheService, ResponseEnvelope,
 };
 use litellm_host::{
     machine::{HostServices, MachineFault},
@@ -78,10 +77,7 @@ pub(in crate::cache) fn service<P: Protocol<HostCall = CacheCall>>(
 where
     P::Error: From<MachineFault>,
 {
-    std::sync::Arc::new(PythonCacheService {
-        services,
-        surface,
-    })
+    std::sync::Arc::new(PythonCacheService { services, surface })
 }
 
 impl<P: Protocol<HostCall = CacheCall>> ResponseCacheService for PythonCacheService<P>

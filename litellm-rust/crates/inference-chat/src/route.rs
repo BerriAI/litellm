@@ -1,8 +1,8 @@
-use litellm_host::observation::ObservationSender;
 use std::convert::Infallible;
 
 use litellm_host::{
     call::{CallOutput, HostedMachine, hosted_call},
+    observation::ObservationSender,
     protocol::Protocol,
 };
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
@@ -37,14 +37,9 @@ impl ChatCompletionsRoute {
             call,
             observers,
             move |call, _, interceptors, observers| async move {
-                self.run_call(
-                    call,
-                    cache_options,
-                    &interceptors,
-                    observers.as_ref(),
-                )
-                .await
-                .map(CallOutput::Complete)
+                self.run_call(call, cache_options, &interceptors, observers.as_ref())
+                    .await
+                    .map(CallOutput::Complete)
             },
         )
     }

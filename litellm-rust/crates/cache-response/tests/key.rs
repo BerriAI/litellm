@@ -29,7 +29,11 @@ fn routed(model_group: Option<&str>, deployment: Deployment) -> CacheKey {
 }
 
 fn input(parameters: Value) -> CacheKeyInput {
-    CacheKeyInput::new("responses", Deployment::new("gpt-5", None, None), parameters)
+    CacheKeyInput::new(
+        "responses",
+        Deployment::new("gpt-5", None, None),
+        parameters,
+    )
 }
 
 #[rstest]
@@ -39,7 +43,10 @@ fn deployments_in_one_model_group_share_a_key() {
             Some("gpt-5"),
             Deployment::new("gpt-5", Some("azure"), Some("https://azure.example"))
         ),
-        routed(Some("gpt-5"), Deployment::new("gpt-5", Some("openai"), None)),
+        routed(
+            Some("gpt-5"),
+            Deployment::new("gpt-5", Some("openai"), None)
+        ),
     );
 }
 

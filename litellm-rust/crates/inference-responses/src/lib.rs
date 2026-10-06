@@ -60,12 +60,7 @@ impl ResponsesRoute {
         } = options.into();
         litellm_host::lifecycle::observe_call(
             observers.clone(),
-            self.run(
-                call,
-                cache_options,
-                interceptors,
-                observers.as_ref(),
-            ),
+            self.run(call, cache_options, interceptors, observers.as_ref()),
         )
         .await
     }

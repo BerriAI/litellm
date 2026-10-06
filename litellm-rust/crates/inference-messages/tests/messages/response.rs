@@ -23,7 +23,6 @@ async fn calls_defer_execution_until_polled(
     #[case] with_observer: bool,
 ) {
     use futures_util::future::BoxFuture;
-
     use litellm_host::lifecycle::CallEvent;
 
     let upstream = upstream([message_response()]).await;
@@ -395,8 +394,7 @@ async fn route_uses_injected_dependencies_and_optional_cache(
 async fn cache_policy_overrides_keep_the_caller_scope(call: MessagesCall) {
     use litellm_cache_memory::InMemoryCache;
     use litellm_cache_response::{
-        CacheContext, CacheCredential, CacheOptions, CachePolicy, ResponseCache,
-        ResponseCacheService,
+        CacheCredential, CacheOptions, CachePolicy, CacheScope, ResponseCache, ResponseCacheService,
     };
 
     let first_body = message_body();
@@ -443,7 +441,7 @@ async fn cache_policy_overrides_keep_the_caller_scope(call: MessagesCall) {
                 ttl: Some(Duration::from_secs(30)),
                 ..CachePolicy::default()
             },
-            context: CacheContext {
+            scope: CacheScope {
                 credential: Some(CacheCredential::new("test", caller, "key")),
                 model_group: None,
             },

@@ -12,11 +12,11 @@ Keep `ResponseCache<B>` generic over its storage backend. Preserve typed backend
 
 Keep the core service contract narrow. Lookup and store must not require connection testing, ping, flush, deletion, counters, queues, or scripts. Require batch operations where a consumer needs partial hits, and keep management capabilities on their own interfaces. An exact-only adapter must remain explicit about its matching restriction. Supporting semantic matching requires a defined lookup-context and embedding execution contract, not just a renamed trait
 
-Separate reusable resources from per-call policy. Backend configuration, namespace, default expiry, and entry limits belong to the configured service or backend. Read/write controls, expiry and freshness overrides, and authenticated caller scope belong to the call. Passing call options must not replace or mutate the route's configured service
+Separate reusable resources from per-call policy. Backend configuration, namespace, default expiry, and entry limits belong to the configured service or backend. Read/write controls, expiry and freshness overrides, the authenticated caller credential, and the model group belong to the call. Passing call options must not replace or mutate the route's configured service
 
 Keep cache misses and storage failures distinguishable in return values. Core owns the decision to continue with provider execution after a cache failure. A read can reject an entry for freshness while the backend still retains it. Preserve the timestamp at which a response was produced when writing it later
 
-Define lookup placement explicitly relative to authorization, deployment and credential resolution, and request-transforming callbacks. Cache identity must account for every input that affects reuse, including API surface and caller scope, while preserving intentional Python caching groups. Preserve existing keys and response formats unless changing them is an explicit migration decision
+Define lookup placement explicitly relative to authorization, deployment and credential resolution, and request-transforming callbacks. Cache identity must account for every input that affects reuse, including API surface and caller credential, while preserving intentional Python caching groups. Preserve existing keys and response formats unless changing them is an explicit migration decision
 
 Cache normalized provider results before caller-specific response transformations. Hits must still run the applicable response processing, success callbacks, and cache-hit accounting. Keep callback execution in the host. Python cache implementations and semantic embedders that require the caller's task must use the existing host-operation mechanism rather than Python calls from a Rust worker. Preserve legacy fallback until that contract is supported
 
@@ -24,13 +24,13 @@ Keep unary caching independent of stream-only methods. Store streams only after 
 
 Test each contract in its owner: storage capabilities in backend tests, envelopes and freshness here, reuse and replay in core, Python callback and fallback behavior at the bridge, and HTTP behavior at the gateway. Run backend contract checks and Python response-codec fixtures before exposing a new backend
 
-Per-call `CacheOptions` pair a `CachePolicy` (reads, writes, expiry, freshness) with a `CacheScope`. Storage operations take a resolved `CacheKey`; reads and writes are gated by the caller, not by storage. Versioned native envelopes reject incompatible API surfaces and versions as misses; this envelope is distinct from the legacy Python response codec
+Per-call `CacheOptions` pair a `CachePolicy` (reads, writes, expiry, freshness) with a `CacheScope` (caller `CacheCredential` and model group). The policy never affects the key, and the scope affects nothing but the key. Storage operations take a resolved `CacheKey`; reads and writes are gated by the caller, not by storage. Versioned native envelopes reject incompatible API surfaces and versions as misses; this envelope is distinct from the legacy Python response codec
 
 Response storage is not the source of budget or rate-limit coordination dependencies. Keep counters, reservations, and atomic admission operations out of `ResponseCacheService`, including when both services happen to use Redis
 
 ## Boundary
 
-- Owns `ResponseCache<B>`, key derivation, scope and per-call policy, envelopes, entry freshness, the Python-compatible response codec, deferred writes, and the object-safe views over `ResponseCache<B>` (`ResponseCacheService`, the exact-only `ExactResponseCache`, `ConnectionProbe`)
+- Owns `ResponseCache<B>`, key derivation, per-call scope and policy, envelopes, entry freshness, the Python-compatible response codec, deferred writes, and the object-safe views over `ResponseCache<B>` (`ResponseCacheService`, the exact-only `ExactResponseCache`, `ConnectionProbe`)
 - Having only one consumer today, such as the Python bridge, is not a reason to move code out. This crate serves both the SDK and the gateway
 - Python wire shapes stay out: decoding the legacy key flags (`api_parameter`, `internal_parameter`) and the legacy activation flags (`supported_call_type`, `configured`, `default_on`, `use_cache`) is configuration translation owned by `python-bridge/src/cache/native`
 - A request carries one resolved read/write policy. The gateway and the Python bridge each translate their inputs into it; don't add parallel control types alongside `CachePolicy`

@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use axum::body::to_bytes;
 use litellm_cache_memory::InMemoryCache;
-use litellm_cache_response::{CacheKey, ResponseCache, ResponseCacheConfig, ResponseCacheService};
+use litellm_cache_response::{CacheKey, ResponseCache, ResponseCacheService};
 use rstest::rstest;
 use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
@@ -50,11 +50,7 @@ async fn all_inference_endpoints_share_native_cache(
             Some(100),
             Some(Duration::from_secs(60)),
         )))
-        .with_config(ResponseCacheConfig {
-            namespace: "gateway-test".into(),
-            max_entry_bytes: 4096,
-            ..ResponseCacheConfig::default()
-        }),
+        .with_max_entry_bytes(4096),
     );
     let app = support::app_with_cache(model, &upstream.uri(), cache.clone());
     let request = if is_responses {
@@ -122,6 +118,50 @@ async fn all_inference_endpoints_share_native_cache(
         Some(&cache_key)
     );
     assert_eq!(to_bytes(restored.into_body(), 4096).await.unwrap(), second);
+}
+
+#[rstest]
+#[case::no_cache(json!({"cache": {"no-cache": true}}), false, true)]
+#[case::no_store(json!({"cache": {"no-store": true}}), true, false)]
+#[case::caching_disabled(json!({"caching": false}), false, false)]
+#[case::caching_enabled(json!({"caching": true}), true, true)]
+#[case::null_controls(json!({"caching": null, "cache": null}), true, true)]
+#[tokio::test]
+async fn request_controls_gate_cache_reads_and_writes(
+    #[case] controls: Value,
+    #[case] reads: bool,
+    #[case] writes: bool,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id":"response-1", "model":"test-model", "status":"completed", "output":[]
+        })))
+        .expect(1 + u64::from(!writes) + u64::from(!reads))
+        .mount(&upstream)
+        .await;
+    let cache: Arc<dyn ResponseCacheService> = Arc::new(ResponseCache::new(Arc::new(
+        InMemoryCache::new(Some(100), Some(Duration::from_secs(60))),
+    )));
+    let app = support::app_with_cache("openai/test-model", &upstream.uri(), cache);
+    let plain = json!({"model":"public/model", "input":"hello"});
+    let controlled = Value::Object(
+        plain
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .chain(controls.as_object().unwrap().clone())
+            .collect(),
+    );
+    let hit = async |body: Value| {
+        let response = support::post(app.clone(), "/v1/responses", body).await;
+        assert_eq!(response.status(), 200);
+        response.headers().contains_key("x-litellm-cache-key")
+    };
+    assert!(!hit(controlled.clone()).await);
+    assert_eq!(hit(plain).await, writes);
+    assert_eq!(hit(controlled).await, reads);
 }
 
 #[rstest]

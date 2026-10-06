@@ -1,6 +1,3 @@
-use crate::cache::{CacheCall, PythonCache, PythonCacheConfig, PythonCached};
-
-use super::super::inference::InferenceHost;
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
 use litellm_inference_chat::{Error, route::ChatCompletions, types::ChatCompletionsCall};
 use pyo3::{
@@ -8,6 +5,9 @@ use pyo3::{
     prelude::*,
     types::PyDict,
 };
+
+use super::super::inference::InferenceHost;
+use crate::cache::{CacheCall, PythonCache, PythonCacheConfig, PythonCached};
 
 pub(super) struct ChatCompletionsPythonHost {
     host: InferenceHost,

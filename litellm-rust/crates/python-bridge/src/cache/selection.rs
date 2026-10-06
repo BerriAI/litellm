@@ -1,4 +1,3 @@
-use super::python;
 use std::sync::Arc;
 
 use litellm_cache_response::{
@@ -10,6 +9,8 @@ use litellm_host::{
 };
 use litellm_inference::caching::Cachable;
 use pyo3::{prelude::*, types::PyDict};
+
+use super::python;
 
 pub(crate) struct PythonCached<P>(std::marker::PhantomData<P>);
 
@@ -135,9 +136,11 @@ pub(crate) fn configure_python_cache<P: Cachable>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rstest::{fixture, rstest};
     use std::ffi::CString;
+
+    use rstest::{fixture, rstest};
+
+    use super::*;
 
     #[fixture]
     fn selection_cache() -> Py<PyModule> {
