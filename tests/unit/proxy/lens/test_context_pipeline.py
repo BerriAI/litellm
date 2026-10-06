@@ -34,6 +34,7 @@ from litellm.proxy.lens.models import (
     ToolCount,
     TracePart,
 )
+from litellm.proxy.lens.reconciliation import FindingGroup, FindingGroups
 from litellm.proxy.lens.state import queue_job
 from litellm.proxy.lens.worker import analyze_sample
 from tests.unit.proxy.lens.test_agent_runtime import InitialPrompt, ToolReply
@@ -43,6 +44,29 @@ from tests.unit.proxy.lens.test_state import NOW, issue_brief, lens
 
 class GroupPrompt(BaseModel):
     candidates: tuple[Candidate, ...]
+
+
+class FindingReference(BaseModel):
+    reference: str
+
+
+class FinalFindingPrompt(BaseModel):
+    findings: tuple[FindingReference, ...]
+
+
+def independent_final_findings(request: ModelRequest) -> ModelResult | None:
+    if '"FindingGroups"' not in request.prompt:
+        return None
+    payload: Final = FinalFindingPrompt.model_validate_json(request.prompt)
+    return ModelResult(
+        content=FindingGroups(
+            groups=tuple(
+                FindingGroup(members=(finding.reference,), representative=finding.reference)
+                for finding in payload.findings
+            )
+        ).model_dump_json(),
+        cost=0,
+    )
 
 
 class AssignedSession(BaseModel):
@@ -386,6 +410,8 @@ async def test_candidate_investigators_overlap_browse_reviews_and_keep_original_
         )
 
     async def model(request: ModelRequest) -> ModelResult:
+        if response := independent_final_findings(request):
+            return response
         if request.purpose == "cluster":
             groups: Final = GroupPrompt.model_validate_json(request.prompt)
             return ModelResult(content=Clusters(candidates=groups.candidates).model_dump_json(), cost=0)
@@ -634,6 +660,7 @@ async def test_investigator_only_injects_candidate_sessions_for_full_access(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("checkpointed", (False, True))
 @pytest.mark.parametrize(
     ("failure", "supported_finding"),
     (
@@ -649,7 +676,7 @@ async def test_investigator_only_injects_candidate_sessions_for_full_access(
     ),
 )
 async def test_failed_session_review_preserves_other_results_and_reports_its_error(
-    failure: str, supported_finding: bool
+    failure: str, supported_finding: bool, checkpointed: bool
 ) -> None:
     runs: Final = tuple(
         execution(identity).model_copy(update=MappingProxyType({"root_seen": True})) for identity in ("failed", "valid")
@@ -682,6 +709,8 @@ async def test_failed_session_review_preserves_other_results_and_reports_its_err
         )
 
     async def model(request: ModelRequest) -> ModelResult:
+        if response := independent_final_findings(request):
+            return response
         if request.purpose == "cluster":
             groups: Final = GroupPrompt.model_validate_json(request.prompt)
             return ModelResult(content=Clusters(candidates=groups.candidates).model_dump_json(), cost=0)
@@ -781,7 +810,9 @@ async def test_failed_session_review_preserves_other_results_and_reports_its_err
         if review is not None:
             reviews.put(review)
 
-    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(
+        lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=(), reviews=() if checkpointed else None
+    )
     result: Final = await analyze_sample(claim, Sample(executions=runs, eligible=2), read, model, progress)
     assert tuple(finding.evidence[0].execution_id for finding in result.findings) == (
         ("valid",) if supported_finding else ()
@@ -796,6 +827,7 @@ async def test_failed_session_review_preserves_other_results_and_reports_its_err
     assert result.coverage.investigated == int(supported_finding)
     assert result.error
     assert "raw-private-response-sentinel" not in result.error
+    assert tuple(version.execution_id for version in result.review_versions) == (("valid",) if checkpointed else ())
     assert ("context window" in result.error) is (failure == "context")
     if failure == "citations":
         assert rejected.qsize() == 4
@@ -820,6 +852,8 @@ async def test_exhausted_candidate_retries_preserve_a_sibling_that_recovers_on_i
         )
 
     async def model(request: ModelRequest) -> ModelResult:
+        if response := independent_final_findings(request):
+            return response
         if request.purpose == "cluster":
             groups: Final = GroupPrompt.model_validate_json(request.prompt)
             return ModelResult(content=Clusters(candidates=groups.candidates).model_dump_json(), cost=0)
@@ -870,8 +904,9 @@ async def test_exhausted_candidate_retries_preserve_a_sibling_that_recovers_on_i
             cost=0,
         )
 
-    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=(), reviews=())
     result: Final = await analyze_sample(claim, Sample(executions=(run,), eligible=1), read, model, ignore_progress)
+    assert result.review_versions == ()
     assert tuple(finding.title for finding in result.findings) == ("valid",)
     assert result.findings[0].evidence == (Evidence(execution_id=run.id, span_id="child", quote="timeout"),)
     assert result.coverage.investigated == result.coverage.candidates == 2
@@ -922,6 +957,8 @@ async def test_late_content_failure_refreshes_partial_coverage_without_changing_
         )
 
     async def model(request: ModelRequest) -> ModelResult:
+        if response := independent_final_findings(request):
+            return response
         if request.purpose == "cluster":
             groups: Final = GroupPrompt.model_validate_json(request.prompt)
             return ModelResult(content=Clusters(candidates=groups.candidates).model_dump_json(), cost=0)
@@ -1139,3 +1176,128 @@ async def test_metadata_only_review_does_not_fetch_traces_or_treat_unloaded_cont
     )
     assert preparation[-1].finished
     assert all(activity.operations == activity.tool_calls == () for activity in preparation)
+
+
+@pytest.mark.asyncio
+async def test_cached_reviews_skip_models_but_changed_trace_content_is_reviewed_again() -> None:
+    run: Final = execution("original-id").model_copy(update={"root_seen": True})
+    sample: Final = Sample(executions=(run,), eligible=1)
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=(), reviews=())
+    calls: Final = SimpleQueue[ModelRequest]()
+    checkpoints: Final = SimpleQueue[Review]()
+    plans: Final = SimpleQueue[tuple[int, int]]()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        calls.put(request)
+        return ModelResult(content=AgentTurn[Extraction](result=Extraction()).model_dump_json(), cost=0.1)
+
+    async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(
+            execution=run,
+            parts=(TracePart(execution_id=identity, span_id="span", name="tool", kind="tool", content="original"),),
+        )
+
+    async def changed(identity: str, cursor: str, offset: int) -> ExecutionContent:
+        content: Final = await read(identity, cursor, offset)
+        return content.model_copy(update={"parts": (content.parts[0].model_copy(update={"content": "updated"}),)})
+
+    async def progress(
+        _stage: str | None,
+        _coverage: Coverage | None,
+        review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        if _stage == "Reuse plan ready" and _coverage is not None:
+            assert _coverage.reused == 0
+            plans.put((_coverage.reusable, calls.qsize()))
+        if review and review.extraction is not None:
+            checkpoints.put(review)
+
+    first: Final = await analyze_sample(claim, sample, read, model, progress)
+    checkpoint: Final = checkpoints.get_nowait().model_copy(update={"consolidated": True})
+    assert checkpoint.execution_id == run.id
+    assert first.coverage.reused == 0
+    assert calls.qsize() == 1
+    cached: Final = claim.model_copy(update={"reviews": (checkpoint,)})
+    repeated: Final = await analyze_sample(cached, sample, read, model, progress)
+    assert repeated.coverage.reused == 1
+    assert repeated.assessments == first.assessments
+    assert calls.qsize() == 1
+    updated: Final = await analyze_sample(cached, sample, changed, model, progress)
+    assert updated.coverage.reused == 0
+    assert calls.qsize() == 2
+    assert updated.review_versions != first.review_versions
+    assert tuple(plans.get_nowait() for _ in range(plans.qsize())) == ((0, 0), (1, 1), (0, 1))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("completed", (0, 1))
+async def test_cancelled_reuse_reports_only_recorded_reviews(completed: int) -> None:
+    import asyncio
+
+    runs: Final = tuple(execution(f"cached-{index}").model_copy(update={"root_seen": True}) for index in range(3))
+    sample: Final = Sample(executions=runs, eligible=len(runs))
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=(), reviews=())
+    checkpoints: Final = SimpleQueue[Review]()
+    recorded: Final = SimpleQueue[Coverage]()
+
+    async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(
+            execution=next(run for run in runs if run.id == identity),
+            parts=(TracePart(execution_id=identity, span_id="span", name="tool", kind="tool", content="original"),),
+        )
+
+    async def model(_request: ModelRequest) -> ModelResult:
+        return ModelResult(content=AgentTurn[Extraction](result=Extraction()).model_dump_json(), cost=0.1)
+
+    async def save(
+        _stage: str | None,
+        _coverage: Coverage | None,
+        review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        if review is not None:
+            checkpoints.put(review.model_copy(update={"consolidated": True}))
+
+    await analyze_sample(claim, sample, read, model, save)
+    cached: Final = claim.model_copy(update={"reviews": tuple(checkpoints.get_nowait() for _ in runs)})
+
+    async def no_model(_request: ModelRequest) -> ModelResult:
+        pytest.fail("Cancelled reuse must not make a model request")
+
+    async def cancel(
+        stage: str | None,
+        coverage: Coverage | None,
+        review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        if coverage is not None and ((completed == 0 and stage == "Reuse plan ready") or review is not None):
+            recorded.put(coverage)
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await analyze_sample(cached, sample, read, no_model, cancel)
+    stopped: Final = recorded.get_nowait()
+    assert (stopped.reusable, stopped.reused, stopped.screened) == (3, completed, completed)
+
+
+@pytest.mark.asyncio
+async def test_final_consolidation_failure_does_not_publish_unreconciled_findings() -> None:
+    from litellm.proxy.lens.context_pipeline import consolidate_findings
+    from tests.unit.proxy.lens.test_state import finding
+
+    drafts: Final = (finding("one"), finding("two"))
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+
+    async def unavailable(_request: ModelRequest) -> ModelResult:
+        raise AnalysisResponseError("Analysis budget is unavailable")
+
+    result: Final = await consolidate_findings(drafts, claim, unavailable)
+    assert result.findings == ()
+    assert result.error == "Finding consolidation is incomplete: Analysis budget is unavailable"

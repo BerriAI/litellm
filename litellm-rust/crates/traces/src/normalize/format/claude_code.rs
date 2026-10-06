@@ -6,7 +6,7 @@ use super::{Extraction, Format, SpanFacts};
 use crate::{
     Error,
     normalize::{
-        CLAUDE_CODE_AGENT, CLAUDE_CODE_EVENTS_SCOPE, CLAUDE_CODE_SCOPE, CallEvidence, CallKey,
+        CLAUDE_CODE_AGENT, CLAUDE_CODE_EVENTS_SCOPE, CLAUDE_CODE_SCOPE, CallEvidence,
         ObservationType, RoleEvidence, SpanContext, attr, present, tokens,
     },
     otlp::DecodedEvent,
@@ -265,7 +265,7 @@ impl Format for ClaudeCode {
                     output: llm_output(attributes),
                     calls: present(attributes, &["gen_ai.response.id", "request_id"])
                         .map_or(CallEvidence::Unknown, |id| {
-                            CallEvidence::complete(CallKey::ProviderResponse(id))
+                            CallEvidence::complete(crate::normalize::claude_call_key(id))
                         }),
                     ..base
                 },

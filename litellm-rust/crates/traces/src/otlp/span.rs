@@ -193,9 +193,9 @@ fn decoded_span(
                 .into_iter()
                 .flatten()
                 .map(|key| match key {
-                    crate::CallKey::LiteLlmRequest(id) | crate::CallKey::ProviderResponse(id) => {
-                        id.len() + size_of::<crate::CallKey>()
-                    }
+                    crate::CallKey::LiteLlmRequest(id)
+                    | crate::CallKey::ProviderResponse(id)
+                    | crate::CallKey::ProviderRequest(id) => id.len() + size_of::<crate::CallKey>(),
                     crate::CallKey::Transport | crate::CallKey::GatewayAttempt => {
                         size_of::<crate::CallKey>()
                     }

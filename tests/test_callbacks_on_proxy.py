@@ -160,7 +160,7 @@ async def _sample_callbacks(session, num_samples, interval):
 
 async def config_update(session, routing_strategy=None):
     url = "http://0.0.0.0:4000/config/update"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     print("routing_strategy: ", routing_strategy)
     data = {
         "router_settings": {
@@ -188,7 +188,7 @@ async def get_active_callbacks(session):
     url = "http://0.0.0.0:4000/active/callbacks"
     headers = {
         "Content-Type": "application/json",
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
     }
 
     async with session.get(url, headers=headers) as response:
@@ -216,7 +216,7 @@ async def get_current_routing_strategy(session):
     url = "http://0.0.0.0:4000/get/config/callbacks"
     headers = {
         "Content-Type": "application/json",
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
     }
 
     async with session.get(url, headers=headers) as response:
