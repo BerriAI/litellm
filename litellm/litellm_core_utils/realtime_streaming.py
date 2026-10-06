@@ -970,6 +970,8 @@ class RealTimeStreaming:
         for event in events:
             if self._should_drop_event_from_client(event):
                 continue
+            if isinstance(event, dict):
+                self._detect_transcription_session_from_backend(event)
             is_session_created_event = isinstance(event, dict) and event.get("type") == "session.created"
             if is_session_created_event:
                 if self._uses_deferred_backend_setup() and not self._backend_setup_complete:

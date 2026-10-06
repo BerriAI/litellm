@@ -3657,6 +3657,38 @@ async def test_transcription_guardrail_sends_no_session_update_after_transcripti
 
 
 @pytest.mark.asyncio
+async def test_provider_transcription_session_created_flags_session_without_intent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    session_created: Final = {"type": "session.created", "session": {"id": "sess_1", "type": "transcription"}}
+    provider_config: Final = MagicMock()
+    provider_config.requires_session_configuration.return_value = False
+    provider_config.transform_realtime_response.return_value = {
+        "response": session_created,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_delta_chunks": None,
+        "current_conversation_id": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+        "session_configuration_request": None,
+    }
+    client_ws: Final = _ga_client_ws()
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(side_effect=[json.dumps(session_created).encode(), ConnectionClosed(None, None)])
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, MagicMock(), provider_config=provider_config, model="m")
+
+    await streaming.backend_to_client_send_messages()
+
+    assert streaming._is_transcription_session is True
+    sent_to_client: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["type"] for event in sent_to_client] == ["session.created"], sent_to_client
+    backend_ws.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_transcription_guardrail_still_disables_auto_response_on_realtime_session_update(
     monkeypatch: pytest.MonkeyPatch,
 ):
