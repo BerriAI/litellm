@@ -77,6 +77,7 @@ export function LiveStrip({
   reviews,
   reviewed,
   selected,
+  reused = 0,
   issues,
   cost,
   waiting,
@@ -89,6 +90,7 @@ export function LiveStrip({
   reviews: readonly Review[];
   reviewed: number;
   selected: number;
+  reused?: number;
   issues: IssueCount;
   cost: number;
   onOpen: () => void;
@@ -108,6 +110,11 @@ export function LiveStrip({
           <span className="tabular-nums">
             {reviewed} of {selected} traces · {issueLabel(issues)} · {money(cost)}
           </span>
+          {reused > 0 && (
+            <span>
+              {reused} reused without review cost · {Math.max(0, selected - reused)} need review
+            </span>
+          )}
         </div>
         <Button
           variant="outline"

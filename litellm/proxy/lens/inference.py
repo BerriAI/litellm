@@ -1,8 +1,10 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final
+from uuid import uuid4
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -14,7 +16,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import inheri
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.proxy._types import ProxyException
 from litellm.proxy.lens.billing import complete, validate_key
-from litellm.proxy.lens.models import Job, Lens, ModelRequest, ModelResult, Step, Worker
+from litellm.proxy.lens.models import BudgetReservation, Job, Lens, ModelRequest, ModelResult, Step, Worker
 from litellm.proxy.lens.repository import LensRepository
 from litellm.proxy.lens.state import add_step, current_job, renew_budget, replace_job
 from litellm.types.integrations.anthropic_cache_control_hook import CacheControlMessageInjectionPoint
@@ -230,6 +232,45 @@ def quote(deployments: tuple[Deployment, ...], prompt: ModelRequest | str) -> fl
     return input_tokens * input_rate + output * output_rate
 
 
+def reserve_amount(lens: Lens, reservation: BudgetReservation, now: datetime | None = None) -> Lens:
+    available: Final = lens.settings.monthly_budget - lens.spent
+    if reservation.amount > available:
+        raise HTTPException(
+            402,
+            "Monthly lens budget reached; increase it or wait for next month"
+            if available <= 0
+            else f"This model request needs up to ${reservation.amount:.3f}, but ${available:.3f} remains "
+            "in the investigation budget. Use a smaller deployment output allowance or increase the limit.",
+        )
+    held: Final = sum(
+        item.amount
+        for item in lens.reservations
+        if item.month == reservation.month and (now is None or item.expires_at is None or item.expires_at > now)
+    )
+    if held + reservation.amount > available:
+        return lens
+    return lens.model_copy(update=MappingProxyType({"reservations": (*lens.reservations, reservation)}))
+
+
+def settle_amount(lens: Lens, reservation_id: str, cost: float, step: Step | None) -> Lens:
+    reservation: Final = next((item for item in lens.reservations if item.id == reservation_id), None)
+    if reservation is None:
+        return lens
+    settled: Final = lens.model_copy(
+        update=MappingProxyType(
+            {
+                "spent": lens.spent + cost if lens.budget_month == reservation.month else lens.spent,
+                "reservations": tuple(item for item in lens.reservations if item.id != reservation_id),
+            }
+        )
+    )
+    job: Final = next((item for item in lens.jobs if item.id == reservation.job_id), None)
+    if job is None:
+        return settled
+    charged: Final = job.model_copy(update=MappingProxyType({"cost": job.cost + cost}))
+    return replace_job(settled, add_step(charged, step) if step is not None else charged)
+
+
 async def analyze(
     repo: LensRepository, lens: Lens, job: Job, worker: Worker, body: ModelRequest, request: Request
 ) -> ModelResult:
@@ -250,9 +291,11 @@ async def analyze(
     if exceeds_context(deployments, body):
         return ModelResult(content="", cost=0, context_exceeded=True)
     estimate: Final = quote(deployments, body)
-    now: Final = datetime.now(timezone.utc)
+    reservation_id: Final = str(uuid4())
+    request_timeout: Final = float(litellm.request_timeout)
 
     def reserve(e: Lens) -> Lens:
+        now: Final = datetime.now(timezone.utc)
         current: Final = renew_budget(e, now)
         active: Final = current_job(current)
         if (
@@ -263,30 +306,33 @@ async def analyze(
             or active.lease_until <= datetime.now(timezone.utc)
         ):
             raise HTTPException(409, "Job was cancelled or reassigned")
-        if current.spent + estimate > current.settings.monthly_budget:
-            raise HTTPException(402, "Monthly lens budget reached; increase it or wait for next month")
-        return replace_job(
-            current, active.model_copy(update=MappingProxyType({"cost": active.cost + estimate}))
-        ).model_copy(update=MappingProxyType({"spent": current.spent + estimate}))
+        return reserve_amount(
+            current,
+            BudgetReservation(
+                id=reservation_id,
+                job_id=job.id,
+                amount=estimate,
+                month=now.strftime("%Y-%m"),
+                expires_at=now + timedelta(seconds=request_timeout + 60),
+            ),
+            now,
+        )
 
     def settle(e: Lens, cost: float, step: Step | None) -> Lens:
-        charged: Final = next((j for j in e.jobs if j.id == job.id), None)
-        adjusted: Final = (
-            e.model_copy(update=MappingProxyType({"spent": max(0, e.spent - estimate + cost)}))
-            if e.budget_month == now.strftime("%Y-%m")
-            else e
-        )
-        if charged is None:
-            return adjusted
-        refunded: Final = charged.model_copy(update=MappingProxyType({"cost": max(0, charged.cost - estimate + cost)}))
-        return replace_job(adjusted, add_step(refunded, step) if step is not None else refunded)
+        return settle_amount(e, reservation_id, cost, step)
 
     @asynccontextmanager
     async def reserve_budget() -> AsyncIterator[None]:
-        if await repo.update(lens.id, reserve) is None:
-            raise HTTPException(409, "Could not reserve analysis budget")
+        while True:
+            reserved: Lens | None = await repo.update(lens.id, reserve)
+            if reserved is None:
+                raise HTTPException(409, "Could not reserve analysis budget")
+            if any(held.id == reservation_id for held in reserved.reservations):
+                break
+            await asyncio.sleep(0.25)
         try:
-            yield
+            async with asyncio.timeout(request_timeout):
+                yield
         except BaseException:
             await repo.update(lens.id, lambda e: settle(e, 0, None))
             raise

@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from .analysis import AnalysisResponseError, AnalyzeSample, validation_details
 from .context_pipeline import analyze_sample
@@ -154,6 +154,12 @@ class LensWorker:
     async def serve(self, slots: int, poll_seconds: float) -> None:
         await asyncio.gather(*(self.slot(poll_seconds) for _ in range(slots)))
 
+    async def analysis_model_request(self, path: str, body: ModelRequest) -> ModelResult:
+        try:
+            return await self.model_request(path, body)
+        except httpx.HTTPError as error:
+            raise AnalysisResponseError(failure_message(error)) from error
+
     async def slot(self, poll_seconds: float) -> None:
         while True:
             try:
@@ -195,7 +201,7 @@ class LensWorker:
         prefix: Final = f"/lens/worker/{claim.lens_id}/{claim.job.id}"
 
         async def model(body: ModelRequest) -> ModelResult:
-            return await self.model_request(prefix + "/model", body)
+            return await self.analysis_model_request(prefix + "/model", body)
 
         async def read(execution_id: str, cursor: str, offset: int) -> ExecutionContent:
             result: Final = await self.client.get(
@@ -243,7 +249,12 @@ class LensWorker:
             data: Final = await self.client.get(prefix + "/sample")
             data.raise_for_status()
             sample: Final = Sample.model_validate(data.json())
-            result: Final = await self.analysis(claim, sample, read, model, progress)
+            cached: Final = await self.client.get(prefix + "/reviews")
+            cached.raise_for_status()
+            reviews: Final = TypeAdapter(tuple[Review, ...]).validate_json(cached.content)
+            result: Final = await self.analysis(
+                claim.model_copy(update=MappingProxyType({"reviews": reviews})), sample, read, model, progress
+            )
             saved: Final = await self.client.post(prefix + "/result", json=result.model_dump(mode="json"))
             saved.raise_for_status()
 

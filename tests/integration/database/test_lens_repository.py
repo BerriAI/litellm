@@ -291,3 +291,93 @@ def test_db_push_creates_fresh_lens_tables_and_preserves_them_on_restart(monkeyp
             ).fetchall() == [("saved", {"keep": True})]
         finally:
             connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+@pytest.mark.asyncio
+async def test_review_checkpoints_survive_new_jobs_and_only_relevant_settings_invalidate_them(lens_db: Prisma) -> None:
+    from litellm.proxy.lens.models import Extraction, Review, ReviewVersion
+
+    now: Final = datetime.now(timezone.utc)
+    repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
+    settings: Final = LensSettings(name="Checkpoint test", model="analysis", context="Find blocked user requests")
+    execution: Final = Execution(
+        id=uuid4().hex,
+        source="traces",
+        trace_id=uuid4().hex,
+        team_id="",
+        name="task",
+        start_time=now.isoformat(),
+        span_count=1,
+    )
+    lens: Final = Lens(
+        id=uuid4().hex,
+        scope=Scope(all_teams=True),
+        settings=settings,
+        created_at=now,
+        next_run_at=now,
+        budget_month=now.strftime("%Y-%m"),
+    )
+    job: Final = (
+        queue_job(lens, now, uuid4().hex)
+        .jobs[0]
+        .model_copy(
+            update={
+                "sample": Sample(executions=(execution,), eligible=1),
+            }
+        )
+    )
+    checkpoint: Final = Review(
+        execution_id=execution.id,
+        trace_id=execution.trace_id,
+        agent="agent",
+        name="task",
+        model=settings.model,
+        duration_ms=10,
+        at=now,
+        content_version="version-1",
+        extraction=Extraction(),
+    )
+    await repo.create(lens)
+    try:
+        await repo.save_review(lens.id, job, checkpoint)
+        resumed: Final = job.model_copy(
+            update={"id": uuid4().hex, "settings": settings.model_copy(update={"monthly_budget": 200})}
+        )
+        assert await repo.reviews(lens.id, resumed) == (checkpoint,)
+        await repo.complete_reviews(
+            lens.id, resumed, (ReviewVersion(execution_id=execution.id, content_version="version-1"),)
+        )
+        assert (await repo.reviews(lens.id, resumed))[0].consolidated
+        changed: Final = resumed.model_copy(
+            update={"settings": settings.model_copy(update={"context": "Find fabricated answers"})}
+        )
+        assert await repo.reviews(lens.id, changed) == ()
+        updated: Final = checkpoint.model_copy(update={"content_version": "version-2"})
+        await repo.save_review(lens.id, resumed, updated)
+        await repo.complete_reviews(
+            lens.id, resumed, (ReviewVersion(execution_id=execution.id, content_version="version-1"),)
+        )
+        assert await repo.reviews(lens.id, resumed) == (updated,)
+    finally:
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', lens.id)
+
+
+@pytest.mark.asyncio
+async def test_legacy_finding_run_provenance_is_recovered_from_archived_and_current_jobs(lens_db: Prisma) -> None:
+    from tests.unit.proxy.lens.test_state import NOW, finding, lens
+    from litellm.proxy.lens.state import merge_finding
+
+    repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
+    saved: Final = merge_finding(lens(), finding("trace"), 1, NOW)
+    old: Final = (
+        queue_job(lens(), NOW, uuid4().hex).jobs[0].model_copy(update={"status": "completed", "findings": (saved,)})
+    )
+    stored: Final = lens().model_copy(update={"id": uuid4().hex, "findings": (saved,), "jobs": (old,)})
+    await repo.create(stored)
+    try:
+        await repo.update(stored.id, lambda value: queue_job(value, NOW, uuid4().hex))
+        matches: Final = await repo.finding_runs(stored.id, (saved.id,))
+        assert tuple((match.finding_id, match.job_id) for match in matches) == ((saved.id, old.id),)
+        assert await repo.finding_runs(stored.id, ("unrelated",)) == ()
+    finally:
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', stored.id)

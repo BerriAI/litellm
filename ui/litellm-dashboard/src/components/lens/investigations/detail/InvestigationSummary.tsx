@@ -1,5 +1,7 @@
 import type { ComponentProps } from "react";
+import { useNow } from "@/hooks/useNow";
 import { NextCheck } from "./JobMeta";
+import { useRunHistory } from "./useRunHistory";
 import { lensStatus } from "../../model/status";
 import { runTime } from "../../model/format";
 import { type Lens } from "../../model/types";
@@ -11,9 +13,16 @@ export type InvestigationSummaryProps = ComponentProps<"div"> & {
 };
 
 export function InvestigationSummary({ lens, connected, className, ...props }: InvestigationSummaryProps) {
-  const lastCompleted = lens.jobs.find((job) => job.status === "completed" && !job.error);
+  const now = useNow(15000);
+  const month = new Date(now).toISOString().slice(0, 7);
+  const history = useRunHistory(lens, 0);
+  const lastCompleted = (history.data ?? lens.jobs).find((job) => job.status === "completed" && !job.error);
   const lastSuccess = lastCompleted?.finished_at ?? lens.last_scan_at;
-  const spent = lens.budget_month === new Date().toISOString().slice(0, 7) ? lens.spent ?? 0 : 0;
+  const spent = lens.budget_month === month ? lens.spent ?? 0 : 0;
+  const reserved = (lens.reservations ?? [])
+    .filter((hold) => hold.month === month)
+    .filter((hold) => !hold.expires_at || Date.parse(hold.expires_at) > now)
+    .reduce((sum, hold) => sum + hold.amount, 0);
   return (
     <div
       {...props}
@@ -29,6 +38,12 @@ export function InvestigationSummary({ lens, connected, className, ...props }: I
           {lensStatus(lens, connected)}
         </strong>
       </span>
+      {reserved > 0 && (
+        <span>
+          Reserved for active requests: ${reserved.toFixed(3)} · Available: $
+          {Math.max(0, lens.settings.monthly_budget - spent - reserved).toFixed(3)}
+        </span>
+      )}
       <span>
         Last full completion: <span className="text-foreground">{lastSuccess ? runTime(lastSuccess) : "Not yet"}</span>
       </span>

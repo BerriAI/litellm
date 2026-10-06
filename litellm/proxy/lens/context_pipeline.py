@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import aclosing
+from dataclasses import replace
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal
@@ -26,17 +27,22 @@ from .analysis import (
     observation_batches,
 )
 from .models import (
+    Activity,
     Claim,
     Coverage,
     Execution,
     FindingDraft,
+    InFlight,
     ModelRequest,
     ModelResult,
     Record,
     Result,
+    Review,
+    ReviewVersion,
     RunAssessment,
     Sample,
 )
+from .reconciliation import reconcile_findings
 
 ACCESS: Final[Literal["full", "tools", "python"]] = "python"
 
@@ -44,6 +50,41 @@ ACCESS: Final[Literal["full", "tools", "python"]] = "python"
 class CandidateInvestigation(Record):
     findings: tuple[FindingDraft, ...] = ()
     error: str = ""
+
+
+class ReviewPlan(Record):
+    execution_id: str
+    content_version: str = ""
+    previous: Review | None = None
+    error: str = ""
+
+
+async def plan_reviews(claim: Claim, workspace: EvidenceWorkspace) -> tuple[ReviewPlan, ...]:
+    async def plan(execution: Execution) -> ReviewPlan:
+        if claim.reviews is None:
+            return ReviewPlan(execution_id=execution.id)
+        try:
+            version: Final = await workspace.fingerprint(execution.id)
+        except EvidenceReadError as error:
+            return ReviewPlan(execution_id=execution.id, error=str(error))
+        previous: Final = next(
+            (
+                review
+                for review in claim.reviews
+                if review.execution_id == execution.id and review.content_version == version and review.extraction
+            ),
+            None,
+        )
+        return ReviewPlan(execution_id=execution.id, content_version=version, previous=previous)
+
+    return tuple(
+        [
+            item
+            async for item in concurrent_results(
+                tuple(session.execution for session in workspace.sessions), plan, claim.job.settings.concurrency
+            )
+        ]
+    )
 
 
 async def analyze_sample(
@@ -212,6 +253,27 @@ async def analyze_context(
         execution_ids=tuple(execution.id for execution in sample.executions),
     ):
         workspace: Final = await load_workspace(sample, read, claim.job.settings.concurrency)
+    await progress("Checking for reusable reviews", base)
+    plans: Final = MappingProxyType({plan.execution_id: plan for plan in await plan_reviews(claim, workspace)})
+    reusable: Final = sum(plan.previous is not None for plan in plans.values())
+
+    async def planned_progress(
+        stage: str | None,
+        coverage: Coverage | None,
+        review: Review | None = None,
+        reading: tuple[InFlight, ...] | None = None,
+        activity: Activity | None = None,
+        /,
+    ) -> None:
+        await progress(
+            stage,
+            coverage.model_copy(update=MappingProxyType({"reused": reusable})) if coverage is not None else None,
+            review,
+            reading,
+            activity,
+        )
+
+    await planned_progress("Reuse plan ready", base)
     slots: Final = asyncio.Semaphore(claim.job.settings.concurrency)
 
     async def limited(request: ModelRequest) -> ModelResult:
@@ -228,15 +290,41 @@ async def analyze_context(
             execution_ids=(execution.id,),
         ) as activity:
             try:
-                return await review_context(
-                    claim,
+                plan: Final = plans[execution.id]
+                if plan.error:
+                    return Examined(
+                        execution=execution,
+                        observations=(),
+                        parts=(),
+                        partial=True,
+                        cannot_assess=True,
+                        error=plan.error,
+                        reasoning=plan.error,
+                    )
+                version: Final = plan.content_version
+                previous: Final = plan.previous
+                if previous is not None and previous.extraction is not None:
+                    return Examined(
+                        execution=execution,
+                        observations=previous.extraction.observations,
+                        parts=(),
+                        partial=previous.partial,
+                        cannot_assess=previous.cannot_assess,
+                        reasoning=previous.reasoning,
+                        content_version=version,
+                        reused=True,
+                        consolidated=previous.consolidated,
+                    )
+                reviewed: Final = await review_context(
+                    claim.model_copy(update=MappingProxyType({"findings": ()})) if claim.reviews is not None else claim,
                     session,
-                    workspace,
+                    replace(workspace, sessions=(session,)) if claim.reviews is not None else workspace,
                     model,
                     inject_evidence=access == "full",
                     enable_python=access == "python",
                     activity=activity,
                 )
+                return reviewed.model_copy(update=MappingProxyType({"content_version": version}))
             except (AnalysisResponseError, EvidenceReadError) as error:
                 return Examined(
                     execution=execution,
@@ -250,7 +338,10 @@ async def analyze_context(
                 )
 
     completed_reviews: Final = tuple(
-        [review async for review in examine_executions(claim, sample, read, limited, progress, extractor=extract)]
+        [
+            review
+            async for review in examine_executions(claim, sample, read, limited, planned_progress, extractor=extract)
+        ]
     )
     indexed: Final = MappingProxyType({review.execution.id: review for review in completed_reviews})
     examined: Final = tuple(indexed[execution.id] for execution in sample.executions)
@@ -263,10 +354,17 @@ async def analyze_context(
                 ),
                 "unassessable": sum(review.cannot_assess for review in examined),
                 "failed_tasks": sum(bool(review.error) for review in examined),
+                "reused": sum(review.reused for review in examined),
             }
         )
     )
     observations: Final = tuple(chain.from_iterable(review.observations for review in examined))
+    pending: Final = tuple(chain.from_iterable(review.observations for review in examined if not review.consolidated))
+    versions: Final = tuple(
+        ReviewVersion(execution_id=review.execution.id, content_version=review.content_version)
+        for review in examined
+        if review.content_version and not review.error
+    )
 
     def assessment(review: Examined) -> RunAssessment:
         supported: Final = tuple(
@@ -284,10 +382,11 @@ async def analyze_context(
         )
 
     assessments: Final = tuple(assessment(review) for review in examined)
-    if not observations:
+    if not pending:
         return Result(
             coverage=coverage,
             assessments=assessments,
+            review_versions=versions,
             error="\n\n".join(
                 dict.fromkeys((*(review.error for review in examined if review.error), *sorted(workspace.read_errors)))
             ),
@@ -303,7 +402,7 @@ async def analyze_context(
         for review in examined
     )
     review_workspace: Final = workspace.with_reviews(records)
-    batches: Final = observation_batches(observations)
+    batches: Final = observation_batches(pending)
     grouping: Final = coverage.model_copy(update=MappingProxyType({"grouping_batches": len(batches)}))
     await progress("Grouping observations", grouping)
     clusters: Final = await parallel_cluster_batches(
@@ -347,12 +446,20 @@ async def analyze_context(
                 ),
             )
     ordered: Final = tuple(item for _, item in sorted(investigated))
+    await progress("Consolidating findings across runs", investigating)
+    consolidated: Final = await consolidate_findings(
+        tuple(chain.from_iterable(item.findings for item in ordered)), claim, limited
+    )
     return Result(
-        findings=tuple(chain.from_iterable(item.findings for item in ordered)),
+        findings=consolidated.findings,
         assessments=assessments,
+        review_versions=versions,
         error="\n\n".join(
             dict.fromkeys(
-                (*(item.error for item in (*examined, *ordered) if item.error), *sorted(workspace.read_errors))
+                (
+                    *(item.error for item in (*examined, *ordered, consolidated) if item.error),
+                    *sorted(workspace.read_errors),
+                )
             )
         ),
         coverage=investigating.model_copy(
@@ -368,3 +475,12 @@ async def analyze_context(
             )
         ),
     )
+
+
+async def consolidate_findings(
+    drafts: tuple[FindingDraft, ...], claim: Claim, model: ModelCall
+) -> CandidateInvestigation:
+    try:
+        return CandidateInvestigation(findings=await reconcile_findings(drafts, claim.findings, model))
+    except AnalysisResponseError as error:
+        return CandidateInvestigation(findings=drafts, error=f"Finding consolidation is incomplete: {error}")

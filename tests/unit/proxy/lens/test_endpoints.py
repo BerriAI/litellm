@@ -28,6 +28,7 @@ from litellm.proxy.lens.models import (
     Lens,
     LensSettings,
     Result,
+    ReviewVersion,
     RunAssessment,
     RunRequest,
     Sample,
@@ -104,6 +105,33 @@ async def test_result_persists_final_coverage_but_keeps_progress_when_worker_is_
     assert saved.jobs[0].status == ("failed" if error and not assessed else "completed")
     assert saved.jobs[0].assessments == assessments
     assert saved.last_scan_at == (None if error else active.end)
+
+
+@pytest.mark.asyncio
+async def test_result_rejects_checkpoints_for_traces_outside_frozen_sample(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    assigned: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = assigned.jobs[0].model_copy(
+        update={
+            "lease_until": datetime.max.replace(tzinfo=timezone.utc),
+            "sample": Sample(executions=(execution("selected"),), eligible=1),
+        }
+    )
+    db: Final = ResultDatabase(replace_job(assigned, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+
+    with pytest.raises(HTTPException) as raised:
+        await result(
+            "lens",
+            "job",
+            Result(coverage=Coverage(), review_versions=(ReviewVersion(execution_id="outside", content_version="v1"),)),
+            worker(),
+            None,
+        )
+
+    assert raised.value.status_code == 422
+    assert db.stored.jobs[0] == active
 
 
 @pytest.fixture

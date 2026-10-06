@@ -412,3 +412,45 @@ def test_cache_hook_marks_prior_write_boundary_when_the_conversation_grows(monke
             assert not isinstance(content, str)
             assert content[-1].prompt_cache_breakpoint == {"mode": "explicit"}
             assert content[-1].text == body.messages[index - 1].content
+
+
+def test_parallel_reservations_wait_without_charging_or_falsely_exhausting_budget() -> None:
+    from litellm.proxy.lens.inference import reserve_amount, settle_amount
+    from litellm.proxy.lens.models import BudgetReservation
+    from tests.unit.proxy.lens.test_state import lens
+    from functools import reduce
+
+    initial: Final = lens().model_copy(update={"spent": 45})
+    reservations: Final = tuple(
+        BudgetReservation(id=str(index), job_id="run", amount=10, month=initial.budget_month) for index in range(6)
+    )
+    held: Final = reduce(reserve_amount, reservations[:5], initial)
+    assert held.spent == 45
+    assert sum(item.amount for item in held.reservations) == 50
+    assert reserve_amount(held, reservations[5]) is held
+    settled: Final = settle_amount(held, "0", 0.25, None)
+    assert settled.spent == 45.25
+    assert len(settled.reservations) == 4
+    assert settle_amount(settled, "0", 0.25, None) is settled
+    assert reservations[5] in reserve_amount(settled, reservations[5]).reservations
+    with pytest.raises(HTTPException, match="needs up to"):
+        reserve_amount(initial, reservations[0].model_copy(update={"amount": 60}))
+
+
+def test_expired_reservations_do_not_hold_budget_and_late_settlement_still_charges() -> None:
+    from datetime import timedelta
+    from litellm.proxy.lens.inference import reserve_amount, settle_amount
+    from litellm.proxy.lens.models import BudgetReservation
+    from tests.unit.proxy.lens.test_state import NOW, lens
+
+    stale: Final = BudgetReservation(id="stale", job_id="run", amount=90, month=lens().budget_month, expires_at=NOW)
+    initial: Final = lens().model_copy(update={"reservations": (stale,)})
+    incoming: Final = stale.model_copy(update={"id": "current", "expires_at": NOW + timedelta(minutes=5)})
+    waiting: Final = reserve_amount(initial, incoming, NOW - timedelta(seconds=1))
+    assert waiting is initial
+    admitted: Final = reserve_amount(initial, incoming, NOW)
+    assert incoming in admitted.reservations
+    assert admitted.spent == 0
+    settled: Final = settle_amount(admitted, "stale", 0.25, None)
+    assert settled.spent == 0.25
+    assert settled.reservations == (incoming,)

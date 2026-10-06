@@ -37,7 +37,7 @@ export function FindingsTab({ lens, job, findings, children }: FindingsTabProps)
   const active = activeJob(lens.jobs) !== undefined;
   const openCount = (of: Finding["kind"]) => findings.filter((f) => f.kind === of && f.status === "open").length;
   const visible = sortedFindings(findings.filter((f) => (status === "all" || f.status === status) && f.kind === kind));
-  const picked = findings.find((f) => f.id === findingId);
+  const picked = findings.find((f) => f.id === findingId || f.merged_finding_ids?.includes(findingId ?? ""));
   const selected: OwnedFinding | null = picked ? { lens, finding: picked } : null;
   return (
     <Inspector.Root
@@ -96,7 +96,8 @@ export function FindingsTab({ lens, job, findings, children }: FindingsTabProps)
                 <p className="text-sm font-medium">{f.title}</p>
                 <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{f.description}</p>
                 <p className="mt-2 text-xs text-muted-foreground">
-                  {f.occurrences?.length ?? 0} linked {f.occurrences?.length === 1 ? "run" : "runs"} ·{" "}
+                  {f.occurrences?.length ?? 0} affected {f.occurrences?.length === 1 ? "trace" : "traces"} ·{" "}
+                  {(f.investigation_runs?.length ?? 0) > 1 && `${f.investigation_runs.length} investigation runs · `}
                   {f.kind === "issue" ? `${f.priority} priority` : "Pattern"}
                 </p>
               </div>

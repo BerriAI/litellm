@@ -199,6 +199,8 @@ async def test_worker_reads_claimed_activity_and_reports_analysis_or_failure(mod
         match request.url.path:
             case "/lens/worker/claim":
                 return httpx.Response(200, json=claim.model_dump(mode="json"))
+            case "/lens/worker/lens/job/reviews":
+                return httpx.Response(200, json=[])
             case "/lens/worker/lens/job/sample":
                 return httpx.Response(200, json=sample.model_dump(mode="json"))
             case "/lens/worker/lens/job/content":
@@ -287,6 +289,8 @@ async def test_worker_saves_validation_errors_from_every_analysis_stage(purpose:
         match request.url.path.rsplit("/", 1)[-1]:
             case "claim":
                 return httpx.Response(200, json=claim.model_dump(mode="json"))
+            case "reviews":
+                return httpx.Response(200, json=[])
             case "sample":
                 return httpx.Response(200, json=sample.model_dump(mode="json"))
             case "content":
@@ -373,6 +377,8 @@ async def test_losing_the_lease_interrupts_an_in_flight_model_request(heartbeat_
         match request.url.path.rsplit("/", 1)[-1]:
             case "claim":
                 return httpx.Response(200, json=claim.model_dump(mode="json"))
+            case "reviews":
+                return httpx.Response(200, json=[])
             case "sample":
                 return httpx.Response(200, json=Sample(executions=(execution,), eligible=1).model_dump())
             case "content":
@@ -434,6 +440,8 @@ async def test_transient_heartbeat_failure_recovers_without_cancelling_analysis(
         match request.url.path.rsplit("/", 1)[-1]:
             case "claim":
                 return httpx.Response(200, json=claim.model_dump(mode="json"))
+            case "reviews":
+                return httpx.Response(200, json=[])
             case "sample":
                 return httpx.Response(200, json=Sample(executions=(execution,), eligible=1).model_dump())
             case "content":
@@ -489,6 +497,8 @@ async def test_worker_sends_each_runs_review_with_its_progress() -> None:
         match request.url.path.rsplit("/", 1)[-1]:
             case "claim":
                 return httpx.Response(200, json=claim.model_dump(mode="json"))
+            case "reviews":
+                return httpx.Response(200, json=[])
             case "sample":
                 return httpx.Response(200, json=Sample(executions=(execution,), eligible=1).model_dump())
             case "content":

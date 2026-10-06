@@ -59,6 +59,7 @@ export function LiveRun({
           reviews={reviews}
           reviewed={job.reviewed}
           selected={job.coverage.selected}
+          reused={job.coverage.reused}
           issues={issues}
           cost={job.cost}
           onOpen={open}

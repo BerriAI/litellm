@@ -8,7 +8,8 @@ from typing import Final, Protocol
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
-from litellm.proxy.lens.models import Job, Lens, Scope, TraceFindingCount, TraceIdentity, Worker
+from litellm.proxy.lens.models import Job, Lens, Review, ReviewVersion, Scope, TraceFindingCount, TraceIdentity, Worker
+from litellm.proxy.lens.reviews import criteria_key
 
 
 class Database(Protocol):
@@ -20,6 +21,11 @@ class Row(BaseModel):
     data: JsonValue
 
 
+class FindingRun(BaseModel):
+    finding_id: str
+    job_id: str
+
+
 _ROWS: Final = TypeAdapter(tuple[Row, ...])
 UPDATE_ATTEMPTS: Final = 40
 UPDATE_BACKOFF_SECONDS: Final = 0.02
@@ -29,6 +35,59 @@ class LensRepository:
     def __init__(self, db: Database, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
         self.db: Final = db
         self.sleep: Final = sleep
+
+    async def finding_runs(self, lens_id: str, finding_ids: tuple[str, ...]) -> tuple[FindingRun, ...]:
+        if not finding_ids:
+            return ()
+        rows: Final = await self.db.query_raw(
+            """WITH jobs AS (
+                SELECT data FROM "LiteLLM_LensRun" WHERE lens_id=$1
+                UNION ALL
+                SELECT jsonb_array_elements(data->'jobs') FROM "LiteLLM_Lens" WHERE id=$1
+            )
+            SELECT DISTINCT jsonb_build_object('finding_id', finding->>'id', 'job_id', jobs.data->>'id') AS data
+            FROM jobs, jsonb_array_elements(NULLIF(jobs.data->'findings', 'null'::jsonb)) AS finding
+            WHERE finding->>'id'=ANY($2::text[])""",
+            lens_id,
+            finding_ids,
+        )
+        return tuple(FindingRun.model_validate(row.data) for row in _ROWS.validate_python(rows))
+
+    async def reviews(self, lens_id: str, job: Job) -> tuple[Review, ...]:
+        rows: Final = _ROWS.validate_python(
+            await self.db.query_raw(
+                'SELECT data FROM "LiteLLM_LensReview" WHERE lens_id=$1 AND criteria_key=$2 '
+                "AND execution_id=ANY($3::text[])",
+                lens_id,
+                criteria_key(job.settings),
+                tuple(e.id for e in job.sample.executions) if job.sample else (),
+            )
+        )
+        return tuple(Review.model_validate(row.data) for row in rows)
+
+    async def save_review(self, lens_id: str, job: Job, review: Review) -> None:
+        if review.reused or review.extraction is None or not review.content_version:
+            return
+        await self.db.execute_raw(
+            'INSERT INTO "LiteLLM_LensReview" (lens_id, criteria_key, execution_id, data) '
+            "VALUES ($1,$2,$3,$4::jsonb) ON CONFLICT (lens_id, criteria_key, execution_id) "
+            "DO UPDATE SET data=EXCLUDED.data",
+            lens_id,
+            criteria_key(job.settings),
+            review.execution_id,
+            review.model_dump_json(),
+        )
+
+    async def complete_reviews(self, lens_id: str, job: Job, versions: tuple[ReviewVersion, ...]) -> None:
+        await self.db.execute_raw(
+            """UPDATE "LiteLLM_LensReview" AS review SET data=jsonb_set(data, '{consolidated}', 'true')
+            FROM jsonb_to_recordset($3::jsonb) AS version(execution_id text, content_version text)
+            WHERE review.lens_id=$1 AND review.criteria_key=$2 AND review.execution_id=version.execution_id
+            AND review.data->>'content_version'=version.content_version""",
+            lens_id,
+            criteria_key(job.settings),
+            json.dumps(tuple(version.model_dump() for version in versions)),
+        )
 
     async def lenses(self) -> tuple[Lens, ...]:
         rows: Final = _ROWS.validate_python(await self.db.query_raw('SELECT data FROM "LiteLLM_Lens" ORDER BY id'))

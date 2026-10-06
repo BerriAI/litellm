@@ -19,11 +19,13 @@ from .models import (
     Evidence,
     Execution,
     ExecutionContent,
+    Extraction,
     FindingDraft,
     InFlight,
     ModelMessage,
     ModelRequest,
     ModelResult,
+    Observation,
     Record,
     Result,
     Review,
@@ -35,20 +37,8 @@ from .models import (
     TracePart,
 )
 from .prompts import PROMPTS
+from .reviews import map_review
 from .trace_store import TraceStore, overview_content, trace_store
-
-
-class Observation(Record):
-    check_id: str
-    kind: Literal["issue", "pattern"] = "issue"
-    summary: str
-    evidence: tuple[Evidence, ...] = Field(default=())
-
-
-class Extraction(Record):
-    observations: tuple[Observation, ...] = ()
-    cannot_assess: bool = False
-    reasoning: str = Field(default="", max_length=800)
 
 
 class SpanRead(Record):
@@ -98,6 +88,9 @@ class Examined(Record):
     reasoning: str = ""
     shown: tuple[TracePart, ...] = ()
     tool_calls: tuple[ToolCount, ...] = ()
+    content_version: str = ""
+    reused: bool = False
+    consolidated: bool = False
 
 
 class Investigation(Record):
@@ -503,6 +496,17 @@ def review_of(examined: Examined, model: str, duration_ms: int, at: datetime) ->
         duration_ms=max(duration_ms, 0),
         at=at,
         tool_calls=examined.tool_calls,
+        extraction=Extraction(
+            observations=examined.observations,
+            reasoning=examined.reasoning[:800],
+            cannot_assess=examined.cannot_assess,
+        )
+        if examined.content_version and not examined.error
+        else None,
+        content_version=examined.content_version,
+        reused=examined.reused,
+        consolidated=examined.consolidated,
+        partial=examined.partial,
     )
 
 
@@ -743,6 +747,7 @@ async def analyze_with(
     analyze: AnalyzeSample,
 ) -> Result:
     originals: Final = MappingProxyType({f"r{index}": e for index, e in enumerate(sample.executions)})
+    aliases: Final = MappingProxyType({execution.id: alias for alias, execution in originals.items()})
     executions: Final = tuple(e.model_copy(update=MappingProxyType({"id": alias})) for alias, e in originals.items())
 
     async def read_alias(identity: str, cursor: str, offset: int) -> ExecutionContent:
@@ -773,7 +778,7 @@ async def analyze_with(
         await progress(
             stage,
             coverage,
-            review and review.model_copy(update=MappingProxyType({"execution_id": original(review.execution_id)})),
+            map_review(review, original) if review else None,
             None
             if reading is None
             else tuple(
@@ -789,7 +794,15 @@ async def analyze_with(
         )
 
     result: Final = await analyze(
-        claim,
+        claim.model_copy(
+            update=MappingProxyType(
+                {
+                    "reviews": tuple(map_review(review, lambda identity: aliases[identity]) for review in claim.reviews)
+                    if claim.reviews is not None
+                    else None
+                }
+            )
+        ),
         sample.model_copy(update=MappingProxyType({"executions": executions})),
         read_alias,
         model,
@@ -801,6 +814,10 @@ async def analyze_with(
                 "assessments": tuple(
                     a.model_copy(update=MappingProxyType({"execution_id": originals[a.execution_id].id}))
                     for a in result.assessments
+                ),
+                "review_versions": tuple(
+                    version.model_copy(update=MappingProxyType({"execution_id": original(version.execution_id)}))
+                    for version in result.review_versions
                 ),
                 "findings": tuple(
                     f.model_copy(
