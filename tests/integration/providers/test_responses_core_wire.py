@@ -198,6 +198,41 @@ def test_previous_response_id_uses_the_raw_id_and_affinity(
 
 def test_codex_responses_request_preserves_all_supported_fields(gateway: Gateway) -> None:
     response_id: Final = f"resp_codex_{uuid.uuid4().hex}"
+    input_items: Final = [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Inspect the requested change."}],
+        },
+        {
+            "type": "reasoning",
+            "id": f"rs_{uuid.uuid4().hex}",
+            "summary": [{"type": "summary_text", "text": "Plan the inspection"}],
+            "encrypted_content": f"gAAAA-codex-encrypted-{uuid.uuid4().hex}",
+        },
+        {
+            "type": "function_call",
+            "call_id": "call_lookup",
+            "name": "lookup",
+            "arguments": '{"query": "diff"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_lookup",
+            "output": '{"rows": 1}',
+        },
+        {
+            "type": "custom_tool_call",
+            "call_id": "call_patch",
+            "name": "ApplyPatch",
+            "input": "*** Begin Patch\n*** End Patch",
+        },
+        {
+            "type": "custom_tool_call_output",
+            "call_id": "call_patch",
+            "output": "Done",
+        },
+    ]
     function_tool: Final = {
         "type": "function",
         "name": "lookup",
@@ -214,7 +249,7 @@ def test_codex_responses_request_preserves_all_supported_fields(gateway: Gateway
     web_search_tool: Final = {"type": "web_search"}
     expected_body: Final = {
         "model": _MODEL,
-        "input": "Use the available tools to inspect the requested change.",
+        "input": input_items,
         "stream": True,
         "include": ["reasoning.encrypted_content"],
         "store": False,
@@ -258,7 +293,7 @@ def test_codex_responses_request_preserves_all_supported_fields(gateway: Gateway
         )
         stream: Final = client.responses.create(
             model=model,
-            input="Use the available tools to inspect the requested change.",
+            input=input_items,
             stream=True,
             include=["reasoning.encrypted_content"],
             store=False,
@@ -301,13 +336,6 @@ def test_conversation_is_forwarded_as_a_separate_responses_parameter(gateway: Ga
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target == "/v1/models":
             return model_discovery_reply(_MODEL)
-        assert request.method == "POST"
-        assert request.target == "/v1/responses"
-        assert _JSON_OBJECT.validate_json(request.body) == {
-            "model": _MODEL,
-            "input": "continue this conversation",
-            "conversation": conversation,
-        }, request.body
         return Reply(body=_response(f"resp_conversation_{uuid.uuid4().hex}"))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -323,4 +351,10 @@ def test_conversation_is_forwarded_as_a_separate_responses_parameter(gateway: Ga
             conversation=conversation,
         )
         assert response.object == "response", response.model_dump_json()
-        assert [request.target for request in drain_contract_requests(wire)] == ["/v1/responses"]
+        requests: Final = drain_contract_requests(wire)
+        assert [(request.method, request.target) for request in requests] == [("POST", "/v1/responses")], requests
+        assert _JSON_OBJECT.validate_json(requests[0].body) == {
+            "model": model,
+            "input": "continue this conversation",
+            "conversation": conversation,
+        }, requests[0].body

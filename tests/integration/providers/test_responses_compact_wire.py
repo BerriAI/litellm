@@ -283,9 +283,7 @@ def test_compact_previous_response_id_reaches_the_provider_as_the_raw_id(
     pytest.skip("BUG: compact forwards the proxy-encrypted previous_response_id instead of the raw provider id")
     raw_id: Final = f"resp_compact_prev_{uuid.uuid4().hex}"
     completed_id: Final = f"resp_compact_result_{uuid.uuid4().hex}"
-    input_items: Final = [
-        {"role": "user", "content": [{"type": "input_text", "text": "Summarize the patch so far."}]}
-    ]
+    input_items: Final = [{"role": "user", "content": [{"type": "input_text", "text": "Summarize the patch so far."}]}]
     output_item: Final = {
         "id": f"rs_compact_{uuid.uuid4().hex}",
         "type": "reasoning",

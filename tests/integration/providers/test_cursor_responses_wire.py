@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import uuid
-from importlib.metadata import version
 from typing import Final
 
-import httpx
 import pytest
 from integration._support.client import Gateway, Scenario
 from integration._support.responses_vendor import same_response
@@ -140,19 +137,6 @@ def test_cursor_responses_input_uses_responses_wire_and_chat_output(
         team: Final = scenario.team(team_alias=team_alias)
         user: Final = scenario.member(team)
         key: Final = scenario.key(team_id=team, user_id=user)
-        key_hash: Final = hashlib.sha256(key.encode()).hexdigest()
-        expected_metadata: Final = {
-            "user_api_key_hash": key_hash,
-            "user_api_key_team_id": team,
-            "user_api_key_user_id": user,
-            "user_api_key_team_alias": team_alias,
-            "user_api_key_request_route": "/cursor/chat/completions",
-            "user_api_key": key_hash,
-            "litellm_api_version": version("litellm"),
-            "endpoint": f"{str(gateway.client.base_url).rstrip('/')}/cursor/chat/completions",
-            "requester_ip_address": "127.0.0.1",
-            "user_agent": f"python-httpx/{httpx.__version__}",
-        }
 
         def respond(request: Request) -> Reply:
             if request.method == "GET" and request.target == "/v1/models":
@@ -167,10 +151,10 @@ def test_cursor_responses_input_uses_responses_wire_and_chat_output(
                     body=completion if isinstance(completion, bytes) else b"",
                 )
             assert request.target == "/v1/responses", request.target
-            assert _JSON_OBJECT.validate_json(request.body) == {
+            body: Final = _JSON_OBJECT.validate_json(request.body)
+            assert {key: value for key, value in body.items() if key != "metadata"} == {
                 "model": _MODEL,
                 "input": _INPUT,
-                "metadata": expected_metadata,
                 **reasoning,
                 "tools": [_CUSTOM_TOOL],
                 "stream": stream,
@@ -250,6 +234,43 @@ def test_cursor_responses_input_uses_responses_wire_and_chat_output(
                     },
                 }, response.text
             assert [request.target for request in drain_contract_requests(wire)] == ["/v1/responses"]
+
+
+def test_cursor_responses_body_carries_no_proxy_metadata(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: /cursor/chat/completions forwards proxy-internal metadata (key hash, team, user, client ip, user agent) "
+        "to the provider in the Responses body"
+    )
+    raw_id: Final = f"resp_cursor_metadata_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        assert request.method == "POST" and request.target == "/v1/responses", request.target
+        return Reply(body=json.dumps(_response(raw_id)).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        response: Final = gateway.request(
+            "POST",
+            "/cursor/chat/completions",
+            {
+                "model": f"{model}-thinking-high",
+                "input": _INPUT,
+                "messages": [],
+                "tools": [_CUSTOM_TOOL],
+            },
+        )
+        assert response.status_code == 200, response.text
+        requests: Final = drain_contract_requests(wire)
+        assert len(requests) == 1, requests
+        body: Final = _JSON_OBJECT.validate_json(requests[0].body)
+        assert body == {
+            "model": _MODEL,
+            "input": _INPUT,
+            "reasoning": {"effort": "high"},
+            "tools": [_CUSTOM_TOOL],
+        }, requests[0].body
 
 
 def test_cursor_stream_reports_usage_when_the_client_asks_for_it(gateway: Gateway) -> None:
@@ -344,9 +365,9 @@ def test_cursor_messages_body_uses_chat_completions_wire(gateway: Gateway) -> No
             }
         ], response.text
         requests: Final = drain_contract_requests(wire)
-        assert [(request.method, request.target) for request in requests] == [
-            ("POST", "/v1/chat/completions")
-        ], requests
+        assert [(request.method, request.target) for request in requests] == [("POST", "/v1/chat/completions")], (
+            requests
+        )
         assert _JSON_OBJECT.validate_json(requests[0].body) == {
             "model": _MODEL,
             "messages": [{"role": "user", "content": "genuine chat request"}],

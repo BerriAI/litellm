@@ -16,7 +16,6 @@ from integration._support.client import Gateway, Scenario, eventually, object_va
 from integration._support.process import owned_proxy
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
-from openai.types.responses import Response as ResponsesAPIResponse
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
@@ -261,7 +260,73 @@ def test_response_ids_are_scoped_to_the_issuing_user_and_team(gateway: Gateway, 
         assert _contract_requests(wire) == ()
 
 
-def test_allow_unmanaged_response_ids_forwards_previous_id_unchanged(
+@pytest.mark.parametrize("prefix", _ALIASES)
+def test_compact_previous_response_id_is_scoped_to_the_issuing_user_and_team(
+    gateway: Gateway,
+    prefix: str,
+) -> None:
+    pytest.skip(
+        "BUG: POST /v1/responses/compact does not check previous_response_id ownership; "
+        "another team's id and unmanaged ids reach the provider"
+    )
+    raw_id: Final = f"resp_compact_owned_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return _model_discovery_reply()
+        if request.method == "POST" and request.target == "/v1/responses":
+            return Reply(body=_response(raw_id))
+        return Reply(body=_response(raw_id))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        team_a: Final = scenario.team(models=[model])
+        team_b: Final = scenario.team(models=[model])
+        user_a: Final = scenario.member(team_a)
+        user_b: Final = scenario.member(team_b)
+        gateway.post("/team/member_add", {"team_id": team_b, "member": {"role": "user", "user_id": user_a}})
+        client_a: Final = _client(gateway, _key(scenario, team_a, user_a, model), prefix)
+        other_user_client: Final = _client(gateway, _key(scenario, team_b, user_b, model), prefix)
+        other_team_client: Final = _client(gateway, _key(scenario, team_b, user_a, model), prefix)
+        created: Final = client_a.responses.create(model=model, input="create compact response")
+        client_id: Final = created.id
+        assert client_id != raw_id, created.model_dump_json()
+        assert len(_contract_requests(wire)) == 1
+        _refused(
+            lambda: other_user_client.responses.compact(
+                model=model,
+                previous_response_id=client_id,
+                input=[
+                    {"role": "user", "content": [{"type": "input_text", "text": "compact someone else's response"}]}
+                ],
+            ),
+            _OTHER_USER_DETAIL,
+        )
+        _refused(
+            lambda: other_team_client.responses.compact(
+                model=model,
+                previous_response_id=client_id,
+                input=[
+                    {"role": "user", "content": [{"type": "input_text", "text": "compact someone else's response"}]}
+                ],
+            ),
+            _OTHER_TEAM_DETAIL,
+        )
+        unmanaged_id: Final = f"resp_vendor_{uuid.uuid4().hex}"
+        _refused(
+            lambda: client_a.responses.compact(
+                model=model,
+                previous_response_id=unmanaged_id,
+                input=[
+                    {"role": "user", "content": [{"type": "input_text", "text": "compact someone else's response"}]}
+                ],
+            ),
+            _UNMANAGED_DETAIL,
+        )
+        assert _contract_requests(wire) == ()
+
+
+def test_allow_unmanaged_response_ids_forward_the_vendor_id_on_every_route(
     gateway: Gateway,
     tmp_path: Path,
 ) -> None:
@@ -283,26 +348,21 @@ def test_allow_unmanaged_response_ids_forwards_previous_id_unchanged(
         with owned_proxy(
             gateway,
             tmp_path,
-            {"INTEGRATION_PROXY_WORKERS": "1"},
+            {
+                "INTEGRATION_PROXY_WORKERS": "1",
+                "OPENAI_BASE_URL": f"{wire.url}/v1",
+                "OPENAI_API_KEY": _API_KEY,
+            },
             config=config,
         ) as allowed_gateway:
-            response: Final = allowed_gateway.request(
-                "POST",
-                "/v1/responses",
-                {
-                    "model": model,
-                    "input": "allowed vendor follow-up",
-                    "previous_response_id": raw_id,
-                },
-                key=key,
+            client: Final = _client(allowed_gateway, key, "/v1")
+            followed: Final = client.responses.create(
+                model=model,
+                input="allowed vendor follow-up",
+                previous_response_id=raw_id,
             )
-            assert response.status_code == 200, response.text
-            parsed_response: Final = ResponsesAPIResponse.model_validate_json(response.content)
-            assert parsed_response.id != raw_followup_id, response.text
-            assert same_response(parsed_response.id, raw_followup_id), response.text
-            assert ResponsesAPIRequestUtils.get_model_id_from_response_id(parsed_response.id) is None, response.text
-            assert parsed_response.model_dump(mode="json", exclude_none=True) == {
-                "id": parsed_response.id,
+            assert followed.model_dump(mode="json", exclude_none=True) == {
+                "id": followed.id,
                 "object": "response",
                 "created_at": 1.0,
                 "status": "completed",
@@ -311,11 +371,109 @@ def test_allow_unmanaged_response_ids_forwards_previous_id_unchanged(
                 "parallel_tool_calls": False,
                 "tool_choice": "auto",
                 "tools": [],
-            }, response.text
-        requests: Final = _contract_requests(wire)
-        assert [(request.method, request.target) for request in requests] == [("POST", "/v1/responses")], requests
-        assert _JSON_OBJECT.validate_json(requests[0].body) == {
+            }, followed.model_dump_json()
+            assert ResponsesAPIRequestUtils.get_model_id_from_response_id(followed.id) is None, followed.id
+            requests: Final = _contract_requests(wire)
+        assert [(request.method, request.target, request.body) for request in requests] == [
+            ("POST", "/v1/responses", requests[-1].body),
+        ], requests
+        assert all(request.headers["authorization"] == f"Bearer {_API_KEY}" for request in requests), requests
+        assert _JSON_OBJECT.validate_json(requests[-1].body) == {
             "model": _MODEL,
             "input": "allowed vendor follow-up",
             "previous_response_id": raw_id,
-        }, requests[0].body
+        }, requests[-1].body
+
+
+@pytest.mark.parametrize("route", ("retrieve", "delete", "cancel", "input_items"))
+def test_allow_unmanaged_response_id_lifecycle_route_reaches_provider(
+    gateway: Gateway,
+    tmp_path: Path,
+    route: Literal["retrieve", "delete", "cancel", "input_items"],
+) -> None:
+    pytest.skip(
+        "BUG: unmanaged response-id lifecycle routes select model=None and return 400 instead of reaching OpenAI"
+    )
+    raw_id: Final = f"resp_vendor_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return _model_discovery_reply()
+        if request.method == "GET" and request.target == f"/v1/responses/{raw_id}/input_items":
+            return Reply(body=b'{"data":[],"has_more":false,"object":"list"}')
+        if request.method == "DELETE":
+            return Reply(body=json.dumps({"id": raw_id, "object": "response", "deleted": True}).encode())
+        if request.method == "POST" and request.target.endswith("/cancel"):
+            return Reply(body=_response(raw_id, "cancelled"))
+        return Reply(body=_response(raw_id))
+
+    config: Final = tmp_path / "allow_unmanaged_responses.yaml"
+    config.write_text("general_settings:\n  allow_unmanaged_response_ids: true\n")
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        team: Final = scenario.team(models=[model])
+        user: Final = scenario.member(team)
+        key: Final = _key(scenario, team, user, model)
+        with owned_proxy(
+            gateway,
+            tmp_path,
+            {
+                "INTEGRATION_PROXY_WORKERS": "1",
+                "OPENAI_BASE_URL": f"{wire.url}/v1",
+                "OPENAI_API_KEY": _API_KEY,
+            },
+            config=config,
+        ) as allowed_gateway:
+            client: Final = _client(allowed_gateway, key, "/v1")
+            expected_request: Final = {
+                "retrieve": ("GET", f"/v1/responses/{raw_id}", b""),
+                "delete": ("DELETE", f"/v1/responses/{raw_id}", b""),
+                "cancel": ("POST", f"/v1/responses/{raw_id}/cancel", b"{}"),
+                "input_items": ("GET", f"/v1/responses/{raw_id}/input_items", b""),
+            }[route]
+            match route:
+                case "retrieve":
+                    retrieved: Final = client.responses.retrieve(raw_id)
+                    assert retrieved.model_dump(mode="json", exclude_none=True) == {
+                        "id": raw_id,
+                        "object": "response",
+                        "created_at": 1.0,
+                        "status": "completed",
+                        "model": _MODEL,
+                        "output": [],
+                        "parallel_tool_calls": False,
+                        "tool_choice": "auto",
+                        "tools": [],
+                    }, retrieved.model_dump_json()
+                case "delete":
+                    deleted: Final = client.responses.delete(raw_id)
+                    assert deleted.model_dump(mode="json", exclude_none=True) == {
+                        "id": raw_id,
+                        "object": "response",
+                        "deleted": True,
+                    }, deleted.model_dump_json()
+                case "cancel":
+                    cancelled: Final = client.responses.cancel(raw_id)
+                    assert cancelled.model_dump(mode="json", exclude_none=True) == {
+                        "id": raw_id,
+                        "object": "response",
+                        "created_at": 1.0,
+                        "status": "cancelled",
+                        "model": _MODEL,
+                        "output": [],
+                        "parallel_tool_calls": False,
+                        "tool_choice": "auto",
+                        "tools": [],
+                    }, cancelled.model_dump_json()
+                case "input_items":
+                    page: Final = client.responses.input_items.list(raw_id)
+                    assert page.model_dump(mode="json", exclude_none=True) == {
+                        "data": [],
+                        "has_more": False,
+                        "object": "list",
+                    }, page.model_dump_json()
+            requests: Final = _contract_requests(wire)
+        assert tuple((request.method, request.target, request.body) for request in requests) == (expected_request,), (
+            requests
+        )
+        assert all(request.headers["authorization"] == f"Bearer {_API_KEY}" for request in requests), requests

@@ -85,10 +85,10 @@ def _stream(identity: str) -> tuple[bytes, ...]:
     ) + (b"data: [DONE]\n\n",)
 
 
-def _deployment(scenario: Scenario, wire: Wire) -> str:
+def _deployment(scenario: Scenario, wire: Wire, api_key: str = _API_KEY) -> str:
     model: Final = scenario.model(
         model=f"openai/{_MODEL}",
-        api_key=_API_KEY,
+        api_key=api_key,
         api_base=f"{wire.url}/v1",
     )
     _wait_for_workers(scenario.gateway, model, 1)
@@ -114,7 +114,7 @@ def _stream_response_events(
         return (), error.response.text
 
 
-def _register_preferred_in_group(scenario: Scenario, wire: Wire, group: str) -> None:
+def _register_preferred_in_group(scenario: Scenario, wire: Wire, group: str, api_key: str) -> None:
     existing: Final = _deployments_in_group(scenario.gateway, group)
     created: Final = scenario.gateway.post(
         "/model/new",
@@ -122,7 +122,7 @@ def _register_preferred_in_group(scenario: Scenario, wire: Wire, group: str) -> 
             "model_name": group,
             "litellm_params": {
                 "model": f"openai/{_MODEL}",
-                "api_key": _API_KEY,
+                "api_key": api_key,
                 "api_base": f"{wire.url}/v1",
                 "order": 1,
             },
@@ -148,28 +148,23 @@ def test_retrieve_routes_to_the_deployment_that_created_the_response(
     prefix: str,
 ) -> None:
     raw_id: Final = f"resp_affinity_{uuid.uuid4().hex}"
+    wire_b_key: Final = "synthetic-responses-key-b"
+    wire_a_key: Final = "synthetic-responses-key-a"
 
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target == "/v1/models":
             return model_discovery_reply(_MODEL)
-        assert request.headers["authorization"] == f"Bearer {_API_KEY}", dict(request.headers)
         if request.method == "POST":
-            assert request.target == "/v1/responses"
-            assert _JSON_OBJECT.validate_json(request.body) == {"model": _MODEL, "input": "create for affinity"}, (
-                request.body
-            )
             return Reply(body=_response(raw_id))
-        assert request.method == "GET"
-        assert request.body == b""
         return Reply(body=_response(raw_id))
 
     with wire_server(respond) as wire_b, wire_server(respond) as wire_a, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, wire_b)
+        model: Final = _deployment(scenario, wire_b, wire_b_key)
         client: Final = _client(gateway, gateway.key, prefix)
         created: Final = client.responses.create(model=model, input="create for affinity")
         client_id: Final = created.id
         assert client_id.startswith("resp_") and client_id != raw_id, created.model_dump_json()
-        _register_preferred_in_group(scenario, wire_a, model)
+        _register_preferred_in_group(scenario, wire_a, model, wire_a_key)
         retrieved: Final = client.responses.retrieve(client_id)
         assert retrieved.id != raw_id, retrieved.model_dump_json()
         assert same_response(retrieved.id, client_id), retrieved.model_dump_json()
@@ -182,7 +177,8 @@ def test_retrieve_routes_to_the_deployment_that_created_the_response(
             "model": _MODEL,
             "input": "create for affinity",
         }, requests[0].body
-        assert requests[1].headers["authorization"] == f"Bearer {_API_KEY}", dict(requests[1].headers)
+        assert all(request.headers["authorization"] == f"Bearer {wire_b_key}" for request in requests), requests
+        assert requests[1].body == b"", requests[1]
         assert drain_contract_requests(wire_a) == (), (
             f"{prefix or '/responses'} did not preserve response deployment affinity"
         )
@@ -216,7 +212,6 @@ def test_retrieve_returns_the_id_the_client_holds(gateway: Gateway, prefix: str)
         created: Final = client.responses.create(model=model, input="retrieve client id")
         client_id: Final = created.id
         retrieved: Final = client.responses.retrieve(client_id)
-        assert retrieved.id == client_id, retrieved.model_dump_json()
         requests: Final = drain_contract_requests(wire)
         assert [(request.method, request.target, request.body) for request in requests] == [
             ("POST", "/v1/responses", requests[0].body),
@@ -226,6 +221,7 @@ def test_retrieve_returns_the_id_the_client_holds(gateway: Gateway, prefix: str)
             "model": _MODEL,
             "input": "retrieve client id",
         }, requests[0].body
+        assert retrieved.id == client_id, (retrieved.model_dump_json(), requests)
 
 
 @pytest.mark.parametrize("prefix", _ALIASES)
@@ -320,8 +316,7 @@ def test_retrieve_query_reaches_the_provider(gateway: Gateway, prefix: str) -> N
         sdk_requests: Final = drain_contract_requests(wire)
         assert [request.method for request in sdk_requests] == ["GET", "GET"], sdk_requests
         expected_queries: Final = tuple(
-            tuple(sorted(parse_qsl(urlsplit(request.target).query, keep_blank_values=True)))
-            for request in sdk_requests
+            tuple(sorted(parse_qsl(urlsplit(request.target).query, keep_blank_values=True))) for request in sdk_requests
         )
 
         with gateway.scenario() as scenario:
@@ -350,10 +345,7 @@ def test_retrieve_query_reaches_the_provider(gateway: Gateway, prefix: str) -> N
             stream_error_text: Final = stream_result[1]
             if stream_error_text is not None:
                 requests: Final = drain_contract_requests(wire)
-                assert [
-                    (request.method, urlsplit(request.target).path, request.body)
-                    for request in requests[2:]
-                ] == [
+                assert [(request.method, urlsplit(request.target).path, request.body) for request in requests[2:]] == [
                     ("GET", f"/v1/responses/{normal_raw_id}", b""),
                     ("GET", f"/v1/responses/{stream_raw_id}", b""),
                 ], stream_error_text
@@ -361,7 +353,12 @@ def test_retrieve_query_reaches_the_provider(gateway: Gateway, prefix: str) -> N
                     tuple(sorted(parse_qsl(urlsplit(request.target).query, keep_blank_values=True)))
                     for request in requests[2:]
                 )
-                assert actual_queries == expected_queries, stream_error_text
+                assert actual_queries == expected_queries, (
+                    requests[2:],
+                    actual_queries,
+                    expected_queries,
+                    stream_error_text,
+                )
                 pytest.fail(f"Streaming retrieval returned an API error: {stream_error_text}")
             completed_events: Final = tuple(event for event in stream_events if event.type == "response.completed")
             assert len(completed_events) == 1, stream_events
@@ -381,10 +378,7 @@ def test_retrieve_query_reaches_the_provider(gateway: Gateway, prefix: str) -> N
                 },
             }, stream_events
             requests: Final = drain_contract_requests(wire)
-            assert [
-                (request.method, urlsplit(request.target).path, request.body)
-                for request in requests
-            ] == [
+            assert [(request.method, urlsplit(request.target).path, request.body) for request in requests] == [
                 ("POST", "/v1/responses", requests[0].body),
                 ("POST", "/v1/responses", requests[1].body),
                 ("GET", f"/v1/responses/{normal_raw_id}", b""),
@@ -475,12 +469,6 @@ def test_delete_returns_the_client_held_id_not_the_provider_id(
         deleted: Final = client.responses.with_raw_response.delete(created.id)
         assert deleted.status_code == 200, deleted.text
         parsed: Final = _DeleteResponse.model_validate_json(deleted.content)
-        assert parsed.id != raw_id, deleted.text
-        assert parsed.model_dump(mode="json") == {
-            "id": created.id,
-            "object": "response",
-            "deleted": True,
-        }, deleted.text
         requests: Final = drain_contract_requests(wire)
         assert [(request.method, request.target, request.body) for request in requests] == [
             ("POST", "/v1/responses", requests[0].body),
@@ -490,6 +478,12 @@ def test_delete_returns_the_client_held_id_not_the_provider_id(
             "model": _MODEL,
             "input": "delete client id",
         }, requests[0].body
+        assert parsed.id != raw_id, (deleted.text, requests)
+        assert parsed.model_dump(mode="json") == {
+            "id": created.id,
+            "object": "response",
+            "deleted": True,
+        }, deleted.text
 
 
 @pytest.mark.parametrize("prefix", _ALIASES)
@@ -535,7 +529,8 @@ def test_cancel_forwards_provider_id_and_returns_cancelled_response(
         assert requests[1].body == b"{}", requests[1]
 
 
-def test_input_items_pagination_query_reaches_the_provider(gateway: Gateway) -> None:
+@pytest.mark.parametrize("prefix", _ALIASES)
+def test_input_items_pagination_query_reaches_the_provider(gateway: Gateway, prefix: str) -> None:
     pytest.skip(
         "BUG: GET /v1/responses/{id}/input_items drops limit, order and after query params; "
         "upstream receives limit=20&order=desc"
@@ -545,28 +540,13 @@ def test_input_items_pagination_query_reaches_the_provider(gateway: Gateway) -> 
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target == "/v1/models":
             return model_discovery_reply(_MODEL)
-        assert request.headers["authorization"] == f"Bearer {_API_KEY}", dict(request.headers)
         if request.method == "POST":
-            assert request.target == "/v1/responses"
-            assert _JSON_OBJECT.validate_json(request.body) == {
-                "model": _MODEL,
-                "input": "list response input items",
-            }, request.body
             return Reply(body=_response(raw_id))
-        assert request.method == "GET"
-        parsed_target: Final = urlsplit(request.target)
-        assert parsed_target.path == f"/v1/responses/{raw_id}/input_items", request.target
-        assert dict(parse_qsl(parsed_target.query)) == {
-            "after": "item_after",
-            "limit": "2",
-            "order": "asc",
-        }, request.target
-        assert request.body == b""
         return Reply(body=b'{"data":[],"has_more":false,"object":"list"}')
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire)
-        client: Final = _client(gateway, gateway.key, "/v1")
+        client: Final = _client(gateway, gateway.key, prefix)
         created: Final = client.responses.create(model=model, input="list response input items")
         page: Final = client.responses.input_items.list(
             created.id,
@@ -583,3 +563,5 @@ def test_input_items_pagination_query_reaches_the_provider(gateway: Gateway) -> 
                 f"/v1/responses/{raw_id}/input_items?limit=2&order=asc&after=item_after",
             ),
         ], requests
+        assert all(request.headers["authorization"] == f"Bearer {_API_KEY}" for request in requests), requests
+        assert requests[1].body == b"", requests[1]
