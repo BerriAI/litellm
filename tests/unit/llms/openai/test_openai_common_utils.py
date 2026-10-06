@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import openai
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
@@ -470,23 +471,40 @@ def _sdk_api_client(
     return factory.get_openai_client(**kwargs, _is_async=is_async)
 
 
+async def _list_model_ids(sdk_client: openai.OpenAI | openai.AsyncOpenAI) -> list[str]:
+    page: Final = (
+        await sdk_client.models.list() if isinstance(sdk_client, openai.AsyncOpenAI) else sdk_client.models.list()
+    )
+    return [model.id for model in page.data]
+
+
 @pytest.mark.parametrize("api", ["files", "batches", "assistants", "fine_tuning", "image_variations", "azure_gateway"])
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
 async def test_sdk_api_factories_keep_httpx_transport_and_request_timeouts(api: str, is_async: bool) -> None:
     timeout: Final = openai.Timeout(connect=1, read=7, write=2, pool=3)
-    sdk_client: Final = _sdk_api_client(api, is_async, timeout)
-    assert sdk_client is not None
-    try:
-        assert isinstance(sdk_client._client, httpx.AsyncClient if is_async else httpx.Client)
-        assert sdk_client._client.follow_redirects is True
-        assert _sdk_api_client(api, is_async, 19, client=sdk_client) is sdk_client
-        assert sdk_client.timeout.as_dict() == timeout.as_dict()
-    finally:
-        if is_async:
-            await sdk_client.close()
-        else:
-            sdk_client.close()
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(host="sdk-default.example", path__regex=r".*/models$").mock(
+            return_value=httpx.Response(307, headers={"location": "https://sdk-default.example/v1/moved-models"})
+        )
+        moved: Final = mock.get(host="sdk-default.example", path="/v1/moved-models").mock(
+            return_value=httpx.Response(
+                200,
+                json={"object": "list", "data": [{"id": "sdk-compat", "object": "model", "created": 0, "owned_by": "t"}]},
+            )
+        )
+        sdk_client: Final = _sdk_api_client(api, is_async, timeout)
+        assert sdk_client is not None
+        try:
+            assert _sdk_api_client(api, is_async, 19, client=sdk_client) is sdk_client
+            model_ids: Final = await _list_model_ids(sdk_client)
+        finally:
+            if is_async:
+                await sdk_client.close()
+            else:
+                sdk_client.close()
+    assert model_ids == ["sdk-compat"]
+    assert moved.calls.last.request.extensions["timeout"] == {"connect": 1.0, "read": 7.0, "write": 2.0, "pool": 3.0}
 
 
 @pytest.mark.parametrize("backend", ["httpx", "sdk_default"])
