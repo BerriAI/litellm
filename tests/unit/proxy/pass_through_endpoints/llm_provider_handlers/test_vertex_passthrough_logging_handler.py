@@ -1,3 +1,5 @@
+import json
+from collections.abc import Iterator
 from datetime import datetime
 
 import httpx
@@ -5,10 +7,13 @@ import pytest
 from pydantic import ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import Logging
+import litellm
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
+from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import EmbeddingResponse, ModelResponse
 
 _PREDICT_ROUTE = "/v1/projects/p/locations/us-central1/publishers/google/models/text-embedding-004:predict"
@@ -93,3 +98,88 @@ def test_interactions_usage_object_is_read_into_prompt_and_completion_tokens():
     assert response.usage.completion_tokens == 29
     assert response.usage.completion_tokens_details.text_tokens == 9
     assert result["kwargs"]["custom_llm_provider"] == "vertex_ai"
+
+
+_UPLIFT_MODEL = "gemini-regional-uplift-probe"
+_UPLIFT_INPUT_RATE = 1e-06
+_UPLIFT_OUTPUT_RATE = 4e-06
+_UPLIFT_MULTIPLIER = 1.1
+
+
+@pytest.fixture
+def regional_uplift_rate_card(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    rates = {
+        "input_cost_per_token": _UPLIFT_INPUT_RATE,
+        "output_cost_per_token": _UPLIFT_OUTPUT_RATE,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+    }
+    monkeypatch.setitem(litellm.model_cost, _UPLIFT_MODEL, rates)
+    monkeypatch.setattr(litellm, "vertex_language_models", {*litellm.vertex_language_models, _UPLIFT_MODEL})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"vertex_ai/{_UPLIFT_MODEL}",
+        {**rates, "regional_endpoint_uplift_multiplier": _UPLIFT_MULTIPLIER},
+    )
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
+def _generate_content_payload() -> dict[str, object]:
+    return {
+        "candidates": [{"content": {"parts": [{"text": "pong"}], "role": "model"}, "finishReason": "STOP", "index": 0}],
+        "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 1, "totalTokenCount": 8},
+        "modelVersion": _UPLIFT_MODEL,
+    }
+
+
+def _cost_the_logger_records(location: str, *, stream: bool) -> float:
+    method = "streamGenerateContent" if stream else "generateContent"
+    url_route = (
+        f"https://aiplatform.googleapis.com/v1/projects/p/locations/{location}"
+        f"/publishers/google/models/{_UPLIFT_MODEL}:{method}"
+    )
+    logging_obj = Logging(
+        model="unknown",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=stream,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    logging_obj.optional_params = {}
+    if stream:
+        result = VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=PassThroughEndpointLogging(),
+            url_route=url_route,
+            request_body={},
+            endpoint_type=EndpointType.VERTEX_AI,
+            start_time=datetime(2026, 1, 1),
+            all_chunks=[f"data: {json.dumps(_generate_content_payload())}"],
+            model=_UPLIFT_MODEL,
+            end_time=datetime(2026, 1, 1),
+        )
+    else:
+        response = httpx.Response(200, json=_generate_content_payload())
+        result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+            httpx_response=response,
+            logging_obj=logging_obj,
+            url_route=url_route,
+            result=response.text,
+            start_time=datetime(2026, 1, 1),
+            end_time=datetime(2026, 1, 1),
+            cache_hit=False,
+            request_body={},
+        )
+    return logging_obj._response_cost_calculator(result=result["result"])
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
+@pytest.mark.parametrize("location, multiplier", [("global", 1.0), ("us", _UPLIFT_MULTIPLIER)])
+def test_generate_content_spend_follows_the_vertex_location(regional_uplift_rate_card, stream, location, multiplier):
+    expected = (7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE) * multiplier
+
+    assert _cost_the_logger_records(location, stream=stream) == pytest.approx(expected), (location, stream)
