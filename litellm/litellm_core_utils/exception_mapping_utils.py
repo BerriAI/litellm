@@ -2376,6 +2376,8 @@ def exception_type(
         return original_exception
     if _is_guardrail_block(original_exception):
         return original_exception
+    if custom_llm_provider in ("bedrock", "bedrock_mantle") and isinstance(original_exception, ImportError):
+        return original_exception
     exception_mapping_worked = False
     exception_provider = custom_llm_provider
     mappable_exception: Final[_ProviderHTTPException] = cast("_ProviderHTTPException", original_exception)

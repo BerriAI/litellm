@@ -264,7 +264,7 @@ async def make_call(
         )
 
         return completion_stream, response.headers
-    except BedrockError:
+    except (BedrockError, ImportError):
         raise
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code
@@ -355,7 +355,7 @@ def make_sync_call(
         )
 
         return completion_stream, response.headers
-    except BedrockError:
+    except (BedrockError, ImportError):
         raise
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code

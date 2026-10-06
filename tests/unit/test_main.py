@@ -4630,6 +4630,45 @@ def test_completion_rejects_an_invalid_stream_chunk_size_before_the_mcp_gateway(
     assert exc_info.value.param == "stream_chunk_size"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("missing_tenacity", [False, True])
+@pytest.mark.parametrize("route", ["bedrock", "bedrock/invoke"])
+async def test_bedrock_stream_missing_dependency_remains_actionable_with_retries(
+    monkeypatch, use_async, missing_tenacity, route
+):
+    import builtins
+
+    original_import = builtins.__import__
+
+    def import_without_aws_or_retry_dependencies(name, *args, **kwargs):
+        if name.split(".")[0] == "botocore" or (name == "tenacity" and missing_tenacity):
+            raise ModuleNotFoundError(name=name.split(".")[0])
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_aws_or_retry_dependencies)
+    monkeypatch.setattr(litellm, "num_retries", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock as upstream:
+        response = upstream.post(url__regex=r"https://bedrock-test\.invalid/.*").respond(200, content=b"")
+        arguments = dict(
+            model=f"{route}/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[{"role": "user", "content": "ping"}],
+            api_key="test-bearer",
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-test.invalid",
+            stream=True,
+            num_retries=1,
+        )
+        if use_async:
+            with pytest.raises(ImportError, match="pip install boto3"):
+                await litellm.acompletion(**arguments)
+        else:
+            with pytest.raises(ImportError, match="pip install boto3"):
+                litellm.completion(**arguments)
+        assert response.call_count == 1
+
+
 def test_drop_params_false_still_rejects_an_invalid_stream_chunk_size() -> None:
     with pytest.raises(litellm.BadRequestError):
         litellm.completion(
