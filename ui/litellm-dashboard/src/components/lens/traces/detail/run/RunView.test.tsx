@@ -13,7 +13,7 @@ import { ShortcutHints } from "@/components/shared/ShortcutHints";
 import { RunView } from "./RunView";
 import { initialRunSelection } from "./useRunTree";
 import { tickLabel, timeTicks } from "../tree/timeline";
-import { useOpenTraceRouting } from "../../routing";
+import { traceShareUrl, useOpenTraceRouting } from "../../routing";
 import { agentHandoffText } from "../../api";
 import type { Span } from "../../types";
 import type { Trace } from "../../types";
@@ -144,6 +144,25 @@ describe("RunView", () => {
     expect(screen.getByLabelText("Keyboard shortcuts")).toHaveTextContent("↑/↓ step←/→ foldEsc close");
   });
 
+  it("shows a loading state until the first trace arrives", async () => {
+    let resolveTrace: (trace: Trace) => void = () => {};
+    vi.mocked(agentTraceCall).mockImplementation(
+      () =>
+        new Promise<Trace>((resolve) => {
+          resolveTrace = resolve;
+        }),
+    );
+    renderWithProviders(
+      <RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} embedded />,
+    );
+    expect(screen.getByRole("status", { name: "Loading trace…" })).toBeVisible();
+    expect(screen.queryByTestId("run-view")).not.toBeInTheDocument();
+
+    act(() => resolveTrace(research));
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
+    expect(screen.queryByRole("status", { name: "Loading trace…" })).not.toBeInTheDocument();
+  });
+
   it("keeps the current run on screen, inert, while an unvisited run loads in the drawer", async () => {
     const user = userEvent.setup();
     let resolveSwarm: (trace: Trace) => void = () => {};
@@ -161,7 +180,7 @@ describe("RunView", () => {
 
     rerender(<RoutedRunView traceId={swarm.summary.trace_id} {...props} />);
     await waitFor(() => expect(screen.getByTestId("run-view")).toHaveAttribute("aria-busy", "true"));
-    expect(screen.queryByRole("status", { name: "Loading trace" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Loading trace…" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
     await user.keyboard("{ArrowDown}");
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
@@ -475,6 +494,23 @@ describe("RunView", () => {
     expect(copyToClipboard).toHaveBeenCalledWith(agentHandoffText(research.summary.trace_id), "Command copied");
     expect(agentHandoffText("t1")).toContain('"http://proxy.test/v1/traces/t1?format=md"');
     expect(agentHandoffText("t1", "s1")).toContain("&span_id=s1");
+  });
+
+  it("copies a link that reopens just this run", async () => {
+    const user = userEvent.setup();
+    renderRun(research);
+
+    await user.click(await screen.findByRole("button", { name: /copy link/i }));
+    const url = new URL(vi.mocked(copyToClipboard).mock.calls[0][0] as string);
+    expect(url.pathname).toBe(window.location.pathname);
+    expect(url.searchParams.get("trace")).toBe(research.summary.trace_id);
+    expect(copyToClipboard).toHaveBeenCalledWith(expect.any(String), "Trace link copied");
+    const loc = { origin: "https://gw.test", pathname: "/ui/lens", search: "?q=refund&span=s1" };
+    expect(traceShareUrl({ traceId: "t1", traceRef: "R1" }, loc)).toBe("https://gw.test/ui/lens?trace=t1&trace_ref=R1");
+    expect(traceShareUrl({ traceId: "t1" }, loc)).toBe("https://gw.test/ui/lens?trace=t1");
+    expect(traceShareUrl({ traceId: "t1" }, { ...loc, search: "?demo=true" })).toBe(
+      "https://gw.test/ui/lens?demo=true&trace=t1",
+    );
   });
 });
 

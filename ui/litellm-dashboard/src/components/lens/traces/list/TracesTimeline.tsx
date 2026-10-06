@@ -3,13 +3,14 @@
 import moment from "moment";
 import { useMemo } from "react";
 
-import { Timeline, TIMELINE_BUCKETS, type Bucket, type TimeWindow } from "@/components/shared/timeline/Timeline";
+import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
+import { Timeline, TIMELINE_BUCKETS, type TimeBucket } from "@/components/shared/timeline/Timeline";
 
 import type { TraceSummary } from "../types";
 import { traceAgentNames } from "../utils";
 
 /** Run counts per equal-width time bucket across the window; runs outside it are dropped. */
-export function bucketRuns(runs: readonly TraceSummary[], range: TimeWindow, buckets = TIMELINE_BUCKETS): Bucket[] {
+export function bucketRuns(runs: readonly TraceSummary[], range: TimeWindow, buckets = TIMELINE_BUCKETS): TimeBucket[] {
   const width = (range.endMs - range.startMs) / buckets;
   const placed = runs.map((run) => ({
     index: Math.floor((moment(run.start_time).valueOf() - range.startMs) / width),
@@ -36,7 +37,9 @@ interface TracesTimelineProps {
 }
 
 /** Lens adapter: buckets the currently loaded runs and hands them to the shared timeline. */
+const RUN_NOUN = { singular: "run", plural: "runs" };
+
 export function TracesTimeline({ runs, range, selection, onSelect }: TracesTimelineProps) {
   const buckets = useMemo(() => bucketRuns(runs, range), [runs, range]);
-  return <Timeline buckets={buckets} selection={selection} onSelect={onSelect} />;
+  return <Timeline buckets={buckets} selection={selection} onSelect={onSelect} noun={RUN_NOUN} />;
 }
