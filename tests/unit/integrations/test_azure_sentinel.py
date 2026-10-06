@@ -704,8 +704,7 @@ async def test_azure_sentinel_keeps_records_queued_during_a_send(queue_attr, sen
     assert getattr(logger, queue_attr) == [*records, late_record]
 
 
-def _poison(record):
-    """A mixed-type set makes safe_dumps raise TypeError while sorting it, so the record can never be serialized."""
+def _with_mixed_set(record):
     field = "messages" if "messages" in record else "updated_values"
     record[field] = {1, "a"}
     return record
@@ -713,13 +712,10 @@ def _poison(record):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
-async def test_azure_sentinel_drops_only_the_record_that_cannot_be_serialized(queue_attr, send_method, build_payloads):
-    """A record that raises during serialization used to escape the send, which killed the periodic
-    flush task for good and lost the already-detached batch with it. It has to be isolated and
-    dropped alone, with the flush completing normally."""
+async def test_azure_sentinel_serializes_mixed_sets_without_dropping_records(queue_attr, send_method, build_payloads):
     logger = _build_logger()
     records = build_payloads(4)
-    poison = _poison(records[2])["id"]
+    _with_mixed_set(records[2])
     setattr(logger, queue_attr, list(records))
 
     delivered = []
@@ -732,7 +728,7 @@ async def test_azure_sentinel_drops_only_the_record_that_cannot_be_serialized(qu
 
     await asyncio.wait_for(logger.flush_queue(), timeout=10)
 
-    assert delivered == [record["id"] for record in records if record["id"] != poison]
+    assert delivered == [record["id"] for record in records]
     assert getattr(logger, queue_attr) == []
 
 

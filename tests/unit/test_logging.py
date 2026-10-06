@@ -1127,8 +1127,8 @@ class _BrokenModel(BaseModel):
 
 @pytest.mark.parametrize(
     "extra",
-    ({1, "a"}, {"nested": {1, "a"}}, _BrokenModel(name="gpt-4o"), {"request": _BrokenModel(name="gpt-4o")}),
-    ids=("mixed_set", "nested_mixed_set", "raising_model", "nested_raising_model"),
+    (_BrokenModel(name="gpt-4o"), {"request": _BrokenModel(name="gpt-4o")}),
+    ids=("raising_model", "nested_raising_model"),
 )
 def test_unserializable_extra_never_breaks_the_filter(monkeypatch, extra):
     """A pydantic computed field that raises escapes model_dump() and str() alike, and a
@@ -1184,9 +1184,10 @@ def test_secret_free_extra_keeps_its_original_object(monkeypatch, extra):
     (
         (("gpt-4o", "sk-1234567890abcdefghij"), ("gpt-4o", "REDACTED")),
         ({"gpt-4o", "sk-1234567890abcdefghij"}, ["REDACTED", "gpt-4o"]),
+        ({"gpt-4o", "sk-1234567890abcdefghij", 1}, ["REDACTED", "gpt-4o", 1]),
         ({"model": "gpt-4o", "key": "sk-1234567890abcdefghij"}, {"model": "gpt-4o", "key": "REDACTED"}),
     ),
-    ids=("tuple", "set", "dict"),
+    ids=("tuple", "set", "mixed_set", "dict"),
 )
 def test_extra_that_carried_a_secret_comes_back_scrubbed(monkeypatch, extra, scrubbed):
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
@@ -1235,9 +1236,8 @@ def test_extra_whose_equality_raises_still_comes_back_scrubbed(monkeypatch, extr
         {"model": {1: "sk-1234567890abcdefghij"}},
         _nest("sk-1234567890abcdefghij", 101),
         _RequestExtra(model="gpt-4o", attempt=2, api_key="sk-1234567890abcdefghij"),
-        {"gpt-4o", "sk-1234567890abcdefghij", 1},
     ),
-    ids=("int_key", "nested_int_key", "deeper_than_safe_dumps", "dataclass_hidden_field", "unsortable_set"),
+    ids=("int_key", "nested_int_key", "deeper_than_safe_dumps", "dataclass_hidden_field"),
 )
 def test_extra_the_filter_cannot_fully_inspect_never_keeps_its_secret(monkeypatch, extra):
     """Whatever safe_dumps would skip (non-string keys, anything past its depth limit,

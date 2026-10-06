@@ -66,7 +66,10 @@ def safe_json_structure(
             seen.remove(id(obj))
             return result
         elif isinstance(obj, set):
-            result = sorted([_serialize(item, seen, depth + 1, key) for item in obj])
+            result = sorted(
+                [_serialize(item, seen, depth + 1, key) for item in obj],
+                key=lambda item: json.dumps(item, sort_keys=True, default=str),
+            )
             seen.remove(id(obj))
             return result
         elif isinstance(obj, BaseModel):

@@ -362,7 +362,7 @@ def _replace_string_leaves(value: object, values: Iterator[str]) -> object:
 
 def _sort_processed_sets(original: object, processed: object) -> object:
     if isinstance(original, set) and isinstance(processed, list):
-        return sorted(processed)
+        return sorted(processed, key=safe_dumps)
     if isinstance(original, dict) and isinstance(processed, dict):
         return {key: _sort_processed_sets(original.get(key), value) for key, value in processed.items()}
     if isinstance(original, list) and isinstance(processed, list):
