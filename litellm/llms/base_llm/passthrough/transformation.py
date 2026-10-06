@@ -6,8 +6,9 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import CallTypes
 
 from ..base_utils import BaseLLMModelInfo
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
 RELAYED_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 
 
-class PassthroughMetadata(BaseModel):
+class PassthroughMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     model_group: str = ""

@@ -99,6 +99,8 @@ def generate(
         else (
             "--output-model-type",
             "pydantic_v2.BaseModel",
+            "--base-class",
+            "litellm.types.llms.base.LiteLLMBaseModel",
             "--enable-faux-immutability",
             "--additional-imports",
             "collections.abc.Mapping,typing.TypeAlias,pydantic.JsonValue",

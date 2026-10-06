@@ -4,7 +4,7 @@ from enum import Enum
 from functools import lru_cache
 from typing import Annotated, Final
 
-from pydantic import AliasChoices, BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
+from pydantic import AliasChoices, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, NoDecode, PydanticBaseSettingsSource, SettingsConfigDict
 
@@ -15,6 +15,7 @@ from litellm.integrations.otel.model.baggage import (
     DEFAULT_BAGGAGE_TEAM_METADATA_KEYS,
 )
 from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import OtelSpanScope
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
@@ -62,7 +63,7 @@ def is_otel_v2_enabled() -> bool:
     return _OTelV2Flag().enabled
 
 
-class ExporterSpec(BaseModel):
+class ExporterSpec(LiteLLMBaseModel):
     """One span-export destination.
 
     The shared ``TracerProvider`` attaches one ``SpanProcessor`` per spec, so
@@ -70,7 +71,7 @@ class ExporterSpec(BaseModel):
     Phoenix + your own Honeycomb).
     """
 
-    model_config = {"extra": "forbid"}
+    model_config = ConfigDict(extra="forbid")
 
     kind: str = Field(
         default="console",

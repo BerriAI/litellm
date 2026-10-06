@@ -8,7 +8,7 @@ from typing import Final, Literal, NamedTuple, Protocol, runtime_checkable
 from uuid import uuid4
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
@@ -18,6 +18,7 @@ from litellm.proxy.roi_calculator.github import GitHubPullListItem, SourceError
 from litellm.proxy.roi_calculator.pull_cache import cache_key, settings_fingerprint
 from litellm.proxy.roi_calculator.source import RepositorySource, create_source, repository_tag
 from litellm.repositories.chunked_in import find_many_in
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.roi_calculator import (
     ROIBranchSpend,
     ROIEstimate,
@@ -99,12 +100,12 @@ def spend_prisma_client(prisma_client: object) -> _SpendPrismaClient:
     return prisma_client
 
 
-class _DailySpendSums(BaseModel):
+class _DailySpendSums(LiteLLMBaseModel):
     spend: float = 0.0
     api_requests: int = 0
 
 
-class _DailySpendGroup(BaseModel):
+class _DailySpendGroup(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     user_id: str | None
@@ -112,7 +113,7 @@ class _DailySpendGroup(BaseModel):
     sums: _DailySpendSums = Field(alias="_sum")
 
 
-class _UserEmail(BaseModel):
+class _UserEmail(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     user_id: str
