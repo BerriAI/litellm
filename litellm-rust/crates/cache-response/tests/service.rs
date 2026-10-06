@@ -9,8 +9,8 @@ use std::{
 use litellm_cache::ExactCacheContext;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheEntry, CacheKeyInput, ResponseCache, ResponseCacheConfig, ResponseCacheRequest,
-    ResponseCacheService, cache_key,
+    CacheEntry, CacheKeyInput, CacheKeyRequest, CacheOptions, CacheScope, RequestRewrite,
+    ResponseCache, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, cache_key,
 };
 use rstest::rstest;
 use serde_json::json;
@@ -282,4 +282,53 @@ fn retained_logical_parameters_override_provider_transformation() {
     );
     assert_eq!(cache_key(&first.key), cache_key(&expected.key));
     assert_eq!(cache_key(&second.key), cache_key(&expected.key));
+}
+
+#[rstest]
+#[case::logical(false, false)]
+#[case::logical_with_rewrite(true, false)]
+#[case::preset(false, true)]
+#[case::preset_with_rewrite(true, true)]
+fn selected_key_input_retains_request_state(#[case] rewritten: bool, #[case] preset: bool) {
+    let logical = CacheKeyInput {
+        preset: preset.then(|| "explicit".into()),
+        ..CacheKeyInput::from_parameters(json!({"model":"logical", "input":"original"}))
+    };
+    let options = CacheOptions {
+        key_input: Some(logical),
+        ..CacheOptions::new(CacheScope::Isolated("caller".into()))
+    };
+    let baseline = options
+        .clone()
+        .request("test", "responses", json!({"model":"provider"}));
+    let request = options.request_with_key(
+        "test",
+        "responses",
+        CacheKeyInput {
+            rewritten_request: rewritten.then(|| CacheKeyRequest {
+                url: "https://provider.test/infer".into(),
+                headers: vec![],
+                body: json!({"input":"changed"}),
+            }),
+            ..CacheKeyInput::from_parameters(json!({"model":"provider"}))
+        },
+    );
+    assert_eq!(
+        request.rewrite,
+        match rewritten {
+            true => RequestRewrite::Rewritten,
+            false => RequestRewrite::Unchanged,
+        }
+    );
+    assert_eq!(
+        cache_key(&request.key) == cache_key(&baseline.key),
+        !rewritten || preset
+    );
+    assert_eq!(
+        request
+            .clone()
+            .with_context(ExactCacheContext::default())
+            .rewrite,
+        request.rewrite
+    );
 }

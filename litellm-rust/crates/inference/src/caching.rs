@@ -8,8 +8,8 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_response::{
-    CacheKeyField, CacheKeyInput, CacheOptions, CachePolicy, ResponseCacheRequest,
-    ResponseCacheService, ResponseEnvelope, ScopedCache,
+    CacheKeyInput, CacheKeyRequest, CacheKeyTransport, CacheOptions, CachePolicy,
+    ResponseCacheRequest, ResponseCacheService, ResponseEnvelope, ScopedCache,
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
@@ -89,30 +89,24 @@ impl CacheRequest {
         let Some(original) = original else {
             return Self { identity, input };
         };
-        let transport = serde_json::json!({ "provider": identity.provider, "url": wire.url, "headers": wire.headers });
-        let changes = (original.url != wire.url || original.headers != wire.headers || original.body != wire.body)
-            .then(|| serde_json::json!({ "url": wire.url, "headers": wire.headers, "body": wire.body }));
+        let transport = CacheKeyTransport {
+            provider: identity.provider.clone(),
+            url: wire.url.clone(),
+            headers: wire.headers.clone(),
+        };
+        let rewritten_request = match original == wire {
+            true => None,
+            false => Some(CacheKeyRequest {
+                url: wire.url.clone(),
+                headers: wire.headers.clone(),
+                body: wire.body.clone(),
+            }),
+        };
         Self {
             identity,
             input: CacheKeyInput {
-                fields: input
-                    .fields
-                    .into_iter()
-                    .chain([
-                        CacheKeyField {
-                            name: "transport".into(),
-                            value: Some(transport.to_string()),
-                            api_parameter: true,
-                            internal_parameter: true,
-                        },
-                        CacheKeyField {
-                            name: "wire_changes".into(),
-                            value: changes.map(|value| value.to_string()),
-                            api_parameter: true,
-                            internal_parameter: true,
-                        },
-                    ])
-                    .collect(),
+                transport: Some(transport),
+                rewritten_request,
                 ..input
             },
         }
@@ -168,6 +162,7 @@ impl CacheSession {
             controls,
             context,
             max_age,
+            rewrite,
         } = request;
         let request = ResponseCacheRequest {
             key: CacheKeyInput {
@@ -177,6 +172,7 @@ impl CacheSession {
             controls,
             context,
             max_age,
+            rewrite,
         };
         Some(Self {
             service,

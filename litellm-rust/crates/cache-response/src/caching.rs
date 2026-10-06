@@ -21,6 +21,20 @@ pub struct CacheKeyField {
     pub internal_parameter: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CacheKeyTransport {
+    pub provider: String,
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CacheKeyRequest {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Value,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct CacheKeyInput {
@@ -28,6 +42,8 @@ pub struct CacheKeyInput {
     pub preset: Option<String>,
     pub namespace: Option<String>,
     pub include_provider_parameters: bool,
+    pub transport: Option<CacheKeyTransport>,
+    pub rewritten_request: Option<CacheKeyRequest>,
 }
 
 impl CacheKeyInput {
@@ -144,6 +160,14 @@ pub fn cache_key(input: &CacheKeyInput) -> String {
             digest.update(b": ");
             digest.update(value.as_bytes());
         }
+    }
+    if let Some(transport) = &input.transport {
+        digest.update(b"transport: ");
+        digest.update(serde_json::json!(transport).to_string().as_bytes());
+    }
+    if let Some(request) = &input.rewritten_request {
+        digest.update(b"wire_changes: ");
+        digest.update(serde_json::json!(request).to_string().as_bytes());
     }
     let hash = format!("{:x}", digest.finalize());
     input

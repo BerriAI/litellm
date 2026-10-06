@@ -1,6 +1,6 @@
 use litellm_cache_response::{
-    CacheControls, CacheKeyContext, CacheKeyField, CacheKeyInput, cache_key, get_cache_key,
-    should_use_cache,
+    CacheControls, CacheKeyContext, CacheKeyField, CacheKeyInput, CacheKeyRequest,
+    CacheKeyTransport, cache_key, get_cache_key, should_use_cache,
 };
 use rstest::rstest;
 use sha2::{Digest, Sha256};
@@ -127,6 +127,30 @@ fn preset_keys_are_used_verbatim(#[case] namespace: Option<&str>) {
     };
     assert_eq!(cache_key(&input), "preset");
     assert_eq!(get_cache_key(&input), "preset");
+}
+
+#[rstest]
+#[case::unchanged(false)]
+#[case::rewritten(true)]
+fn typed_transport_preserves_existing_key_bytes(#[case] rewritten: bool) {
+    let transport = serde_json::json!({
+        "provider": "test", "url": "https://provider.test/infer", "headers": [["x-route", "a"]]
+    });
+    let request = serde_json::json!({
+        "url": "https://provider.test/infer", "headers": [["x-route", "a"]], "body": {"input": "changed"}
+    });
+    let input = CacheKeyInput {
+        fields: vec![field("model", Some("model"))],
+        transport: Some(serde_json::from_value::<CacheKeyTransport>(transport.clone()).unwrap()),
+        rewritten_request: rewritten
+            .then(|| serde_json::from_value::<CacheKeyRequest>(request.clone()).unwrap()),
+        ..Default::default()
+    };
+    let preimage = match rewritten {
+        false => format!("model: modeltransport: {transport}"),
+        true => format!("model: modeltransport: {transport}wire_changes: {request}"),
+    };
+    assert_eq!(cache_key(&input), hash(preimage.as_bytes()));
 }
 
 const ENABLED: CacheControls = CacheControls {

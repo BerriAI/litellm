@@ -135,6 +135,7 @@ pub(super) fn project_key(
             preset: text(&parameters, "preset_cache_key")?,
             namespace,
             include_provider_parameters,
+            ..Default::default()
         },
         context,
     ))

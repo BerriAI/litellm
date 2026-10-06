@@ -2,7 +2,8 @@ use std::{future::Future, pin::Pin, time::Duration};
 
 use litellm_cache::Error;
 use litellm_cache_response::{
-    ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
+    RequestRewrite, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
+    ResponseEnvelope,
 };
 use litellm_core::{
     caching::{Cachable, CachedOutput},
@@ -100,16 +101,15 @@ where
         &'a self,
         request: &'a ResponseCacheRequest,
     ) -> Pin<Box<dyn Future<Output = Result<String, Error>> + Send + 'a>> {
-        if request.key.fields.iter().any(|field| {
-            field.name == "wire_changes" && field.internal_parameter && field.value.is_some()
-        }) {
-            return Box::pin(async { Err(Error::UnsupportedOperation) });
-        }
         Box::pin(async move {
-            self.services
-                .call(|reply| CacheCall::ResolveKey { reply })
-                .await
-                .map_err(|_| Error::Unavailable)?
+            match request.rewrite {
+                RequestRewrite::Rewritten => Err(Error::UnsupportedOperation),
+                RequestRewrite::Unchanged => self
+                    .services
+                    .call(|reply| CacheCall::ResolveKey { reply })
+                    .await
+                    .map_err(|_| Error::Unavailable)?,
+            }
         })
     }
 

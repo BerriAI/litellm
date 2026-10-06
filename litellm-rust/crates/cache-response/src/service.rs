@@ -4,8 +4,8 @@ use litellm_cache::{BaseCache, Error, ExactCacheContext};
 use serde_json::Value;
 
 use crate::{
-    CacheControls, CacheEntry, CacheKeyContext, CacheKeyField, CacheKeyInput, ResponseCache,
-    ResponseCacheRequest, cache_key,
+    CacheControls, CacheEntry, CacheKeyContext, CacheKeyField, CacheKeyInput, RequestRewrite,
+    ResponseCache, ResponseCacheRequest, cache_key,
 };
 
 type CacheFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -121,14 +121,9 @@ impl CacheOptions {
         surface: &str,
         input: CacheKeyInput,
     ) -> ResponseCacheRequest {
-        let fields = input
-            .fields
-            .iter()
-            .filter(|field| field.name == "wire_changes" && field.internal_parameter)
-            .cloned();
         let selected = match self.key_input {
             Some(selected) => CacheKeyInput {
-                fields: selected.fields.into_iter().chain(fields).collect(),
+                rewritten_request: input.rewritten_request,
                 ..selected
             },
             None => input,
@@ -139,16 +134,12 @@ impl CacheOptions {
             .as_ref()
             .is_some_and(|group| !group.is_empty());
         let input = self.key_context.project(CacheKeyInput {
-            fields: selected
-                .fields
-                .into_iter()
-                .filter(|field| {
-                    field.name != "transport" || !field.internal_parameter || !sharing_group
-                })
-                .collect(),
+            transport: selected.transport.filter(|_| !sharing_group),
             ..selected
         });
         let isolated = matches!(self.scope, CacheScope::Isolated(_));
+        let isolated_preset = isolated && input.preset.is_some();
+        let rewrite = RequestRewrite::from(&input);
         let fields = match input.preset.as_ref().filter(|_| isolated) {
             Some(preset) => vec![CacheKeyField {
                 name: "preset".into(),
@@ -163,6 +154,7 @@ impl CacheOptions {
             CacheScope::Isolated(scope) => serde_json::json!(["isolated", scope]).to_string(),
         };
         ResponseCacheRequest {
+            rewrite,
             key: CacheKeyInput {
                 namespace: Some(format!(
                     "{}:inference-v2",
@@ -174,6 +166,8 @@ impl CacheOptions {
                 )),
                 preset: input.preset.filter(|_| !isolated),
                 include_provider_parameters: input.include_provider_parameters,
+                transport: input.transport.filter(|_| !isolated_preset),
+                rewritten_request: input.rewritten_request.filter(|_| !isolated_preset),
                 fields: [("surface", surface.to_owned()), ("scope", scope)]
                     .into_iter()
                     .map(|(name, value)| CacheKeyField {
