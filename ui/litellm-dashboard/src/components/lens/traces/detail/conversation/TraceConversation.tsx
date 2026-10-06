@@ -302,7 +302,7 @@ function ConversationStep({
 }
 
 function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpenStep: (id: string) => void }) {
-  const failed = item.toolAttempt?.isError ?? item.span.status === "error";
+  const failed = item.toolAttempt?.isError || item.span.status === "error";
   const executionStatus = failed ? "Failed" : "Completed";
   const [open, setOpen] = useState(failed);
   const name = item.toolCall?.name ?? item.span.name;

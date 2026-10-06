@@ -276,6 +276,30 @@ describe("TraceConversation", () => {
       ).toBeVisible();
   });
 
+  it.each(["not_recorded", "conflicting"])(
+    "preserves a recorded tool error with %s result evidence",
+    async (status) => {
+      vi.mocked(agentTraceSpanCall).mockResolvedValue({
+        ...toolDetail,
+        output: "",
+        attributes: {
+          "lens.content.execution_status": "not_recorded",
+          "lens.content.output_status": status,
+          "lens.content.tool_result_is_error": "0",
+        },
+      });
+      const failedTool = { ...tool, status: "error", error: "Permission denied" };
+      renderWithProviders(
+        <TraceConversation trace={{ ...trace, spans: [failedTool] }} accessToken="test" onOpenStep={vi.fn()} />,
+      );
+      expect(await screen.findByRole("button", { name: "Collapse read_file tool call" })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(screen.getByText("Permission denied")).toBeVisible();
+    },
+  );
+
   it("loads twenty span details initially and pages conversation entries on demand", async () => {
     const user = userEvent.setup();
     const spans = [
@@ -640,6 +664,36 @@ describe("TraceConversation", () => {
     expect(screen.getByText("All checks passed")).toBeVisible();
     expect(screen.getByText("The release is ready")).toBeVisible();
   });
+
+  it.each([false, true])(
+    "retains loaded details when an extended batch fails (new span count: %s)",
+    async (changedCount) => {
+      const user = userEvent.setup();
+      const later = { ...tool, span_id: "later", name: "later tool", start_offset_ms: 2 };
+      vi.mocked(agentTraceSpansCall)
+        .mockResolvedValueOnce([rootDetail, toolDetail])
+        .mockRejectedValueOnce(new Error("next page unavailable"))
+        .mockResolvedValueOnce([rootDetail, toolDetail, { ...toolDetail, span_id: "later", output: "Later result" }]);
+      const { rerender } = renderWithProviders(
+        <TraceConversation trace={trace} accessToken="test" onOpenStep={vi.fn()} />,
+      );
+      expect(await screen.findByText("Read the release notes")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Expand read_file tool call" }));
+      const extended: Trace = {
+        ...trace,
+        spans: [...trace.spans, later],
+        summary: { ...trace.summary, span_count: trace.summary.span_count + Number(changedCount) },
+      };
+      rerender(<TraceConversation trace={extended} accessToken="test" onOpenStep={vi.fn()} />);
+      expect(screen.getByText("All checks passed")).toBeVisible();
+      expect(await screen.findByRole("alert")).toHaveTextContent("Retry this batch");
+      expect(screen.getByText("Read the release notes")).toBeVisible();
+      expect(screen.getByText("All checks passed")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Retry batch" }));
+      await user.click(await screen.findByRole("button", { name: "Expand later tool tool call" }));
+      expect(screen.getByText("Later result")).toBeVisible();
+    },
+  );
 
   it.each(["input", "output"])("distinguishes conflicting %s content from absent evidence", async (field) => {
     vi.mocked(agentTraceSpanCall).mockResolvedValue({

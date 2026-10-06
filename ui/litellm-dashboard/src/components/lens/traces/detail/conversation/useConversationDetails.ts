@@ -33,6 +33,14 @@ export function useConversationDetails(trace: Trace, accessToken: string) {
   const steps = useMemo(() => conversationSteps(trace.spans), [trace.spans]);
   const visible = steps.slice(0, limit);
   const { trace_id: traceId, trace_ref: traceRef, span_count: spanCount } = trace.summary;
+  const cachedDetails = useCallback(
+    (ids: string[]) =>
+      ids.flatMap((id) => {
+        const detail = queryClient.getQueryData<SpanDetail>(["agentTraceSpan", traceId, traceRef, id, accessToken]);
+        return detail ? [detail] : [];
+      }),
+    [traceId, traceRef, accessToken, queryClient],
+  );
   const batchQuery = useCallback(
     (batch: Span[]) => {
       const ids = batch.map((span) => span.span_id);
@@ -45,7 +53,10 @@ export function useConversationDetails(trace: Trace, accessToken: string) {
           const result = await readBatch(traces, traceId, pending, traceRef);
           const details = [
             ...new Map(
-              [...(previous?.details ?? []), ...result.details].map((detail) => [detail.span_id, detail]),
+              [...(previous?.details ?? []), ...cachedDetails(ids), ...result.details].map((detail) => [
+                detail.span_id,
+                detail,
+              ]),
             ).values(),
           ];
           for (const detail of result.details) {
@@ -58,7 +69,7 @@ export function useConversationDetails(trace: Trace, accessToken: string) {
         retryOnMount: false,
       };
     },
-    [traceId, traceRef, spanCount, accessToken, traces, queryClient],
+    [traceId, traceRef, spanCount, accessToken, traces, queryClient, cachedDetails],
   );
   const batches = Array.from({ length: Math.ceil(visible.length / CONVERSATION_PAGE_SIZE) }, (_, index) =>
     visible.slice(index * CONVERSATION_PAGE_SIZE, (index + 1) * CONVERSATION_PAGE_SIZE),
@@ -66,7 +77,10 @@ export function useConversationDetails(trace: Trace, accessToken: string) {
   const queries = useQueries({ queries: batches.map(batchQuery) });
   const complete = queries.every((query) => query.isSuccess && query.data.failedIds.length === 0);
   const details = new Map(
-    queries.flatMap((query) => (query.data?.details ?? []).map((detail) => [detail.span_id, detail] as const)),
+    [
+      ...cachedDetails(visible.map((span) => span.span_id)),
+      ...queries.flatMap((query) => query.data?.details ?? []),
+    ].map((detail) => [detail.span_id, detail]),
   );
   const loadMore = useCallback(
     async (signal: AbortSignal) => {
