@@ -4368,14 +4368,14 @@ async def test_sse_keepalive_does_not_leak_parallel_slot_v3(answers_after_ping):
     from litellm.proxy.common_request_processing import open_sse_before_first_byte
     from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_BYTES
 
-    _api_key = hash_token("sk-sse-keepalive-test")
-    local_cache = DualCache()
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
-    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
-    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+    _api_key: Final = hash_token("sk-sse-keepalive-test")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+    counter_key: Final = f"{{api_key:{_api_key}}}:max_parallel_requests"
 
     async def streamed_request() -> None:
-        upstream_answers = asyncio.Event()
+        upstream_answers: Final = asyncio.Event()
         if not answers_after_ping:
             upstream_answers.set()
 
@@ -4389,7 +4389,7 @@ async def test_sse_keepalive_does_not_leak_parallel_slot_v3(answers_after_ping):
             await upstream_answers.wait()
             return Response(content=b"{}")
 
-        response = await open_sse_before_first_byte(
+        response: Final = await open_sse_before_first_byte(
             produce_response(),
             ping_interval_seconds=(
                 _SSE_KEEPALIVE_PINGS_SECONDS if answers_after_ping else _SSE_KEEPALIVE_NEVER_PINGS_SECONDS
@@ -4397,11 +4397,12 @@ async def test_sse_keepalive_does_not_leak_parallel_slot_v3(answers_after_ping):
         )
         assert isinstance(response, StreamingResponse) is answers_after_ping
         if isinstance(response, StreamingResponse):
-            chunks = []
-            async for chunk in response.body_iterator:
-                chunks.append(chunk)
-                upstream_answers.set()
-            assert chunks[0] == SSE_COMMENT_PING_BYTES
+            body: Final = response.body_iterator
+            first_chunk: Final = await anext(body)
+            upstream_answers.set()
+            rest: Final = tuple([chunk async for chunk in body])
+            assert first_chunk == SSE_COMMENT_PING_BYTES
+            assert rest[-2:] == (b"data: {}\n\n", b"data: [DONE]\n\n")
 
         await handler.async_log_success_event(
             kwargs={
@@ -4431,12 +4432,12 @@ async def test_sse_keepalive_still_enforces_max_parallel_requests_v3():
 
     from litellm.proxy.common_request_processing import open_sse_before_first_byte
 
-    _api_key = hash_token("sk-sse-keepalive-test")
-    local_cache = DualCache()
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
-    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+    _api_key: Final = hash_token("sk-sse-keepalive-test")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     # Holds the admitted request in flight until the other one has been answered.
-    upstream_answers = asyncio.Event()
+    upstream_answers: Final = asyncio.Event()
 
     async def streamed_request() -> object:
         async def produce_response() -> Response:
@@ -4453,13 +4454,13 @@ async def test_sse_keepalive_still_enforces_max_parallel_requests_v3():
             produce_response(), ping_interval_seconds=_SSE_KEEPALIVE_NEVER_PINGS_SECONDS
         )
 
-    requests = [asyncio.create_task(streamed_request(), context=contextvars.Context()) for _ in range(2)]
+    requests: Final = tuple(asyncio.create_task(streamed_request(), context=contextvars.Context()) for _ in range(2))
     answered, in_flight = await asyncio.wait(requests, return_when=asyncio.FIRST_COMPLETED)
     upstream_answers.set()
     await asyncio.wait(in_flight)
 
     (rejected_request,) = answered
-    rejection = rejected_request.exception()
+    rejection: Final = rejected_request.exception()
     assert isinstance(rejection, HTTPException)
     assert rejection.status_code == 429
     (admitted_request,) = in_flight
