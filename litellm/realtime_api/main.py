@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import (
@@ -64,6 +65,7 @@ vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_AUTH_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _model_params_with_stored_credentials(model_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -102,13 +104,11 @@ def _with_resolved_session_model(session: dict[str, object], model_name: str) ->
     return {**session, "model": model_name}
 
 
-def _build_litellm_metadata(kwargs: dict) -> dict[str, object]:
-    """Build the litellm_metadata dict for guardrail checking (internal only, not forwarded to provider)."""
-    metadata: Final[dict[str, object]] = {**(kwargs.get("litellm_metadata") or {})}
-    guardrails: Final = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
-    if guardrails:
-        metadata["guardrails"] = guardrails
-    return metadata
+def _build_litellm_metadata(kwargs: Mapping[str, object]) -> dict[str, object]:
+    request_metadata: Final = _METADATA_ADAPTER.validate_python(kwargs.get("metadata") or {})
+    internal_metadata: Final = _METADATA_ADAPTER.validate_python(kwargs.get("litellm_metadata") or {})
+    guardrails: Final = request_metadata.get("guardrails") or kwargs.get("guardrails")
+    return {**request_metadata, **internal_metadata, **({"guardrails": guardrails} if guardrails else {})}
 
 
 def _get_realtime_http_provider_config(
