@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import ssl
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -11,7 +12,7 @@ from urllib.parse import quote
 
 import httpx
 import pytest
-from integration._support.client import Gateway, object_value, string_value
+from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
 from integration._support.tls import write_self_signed_cert
@@ -856,8 +857,30 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
     cert_dir: Final = tmp_path / "vault-client-cert"
     cert_dir.mkdir()
     cert_file, key_file = write_self_signed_cert(cert_dir)
-    with wire_server(vault) as vault_wire, wire_server(provider) as provider_wire:
-        with _config_proxy(gateway, tmp_path, monkeypatch) as (candidate, database_url):
+    client_cert_der: Final = ssl.PEM_cert_to_DER_cert(cert_file.read_text())
+    server_cert_dir: Final = tmp_path / "vault-server-cert"
+    server_cert_dir.mkdir()
+    server_cert, server_key = write_self_signed_cert(server_cert_dir)
+    presented_certs: Final[list[bytes | None]] = []
+
+    class RecordingSSLSocket(ssl.SSLSocket):
+        def do_handshake(self) -> None:
+            super().do_handshake()
+            presented_certs.append(self.getpeercert(binary_form=True))
+
+    vault_tls_context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    vault_tls_context.load_cert_chain(server_cert, server_key)
+    vault_tls_context.verify_mode = ssl.CERT_OPTIONAL
+    vault_tls_context.load_verify_locations(cafile=str(cert_file))
+    vault_tls_context.sslsocket_class = RecordingSSLSocket
+    with (
+        wire_server(vault) as vault_wire,
+        wire_server(vault, tls=vault_tls_context) as vault_tls_wire,
+        wire_server(provider) as provider_wire,
+    ):
+        with _config_proxy(
+            gateway, tmp_path, monkeypatch, {"SSL_CERT_FILE": str(server_cert)}
+        ) as (candidate, database_url):
             full_config: Final = {
                 "vault_addr": vault_wire.url,
                 "approle_role_id": role_id,
@@ -917,7 +940,7 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
                 assert approle_phase[1].headers["x-vault-token"] == approle_token
 
                 partial_config: Final = {
-                    "vault_addr": vault_wire.url,
+                    "vault_addr": vault_tls_wire.url,
                     "approle_role_id": "",
                     "approle_secret_id": "",
                     "client_cert": str(cert_file),
@@ -936,7 +959,7 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
                     candidate, "/config_overrides/hashicorp_vault", "hashicorp_vault"
                 )
                 assert readback == {
-                    "vault_addr": vault_wire.url,
+                    "vault_addr": vault_tls_wire.url,
                     "approle_mount_path": mount_path,
                     "client_cert": str(cert_file),
                     "client_key": _masked(str(key_file)),
@@ -960,9 +983,15 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
                 assert response_b.json()["choices"][0]["message"]["content"] == marker_b, (
                     response_b.text
                 )
+                plain_phase_b: Final = eventually(
+                    lambda: vault_wire.drain(),
+                    lambda requests: requests == (),
+                    seconds=20,
+                )
+                assert plain_phase_b == (), plain_phase_b
                 cert_phase: Final = tuple(
                     request
-                    for request in vault_wire.drain()
+                    for request in vault_tls_wire.drain()
                     if request.target in approle_targets
                 )
                 assert all(
@@ -990,6 +1019,7 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
                     request.headers["x-vault-token"] == cert_token
                     for request in cert_secret_reads
                 ), cert_secret_reads
+                assert client_cert_der in presented_certs, presented_certs
 
                 deleted: Final = candidate.request("DELETE", "/config_overrides/hashicorp_vault")
                 assert deleted.status_code == 200, deleted.text
@@ -998,6 +1028,7 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
                     "status": "success",
                 }, deleted.text
                 vault_wire.drain()
+                vault_tls_wire.drain()
                 assert (
                     read_rows(
                         'SELECT config_type FROM "LiteLLM_ConfigOverrides" WHERE config_type = %s',
@@ -1024,6 +1055,8 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
                 )
                 after_delete_requests: Final = vault_wire.drain()
                 assert after_delete_requests == (), after_delete_requests
+                after_delete_tls_requests: Final = vault_tls_wire.drain()
+                assert after_delete_tls_requests == (), after_delete_tls_requests
 
             provider_requests: Final = provider_wire.drain()
             assert tuple((request.method, request.target) for request in provider_requests) == (
