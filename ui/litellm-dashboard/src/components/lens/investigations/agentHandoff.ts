@@ -1,6 +1,5 @@
 const shellQuote = (value: string): string => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 
-/** A credential-free handoff using the same scoped read endpoints as the investigation UI. */
 export function investigationHandoffText(
   baseUrl: string,
   lensId: string,
