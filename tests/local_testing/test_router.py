@@ -5,30 +5,26 @@ import asyncio
 import os
 import time
 import traceback
-
-import openai
-import pytest
-
-import litellm.types
-import litellm.types.router
-
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import httpx
+import openai
+import pytest
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
 import litellm
+import litellm.types
+import litellm.types.router
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
-from litellm.types.router import ModelInfo
 from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments,
     get_cooldown_deployments,
 )
-from litellm.types.router import DeploymentTypedDict
-
+from litellm.types.router import DeploymentTypedDict, ModelInfo
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 load_dotenv()

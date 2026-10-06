@@ -1,7 +1,6 @@
-from base_llm_unit_tests import BaseLLMChatTest
 import pytest
-import litellm
 
+import litellm
 
 # Test implementations
 
@@ -37,9 +36,10 @@ async def test_deepseek_provider_async_completion(stream):
     """
     Test that Deepseek provider requests are formatted correctly with the proper parameters
     """
-    import litellm
     import json
-    from unittest.mock import patch, AsyncMock, MagicMock
+    from unittest.mock import MagicMock, patch
+
+    import litellm
     from litellm import acompletion
 
     litellm.turn_on_debug()

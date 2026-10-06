@@ -1,29 +1,40 @@
 import asyncio
 import copy
+import importlib
 import json
+import logging
+import os
 import re
 import sys
 import textwrap
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections import defaultdict
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import boto3
 import httpx
 import pytest
+import pytest_asyncio
 import respx
 
 import litellm
+import litellm as litellm_amazing_s3
+from litellm._logging import verbose_logger
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.s3_v2 import S3BatchUploadError, S3Logger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 from litellm.types.utils import StandardLoggingPayload
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 _real_sleep: Final = asyncio.sleep
 _NOW: Final = 1_000_000.0
@@ -1227,8 +1238,15 @@ async def test_strip_base64_recursive_redaction():
 # Shared fixture that silences asyncio.create_task during tests
 # --------------------------------------------------------------
 @pytest.fixture(autouse=True)
-def patch_asyncio_create_task():
+def patch_asyncio_create_task(request):
     """Prevent 'no running event loop' errors when S3Logger calls asyncio.create_task()."""
+    if request.node.originalname in {
+        "test_basic_s3_logging",
+        "test_basic_s3_v2_logging",
+        "test_basic_s3_v2_logging_failure",
+    }:
+        yield
+        return
     with patch("asyncio.create_task"):
         yield
 
@@ -5117,9 +5135,7 @@ async def test_repeated_failure_notifications_upload_once(
     )
 
     if concurrent:
-        await asyncio.gather(
-            *(logging_obj.async_failure_handler(error, "synthetic traceback") for _ in range(3))
-        )
+        await asyncio.gather(*(logging_obj.async_failure_handler(error, "synthetic traceback") for _ in range(3)))
     else:
         for _ in range(3):
             await logging_obj.async_failure_handler(error, "synthetic traceback")
@@ -5129,3 +5145,365 @@ async def test_repeated_failure_notifications_upload_once(
     await sink.async_send_batch()
     await asyncio.sleep(0)
     assert upload.await_count == 1
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def drain_logging_worker(isolate_litellm_state: None) -> AsyncIterator[None]:
+    yield
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+
+
+LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
+
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm state to the true defaults captured at conftest import time,
+    then restores after the test. This prevents module-level mutations (e.g.
+    `litellm.num_retries = 3` at the top of test_langfuse_e2e_test.py) from
+    leaking across tests within the same xdist worker.
+    """
+    from litellm.litellm_core_utils import litellm_logging as ll_logging
+    from litellm.proxy.management_helpers import audit_logs as ll_audit_logs
+
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
+    yield
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
+
+
+_LIST_ATTRS = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+    "service_callback",
+    "pre_call_rules",
+    "post_call_rules",
+)
+
+_SCALAR_ATTRS = (
+    "set_verbose",
+    "cache",
+    "num_retries",
+    "num_retries_per_request",
+    "turn_off_message_logging",
+    "redact_messages_in_exceptions",
+    "redact_user_api_key_info",
+    "s3_callback_params",
+    "s3_audit_callback_params",
+    "datadog_params",
+    "vector_store_registry",
+)
+
+_DEFAULTS: dict = {}
+
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception:
+            pass
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+
+litellm_amazing_s3.num_retries = 3
+
+
+class _FakeS3Paginator:
+    def __init__(self, objects):
+        self.objects = objects
+
+    def paginate(self, Bucket):
+        keys = sorted(self.objects[Bucket])
+        if not keys:
+            return [{}]
+        return [{"Contents": [{"Key": key} for key in keys]}]
+
+
+class _FakeS3Client:
+    def __init__(self):
+        self.objects = defaultdict(dict)
+
+    def clear(self):
+        self.objects.clear()
+
+    def put_object(self, Bucket, Key, Body, **_kwargs):
+        self.objects[Bucket][Key] = Body
+        return {"ResponseMetadata": {"HTTPStatusCode": 200}}
+
+    def delete_object(self, Bucket, Key):
+        self.objects[Bucket].pop(Key, None)
+        return {"ResponseMetadata": {"HTTPStatusCode": 204}}
+
+    def get_paginator(self, name):
+        assert name == "list_objects_v2"
+        return _FakeS3Paginator(self.objects)
+
+    def list_objects(self, Bucket):
+        keys = sorted(self.objects[Bucket])
+        return {"Contents": [{"Key": key, "LastModified": 0} for key in keys]}
+
+
+_FAKE_S3_CLIENT = _FakeS3Client()
+
+
+@pytest.fixture
+def fake_s3_client(monkeypatch):
+    _FAKE_S3_CLIENT.clear()
+
+    def fake_boto3_client(service_name, *args, **kwargs):
+        assert service_name == "s3"
+        return _FAKE_S3_CLIENT
+
+    monkeypatch.setattr(boto3, "client", fake_boto3_client)
+    litellm_amazing_s3.success_callback = []
+    litellm_amazing_s3.callbacks = []
+    yield _FAKE_S3_CLIENT
+    litellm_amazing_s3.success_callback = []
+    litellm_amazing_s3.callbacks = []
+
+
+@pytest.mark.usefixtures(
+    "fake_s3_client", "_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown"
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode,streaming", [(True, True), (True, False), (False, True), (False, False)])
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_basic_s3_logging(sync_mode, streaming):
+    verbose_logger.setLevel(level=logging.DEBUG)
+    litellm_amazing_s3.success_callback = ["s3"]
+    litellm_amazing_s3.s3_callback_params = {
+        "s3_bucket_name": "load-testing-oct",
+        "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
+        "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
+        "s3_region_name": "us-west-2",
+    }
+    litellm_amazing_s3.set_verbose = True
+    response_id = None
+    if sync_mode is True:
+        response = litellm_amazing_s3.completion(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "This is a test"}],
+            mock_response="It's simple to use and easy to get started",
+            stream=streaming,
+        )
+        if streaming:
+            for chunk in response:
+                response_id = chunk.id
+        else:
+            response_id = response.id
+        time.sleep(2)
+    else:
+        response = await litellm_amazing_s3.acompletion(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "This is a test"}],
+            mock_response="It's simple to use and easy to get started",
+            stream=streaming,
+        )
+        if streaming:
+            async for chunk in response:
+                response_id = chunk.id
+        else:
+            response_id = response.id
+        await asyncio.sleep(2)
+
+    total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct")
+
+    assert any(response_id in key for key in all_s3_keys)
+    s3 = boto3.client("s3")
+    for key in all_s3_keys:
+        s3.delete_object(Bucket="load-testing-oct", Key=key)
+
+
+@pytest.mark.usefixtures(
+    "fake_s3_client", "_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown"
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [True])
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_basic_s3_v2_logging(streaming):
+    from litellm.integrations.s3_v2 import S3Logger
+
+    litellm_amazing_s3.s3_callback_params = {
+        "s3_bucket_name": "load-testing-oct",
+        "s3_aws_secret_access_key": "test-secret",
+        "s3_aws_access_key_id": "test-key",
+        "s3_region_name": "us-west-2",
+    }
+
+    s3_v2_logger = S3Logger(s3_flush_interval=1)
+    litellm_amazing_s3.callbacks = [s3_v2_logger]
+
+    uploaded_keys: list = []
+
+    async def mock_upload(batch_logging_element):
+        uploaded_keys.append(batch_logging_element.s3_object_key)
+
+    s3_v2_logger.async_upload_data_to_s3 = mock_upload
+
+    litellm_amazing_s3.set_verbose = True
+    response_id = None
+    response = await litellm_amazing_s3.acompletion(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "This is a test"}],
+        mock_response="It's simple to use and easy to get started",
+        stream=streaming,
+    )
+    if streaming:
+        async for chunk in response:
+            response_id = chunk.id
+    else:
+        response_id = response.id
+
+    await asyncio.sleep(5)
+
+    assert len(uploaded_keys) > 0, "S3 upload was never called"
+    assert any(response_id in key for key in uploaded_keys), (
+        f"Expected response_id={response_id} in one of the uploaded S3 keys: {uploaded_keys}"
+    )
+
+
+@pytest.mark.usefixtures(
+    "fake_s3_client", "_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown"
+)
+@pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_basic_s3_v2_logging_failure():
+    """Test that S3 v2 logger makes httpx PUT request when logging failures"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.integrations.s3_v2 import S3Logger
+
+    s3_v2_logger = S3Logger(s3_flush_interval=1)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+
+    s3_v2_logger.async_httpx_client = AsyncMock()
+    s3_v2_logger.async_httpx_client.put.return_value = mock_response
+
+    upload_called = False
+
+    async def mock_upload(batch_logging_element):
+        nonlocal upload_called
+        upload_called = True
+        url = f"https://test-bucket.s3.us-west-2.amazonaws.com/{batch_logging_element.s3_object_key}"
+        headers = {"Content-Type": "application/json"}
+        data = '{"model": "gpt-5-mini"}'
+
+        await s3_v2_logger.async_httpx_client.put(url=url, headers=headers, data=data)
+
+    s3_v2_logger.async_upload_data_to_s3 = mock_upload
+
+    litellm_amazing_s3.callbacks = [s3_v2_logger]
+    litellm_amazing_s3.s3_callback_params = {
+        "s3_bucket_name": "test-bucket",
+        "s3_aws_secret_access_key": "test-secret",
+        "s3_aws_access_key_id": "test-key",
+        "s3_region_name": "us-west-2",
+    }
+    litellm_amazing_s3.set_verbose = True
+
+    try:
+        await litellm_amazing_s3.acompletion(
+            model="gpt-5-mini",
+            api_key="invalid-api-key",
+            messages=[{"role": "user", "content": "This is a test"}],
+            mock_response=Exception("forced failure for S3 logging test"),
+        )
+    except Exception:
+        pass
+
+    await asyncio.sleep(5)
+
+    assert upload_called, "S3 upload method was not called"
+
+    s3_v2_logger.async_httpx_client.put.assert_called()
+
+    call_args = s3_v2_logger.async_httpx_client.put.call_args
+    assert call_args is not None
+    url = call_args[1]["url"] if "url" in call_args[1] else call_args[0][0]
+
+    assert "test-bucket.s3.us-west-2.amazonaws.com" in url
+
+    headers = call_args[1]["headers"]
+    assert headers["Content-Type"] == "application/json"
+
+    data = call_args[1]["data"]
+    assert data is not None
+    assert '"model": "gpt-5-mini"' in data
+
+
+def list_all_s3_objects(bucket_name):
+    s3 = boto3.client("s3")
+
+    all_s3_keys = []
+
+    paginator = s3.get_paginator("list_objects_v2")
+    total_objects = 0
+
+    for page in paginator.paginate(Bucket=bucket_name):
+        if "Contents" in page:
+            total_objects += len(page["Contents"])
+            all_s3_keys.extend([obj["Key"] for obj in page["Contents"]])
+
+    return total_objects, all_s3_keys
+
+
+class TestS3Logger(S3Logger):
+    def __init__(self, *args, **kwargs):
+        self.recorded_requests = {}
+        self.logged_standard_logging_payload = None
+        super().__init__(*args, **kwargs)
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.recorded_requests[response_obj["id"]] = start_time
+        self.logged_standard_logging_payload = kwargs["standard_logging_object"]
+        return await super().async_log_success_event(kwargs, response_obj, start_time, end_time)

@@ -1,14 +1,10 @@
 import json
 import os
-import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-
-
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -16,10 +12,9 @@ import pytest
 from openai import OpenAI
 
 import litellm
-from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm import Timeout, completion, completion_cost
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
-
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 # litellm.num_retries=3
@@ -66,7 +61,6 @@ def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
         ],
         "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
     }
-    from openai import OpenAI
     from openai.types.chat.chat_completion import ChatCompletion
 
     pydantic_obj = ChatCompletion(**response_object)  # type: ignore
@@ -1496,9 +1490,7 @@ def test_completion_azure_extra_headers():
     # If you want to remove it, speak to Ishaan!
     # Ishaan will be very disappointed if this test is removed -> this is a standard way to pass api_key + the router + proxy use this
     from httpx import Client
-    from openai import AzureOpenAI
 
-    from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 
     http_client = Client()
 
@@ -1750,7 +1742,6 @@ def test_completion_azure_with_litellm_key():
         pytest.fail(f"Error occurred: {e}")
 
 
-import asyncio
 
 
 
@@ -1879,9 +1870,11 @@ def test_bedrock_deepseek_known_tokenizer_config(monkeypatch):
     model = (
         "deepseek_r1/arn:aws:bedrock:us-west-2:888602223428:imported-model/bnnr6463ejgf"
     )
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from unittest.mock import Mock
+
     import httpx
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     monkeypatch.setenv("AWS_REGION", "us-east-1")
 
@@ -2308,10 +2301,10 @@ def test_petals():
 def test_completion_deep_infra(drop_params):
     """Test that DeepInfra requests are shaped correctly without making real API calls."""
     from unittest.mock import MagicMock, patch
-    from openai import OpenAI
+
+    import httpx
     from openai.types.chat import ChatCompletion, ChatCompletionMessage
     from openai.types.chat.chat_completion import Choice
-    import httpx
 
     litellm.set_verbose = False
     model_name = "deepinfra/meta-llama/Llama-2-70b-chat-hf"
@@ -2418,9 +2411,10 @@ def test_completion_deep_infra(drop_params):
 def test_completion_deep_infra_mistral():
     """Test that DeepInfra Mistral requests are shaped correctly without making real API calls."""
     from unittest.mock import MagicMock, patch
+
+    import httpx
     from openai.types.chat import ChatCompletion, ChatCompletionMessage
     from openai.types.chat.chat_completion import Choice
-    import httpx
 
     model_name = "deepinfra/mistralai/Mistral-7B-Instruct-v0.1"
 
@@ -2767,7 +2761,6 @@ def _openai_hallucinated_tool_call_mock_response(
         ],
         "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
     }
-    from openai import OpenAI
     from openai.types.chat.chat_completion import ChatCompletion
 
     pydantic_obj = ChatCompletion(**response_object)  # type: ignore
@@ -2860,8 +2853,8 @@ def test_openai_hallucinated_tool_call_util(function_name, expect_modification):
         - get function name from recipient_name value
         - parameters will be JSON object for function arguments
     """
-    from litellm.utils import _handle_invalid_parallel_tool_calls
     from litellm.types.utils import ChatCompletionMessageToolCall
+    from litellm.utils import _handle_invalid_parallel_tool_calls
 
     response = _handle_invalid_parallel_tool_calls(
         tool_calls=[

@@ -1,24 +1,31 @@
+import asyncio
 import base64
+import importlib
 import json
 import logging
 import os
 import re
+import uuid
+from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+from dotenv import load_dotenv
 
 import litellm
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
+    THOUGHT_SIGNATURE_SEPARATOR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
-    _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
-    _sanitize_anthropic_tool_use_id,
     _convert_to_bedrock_tool_call_result,
+    _rename_duplicate_bedrock_document_names,
+    _sanitize_anthropic_tool_use_id,
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
@@ -32,7 +39,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     sanitize_messages_for_tool_calling,
 )
 from litellm.types.llms.openai import ChatCompletionToolMessage
-from litellm.utils import validate_and_fix_openai_messages
+from litellm.utils import Rules, _invalidate_model_cost_lowercase_map, function_setup, validate_and_fix_openai_messages
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 def test_function_call_prompt_preserves_append_failure_for_non_string_content() -> None:
@@ -385,7 +394,7 @@ def test_convert_to_azure_openai_messages_strips_litellm_format_from_file_and_im
 
 
 def test_bedrock_validate_format_image_or_video():
-    """Test the _validate_format method for images, videos, and documents"""
+    """Test the validate_format method for images, videos, and documents"""
 
     # Test valid image formats
     valid_image_formats = ["png", "jpeg", "gif", "webp"]
@@ -1987,8 +1996,8 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     This test creates a schema with multiple nested $defs that reference each other
     to verify the fix prevents memory explosion while still correctly resolving refs.
     """
-    import sys
     import copy
+    import sys
 
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 
@@ -4205,7 +4214,9 @@ def test_bedrock_converse_messages_pt_user_message_without_content_adds_no_block
 
     assert _bedrock_converse_messages_pt(
         messages=with_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
-    ) == _bedrock_converse_messages_pt(messages=without_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock")
+    ) == _bedrock_converse_messages_pt(
+        messages=without_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
+    )
 
 
 @pytest.mark.asyncio
@@ -4327,3 +4338,354 @@ def test_bedrock_converse_messages_pt_lone_content_less_user_turn_adds_no_block_
         )
         == []
     )
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+@pytest.fixture(scope="session")
+def fake_openai_endpoint():
+    ensure_fake_openai_endpoint()
+    yield
+
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm globals to their true defaults before each test and
+    restores them afterward, so tests don't leak side effects.
+    Works safely under pytest-xdist parallel execution.
+    """
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in ("pre_call_rules", "post_call_rules"):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "pre_call_rules",
+        "post_call_rules",
+    ):
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
+    for attr, default_val in _SCALAR_DEFAULTS.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, default_val)
+    yield
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    _invalidate_model_cost_lowercase_map()
+
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
+    "request_timeout": getattr(litellm, "request_timeout", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "default_fallbacks": getattr(litellm, "default_fallbacks", None),
+    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
+    "tag_budget_config": getattr(litellm, "tag_budget_config", None),
+    "model_cost": getattr(litellm, "model_cost", None),
+    "token_counter": getattr(litellm, "token_counter", None),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+}
+
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception as e:
+            print(f"Error reloading litellm.proxy.proxy_server: {e}")
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+
+#### What this tests ####
+#  Allow the user to map the function to the prompt, if the model doesn't support function calling
+
+
+## case 1: set_function_to_prompt not set
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+def test_function_call_non_openai_model():
+    try:
+        model = "claude-3-5-haiku-20241022"
+        messages = [{"role": "user", "content": "what's the weather in sf?"}]
+        functions = [
+            {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            }
+        ]
+        response = litellm.completion(model=model, messages=messages, functions=functions)
+        pytest.fail(f"An error occurred")
+    except Exception as e:
+        print(e)
+        pass
+
+
+# test_function_call_non_openai_model()
+
+# test_function_call_non_openai_model_litellm_mod_set()
+
+
+# What is this?
+## Unit tests for the 'function_setup()' function
+
+load_dotenv()
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+def test_empty_content():
+    """
+    Make a chat completions request with empty content -> expect this to work
+    """
+    rules_obj = Rules()
+
+    def completion():
+        pass
+
+    function_setup(
+        original_function="completion",
+        rules_obj=rules_obj,
+        start_time=datetime.now(),
+        messages=[],
+        litellm_call_id=str(uuid.uuid4()),
+    )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+def test_thought_signature_removal_for_non_gemini():
+    """
+    Test that thought signatures are removed from tool call IDs when sending to non-Gemini models
+    """
+    rules_obj = Rules()
+
+    # Create messages with thought signatures (as would come from Gemini)
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": f"call_123{THOUGHT_SIGNATURE_SEPARATOR}sig1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "SF"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": f"call_123{THOUGHT_SIGNATURE_SEPARATOR}sig1",
+            "content": "Sunny, 72°F",
+        },
+    ]
+
+    # Call function_setup with OpenAI model (non-Gemini)
+    logging_obj, kwargs = function_setup(
+        original_function="acompletion",
+        rules_obj=rules_obj,
+        start_time=datetime.now(),
+        model="gpt-4",
+        messages=messages,
+        litellm_call_id=str(uuid.uuid4()),
+        custom_llm_provider="openai",
+    )
+
+    # Verify thought signatures were removed
+    processed_messages = kwargs["messages"]
+    assert processed_messages[1]["tool_calls"][0]["id"] == "call_123"
+    assert processed_messages[2]["tool_call_id"] == "call_123"
+    assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[1]["tool_calls"][0]["id"]
+    assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[2]["tool_call_id"]
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+def test_thought_signature_preserved_for_gemini():
+    """
+    Test that thought signatures are preserved when sending to Gemini models
+    """
+    rules_obj = Rules()
+
+    # Create messages with thought signatures
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": f"call_456{THOUGHT_SIGNATURE_SEPARATOR}sig2",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": f"call_456{THOUGHT_SIGNATURE_SEPARATOR}sig2",
+            "content": "Rainy, 65°F",
+        },
+    ]
+
+    # Call function_setup with Gemini model
+    logging_obj, kwargs = function_setup(
+        original_function="acompletion",
+        rules_obj=rules_obj,
+        start_time=datetime.now(),
+        model="gemini-1.5-pro",
+        messages=messages,
+        litellm_call_id=str(uuid.uuid4()),
+        custom_llm_provider="vertex_ai",
+    )
+
+    # Verify thought signatures were preserved (messages should be unchanged)
+    processed_messages = kwargs["messages"]
+    assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[1]["tool_calls"][0]["id"]
+    assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[2]["tool_call_id"]
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+def test_thought_signature_removal_with_multiple_tool_calls():
+    """
+    Test that thought signatures are removed from multiple tool calls
+    """
+    rules_obj = Rules()
+
+    messages = [
+        {"role": "user", "content": "Get weather and time"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}sig1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{}"},
+                },
+                {
+                    "id": f"call_2{THOUGHT_SIGNATURE_SEPARATOR}sig2",
+                    "type": "function",
+                    "function": {"name": "get_time", "arguments": "{}"},
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}sig1",
+            "content": "Sunny",
+        },
+        {
+            "role": "tool",
+            "tool_call_id": f"call_2{THOUGHT_SIGNATURE_SEPARATOR}sig2",
+            "content": "3:00 PM",
+        },
+    ]
+
+    logging_obj, kwargs = function_setup(
+        original_function="acompletion",
+        rules_obj=rules_obj,
+        start_time=datetime.now(),
+        model="claude-3-opus",
+        messages=messages,
+        litellm_call_id=str(uuid.uuid4()),
+        custom_llm_provider="anthropic",
+    )
+
+    processed_messages = kwargs["messages"]
+
+    # Check all tool call IDs are cleaned
+    assert processed_messages[1]["tool_calls"][0]["id"] == "call_1"
+    assert processed_messages[1]["tool_calls"][1]["id"] == "call_2"
+    assert processed_messages[2]["tool_call_id"] == "call_1"
+    assert processed_messages[3]["tool_call_id"] == "call_2"
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+def test_messages_without_tool_calls_unchanged():
+    """
+    Test that messages without tool calls pass through unchanged
+    """
+    rules_obj = Rules()
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there!"},
+    ]
+
+    logging_obj, kwargs = function_setup(
+        original_function="acompletion",
+        rules_obj=rules_obj,
+        start_time=datetime.now(),
+        model="gpt-4",
+        messages=messages,
+        litellm_call_id=str(uuid.uuid4()),
+        custom_llm_provider="openai",
+    )
+
+    # Messages should be unchanged
+    assert kwargs["messages"] == messages

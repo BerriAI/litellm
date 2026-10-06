@@ -7,7 +7,6 @@ import traceback
 
 import pytest
 
-
 import litellm
 from litellm import completion, embedding
 from litellm.integrations.custom_logger import CustomLogger

@@ -1,19 +1,26 @@
+# Adds the grandparent directory to sys.path to allow importing project modules
+import asyncio
+import datetime
+import importlib
 import json
+import logging
+import os
+from collections.abc import Callable
 from typing import Optional
 from unittest.mock import MagicMock, Mock, patch
 
-# Adds the grandparent directory to sys.path to allow importing project modules
-
-import asyncio
-import datetime
-from collections.abc import Callable
-
 import pytest
+from dotenv import load_dotenv
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import litellm
-from litellm.integrations.arize.arize import ArizeLogger
+from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm.integrations.arize.arize import ArizeConfig, ArizeLogger
 from litellm.integrations.opentelemetry import OpenTelemetryConfig
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.utils import _invalidate_model_cost_lowercase_map
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 @pytest.mark.asyncio
@@ -63,7 +70,6 @@ async def test_arize_dynamic_params():
     await asyncio.sleep(5)
 
     # Assertions
-    print(f"Tracer calls: {len(tracer_calls)}")
 
     # We should have captured calls for both requests
     assert len(tracer_calls) >= 2, f"Expected at least 2 tracer calls, got {len(tracer_calls)}"
@@ -284,3 +290,171 @@ async def test_a_sampling_rate_that_is_not_a_scalar_exports_rather_than_dropping
     kwargs = _arize_kwargs({"arize_success_sampling_rate": ["0.0"]})
     await logger.async_log_success_event(kwargs, None, _START, _END)
     assert _request_spans(exporter) == 1
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+@pytest.fixture(scope="session")
+def fake_openai_endpoint():
+    ensure_fake_openai_endpoint()
+    yield
+
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm globals to their true defaults before each test and
+    restores them afterward, so tests don't leak side effects.
+    Works safely under pytest-xdist parallel execution.
+    """
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in ("pre_call_rules", "post_call_rules"):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "pre_call_rules",
+        "post_call_rules",
+    ):
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
+    for attr, default_val in _SCALAR_DEFAULTS.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, default_val)
+    yield
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    _invalidate_model_cost_lowercase_map()
+
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
+    "request_timeout": getattr(litellm, "request_timeout", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "default_fallbacks": getattr(litellm, "default_fallbacks", None),
+    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
+    "tag_budget_config": getattr(litellm, "tag_budget_config", None),
+    "model_cost": getattr(litellm, "model_cost", None),
+    "token_counter": getattr(litellm, "token_counter", None),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+}
+
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception as e:
+            print(f"Error reloading litellm.proxy.proxy_server: {e}")
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+
+load_dotenv()
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio()
+async def test_async_otel_callback():
+    litellm.set_verbose = True
+
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    verbose_logger.setLevel(logging.DEBUG)
+    litellm.success_callback = ["arize"]
+
+    await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi test from local arize"}],
+        mock_response="hello",
+        temperature=0.1,
+        user="OTEL_USER",
+    )
+
+    await asyncio.sleep(2)
+
+
+@pytest.fixture
+def mock_env_vars(monkeypatch):
+    monkeypatch.setenv("ARIZE_SPACE_KEY", "test_space_key")
+    monkeypatch.setenv("ARIZE_API_KEY", "test_api_key")
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+def test_get_arize_config(mock_env_vars):
+    """
+    Use Arize default endpoint when no endpoints are provided
+    """
+    config = ArizeLogger.get_arize_config()
+    assert isinstance(config, ArizeConfig)
+    assert config.space_key == "test_space_key"
+    assert config.api_key == "test_api_key"
+    assert config.endpoint == "https://otlp.arize.com/v1"
+    assert config.protocol == "otlp_grpc"
+    assert config.project_name is None
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+def test_get_arize_config_with_endpoints(mock_env_vars, monkeypatch):
+    """
+    Use provided endpoints when they are set
+    """
+    monkeypatch.setenv("ARIZE_ENDPOINT", "grpc://test.endpoint")
+    monkeypatch.setenv("ARIZE_HTTP_ENDPOINT", "http://test.endpoint")
+    monkeypatch.setenv("ARIZE_PROJECT_NAME", "custom-project")
+
+    config = ArizeLogger.get_arize_config()
+    assert config.endpoint == "grpc://test.endpoint"
+    assert config.protocol == "otlp_grpc"
+    assert config.project_name == "custom-project"

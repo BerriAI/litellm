@@ -7,18 +7,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import io
-from typing import Optional, Dict
-
-
+from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
-from litellm.types.rerank import RerankResponse
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.rerank import RerankResponse
 
 
 def assert_response_shape(response, custom_llm_provider):

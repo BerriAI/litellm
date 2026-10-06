@@ -11,12 +11,11 @@ Run with: pytest tests/llm_translation/interactions/test_google_interactions_int
 import asyncio
 import os
 
+import openai
 import pytest
-
 
 import litellm
 import litellm.interactions as interactions
-import openai
 
 # Test API key - should be set in environment
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")

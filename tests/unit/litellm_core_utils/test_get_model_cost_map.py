@@ -4,13 +4,18 @@ count actual model entries, not reserved meta keys) and the extraction of the
 ``fallback_generalizations`` block out of the raw map.
 """
 
+import asyncio
+import importlib
+import importlib.resources as importlib_get_model
 import json
 import os
 import sys
 import threading
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
     match_capability_generalizations,
@@ -25,6 +30,10 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     get_model_cost_map_provenance,
     git_blob_id,
 )
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.utils import _invalidate_model_cost_lowercase_map
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 def _load_root_cost_map() -> dict:
@@ -734,3 +743,477 @@ def test_boot_load_skips_remote_fetch_for_cli_processes(
         assert source["source"] == "local"
     else:
         assert source["source"] == "remote"
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+@pytest.fixture(scope="session")
+def event_loop():
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest.fixture(scope="session")
+def fake_openai_endpoint():
+    ensure_fake_openai_endpoint()
+    yield
+
+
+@pytest.fixture(scope="function")
+def setup_and_teardown(event_loop):
+    import litellm
+
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    importlib.reload(litellm)
+    asyncio.set_event_loop(event_loop)
+    yield
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    pending = asyncio.all_tasks(event_loop)
+    for task in pending:
+        task.cancel()
+    if pending:
+        event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+    "cohere_key": getattr(litellm, "cohere_key", None),
+}
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+class TestCheckIsValidDict:
+    """Unit tests for _check_is_valid_dict."""
+
+    def test_should_reject_non_dict(self):
+        """Non-dict should fail."""
+        assert GetModelCostMap._check_is_valid_dict("not a dict") is False
+
+    def test_should_reject_empty_dict(self):
+        """Empty dict should fail."""
+        assert GetModelCostMap._check_is_valid_dict({}) is False
+
+    def test_should_reject_list(self):
+        """List should fail."""
+        assert GetModelCostMap._check_is_valid_dict([1, 2, 3]) is False
+
+    def test_should_reject_none(self):
+        """None should fail."""
+        assert GetModelCostMap._check_is_valid_dict(None) is False
+
+    def test_should_accept_non_empty_dict(self):
+        """Non-empty dict should pass."""
+        assert GetModelCostMap._check_is_valid_dict({"model": {}}) is True
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+class TestCheckModelCountNotReduced:
+    """Unit tests for _check_model_count_not_reduced."""
+
+    def test_should_reject_too_few_models(self):
+        """Fetched map with fewer models than min_model_count should fail."""
+        small_map = {f"model-{i}": {} for i in range(5)}
+        assert (
+            GetModelCostMap._check_model_count_not_reduced(
+                fetched_map=small_map, backup_model_count=0, min_model_count=10
+            )
+            is False
+        )
+
+    def test_should_reject_significant_shrinkage(self):
+        """Fetched map that shrunk >50% vs backup should fail."""
+        fetched = {f"model-{i}": {} for i in range(40)}  # 40% of 100
+        assert (
+            GetModelCostMap._check_model_count_not_reduced(
+                fetched_map=fetched, backup_model_count=100, min_model_count=10
+            )
+            is False
+        )
+
+    def test_should_accept_when_above_threshold(self):
+        """Fetched map at 60% of backup (above 50% threshold) should pass."""
+        fetched = {f"model-{i}": {} for i in range(60)}
+        assert (
+            GetModelCostMap._check_model_count_not_reduced(
+                fetched_map=fetched, backup_model_count=100, min_model_count=10
+            )
+            is True
+        )
+
+    def test_should_accept_growth(self):
+        """Fetched map larger than backup should pass."""
+        fetched = {f"model-{i}": {} for i in range(120)}
+        assert (
+            GetModelCostMap._check_model_count_not_reduced(
+                fetched_map=fetched, backup_model_count=100, min_model_count=10
+            )
+            is True
+        )
+
+    def test_should_accept_with_empty_backup(self):
+        """When backup is empty, only min_model_count matters."""
+        fetched = {f"model-{i}": {} for i in range(15)}
+        assert (
+            GetModelCostMap._check_model_count_not_reduced(
+                fetched_map=fetched, backup_model_count=0, min_model_count=10
+            )
+            is True
+        )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+class TestValidateModelCostMap:
+    """Unit tests for validate_model_cost_map (combines both checks)."""
+
+    def test_should_reject_non_dict(self):
+        """Non-dict should fail at check 1."""
+        assert GetModelCostMap.validate_model_cost_map(fetched_map="not a dict", backup_model_count=0) is False
+
+    def test_should_reject_empty_map(self):
+        """Empty dict should fail at check 1."""
+        assert GetModelCostMap.validate_model_cost_map(fetched_map={}, backup_model_count=0) is False
+
+    def test_should_reject_significant_shrinkage(self):
+        """Should fail at check 2 (shrinkage)."""
+        fetched = {f"model-{i}": {} for i in range(40)}
+        assert (
+            GetModelCostMap.validate_model_cost_map(fetched_map=fetched, backup_model_count=100, min_model_count=10)
+            is False
+        )
+
+    def test_should_accept_valid_map(self):
+        """Should pass both checks."""
+        fetched = {f"model-{i}": {} for i in range(120)}
+        assert (
+            GetModelCostMap.validate_model_cost_map(fetched_map=fetched, backup_model_count=100, min_model_count=10)
+            is True
+        )
+
+    def test_should_accept_equal_size_map(self):
+        """Equal size should pass both checks."""
+        fetched = {f"model-{i}": {} for i in range(100)}
+        assert (
+            GetModelCostMap.validate_model_cost_map(fetched_map=fetched, backup_model_count=100, min_model_count=10)
+            is True
+        )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+class TestGetModelCostMapFallback:
+    """Tests for get_model_cost_map fallback behavior with bad upstream."""
+
+    def test_should_fallback_to_backup_on_invalid_json(self):
+        """When upstream returns invalid JSON, should fall back to local backup."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.side_effect = json.JSONDecodeError("bad json", "", 0)
+
+        with patch("httpx.get", return_value=mock_response):
+            result = get_model_cost_map("https://fake-url.com/model_prices.json")
+
+        # Should have fallen back to backup — backup always has models
+        assert isinstance(result, dict)
+        assert len(result) > 0
+
+    def test_should_fallback_to_backup_on_network_error(self):
+        """When upstream is unreachable, should fall back to local backup."""
+        with patch(
+            "httpx.get",
+            side_effect=httpx.ConnectError(
+                "Connection refused",
+                request=httpx.Request("GET", "https://fake-url.com/model_prices.json"),
+            ),
+        ):
+            result = get_model_cost_map("https://fake-url.com/model_prices.json")
+
+        assert isinstance(result, dict)
+        assert len(result) > 0
+
+    def test_should_fallback_when_fetched_map_is_empty(self):
+        """When upstream returns valid JSON but empty dict, should fall back."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {}  # empty map
+
+        with patch("httpx.get", return_value=mock_response):
+            result = get_model_cost_map("https://fake-url.com/model_prices.json")
+
+        # Should have fallen back to backup since empty map fails validation
+        assert isinstance(result, dict)
+        assert len(result) > 0
+
+    def test_should_fallback_when_fetched_map_shrinks_dramatically(self):
+        """When upstream returns far fewer models than backup, should fall back."""
+        tiny_map = {f"model-{i}": {"litellm_provider": "test"} for i in range(11)}
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = tiny_map
+
+        with patch("httpx.get", return_value=mock_response):
+            result = get_model_cost_map("https://fake-url.com/model_prices.json")
+
+        # Backup has thousands of models; 11 is a massive shrinkage → fallback
+        assert len(result) > 11
+
+    def test_should_use_local_map_when_env_var_set(self):
+        """LITELLM_LOCAL_MODEL_COST_MAP=True should skip remote fetch entirely."""
+        with patch.dict(os.environ, {"LITELLM_LOCAL_MODEL_COST_MAP": "True"}):
+            with patch("httpx.get") as mock_get:
+                result = get_model_cost_map("https://fake-url.com/model_prices.json")
+                mock_get.assert_not_called()
+
+        assert isinstance(result, dict)
+        assert len(result) > 0
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+class TestBackupModelCostMapExists:
+    """Validates the local backup file is always present and valid."""
+
+    def test_should_have_backup_file(self):
+        """The backup model cost map must exist and be loadable."""
+        backup = GetModelCostMap.load_local_model_cost_map()
+        assert isinstance(backup, dict)
+        assert len(backup) > 0, "Backup model cost map is empty"
+
+    def test_should_have_minimum_models_in_backup(self):
+        """The backup must contain a reasonable number of models."""
+        backup = GetModelCostMap.load_local_model_cost_map()
+        assert len(backup) > 100, f"Backup has only {len(backup)} models, expected > 100"
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "setup_and_teardown")
+class TestBadHostedModelCostMap:
+    """
+    Simulates the hosted model cost map being bad (invalid JSON / corrupted).
+
+    When the hosted map is bad, get_model_cost_map() falls back to the local
+    backup. These tests verify that after fallback:
+    - get_model_info() still works for models in the backup
+    - litellm.completion() still works
+    """
+
+    def test_should_model_info_pass_after_bad_hosted_map(self):
+        """
+        If the hosted map is bad, get_model_cost_map falls back to the local
+        backup. get_model_info should still work for models in the backup.
+        """
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.side_effect = json.JSONDecodeError("bad json", "", 0)
+
+        with patch("httpx.get", return_value=mock_response):
+            fallback_map = get_model_cost_map("https://fake-url.com/bad.json")
+
+        original = litellm.model_cost
+        litellm.model_cost = fallback_map
+        try:
+            # gpt-4o is in every backup — should work fine
+            info = litellm.get_model_info("gpt-4o")
+            assert info is not None
+            assert info["input_cost_per_token"] > 0
+        finally:
+            litellm.model_cost = original
+
+    def test_should_completion_pass_after_bad_hosted_map(self):
+        """
+        If the hosted map is bad, litellm.completion() should still work.
+
+        Uses litellm's built-in mock_response param so the real completion
+        path is exercised (routing, cost calculator, logging) without
+        needing API credentials.
+        """
+        # Simulate bad hosted map → fallback to backup
+        mock_http = MagicMock()
+        mock_http.raise_for_status = MagicMock()
+        mock_http.json.side_effect = json.JSONDecodeError("bad json", "", 0)
+
+        with patch("httpx.get", return_value=mock_http):
+            fallback_map = get_model_cost_map("https://fake-url.com/bad.json")
+
+        original = litellm.model_cost
+        litellm.model_cost = fallback_map
+        try:
+            # mock_response goes through the real completion path —
+            # routing, cost calculator, logging — but skips the HTTP call
+            response = litellm.completion(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "say hi"}],
+                mock_response="hello from mock",
+            )
+            assert response is not None
+            assert response.choices[0].message.content == "hello from mock"
+        finally:
+            litellm.model_cost = original
+
+
+@pytest.fixture()
+def _vcr_outcome_gate_local_testing(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+@pytest.fixture(scope="session")
+def fake_openai_endpoint_local_testing():
+    ensure_fake_openai_endpoint()
+    yield
+
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm globals to their true defaults before each test and
+    restores them afterward, so tests don't leak side effects.
+    Works safely under pytest-xdist parallel execution.
+    """
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in ("pre_call_rules", "post_call_rules"):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS_local_testing:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "pre_call_rules",
+        "post_call_rules",
+    ):
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
+    for attr, default_val in _SCALAR_DEFAULTS_local_testing.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, default_val)
+    yield
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    _invalidate_model_cost_lowercase_map()
+
+
+_SCALAR_DEFAULTS_local_testing = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
+    "request_timeout": getattr(litellm, "request_timeout", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "default_fallbacks": getattr(litellm, "default_fallbacks", None),
+    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
+    "tag_budget_config": getattr(litellm, "tag_budget_config", None),
+    "model_cost": getattr(litellm, "model_cost", None),
+    "token_counter": getattr(litellm, "token_counter", None),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+}
+
+
+@pytest.fixture(scope="module")
+def setup_and_teardown_local_testing():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception:
+            pass
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+
+@pytest.mark.usefixtures(
+    "_vcr_outcome_gate_local_testing",
+    "fake_openai_endpoint_local_testing",
+    "isolate_litellm_state",
+    "setup_and_teardown_local_testing",
+)
+def test_get_model_cost_map():
+    try:
+        print(litellm.get_model_cost_map(url="fake-url"))
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {e}")
+
+
+@pytest.mark.usefixtures(
+    "_vcr_outcome_gate_local_testing",
+    "fake_openai_endpoint_local_testing",
+    "isolate_litellm_state",
+    "setup_and_teardown_local_testing",
+)
+def test_get_backup_model_cost_map():
+    with importlib_get_model.open_text("litellm", "model_prices_and_context_window_backup.json") as f:
+        print("inside backup")
+        content = json.load(f)
+        print("content", content)

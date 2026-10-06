@@ -1,21 +1,20 @@
 import json
 import os
-import traceback
 
 import httpx
-
 import openai
 import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-import litellm
-from litellm import completion, completion_cost, embedding
 from openai.types import CreateEmbeddingResponse
 from openai.types.create_embedding_response import Usage as EmbeddingUsage
+
+import litellm
+from litellm import completion_cost, embedding
 from tests.capturing_transport import CapturingTransport
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
@@ -939,7 +938,7 @@ def test_llamafile_embedding(monkeypatch):
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_lm_studio_embedding(monkeypatch, sync_mode):
     monkeypatch.setenv("LM_STUDIO_API_BASE", "http://localhost:8000")
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     client = HTTPHandler() if sync_mode else AsyncHTTPHandler()
     with patch.object(client, "post") as mock_post:
@@ -1034,7 +1033,7 @@ def test_cohere_img_embeddings(input, input_type):
 async def test_embedding_with_extra_headers(sync_mode):
 
     input = ["hello world"]
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     if sync_mode:
         client = HTTPHandler()

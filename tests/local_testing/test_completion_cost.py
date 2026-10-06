@@ -1,29 +1,28 @@
-import os
-import traceback
-
-import litellm.cost_calculator
-
 import asyncio
+import json
+import os
 import time
+import traceback
 from typing import Final, Optional
 from unittest.mock import MagicMock, patch
+
+import httpx
 import pytest
 
 import litellm
+import litellm.cost_calculator
 from litellm import (
     TranscriptionResponse,
     completion_cost,
     cost_per_token,
     model_cost,
 )
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
-import json
-import httpx
-from litellm.types.utils import PromptTokensDetails
 from litellm.litellm_core_utils.litellm_logging import CustomLogger
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.utils import PromptTokensDetails
 
 
 class CustomLoggingHandler(CustomLogger):
@@ -1126,8 +1125,8 @@ def test_completion_cost_vertex_llama3():
 
 
 def test_cost_openai_prompt_caching():
-    from litellm.utils import Choices, Message, ModelResponse, Usage
     from litellm import get_model_info
+    from litellm.utils import Choices, Message, ModelResponse, Usage
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -2103,9 +2102,8 @@ def test_completion_cost_params_2():
 
 
 def test_completion_cost_params_gemini_3():
-    from litellm.utils import Choices, Message, ModelResponse, Usage
-
     from litellm.llms.vertex_ai.cost_calculator import cost_per_character
+    from litellm.utils import Choices, Message, ModelResponse, Usage
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -2183,13 +2181,13 @@ async def test_test_completion_cost_gpt4o_audio_output_from_model(stream):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     from litellm.types.utils import (
+        ChatCompletionAudioResponse,
         Choices,
+        CompletionTokensDetailsWrapper,
         Message,
         ModelResponse,
-        Usage,
-        ChatCompletionAudioResponse,
-        CompletionTokensDetailsWrapper,
         PromptTokensDetailsWrapper,
+        Usage,
     )
 
     usage_object = Usage(

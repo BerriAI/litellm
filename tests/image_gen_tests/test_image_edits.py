@@ -1,20 +1,20 @@
+import asyncio
+import base64
+import json
 import logging
 import os
 import traceback
-import asyncio
-from typing import Optional
-import pytest
-import base64
-from io import BytesIO
-from unittest.mock import patch, AsyncMock
-import json
 from abc import ABC, abstractmethod
+from io import BytesIO
+from typing import Optional
+from unittest.mock import AsyncMock, patch
 
+import pytest
 
 import litellm
-from litellm.utils import ImageResponse
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
+from litellm.utils import ImageResponse
 
 # Configure pytest marks to avoid warnings
 pytestmark = pytest.mark.asyncio
@@ -199,7 +199,7 @@ async def test_openai_image_edit_litellm_router():
 @pytest.mark.asyncio
 async def test_openai_image_edit_with_bytesio():
     """Test image editing using BytesIO objects instead of file readers"""
-    from litellm import image_edit, aimage_edit
+    from litellm import aimage_edit, image_edit
 
     litellm.turn_on_debug()
     try:
@@ -346,7 +346,7 @@ async def test_azure_image_edit_litellm_sdk():
 @pytest.mark.asyncio
 async def test_openai_image_edit_cost_tracking():
     """Test OpenAI image edit cost tracking with custom logger"""
-    from litellm import image_edit, aimage_edit
+    from litellm import aimage_edit, image_edit
 
     test_custom_logger = TestCustomLogger()
     litellm.logging_callback_manager._reset_all_callbacks()
@@ -437,7 +437,7 @@ async def test_openai_image_edit_cost_tracking():
 @pytest.mark.asyncio
 async def test_azure_image_edit_cost_tracking():
     """Test Azure image edit cost tracking with custom logger"""
-    from litellm import image_edit, aimage_edit
+    from litellm import aimage_edit, image_edit
 
     test_custom_logger = TestCustomLogger()
     litellm.logging_callback_manager._reset_all_callbacks()

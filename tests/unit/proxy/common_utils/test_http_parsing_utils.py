@@ -1,19 +1,24 @@
+import asyncio
 import gzip
+import importlib
 import io
 import json
-from collections.abc import Mapping
+import os
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, Literal, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
+from fastapi import Request as Request_http_parsing
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
 from starlette.requests import Request
-
+from starlette.types import Message
 
 import litellm
 import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import (
     _is_form_content_type,
@@ -30,6 +35,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     populate_request_with_path_params,
     read_raw_json_body,
 )
+from litellm.utils import _invalidate_model_cost_lowercase_map
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.fake_openai_endpoint import ensure_fake_openai_endpoint
 
 
 def _starlette_request(
@@ -1417,3 +1425,171 @@ async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit(
     assert response.status_code == 413
     assert receive.await_count == 2
     storage.ingest.assert_not_awaited()
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+@pytest.fixture(scope="session")
+def fake_openai_endpoint():
+    ensure_fake_openai_endpoint()
+    yield
+
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm globals to their true defaults before each test and
+    restores them afterward, so tests don't leak side effects.
+    Works safely under pytest-xdist parallel execution.
+    """
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in ("pre_call_rules", "post_call_rules"):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "pre_call_rules",
+        "post_call_rules",
+    ):
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
+    for attr, default_val in _SCALAR_DEFAULTS.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, default_val)
+    yield
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    _invalidate_model_cost_lowercase_map()
+
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
+    "request_timeout": getattr(litellm, "request_timeout", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "default_fallbacks": getattr(litellm, "default_fallbacks", None),
+    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
+    "tag_budget_config": getattr(litellm, "tag_budget_config", None),
+    "model_cost": getattr(litellm, "model_cost", None),
+    "token_counter": getattr(litellm, "token_counter", None),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+}
+
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception:
+            pass
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+
+def _request(receive: Callable[[], Awaitable[Message]]) -> Request_http_parsing:
+    return Request_http_parsing(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+
+def _request_with_body(body: bytes) -> Request_http_parsing:
+    async def receive() -> Message:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return _request(receive)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_read_request_body_valid_json():
+    result = await _read_request_body(_request_with_body(b'{"key": "value"}'))
+    assert result == {"key": "value"}
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_read_request_body_empty_body():
+    result = await _read_request_body(_request_with_body(b""))
+    assert result == {}
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_read_request_body_invalid_json():
+    with pytest.raises(ProxyException):
+        await _read_request_body(_request_with_body(b'{"key": value}'))
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_read_request_body_large_payload():
+    large_payload = '{"key":' + '"a"' * 10**6 + "}"
+    with pytest.raises(ProxyException):
+        await _read_request_body(_request_with_body(large_payload.encode()))
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "fake_openai_endpoint", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_read_request_body_unexpected_error():
+    async def receive() -> Message:
+        raise ValueError("Unexpected error")
+
+    result = await _read_request_body(_request(receive))
+    assert result == {}

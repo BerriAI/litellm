@@ -2,16 +2,15 @@
 #    This tests the timeout decorator
 
 import os
-import traceback
-
 import time
-from litellm._uuid import uuid
+import traceback
 
 import httpx
 import openai
 import pytest
 
 import litellm
+from litellm._uuid import uuid
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 

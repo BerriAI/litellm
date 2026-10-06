@@ -4,26 +4,20 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import io
 
-from test_streaming import streaming_format_tests
 
-import asyncio
 import json
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch, ANY
-from respx import MockRouter
-import httpx
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from respx import MockRouter
 
 import litellm
 from litellm import (
-    RateLimitError,
-    Timeout,
     acompletion,
     completion,
-    completion_cost,
     embedding,
     image_generation,
 )
@@ -31,7 +25,6 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-
 
 litellm.num_retries = 3
 litellm.cache = None
@@ -905,8 +898,9 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
 
 @pytest.mark.asyncio
 async def test_anthropic_message_via_anthropic_messages():
+    from unittest.mock import AsyncMock
+
     from litellm.llms.custom_httpx.llm_http_handler import AsyncHTTPHandler
-    from unittest.mock import MagicMock, AsyncMock
 
     load_vertex_ai_credentials()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -2346,8 +2340,9 @@ def test_gemini_fine_tuned_model_request_consistency():
     """
     litellm.set_verbose = True
     load_vertex_ai_credentials()
+    from unittest.mock import MagicMock, patch
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
-    from unittest.mock import patch, MagicMock
 
     # Set up the messages
     messages = [

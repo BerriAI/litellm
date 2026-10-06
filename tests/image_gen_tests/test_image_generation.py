@@ -6,22 +6,22 @@ import os
 import traceback
 from unittest.mock import AsyncMock, MagicMock, patch
 
-
-
 from dotenv import load_dotenv
 from openai.types.image import Image
+
 from litellm.caching import InMemoryCache
 
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 import asyncio
+import json
+import logging
+import tempfile
+
 import pytest
+from base_image_generation_test import BaseImageGenTest, TestCustomLogger
 
 import litellm
-import json
-import tempfile
-from base_image_generation_test import BaseImageGenTest, TestCustomLogger
-import logging
 from litellm._logging import verbose_logger
 
 verbose_logger.setLevel(logging.DEBUG)
@@ -279,7 +279,8 @@ async def test_aiml_image_generation_with_dynamic_api_key():
     This test validates the fix for ensuring dynamic API keys are respected
     when making image generation requests to the AIML provider.
     """
-    from unittest.mock import AsyncMock, patch, MagicMock
+    from unittest.mock import AsyncMock, MagicMock, patch
+
     import httpx
 
     # Mock AIML response
@@ -346,8 +347,8 @@ async def test_aiml_openai_gpt_image_2_request_uses_openai_param_shape():
     being remapped to the AI/ML flux schema (``image_size``/``num_images``/
     ``output_format``), and hits the correct upstream model name.
     """
-    from unittest.mock import MagicMock, patch
     import json as _json
+    from unittest.mock import MagicMock, patch
 
     mock_aiml_response = {
         "created": 1703658209,

@@ -1,10 +1,7 @@
 import asyncio
-import copy
 import json
 import logging
 import os
-from typing import Any, Optional
-from unittest.mock import MagicMock, patch
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -13,18 +10,13 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTrace
 logging.basicConfig(level=logging.DEBUG)
 
 import litellm
-from litellm import completion
-from litellm.caching import InMemoryCache
 from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
 
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
 os.environ["LANGFUSE_DEBUG"] = "True"
-import time
 
 import pytest
-
-
 
 
 def search_logs(log_file_path, num_good_logs=1):
@@ -524,8 +516,9 @@ generation_params = {
 )
 def test_langfuse_prompt_type(prompt):
 
+    from unittest.mock import Mock
+
     from litellm.integrations.langfuse.langfuse import _add_prompt_to_generation_params
-    from unittest.mock import patch, MagicMock, Mock
 
     clean_metadata = {
         "prompt": {

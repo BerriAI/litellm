@@ -2,13 +2,11 @@
 #    This tests the the acompletion function #
 
 import asyncio
-import logging
-import traceback
 
 import pytest
 
 import litellm
-from litellm import acompletion, acreate, completion
+from litellm import acompletion
 
 litellm.num_retries = 3
 
@@ -19,7 +17,6 @@ litellm.num_retries = 3
 
 
 def test_async_response_openai():
-    import asyncio
 
     litellm.set_verbose = True
 

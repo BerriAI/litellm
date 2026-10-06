@@ -2,24 +2,22 @@
 #    This tests streaming for the completion endpoint
 
 import asyncio
-from typing import Final
 import json
 import os
 import time
 import traceback
-from litellm._uuid import uuid
-from typing import Tuple
+from typing import Final, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from dotenv import load_dotenv
 from pydantic import BaseModel
 
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
-from litellm.utils import ModelResponseListIterator
+from litellm._uuid import uuid
 from litellm.types.utils import ModelResponseStream
-
-from dotenv import load_dotenv
+from litellm.utils import ModelResponseListIterator
 
 load_dotenv()
 import random
@@ -2965,12 +2963,12 @@ def test_mock_response_iterator_tool_use():
     from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
     from litellm.types.utils import (
         ChatCompletionMessageToolCall,
+        Choices,
+        CompletionTokensDetailsWrapper,
         Function,
         Message,
-        Usage,
-        CompletionTokensDetailsWrapper,
         PromptTokensDetailsWrapper,
-        Choices,
+        Usage,
     )
 
     litellm.set_verbose = False
@@ -3083,8 +3081,9 @@ def test_is_delta_empty():
 
 
 def test_streaming_with_cost_calculation():
-    from litellm.types.utils import Usage
     from typing import Optional
+
+    from litellm.types.utils import Usage
 
     litellm.include_cost_in_streaming_usage = True
 

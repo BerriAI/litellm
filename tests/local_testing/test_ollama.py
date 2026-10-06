@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import io
-
 from unittest import mock
 
 import pytest
@@ -174,9 +173,11 @@ def test_ollama_aembeddings(mock_aembeddings):
 
 
 def test_ollama_ssl_verify():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
     import ssl
+
     import httpx
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     try:
         response = litellm.completion(
@@ -207,8 +208,9 @@ def test_ollama_ssl_verify():
 @pytest.mark.parametrize("stream", [True, False])
 @pytest.mark.asyncio
 async def test_async_ollama_ssl_verify(stream):
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     try:
         response = await litellm.acompletion(

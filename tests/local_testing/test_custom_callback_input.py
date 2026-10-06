@@ -4,17 +4,15 @@ import asyncio
 import inspect
 import os
 import traceback
-from litellm._uuid import uuid
 from datetime import datetime
+from typing import List, Literal, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
 
-from typing import List, Literal, Optional, Union
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import litellm
-from litellm import Cache, completion, embedding
+from litellm import Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import LiteLLMCommonStrings
 from tests._wait_helpers import await_until, wait_until
@@ -568,12 +566,6 @@ async def test_async_chat_openai_stream_options():
 
 ## Test Vertex AI + Async
 import json
-import tempfile
-
-
-
-
-
 
 # Text Completion
 
@@ -1267,8 +1259,8 @@ async def test_standard_logging_payload_stream_usage(sync_mode):
     """
     Even if stream_options is not provided, correct usage should be logged
     """
-    from litellm.types.utils import StandardLoggingPayload
     from litellm.main import stream_chunk_builder
+    from litellm.types.utils import StandardLoggingPayload
 
     stream = True
     try:
@@ -1330,7 +1322,6 @@ def test_standard_logging_retries():
     """
     know if a request was retried.
     """
-    from litellm.types.utils import StandardLoggingPayload
     from litellm.router import Router
 
     customHandler = CompletionCustomHandler()

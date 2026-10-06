@@ -2,17 +2,16 @@
 Unit tests for Replicate provider, particularly testing DeepSeek models
 """
 
-import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-
 import litellm
-from litellm import completion
 from litellm.llms.replicate.chat.handler import (
     async_completion,
+)
+from litellm.llms.replicate.chat.handler import (
     completion as replicate_completion,
 )
 

@@ -1,23 +1,22 @@
 import asyncio
-import httpx
 import json
-import pytest
 import sys
 from typing import Any, Dict, List
-from unittest.mock import MagicMock, Mock, patch, ANY
+from unittest.mock import MagicMock, Mock, patch
 
+import httpx
+import pytest
 
 import litellm
+from litellm._version import version
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import CustomStreamWrapper
-from litellm._version import version
-from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
 
 try:
-    import databricks.sdk
+    import databricks.sdk as databricks_sdk
 
-    databricks_sdk_installed = True
+    databricks_sdk_installed = databricks_sdk is not None
 except ImportError:
     databricks_sdk_installed = False
 

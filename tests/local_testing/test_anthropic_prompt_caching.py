@@ -6,19 +6,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import io
-
-from test_streaming import streaming_format_tests
-
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from test_amazing_vertex_completion import load_vertex_ai_credentials
+from test_streaming import streaming_format_tests
 
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
-from test_amazing_vertex_completion import load_vertex_ai_credentials
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 # litellm.num_retries =3
 litellm.cache = None
@@ -702,8 +699,9 @@ async def test_router_with_prompt_caching(anthropic_messages):
     if prompt caching supported model called with prompt caching valid prompt,
     then 2nd call should go to the same model.
     """
-    from litellm.router import Router
     import asyncio
+
+    from litellm.router import Router
     from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 
     router = Router(

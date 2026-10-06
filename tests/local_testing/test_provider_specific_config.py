@@ -2,16 +2,15 @@
 #    This tests setting provider specific configs across providers
 # There are 2 types of tests - changing config dynamically or by setting class variables
 
+import json
 import os
 import traceback
-import json
-import pytest
-
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 import litellm
 from litellm import RateLimitError, completion
-
 
 # Anthropic
 

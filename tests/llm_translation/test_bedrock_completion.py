@@ -3,36 +3,31 @@ Tests Bedrock Completion + Rerank endpoints
 """
 
 import os
-import traceback
 
 from dotenv import load_dotenv
 
 import litellm.types
 
 load_dotenv()
-import io
 import json
-
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from base_embedding_unit_tests import BaseLLMEmbeddingTest
+from base_llm_unit_tests import BaseAnthropicChatTest, BaseLLMChatTest
+from base_rerank_unit_tests import BaseLLMRerankTest
 
 import litellm
 from litellm import (
     ModelResponse,
     RateLimitError,
     ServiceUnavailableError,
-    Timeout,
     completion,
     completion_cost,
-    embedding,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
-from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
-from base_rerank_unit_tests import BaseLLMRerankTest
-from base_embedding_unit_tests import BaseLLMEmbeddingTest
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -83,12 +78,9 @@ def test_completion_bedrock_claude_completion_auth(monkeypatch):
 
 @pytest.mark.parametrize("streaming", [True, False])
 def test_completion_bedrock_guardrails(streaming):
-    import os
 
     litellm.set_verbose = True
-    import logging
 
-    from litellm._logging import verbose_logger
 
     # verbose_logger.setLevel(logging.DEBUG)
     try:
@@ -369,7 +361,6 @@ def test_bedrock_claude_3_tool_calling():
 def test_completion_bedrock_mistral_completion_auth():
     print("calling bedrock mistral completion params auth")
 
-    import os
 
     litellm.turn_on_debug()
 
@@ -413,7 +404,6 @@ def test_bedrock_ptu():
 
     with patch.object(client, "post", new=Mock()) as mock_client_post:
         litellm.set_verbose = True
-        from openai.types.chat import ChatCompletion
 
         model_id = (
             "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
@@ -448,7 +438,6 @@ async def test_bedrock_custom_api_base():
 
     with patch.object(client, "post", new=AsyncMock()) as mock_client_post:
         litellm.set_verbose = True
-        from openai.types.chat import ChatCompletion
 
         try:
             response = await litellm.acompletion(
@@ -491,7 +480,6 @@ async def test_bedrock_extra_headers(model):
 
     with patch.object(client, "post", new=AsyncMock()) as mock_client_post:
         litellm.set_verbose = True
-        from openai.types.chat import ChatCompletion
 
         try:
             response = await litellm.acompletion(
@@ -848,7 +836,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 
 
 def test_bedrock_converse_translation_tool_message():
-    from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
     litellm.set_verbose = True
 
@@ -902,7 +889,6 @@ def test_base_aws_llm_get_credentials():
 
     import boto3
 
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     start_time = time.time()
     session = boto3.Session(
@@ -1184,10 +1170,10 @@ def test_bedrock_completion_test_3():
     """
     Check if content in tool result is formatted correctly
     """
-    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
     from litellm.litellm_core_utils.prompt_templates.factory import (
         _bedrock_converse_messages_pt,
     )
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
     messages = [
         {
@@ -1359,8 +1345,9 @@ def test_bedrock_route_detection(model, expected_route):
     ],
 )
 def test_bedrock_prompt_caching_message(messages, expected_cache_control):
-    import litellm
     import json
+
+    import litellm
 
     transformed_messages = litellm.AmazonConverseConfig()._transform_request(
         model="bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
@@ -1733,9 +1720,10 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
 
 @pytest.mark.asyncio
 async def test_bedrock_image_url_sync_client():
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     import logging
+
     from litellm import verbose_logger
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     verbose_logger.setLevel(level=logging.DEBUG)
 
@@ -1785,11 +1773,12 @@ def test_bedrock_error_handling_streaming(exception_type, expected_status_code):
     (e.g. internalServerException -> 500). For 5xx this is what makes the error
     retryable downstream; for all types it replaces the misleading 400 with the
     true code. Regression for #24608."""
+    from unittest.mock import Mock
+
     from litellm.llms.bedrock.chat.invoke_handler import (
         AWSEventStreamDecoder,
         BedrockError,
     )
-    from unittest.mock import Mock
 
     event = Mock()
     event.to_response_dict = Mock(
@@ -1837,7 +1826,6 @@ def test_bedrock_custom_proxy():
 
 
 def test_bedrock_custom_deepseek():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
     import json
 
     litellm.turn_on_debug()
@@ -2188,7 +2176,7 @@ async def test_bedrock_stream_thinking_content_openwebui():
 
 
 def test_bedrock_application_inference_profile():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
     client2 = HTTPHandler()
@@ -2316,8 +2304,8 @@ def test_bedrock_meta_llama_function_calling():
     Tests that:
     - meta llama models support function calling
     """
-    from litellm.utils import return_raw_request
     from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
 
     tools = [
         {
@@ -2418,9 +2406,10 @@ async def test_bedrock_passthrough_router():
 
 @pytest.mark.asyncio
 async def test_bedrock_converse__streaming_passthrough(monkeypatch):
+    import asyncio
+
     import litellm
     from litellm.integrations.custom_logger import CustomLogger
-    import asyncio
 
     if os.environ.get("LITELLM_RUN_LIVE_BEDROCK_PASSTHROUGH_TESTS") != "1":
         pytest.skip("Live Bedrock passthrough E2E tests are opt-in")
@@ -2471,10 +2460,9 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bedrock_streaming_passthrough_test2(monkeypatch):
-    import litellm
-    import time
     import asyncio
-    from unittest.mock import MagicMock
+
+    import litellm
     from litellm.integrations.custom_logger import CustomLogger
 
     class MockCustomLogger(CustomLogger):
@@ -2629,7 +2617,6 @@ def test_bedrock_nova_provider_detection():
     Regression test for issue #17910 where models like "amazon.nova-pro-v1:0"
     were incorrectly identified as "amazon" (Titan) instead of "nova".
     """
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     # Test various Nova model formats
     nova_test_cases = [
@@ -2670,7 +2657,6 @@ def test_bedrock_openai_provider_detection():
     """
     Test that the OpenAI provider is correctly detected from model strings.
     """
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     # Test various OpenAI model formats
     test_cases = [
@@ -2690,7 +2676,6 @@ def test_bedrock_openai_model_id_extraction():
     """
     Test that the model ID (ARN) is correctly extracted and encoded for OpenAI models.
     """
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     model = (
         "openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/test-model-123"
@@ -2972,7 +2957,8 @@ def test_bedrock_nova_grounding_web_search_options_non_streaming():
 
     Related: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
     """
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import patch
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -3028,6 +3014,7 @@ def test_bedrock_nova_grounding_with_function_tools():
     custom function calling capabilities.
     """
     from unittest.mock import patch
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -3111,7 +3098,8 @@ async def test_bedrock_nova_grounding_async():
 
     This test verifies the request transformation for async calls.
     """
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import AsyncMock, patch
+
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     client = AsyncHTTPHandler()
@@ -3193,7 +3181,8 @@ def test_bedrock_nova_grounding_request_transformation():
     """
     Unit test to verify that web_search_options transforms to systemTool in the request.
     """
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()

@@ -1,12 +1,11 @@
 #### What this tests ####
 #    This tests if ahealth_check() actually works
 
+import asyncio
 import os
-
-import pytest
 from unittest.mock import AsyncMock, patch
 
-import asyncio
+import pytest
 
 import litellm
 
@@ -509,8 +508,9 @@ async def test_perform_health_check_with_health_check_model():
 
 @pytest.mark.asyncio
 async def test_health_check_bad_model():
-    from litellm.proxy.health_check import _perform_health_check
     import time
+
+    from litellm.proxy.health_check import _perform_health_check
 
     model_list = [
         {
@@ -676,6 +676,7 @@ async def test_image_generation_health_check_prompt(monkeypatch):
     """Health checks should respect default and environment-configured prompts."""
 
     import importlib
+
     import litellm.constants as litellm_constants
     import litellm.proxy.health_check as health_check
 

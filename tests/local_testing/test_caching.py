@@ -1,38 +1,36 @@
 import os
-import time
-import traceback
 import shutil
 import subprocess
+import time
+import traceback
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
 
 import redis
+from dotenv import load_dotenv
 
 from litellm._redis import _get_redis_env_kwarg_mapping, get_redis_client
 from litellm._redis_credential_provider import _token_cache
 from litellm._uuid import uuid
 
-from dotenv import load_dotenv
-
 load_dotenv()
-import json
-
 import asyncio
+import datetime
 import hashlib
+import json
 import random
+from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
+from redis.asyncio import RedisCluster
 
 import litellm
 from litellm import aembedding, completion, embedding
 from litellm.caching.caching import Cache
-from redis.asyncio import RedisCluster
 from litellm.caching.redis_cluster_cache import RedisClusterCache
-from unittest.mock import AsyncMock, patch, MagicMock, call
-import datetime
-from datetime import timedelta
 
 # litellm.set_verbose=True
 
@@ -2158,18 +2156,19 @@ def test_basic_caching_import():
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio()
 async def test_caching_kwargs_input(sync_mode):
+    from datetime import datetime
+
     from litellm import acompletion
     from litellm.caching.caching_handler import LLMCachingHandler
     from litellm.types.utils import (
         Choices,
+        CompletionTokensDetailsWrapper,
         EmbeddingResponse,
         Message,
         ModelResponse,
-        Usage,
-        CompletionTokensDetailsWrapper,
         PromptTokensDetailsWrapper,
+        Usage,
     )
-    from datetime import datetime
 
     llm_caching_handler = LLMCachingHandler(
         original_function=acompletion, request_kwargs={}, start_time=datetime.now()
@@ -2477,11 +2476,12 @@ def test_redis_caching_multiple_namespaces():
 
     The same request with different namespaces should not be cached under the same key
     """
-    from litellm._uuid import uuid
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
     import litellm
-    from litellm.caching import Cache
     from litellm import completion
+    from litellm._uuid import uuid
+    from litellm.caching import Cache
 
     # Use a fixed uuid to ensure consistent cache keys
     test_uuid = "12345678-1234-1234-1234-123456789abc"

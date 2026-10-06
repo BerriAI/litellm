@@ -8,9 +8,6 @@ import os
 
 import pytest
 
-
-
-
 # Integration test example (requires real API key)
 
 

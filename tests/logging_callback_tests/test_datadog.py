@@ -1,39 +1,36 @@
-import io
-import os
-
-from litellm.integrations.datadog.datadog_handler import (
-    get_datadog_source,
-    get_datadog_service,
-    get_datadog_env,
-    get_datadog_pod_name,
-    get_datadog_hostname,
-    get_datadog_tags,
-)
-
-
 import asyncio
 import gzip
+import io
 import json
 import logging
+import os
 import time
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import litellm
+import litellm.integrations.datadog.datadog as datadog_module
 from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.integrations.datadog.datadog import *
-import litellm.integrations.datadog.datadog as datadog_module
-from datetime import datetime, timedelta
-from litellm.types.utils import (
-    StandardLoggingPayload,
-    StandardLoggingModelInformation,
-    StandardLoggingMetadata,
-    StandardLoggingHiddenParams,
-    LiteLLMCommonStrings,
+from litellm.integrations.datadog.datadog_handler import (
+    get_datadog_env,
+    get_datadog_hostname,
+    get_datadog_pod_name,
+    get_datadog_service,
+    get_datadog_source,
+    get_datadog_tags,
 )
 from litellm.types.integrations.datadog import DatadogInitParams
+from litellm.types.utils import (
+    LiteLLMCommonStrings,
+    StandardLoggingHiddenParams,
+    StandardLoggingMetadata,
+    StandardLoggingModelInformation,
+    StandardLoggingPayload,
+)
 
 verbose_logger.setLevel(logging.DEBUG)
 

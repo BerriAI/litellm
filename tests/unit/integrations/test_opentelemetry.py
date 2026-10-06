@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import gc
+import importlib
 import json
 import os
 import sys
@@ -9,6 +10,7 @@ import threading
 import time
 import unittest
 import weakref
+from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
@@ -16,6 +18,9 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+import pytest_asyncio
+import requests
+from dotenv import load_dotenv
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 from opentelemetry import trace
@@ -27,14 +32,12 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricsData
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
-from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from parameterized import parameterized
 
-import requests
-
-from tests.unit.integrations.conftest import TlsSink, write_self_signed_cert
 import litellm
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.integrations import opentelemetry as otel_module
 from litellm.integrations.opentelemetry import (
     OpenTelemetry,
@@ -43,8 +46,13 @@ from litellm.integrations.opentelemetry import (
     OTELSemconvCategory,
     _normalize_team_metadata_keys,
 )
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+from litellm.types.utils import ModelResponse
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.logging_callback_tests.base_test import BaseLoggingCallbackTest
+from tests.unit.integrations.conftest import TlsSink, write_self_signed_cert
 
 
 class TestOpenTelemetryGuardrails(unittest.TestCase):
@@ -67,9 +75,7 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
         }
 
         # Create a kwargs dict with standard_logging_object containing guardrail information
-        kwargs = {
-            "standard_logging_object": {"guardrail_information": [guardrail_info]}
-        }
+        kwargs = {"standard_logging_object": {"guardrail_information": [guardrail_info]}}
 
         # Call the method
         otel._create_guardrail_span(kwargs=kwargs, context=None)
@@ -78,19 +84,14 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
         otel.tracer.start_span.assert_called_once()
 
         # print all calls to mock_span.set_attribute
-        print("Calls to mock_span.set_attribute:")
         for call in mock_span.set_attribute.call_args_list:
             print(call)
 
         # Check that the span has the correct attributes set
         mock_span.set_attribute.assert_any_call("guardrail_name", "test_guardrail")
         mock_span.set_attribute.assert_any_call("guardrail_mode", "input")
-        mock_span.set_attribute.assert_any_call(
-            "guardrail_response", safe_dumps("filtered_content")
-        )
-        mock_span.set_attribute.assert_any_call(
-            "masked_entity_count", safe_dumps({"CREDIT_CARD": 2})
-        )
+        mock_span.set_attribute.assert_any_call("guardrail_response", safe_dumps("filtered_content"))
+        mock_span.set_attribute.assert_any_call("masked_entity_count", safe_dumps({"CREDIT_CARD": 2}))
 
         # Verify that the span was ended
         mock_span.end.assert_called_once()
@@ -129,15 +130,11 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
             "start_time": 1609459200.0,
             "end_time": 1609459201.0,
         }
-        kwargs = {
-            "standard_logging_object": {"guardrail_information": [guardrail_info]}
-        }
+        kwargs = {"standard_logging_object": {"guardrail_information": [guardrail_info]}}
 
         otel._create_guardrail_span(kwargs=kwargs, context=None)
 
-        mock_span.set_attribute.assert_any_call(
-            "guardrail_response", safe_dumps(moderation_payload)
-        )
+        mock_span.set_attribute.assert_any_call("guardrail_response", safe_dumps(moderation_payload))
 
     @patch("litellm.integrations.opentelemetry.datetime")
     def test_guardrail_response_none_is_skipped(self, mock_datetime):
@@ -155,15 +152,11 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
             "start_time": 1609459200.0,
             "end_time": 1609459201.0,
         }
-        kwargs = {
-            "standard_logging_object": {"guardrail_information": [guardrail_info]}
-        }
+        kwargs = {"standard_logging_object": {"guardrail_information": [guardrail_info]}}
 
         otel._create_guardrail_span(kwargs=kwargs, context=None)
 
-        attribute_keys = [
-            call.args[0] for call in mock_span.set_attribute.call_args_list
-        ]
+        attribute_keys = [call.args[0] for call in mock_span.set_attribute.call_args_list]
         self.assertNotIn("guardrail_response", attribute_keys)
 
 
@@ -200,12 +193,8 @@ class TestOpenTelemetryTeamAttributesOnChildSpans(unittest.TestCase):
 
         otel._create_guardrail_span(kwargs=kwargs, context=None)
 
-        mock_span.set_attribute.assert_any_call(
-            "metadata.user_api_key_team_id", "team-123"
-        )
-        mock_span.set_attribute.assert_any_call(
-            "metadata.user_api_key_team_alias", "my-team"
-        )
+        mock_span.set_attribute.assert_any_call("metadata.user_api_key_team_id", "team-123")
+        mock_span.set_attribute.assert_any_call("metadata.user_api_key_team_alias", "my-team")
 
     @patch.dict(os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""})
     @patch("litellm.turn_off_message_logging", False)
@@ -224,16 +213,10 @@ class TestOpenTelemetryTeamAttributesOnChildSpans(unittest.TestCase):
             "litellm_params": {"metadata": {}},
             "standard_logging_object": {"metadata": self._slo_metadata()},
         }
-        otel._maybe_log_raw_request(
-            kwargs, {}, datetime.now(), datetime.now(), MagicMock()
-        )
+        otel._maybe_log_raw_request(kwargs, {}, datetime.now(), datetime.now(), MagicMock())
 
-        mock_span.set_attribute.assert_any_call(
-            "metadata.user_api_key_team_id", "team-123"
-        )
-        mock_span.set_attribute.assert_any_call(
-            "metadata.user_api_key_team_alias", "my-team"
-        )
+        mock_span.set_attribute.assert_any_call("metadata.user_api_key_team_id", "team-123")
+        mock_span.set_attribute.assert_any_call("metadata.user_api_key_team_alias", "my-team")
 
     def test_helper_skips_when_team_values_missing(self):
         otel = OpenTelemetry()
@@ -263,12 +246,8 @@ class TestOpenTelemetryTeamAttributesOnChildSpans(unittest.TestCase):
             {"standard_logging_object": {"metadata": self._slo_metadata()}},
         )
 
-        mock_span.set_attribute.assert_any_call(
-            "metadata.user_api_key_team_id", "team-123"
-        )
-        mock_span.set_attribute.assert_any_call(
-            "metadata.user_api_key_team_alias", "my-team"
-        )
+        mock_span.set_attribute.assert_any_call("metadata.user_api_key_team_id", "team-123")
+        mock_span.set_attribute.assert_any_call("metadata.user_api_key_team_alias", "my-team")
 
     def test_helper_handles_missing_standard_logging_object(self):
         otel = OpenTelemetry()
@@ -305,9 +284,7 @@ class TestOpenTelemetryTeamAttributesOnChildSpans(unittest.TestCase):
         finished = {s.name: s for s in exporter.get_finished_spans()}
         exception_span = finished["Failed Proxy Server Request"]
         assert exception_span.attributes["metadata.user_api_key_team_id"] == "team-123"
-        assert (
-            exception_span.attributes["metadata.user_api_key_team_alias"] == "my-team"
-        )
+        assert exception_span.attributes["metadata.user_api_key_team_alias"] == "my-team"
 
 
 def test_v1_routing_diagnostics_add_scalar_attributes_and_preserve_legacy_metadata() -> None:
@@ -484,13 +461,9 @@ class TestOpenTelemetryProviderInitialization(unittest.TestCase):
 
         # Assert: The existing provider should still be active
         current_provider = trace.get_tracer_provider()
-        assert (
-            current_provider is existing_provider
-        ), "Existing TracerProvider should be respected and not overridden"
+        assert current_provider is existing_provider, "Existing TracerProvider should be respected and not overridden"
 
-    @patch.dict(
-        os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True
-    )
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
     def test_init_metrics_creates_instruments_under_their_published_names(self):
         """
         The v1 engine's instrument names are a public contract.
@@ -522,9 +495,7 @@ class TestOpenTelemetryProviderInitialization(unittest.TestCase):
             "gen_ai.client.response.duration",
         }
 
-    @patch.dict(
-        os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True
-    )
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
     def test_init_metrics_respects_existing_meter_provider(self):
         """
         Unit test: _init_metrics() should respect existing MeterProvider.
@@ -546,13 +517,9 @@ class TestOpenTelemetryProviderInitialization(unittest.TestCase):
 
         # Assert: The existing provider should still be active
         current_provider = metrics.get_meter_provider()
-        assert (
-            current_provider is existing_provider
-        ), "Existing MeterProvider should be respected and not overridden"
+        assert current_provider is existing_provider, "Existing MeterProvider should be respected and not overridden"
 
-    @patch.dict(
-        os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS": "true"}, clear=True
-    )
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS": "true"}, clear=True)
     def test_init_logs_respects_existing_logger_provider(self):
         """
         Unit test: _init_logs() should respect existing LoggerProvider.
@@ -574,9 +541,7 @@ class TestOpenTelemetryProviderInitialization(unittest.TestCase):
 
         # Assert: The existing provider should still be active
         current_provider = get_logger_provider()
-        assert (
-            current_provider is existing_provider
-        ), "Existing LoggerProvider should be respected and not overridden"
+        assert current_provider is existing_provider, "Existing LoggerProvider should be respected and not overridden"
 
 
 class TestOpenTelemetryDualHandlerIsolation(unittest.TestCase):
@@ -598,9 +563,7 @@ class TestOpenTelemetryDualHandlerIsolation(unittest.TestCase):
 
         fake_existing = SDKTracerProvider()
         own_exporter = InMemorySpanExporter()
-        cfg = OpenTelemetryConfig(
-            exporter="console", service_name="iso-test", skip_set_global=True
-        )
+        cfg = OpenTelemetryConfig(exporter="console", service_name="iso-test", skip_set_global=True)
         with (
             patch.object(trace, "get_tracer_provider", return_value=fake_existing),
             patch.object(trace, "set_tracer_provider") as mock_set,
@@ -690,9 +653,7 @@ class TestOpenTelemetryDualHandlerIsolation(unittest.TestCase):
 
         global_exporter = InMemoryLogExporter()
         fake_existing = SDKLoggerProvider()
-        fake_existing.add_log_record_processor(
-            SimpleLogRecordProcessor(global_exporter)
-        )
+        fake_existing.add_log_record_processor(SimpleLogRecordProcessor(global_exporter))
 
         private_exporter = InMemoryLogExporter()
         cfg = OpenTelemetryConfig(
@@ -704,9 +665,7 @@ class TestOpenTelemetryDualHandlerIsolation(unittest.TestCase):
         with (
             patch.object(_logs, "get_logger_provider", return_value=fake_existing),
             patch.object(_logs, "set_logger_provider"),
-            patch.object(
-                OpenTelemetry, "_get_log_exporter", return_value=private_exporter
-            ),
+            patch.object(OpenTelemetry, "_get_log_exporter", return_value=private_exporter),
             self._wire_span_processor(InMemorySpanExporter()),
         ):
             handler = OpenTelemetry(config=cfg)
@@ -735,9 +694,7 @@ class TestOpenTelemetryDualHandlerIsolation(unittest.TestCase):
 
         # Handler B comes along with the global appearing to be A's provider.
         exporter_b = InMemorySpanExporter()
-        cfg_b = OpenTelemetryConfig(
-            exporter="console", service_name="handler-b", skip_set_global=True
-        )
+        cfg_b = OpenTelemetryConfig(exporter="console", service_name="handler-b", skip_set_global=True)
         with (
             patch.object(trace, "get_tracer_provider", return_value=provider_a),
             patch.object(trace, "set_tracer_provider"),
@@ -776,9 +733,7 @@ class TestOpenTelemetryCaptureMessageContent(unittest.TestCase):
         )
         with patch.dict(os.environ, env_dict):
             handler = OpenTelemetry(
-                config=OpenTelemetryConfig(
-                    exporter="console", capture_message_content=config_value
-                )
+                config=OpenTelemetryConfig(exporter="console", capture_message_content=config_value)
             )
             handler.message_logging = message_logging
             return handler, handler._resolve_capture_mode()
@@ -844,18 +799,12 @@ class TestOpenTelemetryCaptureMessageContent(unittest.TestCase):
 
     def test_two_handlers_can_have_different_modes(self):
         # FIL's stated requirement: one handler strips content, the other keeps it.
-        with patch.dict(
-            os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""}
-        ):
+        with patch.dict(os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""}):
             stripped = OpenTelemetry(
-                config=OpenTelemetryConfig(
-                    exporter="console", capture_message_content="NO_CONTENT"
-                )
+                config=OpenTelemetryConfig(exporter="console", capture_message_content="NO_CONTENT")
             )
             kept = OpenTelemetry(
-                config=OpenTelemetryConfig(
-                    exporter="console", capture_message_content="SPAN_AND_EVENT"
-                )
+                config=OpenTelemetryConfig(exporter="console", capture_message_content="SPAN_AND_EVENT")
             )
         self.assertEqual(stripped._resolve_capture_mode(), "NO_CONTENT")
         self.assertEqual(kept._resolve_capture_mode(), "SPAN_AND_EVENT")
@@ -901,9 +850,7 @@ class TestOpenTelemetrySemconvStability(unittest.TestCase):
         self.assertFalse(h._gen_ai_semconv_latest_experimental)
 
     def test_config_field_enables_without_env(self):
-        h = self._make(
-            env="", config_value={OTELSemconvCategory.GEN_AI_LATEST_EXPERIMENTAL}
-        )
+        h = self._make(env="", config_value={OTELSemconvCategory.GEN_AI_LATEST_EXPERIMENTAL})
         self.assertTrue(h._gen_ai_semconv_latest_experimental)
 
     def test_config_field_unions_with_env(self):
@@ -962,10 +909,7 @@ class TestOpenTelemetrySemconvStability(unittest.TestCase):
             "n": 3,
         }
         h._set_semconv_request_attributes(span, optional_params)
-        calls = {
-            c.args[0] if c.args else c.kwargs.get("key"): c
-            for c in span.set_attribute.call_args_list
-        }
+        calls = {c.args[0] if c.args else c.kwargs.get("key"): c for c in span.set_attribute.call_args_list}
         self.assertIn("gen_ai.request.frequency_penalty", calls)
         self.assertIn("gen_ai.request.presence_penalty", calls)
         self.assertIn("gen_ai.request.top_k", calls)
@@ -988,16 +932,10 @@ class TestOpenTelemetrySemconvStability(unittest.TestCase):
             span = MagicMock()
             h._set_semconv_request_attributes(span, {"n": bad_n})
             keys = {c.args[0] for c in span.set_attribute.call_args_list if c.args}
-            self.assertNotIn(
-                "gen_ai.request.choice.count", keys, f"n={bad_n!r} should be omitted"
-            )
+            self.assertNotIn("gen_ai.request.choice.count", keys, f"n={bad_n!r} should be omitted")
 
     def _stream_calls(self, span):
-        return [
-            c
-            for c in span.set_attribute.call_args_list
-            if c.args and c.args[0] == "gen_ai.request.stream"
-        ]
+        return [c for c in span.set_attribute.call_args_list if c.args and c.args[0] == "gen_ai.request.stream"]
 
     def test_semconv_request_stream_emitted_as_bool_when_streaming(self):
         # Conditionally required per spec: present (as bool True) only when streaming.
@@ -1021,9 +959,7 @@ class TestOpenTelemetrySemconvStability(unittest.TestCase):
         span = MagicMock()
         h._set_semconv_request_attributes(span, {"stop": "STOP_TOKEN"})
         stop_calls = [
-            c
-            for c in span.set_attribute.call_args_list
-            if c.args and c.args[0] == "gen_ai.request.stop_sequences"
+            c for c in span.set_attribute.call_args_list if c.args and c.args[0] == "gen_ai.request.stop_sequences"
         ]
         self.assertEqual(len(stop_calls), 1)
         self.assertEqual(stop_calls[0].args[1], ["STOP_TOKEN"])
@@ -1040,9 +976,7 @@ class TestOpenTelemetrySemconvStability(unittest.TestCase):
             }
         }
         h._set_semconv_cache_token_attributes(span, std_log)
-        keys = {
-            c.args[0]: c.args[1] for c in span.set_attribute.call_args_list if c.args
-        }
+        keys = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list if c.args}
         self.assertEqual(keys.get("gen_ai.usage.cache_creation.input_tokens"), 12)
         self.assertEqual(keys.get("gen_ai.usage.cache_read.input_tokens"), 34)
 
@@ -1085,9 +1019,7 @@ class TestOpenTelemetrySemconvStability(unittest.TestCase):
         }
         response_obj = {"id": "r", "model": "gpt-4", "choices": []}
         h.set_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
-        return {
-            c.args[0]: c.args[1] for c in span.set_attribute.call_args_list if c.args
-        }
+        return {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list if c.args}
 
     def test_semconv_mode_emits_provider_name_not_system(self):
         # Latest-experimental semconv replaced gen_ai.system with
@@ -1114,15 +1046,11 @@ class TestOpenTelemetrySemconvStability(unittest.TestCase):
                 os.environ,
                 {"OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental"},
             ),
-            patch.object(
-                _logs, "get_logger_provider", return_value=ProxyLoggerProvider()
-            ),
+            patch.object(_logs, "get_logger_provider", return_value=ProxyLoggerProvider()),
             patch.object(_logs, "set_logger_provider"),
             patch.object(OpenTelemetry, "_get_log_exporter", return_value=log_exporter),
         ):
-            h = OpenTelemetry(
-                config=OpenTelemetryConfig(exporter="console", enable_events=True)
-            )
+            h = OpenTelemetry(config=OpenTelemetryConfig(exporter="console", enable_events=True))
         h.message_logging = True
 
         kwargs = {
@@ -1148,9 +1076,7 @@ class TestOpenTelemetrySemconvStability(unittest.TestCase):
         # Exactly ONE inference details event, not the legacy per-message/choice pair.
         self.assertEqual(len(records), 1)
         attrs = dict(records[0].attributes or {})
-        self.assertEqual(
-            attrs["event_name"], "gen_ai.client.inference.operation.details"
-        )
+        self.assertEqual(attrs["event_name"], "gen_ai.client.inference.operation.details")
         self.assertEqual(attrs["gen_ai.provider.name"], "openai")
         self.assertEqual(attrs["gen_ai.operation.name"], "chat")
         self.assertIn("gen_ai.input.messages", attrs)
@@ -1167,15 +1093,11 @@ class TestOpenTelemetrySemconvStability(unittest.TestCase):
                 {"OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental"},
             ),
             patch("litellm.turn_off_message_logging", True),
-            patch.object(
-                _logs, "get_logger_provider", return_value=ProxyLoggerProvider()
-            ),
+            patch.object(_logs, "get_logger_provider", return_value=ProxyLoggerProvider()),
             patch.object(_logs, "set_logger_provider"),
             patch.object(OpenTelemetry, "_get_log_exporter", return_value=log_exporter),
         ):
-            h = OpenTelemetry(
-                config=OpenTelemetryConfig(exporter="console", enable_events=True)
-            )
+            h = OpenTelemetry(config=OpenTelemetryConfig(exporter="console", enable_events=True))
             h.message_logging = True
 
             kwargs = {
@@ -1242,9 +1164,7 @@ class TestOpenTelemetry(unittest.TestCase):
         self.assertEqual(config.exporter, "otlp_http")
 
         # When exporter is explicitly set to something other than console, should not override
-        config_grpc = OpenTelemetryConfig(
-            exporter="grpc", endpoint="https://otel-collector.example.com:443"
-        )
+        config_grpc = OpenTelemetryConfig(exporter="grpc", endpoint="https://otel-collector.example.com:443")
         self.assertEqual(config_grpc.exporter, "grpc")
 
         # When no endpoint is set, should keep console as default
@@ -1256,11 +1176,7 @@ class TestOpenTelemetry(unittest.TestCase):
         deadline = time.time() + self.POLL_TIMEOUT
         while time.time() < deadline:
             spans = exporter.get_finished_spans()
-            matches = [
-                s
-                for s in spans
-                if s.attributes and any(str(k).startswith(prefix) for k in s.attributes)
-            ]
+            matches = [s for s in spans if s.attributes and any(str(k).startswith(prefix) for k in s.attributes)]
             if matches:
                 return matches
             time.sleep(self.POLL_INTERVAL)
@@ -1303,7 +1219,6 @@ class TestOpenTelemetry(unittest.TestCase):
             time.sleep(self.POLL_INTERVAL)
         return []
 
-
     def test_get_tracer_to_use_for_request_with_dynamic_headers(self):
         """Test that get_tracer_to_use_for_request returns a dynamic tracer when dynamic headers are present."""
         # Setup
@@ -1312,9 +1227,7 @@ class TestOpenTelemetry(unittest.TestCase):
 
         # Mock the dynamic header extraction and tracer creation
         with (
-            patch.object(
-                otel, "_get_dynamic_otel_headers_from_kwargs"
-            ) as mock_get_headers,
+            patch.object(otel, "_get_dynamic_otel_headers_from_kwargs") as mock_get_headers,
             patch.object(otel, "_get_tracer_with_dynamic_headers") as mock_get_tracer,
         ):
             # Test case 1: With dynamic headers
@@ -1325,16 +1238,12 @@ class TestOpenTelemetry(unittest.TestCase):
             mock_dynamic_tracer = MagicMock()
             mock_get_tracer.return_value = mock_dynamic_tracer
 
-            kwargs = {
-                "standard_callback_dynamic_params": {"arize_space_key": "test-space"}
-            }
+            kwargs = {"standard_callback_dynamic_params": {"arize_space_key": "test-space"}}
             result = otel.get_tracer_to_use_for_request(kwargs)
 
             # Assertions
             mock_get_headers.assert_called_once_with(kwargs)
-            mock_get_tracer.assert_called_once_with(
-                {"arize-space-id": "test-space", "api_key": "test-key"}
-            )
+            mock_get_tracer.assert_called_once_with({"arize-space-id": "test-space", "api_key": "test-key"})
             self.assertEqual(result, mock_dynamic_tracer)
 
     def test_get_tracer_to_use_for_request_without_dynamic_headers(self):
@@ -1344,9 +1253,7 @@ class TestOpenTelemetry(unittest.TestCase):
         otel.tracer = MagicMock()
 
         # Mock the dynamic header extraction to return None
-        with patch.object(
-            otel, "_get_dynamic_otel_headers_from_kwargs"
-        ) as mock_get_headers:
+        with patch.object(otel, "_get_dynamic_otel_headers_from_kwargs") as mock_get_headers:
             mock_get_headers.return_value = None
 
             kwargs = {}
@@ -1378,12 +1285,8 @@ class TestOpenTelemetry(unittest.TestCase):
             result = otel._get_dynamic_otel_headers_from_kwargs(kwargs)
 
             # Assertions
-            mock_construct.assert_called_once_with(
-                standard_callback_dynamic_params=standard_params
-            )
-            self.assertEqual(
-                result, {"arize-space-id": "test-space", "api_key": "test-key"}
-            )
+            mock_construct.assert_called_once_with(standard_callback_dynamic_params=standard_params)
+            self.assertEqual(result, {"arize-space-id": "test-space", "api_key": "test-key"})
 
             # Test case 2: Without standard_callback_dynamic_params
             kwargs_empty = {}
@@ -1426,21 +1329,15 @@ class TestOpenTelemetry(unittest.TestCase):
             result = otel._get_tracer_with_dynamic_headers(dynamic_headers)
 
             # Assertions
-            mock_get_span_processor.assert_called_once_with(
-                dynamic_headers=dynamic_headers
-            )
-            mock_provider_instance.add_span_processor.assert_called_once_with(
-                mock_span_processor
-            )
+            mock_get_span_processor.assert_called_once_with(dynamic_headers=dynamic_headers)
+            mock_provider_instance.add_span_processor.assert_called_once_with(mock_span_processor)
             mock_provider_instance.get_tracer.assert_called_once_with("litellm")
             self.assertEqual(result, mock_tracer)
 
     @patch.dict(os.environ, {}, clear=True)
     @patch("opentelemetry.sdk.resources.Resource.create")
     @patch("opentelemetry.sdk.resources.OTELResourceDetector")
-    def test_get_litellm_resource_with_defaults(
-        self, mock_detector_cls, mock_resource_create
-    ):
+    def test_get_litellm_resource_with_defaults(self, mock_detector_cls, mock_resource_create):
         """Test _get_litellm_resource with default values when no environment variables are set."""
         # Mock the Resource.create method
         mock_base_resource = MagicMock()
@@ -1481,9 +1378,7 @@ class TestOpenTelemetry(unittest.TestCase):
     )
     @patch("opentelemetry.sdk.resources.Resource.create")
     @patch("opentelemetry.sdk.resources.OTELResourceDetector")
-    def test_get_litellm_resource_with_litellm_env_vars(
-        self, mock_detector_cls, mock_resource_create
-    ):
+    def test_get_litellm_resource_with_litellm_env_vars(self, mock_detector_cls, mock_resource_create):
         """Test _get_litellm_resource with LiteLLM-specific environment variables."""
         # Mock the Resource.create method
         mock_base_resource = MagicMock()
@@ -1523,9 +1418,7 @@ class TestOpenTelemetry(unittest.TestCase):
     )
     @patch("opentelemetry.sdk.resources.Resource.create")
     @patch("opentelemetry.sdk.resources.OTELResourceDetector")
-    def test_get_litellm_resource_with_otel_resource_attributes(
-        self, mock_detector_cls, mock_resource_create
-    ):
+    def test_get_litellm_resource_with_otel_resource_attributes(self, mock_detector_cls, mock_resource_create):
         """Test _get_litellm_resource with OTEL_RESOURCE_ATTRIBUTES environment variable."""
         # Mock the Resource.create method to simulate the actual behavior
         # In reality, Resource.create() would parse OTEL_RESOURCE_ATTRIBUTES and merge it
@@ -1654,13 +1547,9 @@ class TestOpenTelemetry(unittest.TestCase):
         # ─── minimal input / output for a chat call ──────────────────────────────
         start = datetime.utcnow()
         end = start + timedelta(seconds=1)
-        with open(
-            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
-        ) as f:
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")) as f:
             kwargs = json.load(f)
-        with open(
-            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
-        ) as f:
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")) as f:
             response_obj = json.load(f)
 
         # ─── exercise the hook ───────────────────────────────────────────────────
@@ -1676,10 +1565,7 @@ class TestOpenTelemetry(unittest.TestCase):
         #     "litellm_request span missing",
         # )
         # model attribute should be on that span
-        found = any(
-            s.attributes and s.attributes.get("gen_ai.request.model") == self.MODEL
-            for s in spans
-        )
+        found = any(s.attributes and s.attributes.get("gen_ai.request.model") == self.MODEL for s in spans)
         self.assertTrue(found, "expected gen_ai.request.model on span attributes")
 
         # no metrics recorded
@@ -1691,9 +1577,7 @@ class TestOpenTelemetry(unittest.TestCase):
         logs = log_exporter.get_finished_logs()
         self.assertFalse(logs, "Did not expect any logs")
 
-    @patch.dict(
-        os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True
-    )
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
     def test_handle_success_spans_and_metrics(self):
         # ─── build in‐memory OTEL providers/exporters ─────────────────────────────
         span_exporter = InMemorySpanExporter()
@@ -1717,13 +1601,9 @@ class TestOpenTelemetry(unittest.TestCase):
         # ─── minimal input / output for a chat call ──────────────────────────────
         start = datetime.utcnow()
         end = start + timedelta(seconds=1)
-        with open(
-            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
-        ) as f:
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")) as f:
             kwargs = json.load(f)
-        with open(
-            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
-        ) as f:
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")) as f:
             response_obj = json.load(f)
 
         # ─── exercise the hook ───────────────────────────────────────────────────
@@ -1734,24 +1614,15 @@ class TestOpenTelemetry(unittest.TestCase):
         self.assertTrue(spans, "Expected at least one span")
 
         # ─── assert metrics ──────────────────────────────────────────────────────
-        duration_metric = self.wait_for_metric(
-            metric_reader, "gen_ai.client.operation.duration"
-        )
+        duration_metric = self.wait_for_metric(metric_reader, "gen_ai.client.operation.duration")
         self.assertIsNotNone(duration_metric, "duration histogram was not recorded")
         # model attribute should be present on a data point
         found_dp = False
-        if (
-            duration_metric
-            and hasattr(duration_metric, "data")
-            and hasattr(duration_metric.data, "data_points")
-        ):
+        if duration_metric and hasattr(duration_metric, "data") and hasattr(duration_metric.data, "data_points"):
             found_dp = any(
-                dp.attributes.get("gen_ai.request.model") == self.MODEL
-                for dp in duration_metric.data.data_points
+                dp.attributes.get("gen_ai.request.model") == self.MODEL for dp in duration_metric.data.data_points
             )
-        self.assertTrue(
-            found_dp, "expected gen_ai.request.model attribute on a data point"
-        )
+        self.assertTrue(found_dp, "expected gen_ai.request.model attribute on a data point")
 
         # ─── no events when only metrics enabled ─────────────────────────────────
         logs = log_exporter.get_finished_logs()
@@ -1790,14 +1661,10 @@ class TestOpenTelemetry(unittest.TestCase):
         otel._to_ns = MagicMock(return_value=1234567890)
 
         kwargs = {"litellm_params": {"metadata": {}}}
-        otel._maybe_log_raw_request(
-            kwargs, {}, datetime.now(), datetime.now(), MagicMock()
-        )
+        otel._maybe_log_raw_request(kwargs, {}, datetime.now(), datetime.now(), MagicMock())
 
         mock_tracer.start_span.assert_called_once()
-        self.assertEqual(
-            mock_tracer.start_span.call_args[1]["name"], RAW_REQUEST_SPAN_NAME
-        )
+        self.assertEqual(mock_tracer.start_span.call_args[1]["name"], RAW_REQUEST_SPAN_NAME)
 
     @patch("litellm.turn_off_message_logging", True)
     def test_maybe_log_raw_request_skips_when_logging_disabled(self):
@@ -1807,9 +1674,7 @@ class TestOpenTelemetry(unittest.TestCase):
         otel.get_tracer_to_use_for_request = MagicMock(return_value=mock_tracer)
 
         kwargs = {"litellm_params": {"metadata": {}}}
-        otel._maybe_log_raw_request(
-            kwargs, {}, datetime.now(), datetime.now(), MagicMock()
-        )
+        otel._maybe_log_raw_request(kwargs, {}, datetime.now(), datetime.now(), MagicMock())
 
         mock_tracer.start_span.assert_not_called()
 
@@ -1854,9 +1719,7 @@ class TestOpenTelemetryHeaderSplitting(unittest.TestCase):
         otel = OpenTelemetry()
         headers = "api-key=value1=part2,config=setting=enabled"
         result = otel._get_headers_dictionary(headers)
-        self.assertEqual(
-            result, {"api-key": "value1=part2", "config": "setting=enabled"}
-        )
+        self.assertEqual(result, {"api-key": "value1=part2", "config": "setting=enabled"})
 
     def test_accepts_any_mapping_not_only_dict(self):
         """The parameter is typed Mapping, so a non-dict Mapping must not silently drop
@@ -1881,17 +1744,13 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
     def test_normalize_traces_endpoint_from_logs_path(self):
         """Test normalizing endpoint with /v1/logs to /v1/traces"""
         otel = OpenTelemetry()
-        result = otel._normalize_otel_endpoint(
-            "http://collector:4318/v1/logs", "traces"
-        )
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/logs", "traces")
         self.assertEqual(result, "http://collector:4318/v1/traces")
 
     def test_normalize_traces_endpoint_from_metrics_path(self):
         """Test normalizing endpoint with /v1/metrics to /v1/traces"""
         otel = OpenTelemetry()
-        result = otel._normalize_otel_endpoint(
-            "http://collector:4318/v1/metrics", "traces"
-        )
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/metrics", "traces")
         self.assertEqual(result, "http://collector:4318/v1/traces")
 
     def test_normalize_traces_endpoint_from_base_url(self):
@@ -1909,25 +1768,19 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
     def test_normalize_traces_endpoint_already_correct(self):
         """Test endpoint already ending with /v1/traces remains unchanged"""
         otel = OpenTelemetry()
-        result = otel._normalize_otel_endpoint(
-            "http://collector:4318/v1/traces", "traces"
-        )
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/traces", "traces")
         self.assertEqual(result, "http://collector:4318/v1/traces")
 
     def test_normalize_metrics_endpoint_from_traces_path(self):
         """Test normalizing endpoint with /v1/traces to /v1/metrics"""
         otel = OpenTelemetry()
-        result = otel._normalize_otel_endpoint(
-            "http://collector:4318/v1/traces", "metrics"
-        )
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/traces", "metrics")
         self.assertEqual(result, "http://collector:4318/v1/metrics")
 
     def test_normalize_metrics_endpoint_from_logs_path(self):
         """Test normalizing endpoint with /v1/logs to /v1/metrics"""
         otel = OpenTelemetry()
-        result = otel._normalize_otel_endpoint(
-            "http://collector:4318/v1/logs", "metrics"
-        )
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/logs", "metrics")
         self.assertEqual(result, "http://collector:4318/v1/metrics")
 
     def test_normalize_metrics_endpoint_from_base_url(self):
@@ -1939,25 +1792,19 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
     def test_normalize_metrics_endpoint_already_correct(self):
         """Test endpoint already ending with /v1/metrics remains unchanged"""
         otel = OpenTelemetry()
-        result = otel._normalize_otel_endpoint(
-            "http://collector:4318/v1/metrics", "metrics"
-        )
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/metrics", "metrics")
         self.assertEqual(result, "http://collector:4318/v1/metrics")
 
     def test_normalize_logs_endpoint_from_traces_path(self):
         """Test normalizing endpoint with /v1/traces to /v1/logs"""
         otel = OpenTelemetry()
-        result = otel._normalize_otel_endpoint(
-            "http://collector:4318/v1/traces", "logs"
-        )
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/traces", "logs")
         self.assertEqual(result, "http://collector:4318/v1/logs")
 
     def test_normalize_logs_endpoint_from_metrics_path(self):
         """Test normalizing endpoint with /v1/metrics to /v1/logs"""
         otel = OpenTelemetry()
-        result = otel._normalize_otel_endpoint(
-            "http://collector:4318/v1/metrics", "logs"
-        )
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/metrics", "logs")
         self.assertEqual(result, "http://collector:4318/v1/logs")
 
     def test_normalize_logs_endpoint_from_base_url(self):
@@ -1998,9 +1845,7 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
             ),
         ]
     )
-    def test_normalize_traces_nonstandard_otlp_ingest_urls_unchanged(
-        self, input_url: str, expected: str
-    ) -> None:
+    def test_normalize_traces_nonstandard_otlp_ingest_urls_unchanged(self, input_url: str, expected: str) -> None:
         """Splunk-style /v2/trace/otlp endpoints must not get /v1/traces appended."""
         otel = OpenTelemetry()
         self.assertEqual(
@@ -2075,24 +1920,18 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
             call_args = mock_warning.call_args[0]
             self.assertIn("Invalid signal_type", call_args[0])
             self.assertEqual(call_args[1], "invalid")  # signal_type parameter
-            self.assertEqual(
-                call_args[2], {"traces", "metrics", "logs"}
-            )  # valid_signals parameter
+            self.assertEqual(call_args[2], {"traces", "metrics", "logs"})  # valid_signals parameter
 
     def test_normalize_endpoint_https(self):
         """Test normalization works with https URLs"""
         otel = OpenTelemetry()
-        result = otel._normalize_otel_endpoint(
-            "https://collector.example.com:4318", "logs"
-        )
+        result = otel._normalize_otel_endpoint("https://collector.example.com:4318", "logs")
         self.assertEqual(result, "https://collector.example.com:4318/v1/logs")
 
     def test_normalize_endpoint_with_path_prefix(self):
         """Test normalization works with URLs that have path prefixes"""
         otel = OpenTelemetry()
-        result = otel._normalize_otel_endpoint(
-            "http://collector:4318/otel/v1/traces", "logs"
-        )
+        result = otel._normalize_otel_endpoint("http://collector:4318/otel/v1/traces", "logs")
         # Should replace the final /traces with /logs
         self.assertEqual(result, "http://collector:4318/otel/v1/logs")
 
@@ -2272,9 +2111,7 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
         )
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-        config = OpenTelemetryConfig(
-            exporter="otlp_http", endpoint="http://collector:4318"
-        )
+        config = OpenTelemetryConfig(exporter="otlp_http", endpoint="http://collector:4318")
         otel = OpenTelemetry(config=config)
 
         processor = otel._get_span_processor()
@@ -2292,9 +2129,7 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
         )
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-        config = OpenTelemetryConfig(
-            exporter="otlp_grpc", endpoint="http://collector:4317"
-        )
+        config = OpenTelemetryConfig(exporter="otlp_grpc", endpoint="http://collector:4317")
         otel = OpenTelemetry(config=config)
 
         processor = otel._get_span_processor()
@@ -2330,9 +2165,7 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
         )
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-        config = OpenTelemetryConfig(
-            exporter="http/protobuf", endpoint="http://collector:4318"
-        )
+        config = OpenTelemetryConfig(exporter="http/protobuf", endpoint="http://collector:4318")
         otel = OpenTelemetry(config=config)
 
         processor = otel._get_span_processor()
@@ -2365,9 +2198,7 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
         """Test that otlp_http protocol uses HTTP OTLPLogExporter"""
         from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
-        config = OpenTelemetryConfig(
-            exporter="otlp_http", endpoint="http://collector:4318", enable_events=True
-        )
+        config = OpenTelemetryConfig(exporter="otlp_http", endpoint="http://collector:4318", enable_events=True)
         otel = OpenTelemetry(config=config)
 
         exporter = otel._get_log_exporter()
@@ -2382,9 +2213,7 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
         """Test that otlp_grpc protocol uses gRPC OTLPLogExporter"""
         from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 
-        config = OpenTelemetryConfig(
-            exporter="otlp_grpc", endpoint="http://collector:4317", enable_events=True
-        )
+        config = OpenTelemetryConfig(exporter="otlp_grpc", endpoint="http://collector:4317", enable_events=True)
         otel = OpenTelemetry(config=config)
 
         exporter = otel._get_log_exporter()
@@ -2399,9 +2228,7 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
         """Test that 'grpc' protocol alias uses gRPC OTLPLogExporter"""
         from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 
-        config = OpenTelemetryConfig(
-            exporter="grpc", endpoint="http://collector:4317", enable_events=True
-        )
+        config = OpenTelemetryConfig(exporter="grpc", endpoint="http://collector:4317", enable_events=True)
         otel = OpenTelemetry(config=config)
 
         exporter = otel._get_log_exporter()
@@ -2547,9 +2374,7 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
 
     def test_http_exporter_endpoint_normalization_for_traces(self):
         """Test that HTTP trace exporter gets properly normalized endpoint"""
-        config = OpenTelemetryConfig(
-            exporter="otlp_http", endpoint="http://collector:4318"
-        )
+        config = OpenTelemetryConfig(exporter="otlp_http", endpoint="http://collector:4318")
         otel = OpenTelemetry(config=config)
 
         processor = otel._get_span_processor()
@@ -2561,9 +2386,7 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
 
     def test_grpc_exporter_endpoint_normalization_for_traces(self):
         """Test that gRPC trace exporter gets properly normalized endpoint"""
-        config = OpenTelemetryConfig(
-            exporter="otlp_grpc", endpoint="http://collector:4317"
-        )
+        config = OpenTelemetryConfig(exporter="otlp_grpc", endpoint="http://collector:4317")
         otel = OpenTelemetry(config=config)
 
         processor = otel._get_span_processor()
@@ -2575,9 +2398,7 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
             self.assertIn("collector:4317", processor.span_exporter._endpoint)  # type: ignore[attr-defined]
             # The endpoint should have been normalized with /v1/traces before being passed to gRPC exporter
             # We verify this by checking the normalization function was called correctly
-            normalized = otel._normalize_otel_endpoint(
-                "http://collector:4317", "traces"
-            )
+            normalized = otel._normalize_otel_endpoint("http://collector:4317", "traces")
             self.assertEqual(normalized, "http://collector:4317/v1/traces")
 
     def test_http_log_exporter_endpoint_normalization_for_logs(self):
@@ -2614,9 +2435,7 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
             self.assertIn("collector:4317", exporter._endpoint)  # type: ignore[attr-defined]
             # The endpoint should have been normalized with /v1/logs before being passed to gRPC exporter
             # We verify this by checking the normalization function was called correctly
-            normalized = otel._normalize_otel_endpoint(
-                "http://collector:4317/v1/traces", "logs"
-            )
+            normalized = otel._normalize_otel_endpoint("http://collector:4317/v1/traces", "logs")
             self.assertEqual(normalized, "http://collector:4317/v1/logs")
 
     def test_get_metric_reader_uses_http_exporter_for_http_protobuf(self):
@@ -2626,9 +2445,7 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
         )
         from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 
-        config = OpenTelemetryConfig(
-            exporter="http/protobuf", endpoint="http://collector:4318"
-        )
+        config = OpenTelemetryConfig(exporter="http/protobuf", endpoint="http://collector:4318")
         otel = OpenTelemetry(config=config)
 
         reader = otel._get_metric_reader()
@@ -2667,14 +2484,10 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
 
     def _create_test_kwargs_and_response(self):
         """Load test data from JSON files"""
-        with open(
-            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
-        ) as f:
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")) as f:
             kwargs = json.load(f)
 
-        with open(
-            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
-        ) as f:
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")) as f:
             response_obj = json.load(f)
 
         return kwargs, response_obj
@@ -2749,9 +2562,7 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
 
         # Should have external_parent_span
         parent_spans = self._get_spans_by_name("external_parent_span")
-        self.assertEqual(
-            len(parent_spans), 1, "Should have exactly one external_parent_span"
-        )
+        self.assertEqual(len(parent_spans), 1, "Should have exactly one external_parent_span")
 
         # Verify LiteLLM set attributes on external parent span
         parent_span_finished = parent_spans[0]
@@ -2921,9 +2732,7 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
 
         # Should have the external parent span
         parent_spans = self._get_spans_by_name("external_parent_span")
-        self.assertEqual(
-            len(parent_spans), 1, "Should have exactly one external_parent_span"
-        )
+        self.assertEqual(len(parent_spans), 1, "Should have exactly one external_parent_span")
 
         # Verify LiteLLM set attributes on external parent span
         parent_span_finished = parent_spans[0]
@@ -2962,9 +2771,7 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
 
             # Verify the span is in global context
             current_span = trace.get_current_span()
-            self.assertEqual(
-                current_span, parent_span, "Span should be in global context"
-            )
+            self.assertEqual(current_span, parent_span, "Span should be in global context")
 
             # Make completion call
             start_time = datetime.utcnow()
@@ -2998,9 +2805,7 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
         """
         # Initialize OpenTelemetry
         otel = OpenTelemetry(tracer_provider=self.tracer_provider)
-        otel.message_logging = (
-            True  # Enable message logging to get raw_gen_ai_request spans
-        )
+        otel.message_logging = True  # Enable message logging to get raw_gen_ai_request spans
 
         # Load test data
         kwargs, response_obj = self._create_test_kwargs_and_response()
@@ -3087,9 +2892,7 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
 
         # Should have external_parent_span
         parent_spans = self._get_spans_by_name("external_parent_span")
-        self.assertEqual(
-            len(parent_spans), 1, "Should have exactly one external_parent_span"
-        )
+        self.assertEqual(len(parent_spans), 1, "Should have exactly one external_parent_span")
 
         # Verify LiteLLM set attributes on external parent span even on failure
         parent_span_finished = parent_spans[0]
@@ -3117,15 +2920,11 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
     def setUp(self):
         # Insulate from a shell-set OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
         # so these tests exercise the legacy default path (message_logging=True).
-        self._prev = os.environ.pop(
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None
-        )
+        self._prev = os.environ.pop("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None)
 
     def tearDown(self):
         if self._prev is not None:
-            os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
-                self._prev
-            )
+            os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = self._prev
 
     def test_input_messages_uses_parts_structure(self):
         """
@@ -3165,9 +2964,7 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
         # Find the call that set gen_ai.input.messages
         input_messages_calls = [
-            call
-            for call in mock_span.set_attribute.call_args_list
-            if call[0][0] == "gen_ai.input.messages"
+            call for call in mock_span.set_attribute.call_args_list if call[0][0] == "gen_ai.input.messages"
         ]
         self.assertEqual(
             len(input_messages_calls),
@@ -3224,9 +3021,7 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
         # Find the call that set gen_ai.output.messages
         output_messages_calls = [
-            call
-            for call in mock_span.set_attribute.call_args_list
-            if call[0][0] == "gen_ai.output.messages"
+            call for call in mock_span.set_attribute.call_args_list if call[0][0] == "gen_ai.output.messages"
         ]
         self.assertEqual(
             len(output_messages_calls),
@@ -3322,9 +3117,7 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
         # Find the call that set gen_ai.response.finish_reasons
         finish_reasons_calls = [
-            call
-            for call in mock_span.set_attribute.call_args_list
-            if call[0][0] == "gen_ai.response.finish_reasons"
+            call for call in mock_span.set_attribute.call_args_list if call[0][0] == "gen_ai.response.finish_reasons"
         ]
         self.assertEqual(
             len(finish_reasons_calls),
@@ -3369,9 +3162,7 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         mock_span.set_attribute.assert_any_call("gen_ai.operation.name", "chat")
 
     @parameterized.expand([("_handle_success",), ("_handle_failure",)])
-    def test_handle_success_failure_nulls_parent_span_if_ignore_context_propagation(
-        self, handle_method: str
-    ):
+    def test_handle_success_failure_nulls_parent_span_if_ignore_context_propagation(self, handle_method: str):
         """
         If ignore_context_propagation is True, _handle_success should ignore any parent span
         and create a root-level span. This could be useful for langfuse_otel where
@@ -3426,14 +3217,12 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
         self.assertTrue(child_spans, "Expected at least one child span")
         for span in child_spans:
-            assert (
-                span.parent is None or span.parent.span_id in child_span_ids
-            ), f"if ignore_context_propagation is True, span should not have parent from other providers, but got parent: {span.parent}"
+            assert span.parent is None or span.parent.span_id in child_span_ids, (
+                f"if ignore_context_propagation is True, span should not have parent from other providers, but got parent: {span.parent}"
+            )
 
     @parameterized.expand([("_handle_success",), ("_handle_failure",)])
-    def test_handle_success_failure_default_preserves_parent_span(
-        self, handle_method: str
-    ):
+    def test_handle_success_failure_default_preserves_parent_span(self, handle_method: str):
         """
         For default otel callbacks, _handle_success should use parent spans normally.
         (symmetric with _handle_failure)
@@ -3481,14 +3270,12 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
         self.assertTrue(child_spans, "Expected at least one child span")
         for span in child_spans:
-            assert (
-                span.parent is not None
-            ), f"By default parent span should be preserved, but got None parent for span: {span.name}"
+            assert span.parent is not None, (
+                f"By default parent span should be preserved, but got None parent for span: {span.name}"
+            )
 
     @parameterized.expand([("_handle_success",), ("_handle_failure",)])
-    def test_handle_success_failure_with_context_propagation_preserves_parent_span(
-        self, handle_method: str
-    ):
+    def test_handle_success_failure_with_context_propagation_preserves_parent_span(self, handle_method: str):
         """
         For otel callbacks with context propagation enabled, _handle_success should
         use parent spans normally. (symmetric with _handle_failure)
@@ -3539,9 +3326,9 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
         self.assertTrue(child_spans, "Expected at least one child span")
         for span in child_spans:
-            assert (
-                span.parent is not None
-            ), f"If ignore_context_propagation is False, parent span should be preserved, but got None parent for span: {span.name}"
+            assert span.parent is not None, (
+                f"If ignore_context_propagation is False, parent span should be preserved, but got None parent for span: {span.name}"
+            )
 
     def test_handle_failure_hasattr_guard_on_parent_name(self):
         """
@@ -3576,9 +3363,7 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         try:
             otel._handle_failure(kwargs, None, start, end)
         except AttributeError as e:
-            self.fail(
-                f"_handle_failure raised AttributeError on parent span without 'name': {e}"
-            )
+            self.fail(f"_handle_failure raised AttributeError on parent span without 'name': {e}")
 
     def test_handle_failure_creates_error_span(self):
         """
@@ -3640,9 +3425,7 @@ class TestRawSpanAttributeIsolation(unittest.TestCase):
             "litellm_params": {"custom_llm_provider": "vertex_ai"},
             "optional_params": {"temperature": 0.7},
             "original_response": '{"predictions": [1,2,3]}',
-            "additional_args": {
-                "complete_input_dict": {"instances": [{"content": "hello"}]}
-            },
+            "additional_args": {"complete_input_dict": {"instances": [{"content": "hello"}]}},
             "standard_logging_object": {
                 "id": "test-id",
                 "call_type": "embedding",
@@ -3689,13 +3472,9 @@ class TestNoParentSpanDuplication(unittest.TestCase):
 
         otel = OpenTelemetry(tracer_provider=tracer_provider)
 
-        with open(
-            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
-        ) as f:
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")) as f:
             kwargs = json.load(f)
-        with open(
-            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
-        ) as f:
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")) as f:
             response_obj = json.load(f)
 
         # Simulate proxy flow: create a parent proxy span
@@ -3889,9 +3668,7 @@ class TestResponseIdFallback(unittest.TestCase):
         otel.set_attributes(mock_span, kwargs, response_obj)
 
         # Should use provider response ID, not litellm call ID
-        mock_span.set_attribute.assert_any_call(
-            "gen_ai.response.id", "chatcmpl-provider-id-456"
-        )
+        mock_span.set_attribute.assert_any_call("gen_ai.response.id", "chatcmpl-provider-id-456")
 
     def test_response_id_fallback_for_embeddings(self):
         """When response_obj has no id (embeddings), fallback to
@@ -3920,9 +3697,7 @@ class TestResponseIdFallback(unittest.TestCase):
         otel.set_attributes(mock_span, kwargs, response_obj)
 
         # Should fallback to litellm call ID
-        mock_span.set_attribute.assert_any_call(
-            "gen_ai.response.id", "litellm-embed-call-789"
-        )
+        mock_span.set_attribute.assert_any_call("gen_ai.response.id", "litellm-embed-call-789")
 
     def test_response_id_fallback_for_image_gen(self):
         """When response_obj has no id (image gen), fallback to
@@ -3949,9 +3724,7 @@ class TestResponseIdFallback(unittest.TestCase):
         otel.set_attributes(mock_span, kwargs, response_obj)
 
         # Should fallback to litellm call ID
-        mock_span.set_attribute.assert_any_call(
-            "gen_ai.response.id", "litellm-img-call-101"
-        )
+        mock_span.set_attribute.assert_any_call("gen_ai.response.id", "litellm-img-call-101")
 
     def test_litellm_call_id_emitted_as_span_attribute(self):
         """litellm.call_id must be set on the span from standard_logging_payload."""
@@ -4031,11 +3804,7 @@ class TestOpenTelemetryResponsesAPI(unittest.TestCase):
 
     def _get_attr(self, mock_span, attr_name):
         """Extract the value set for a specific attribute name, or None."""
-        calls = [
-            call
-            for call in mock_span.set_attribute.call_args_list
-            if call[0][0] == attr_name
-        ]
+        calls = [call for call in mock_span.set_attribute.call_args_list if call[0][0] == attr_name]
         if not calls:
             return None
         return calls[0][0][1]
@@ -4086,9 +3855,7 @@ class TestOpenTelemetryResponsesAPI(unittest.TestCase):
             ],
         }
 
-        otel.set_attributes(
-            span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj
-        )
+        otel.set_attributes(span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj)
 
         raw = self._get_attr(mock_span, "gen_ai.output.messages")
         parsed = json.loads(raw)
@@ -4115,9 +3882,7 @@ class TestOpenTelemetryResponsesAPI(unittest.TestCase):
             ],
         }
 
-        otel.set_attributes(
-            span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj
-        )
+        otel.set_attributes(span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj)
 
         raw = self._get_attr(mock_span, "gen_ai.output.messages")
         parsed = json.loads(raw)
@@ -4154,9 +3919,7 @@ class TestOpenTelemetryResponsesAPI(unittest.TestCase):
             ],
         }
 
-        otel.set_attributes(
-            span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj
-        )
+        otel.set_attributes(span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj)
 
         raw = self._get_attr(mock_span, "gen_ai.output.messages")
         parsed = json.loads(raw)
@@ -4183,15 +3946,11 @@ class TestOpenTelemetryResponsesAPI(unittest.TestCase):
             ],
         }
 
-        otel.set_attributes(
-            span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj
-        )
+        otel.set_attributes(span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj)
 
         # No output messages should be set since the text is empty
         raw = self._get_attr(mock_span, "gen_ai.output.messages")
-        self.assertIsNone(
-            raw, "Empty output text should not produce gen_ai.output.messages"
-        )
+        self.assertIsNone(raw, "Empty output text should not produce gen_ai.output.messages")
 
     def test_choices_still_work(self):
         """Existing choices-based responses must still work (no regression)."""
@@ -4299,9 +4058,7 @@ class TestOpenTelemetryResponsesAPI(unittest.TestCase):
         otel = OpenTelemetry()
         mock_span = MagicMock()
 
-        kwargs = self._base_kwargs(
-            system_instructions=[{"role": "system", "content": "Be concise."}]
-        )
+        kwargs = self._base_kwargs(system_instructions=[{"role": "system", "content": "Be concise."}])
         response_obj = self._responses_api_response_obj()
 
         otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
@@ -4473,11 +4230,7 @@ class TestSystemInstructionsPrecedence(unittest.TestCase):
     """Tests for the is-not-None precedence in system_instructions coalescing."""
 
     def _get_attr(self, mock_span, attr_name):
-        calls = [
-            call
-            for call in mock_span.set_attribute.call_args_list
-            if call[0][0] == attr_name
-        ]
+        calls = [call for call in mock_span.set_attribute.call_args_list if call[0][0] == attr_name]
         if not calls:
             return None
         return calls[0][0][1]
@@ -4554,24 +4307,16 @@ class TestResponsesAPIToolCallSpanAttributes(unittest.TestCase):
             ],
         }
 
-        otel.set_attributes(
-            span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj
-        )
+        otel.set_attributes(span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj)
 
         # Verify per-tool-call attributes were set (same format as choices branch)
         attr_names = [call[0][0] for call in mock_span.set_attribute.call_args_list]
         tool_call_attrs = [a for a in attr_names if "function_call" in a]
-        self.assertTrue(
-            len(tool_call_attrs) > 0, "Per-tool-call span attributes should be emitted"
-        )
+        self.assertTrue(len(tool_call_attrs) > 0, "Per-tool-call span attributes should be emitted")
 
         # Verify the name attribute specifically
-        mock_span.set_attribute.assert_any_call(
-            "gen_ai.completion.0.function_call.name", "get_weather"
-        )
-        mock_span.set_attribute.assert_any_call(
-            "gen_ai.completion.0.function_call.arguments", '{"location": "SF"}'
-        )
+        mock_span.set_attribute.assert_any_call("gen_ai.completion.0.function_call.name", "get_weather")
+        mock_span.set_attribute.assert_any_call("gen_ai.completion.0.function_call.arguments", '{"location": "SF"}')
 
     def test_multiple_tool_calls_indexed(self):
         """Multiple function_call items should be indexed correctly."""
@@ -4598,16 +4343,10 @@ class TestResponsesAPIToolCallSpanAttributes(unittest.TestCase):
             ],
         }
 
-        otel.set_attributes(
-            span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj
-        )
+        otel.set_attributes(span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj)
 
-        mock_span.set_attribute.assert_any_call(
-            "gen_ai.completion.0.function_call.name", "get_weather"
-        )
-        mock_span.set_attribute.assert_any_call(
-            "gen_ai.completion.1.function_call.name", "get_time"
-        )
+        mock_span.set_attribute.assert_any_call("gen_ai.completion.0.function_call.name", "get_weather")
+        mock_span.set_attribute.assert_any_call("gen_ai.completion.1.function_call.name", "get_time")
 
 
 class TestOpenTelemetryProxyParentSpanChildEmission(unittest.TestCase):
@@ -4678,17 +4417,11 @@ class TestOpenTelemetryProxyParentSpanChildEmission(unittest.TestCase):
         litellm_spans = [s for s in spans if s.name == LITELLM_REQUEST_SPAN_NAME]
         proxy_spans = [s for s in spans if s.name == LITELLM_PROXY_REQUEST_SPAN_NAME]
 
-        self.assertEqual(
-            len(litellm_spans), 1, "Exactly one litellm_request span must be emitted"
-        )
-        self.assertEqual(
-            len(proxy_spans), 1, "Proxy span should be closed exactly once"
-        )
+        self.assertEqual(len(litellm_spans), 1, "Exactly one litellm_request span must be emitted")
+        self.assertEqual(len(proxy_spans), 1, "Proxy span should be closed exactly once")
 
         litellm_span = litellm_spans[0]
-        self.assertIsNotNone(
-            litellm_span.parent, "litellm_request must have a parent (not root)"
-        )
+        self.assertIsNotNone(litellm_span.parent, "litellm_request must have a parent (not root)")
         self.assertEqual(
             litellm_span.parent.span_id,
             proxy_spans[0].context.span_id,
@@ -4715,9 +4448,7 @@ class TestOpenTelemetryProxyParentSpanChildEmission(unittest.TestCase):
         }
         otel._end_proxy_span_from_kwargs(kwargs, end_time=datetime.utcnow())
 
-        self.assertFalse(
-            proxy_span.is_recording(), "Proxy span should be closed by helper"
-        )
+        self.assertFalse(proxy_span.is_recording(), "Proxy span should be closed by helper")
 
     def test_end_proxy_span_from_kwargs_does_not_close_external_span(self):
         """Spans not named LITELLM_PROXY_REQUEST_SPAN_NAME must not be closed —
@@ -4898,9 +4629,7 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         )
         self.assertFalse(otel._emit_once(kwargs, "success"))
         self.assertFalse(otel._emit_once(kwargs, "failure"))
-        self.assertFalse(
-            otel._emit_once(kwargs, "guardrail", "block-code", 1.0, "pre_call")
-        )
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "block-code", 1.0, "pre_call"))
 
     def test_emit_once_separate_handlers_each_emit(self):
         """Two distinct handler instances must each emit exactly once for the
@@ -4935,9 +4664,7 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         dedupe key. Pre-fix, this call crashed inside ``dict.get``."""
         otel = OpenTelemetry()
         kwargs = self._build_kwargs()
-        self.assertTrue(
-            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"])
-        )
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"]))
         self.assertFalse(
             otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"]),
             "Same list scope must dedupe to False on the second call",
@@ -4955,9 +4682,7 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
             "Distinct list scopes must produce distinct dedupe keys",
         )
         self.assertFalse(otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call"]))
-        self.assertFalse(
-            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"])
-        )
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"]))
 
     def test_emit_once_accepts_dict_and_set_scope_parts(self):
         """``guardrail_mode`` can also arrive as a ``GuardrailMode`` TypedDict
@@ -4965,12 +4690,8 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         through the same normalization. Both must hash without raising."""
         otel = OpenTelemetry()
         kwargs = self._build_kwargs()
-        self.assertTrue(
-            otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"tags": ["pre", "post"]})
-        )
-        self.assertFalse(
-            otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"tags": ["pre", "post"]})
-        )
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"tags": ["pre", "post"]}))
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"tags": ["pre", "post"]}))
         self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"a", "b"}))
 
     def test_emit_once_handles_self_referential_scope_without_recursion_error(self):
@@ -5021,14 +4742,11 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         otel._create_guardrail_span(kwargs=kwargs, context=None)
         otel._create_guardrail_span(kwargs=kwargs, context=None)
 
-        guardrail_spans = [
-            s for s in span_exporter.get_finished_spans() if s.name == "guardrail"
-        ]
+        guardrail_spans = [s for s in span_exporter.get_finished_spans() if s.name == "guardrail"]
         self.assertEqual(
             len(guardrail_spans),
             1,
-            "List-valued guardrail_mode must emit exactly one guardrail span "
-            "across repeated lifecycle entrypoints",
+            "List-valued guardrail_mode must emit exactly one guardrail span across repeated lifecycle entrypoints",
         )
 
     def test_handle_success_emits_single_litellm_request_span_on_double_call(self):
@@ -5141,16 +4859,12 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
 
         otel._create_guardrail_span(kwargs=kwargs, context=None)
         # Mutate the entry between calls — proxy enriches the response.
-        guardrail_entry["guardrail_response"] = [
-            {"type": "code_block", "action_taken": "block"}
-        ]
+        guardrail_entry["guardrail_response"] = [{"type": "code_block", "action_taken": "block"}]
         guardrail_entry["end_time"] = 3.0
         otel._create_guardrail_span(kwargs=kwargs, context=None)
         otel._create_guardrail_span(kwargs=kwargs, context=None)
 
-        guardrail_spans = [
-            s for s in span_exporter.get_finished_spans() if s.name == "guardrail"
-        ]
+        guardrail_spans = [s for s in span_exporter.get_finished_spans() if s.name == "guardrail"]
         self.assertEqual(
             len(guardrail_spans),
             1,
@@ -5188,9 +4902,7 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         otel._create_guardrail_span(kwargs=kwargs, context=None)
         otel._create_guardrail_span(kwargs=kwargs, context=None)
 
-        guardrail_spans = [
-            s for s in span_exporter.get_finished_spans() if s.name == "guardrail"
-        ]
+        guardrail_spans = [s for s in span_exporter.get_finished_spans() if s.name == "guardrail"]
         self.assertEqual(
             len(guardrail_spans),
             2,
@@ -5446,9 +5158,7 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
             },
         )
         attrs = self._attr(span, exp)
-        self.assertAlmostEqual(
-            attrs["litellm.preprocessing.duration_ms"], 250.0, places=1
-        )
+        self.assertAlmostEqual(attrs["litellm.preprocessing.duration_ms"], 250.0, places=1)
 
     def test_failure_shape_request_data(self):
         # failure path: request_data with first_api_call_start_time lifted
@@ -5467,24 +5177,18 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
             },
         )
         attrs = self._attr(span, exp)
-        self.assertAlmostEqual(
-            attrs["litellm.preprocessing.duration_ms"], 30.0, places=1
-        )
+        self.assertAlmostEqual(attrs["litellm.preprocessing.duration_ms"], 30.0, places=1)
 
     def test_missing_received_at_omits(self):
         otel = OpenTelemetry()
         span, exp = self._span()
-        otel.set_preprocessing_duration_attribute(
-            span, {"first_api_call_start_time": datetime(2026, 1, 1)}
-        )
+        otel.set_preprocessing_duration_attribute(span, {"first_api_call_start_time": datetime(2026, 1, 1)})
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
 
     def test_missing_handoff_omits(self):
         otel = OpenTelemetry()
         span, exp = self._span()
-        otel.set_preprocessing_duration_attribute(
-            span, {"metadata": {"litellm_received_at": datetime(2026, 1, 1)}}
-        )
+        otel.set_preprocessing_duration_attribute(span, {"metadata": {"litellm_received_at": datetime(2026, 1, 1)}})
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
 
     def test_negative_duration_omitted(self):
@@ -5499,7 +5203,6 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
             },
         )
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
-
 
     def test_non_dict_container_is_noop(self):
         otel = OpenTelemetry()
@@ -5545,9 +5248,7 @@ class TestGetSpanContextLitellmMetadataFallback(unittest.TestCase):
 
         kwargs = {
             "litellm_params": {
-                "metadata": {
-                    "user_id": "test-user"
-                },  # Anthropic native metadata, no span
+                "metadata": {"user_id": "test-user"},  # Anthropic native metadata, no span
                 "litellm_metadata": {"litellm_parent_otel_span": mock_span},
             }
         }
@@ -5562,16 +5263,12 @@ class TestGetSpanContextLitellmMetadataFallback(unittest.TestCase):
         span_from_metadata = MagicMock(name="span_from_metadata")
         span_from_metadata.get_span_context.return_value = MagicMock(is_valid=True)
         span_from_litellm_metadata = MagicMock(name="span_from_litellm_metadata")
-        span_from_litellm_metadata.get_span_context.return_value = MagicMock(
-            is_valid=True
-        )
+        span_from_litellm_metadata.get_span_context.return_value = MagicMock(is_valid=True)
 
         kwargs = {
             "litellm_params": {
                 "metadata": {"litellm_parent_otel_span": span_from_metadata},
-                "litellm_metadata": {
-                    "litellm_parent_otel_span": span_from_litellm_metadata
-                },
+                "litellm_metadata": {"litellm_parent_otel_span": span_from_litellm_metadata},
             }
         }
 
@@ -5745,9 +5442,7 @@ class TestOpenTelemetryInferenceIdentityAttributes(unittest.TestCase):
         }
 
     def _otel_with_team_metadata_keys(self, keys):
-        return OpenTelemetry(
-            config=OpenTelemetryConfig(baggage_team_metadata_keys=keys)
-        )
+        return OpenTelemetry(config=OpenTelemetryConfig(baggage_team_metadata_keys=keys))
 
     def test_all_identity_attributes_stamped(self):
         otel = self._otel_with_team_metadata_keys(["tier", "cost_center"])
@@ -5776,9 +5471,7 @@ class TestOpenTelemetryInferenceIdentityAttributes(unittest.TestCase):
         otel = self._otel_with_team_metadata_keys(["tier"])
         span, exp = self._span()
         otel.set_attributes(span, self._kwargs(), {"model": "azure/gpt-4o"})
-        assert json.loads(self._attr(span, exp)["litellm.team.metadata"]) == {
-            "tier": "gold"
-        }
+        assert json.loads(self._attr(span, exp)["litellm.team.metadata"]) == {"tier": "gold"}
 
     def test_team_metadata_allowlist_from_config_yaml_kwarg(self):
         """callback_settings.otel.baggage_team_metadata_keys arrives as a kwarg
@@ -5786,9 +5479,7 @@ class TestOpenTelemetryInferenceIdentityAttributes(unittest.TestCase):
         otel = OpenTelemetry(baggage_team_metadata_keys=["cost_center"])
         span, exp = self._span()
         otel.set_attributes(span, self._kwargs(), {"model": "azure/gpt-4o"})
-        assert json.loads(self._attr(span, exp)["litellm.team.metadata"]) == {
-            "cost_center": "42"
-        }
+        assert json.loads(self._attr(span, exp)["litellm.team.metadata"]) == {"cost_center": "42"}
 
     def test_provider_model_falls_back_to_payload_model(self):
         """Without hidden_params.litellm_model_name the dispatched model is
@@ -5860,9 +5551,7 @@ class TestOpenTelemetryInferenceIdentityAttributes(unittest.TestCase):
         # no allowlisted key present -> dropped, not a useless "{}"
         assert OpenTelemetry._team_metadata_json({"c": 1}, keys) is None
         # only allowlisted sub-keys survive
-        assert json.loads(
-            OpenTelemetry._team_metadata_json({"a": 1, "c": 2}, keys)
-        ) == {"a": 1}
+        assert json.loads(OpenTelemetry._team_metadata_json({"a": 1, "c": 2}, keys)) == {"a": 1}
 
 
 class TestOpenTelemetryTeamMetadataKeysConfig(unittest.TestCase):
@@ -5932,13 +5621,9 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
     RETAINED_LOW_CARDINALITY_KEY = "gen_ai.request.model"
 
     def _load_fixtures(self):
-        with open(
-            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
-        ) as f:
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")) as f:
             kwargs = json.load(f)
-        with open(
-            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
-        ) as f:
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")) as f:
             response_obj = json.load(f)
         return kwargs, response_obj
 
@@ -5949,9 +5634,7 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
         tracer_provider = TracerProvider()
         tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
         otel = OpenTelemetry(
-            config=OpenTelemetryConfig(
-                exporter="console", enable_metrics=True, attributes=attributes
-            ),
+            config=OpenTelemetryConfig(exporter="console", enable_metrics=True, attributes=attributes),
             tracer_provider=tracer_provider,
             meter_provider=meter_provider,
         )
@@ -5973,10 +5656,7 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
                     for sm in rm.scope_metrics:
                         for m in sm.metrics:
                             if m.name == metric_name:
-                                return [
-                                    set(dp.attributes.keys())
-                                    for dp in m.data.data_points
-                                ]
+                                return [set(dp.attributes.keys()) for dp in m.data.data_points]
             time.sleep(self.POLL_INTERVAL)
         return None
 
@@ -5985,9 +5665,7 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
         cardinality. With exclude_list set, none of them reach any data point,
         while the retained low-cardinality model attribute survives. Asserted
         on both the duration and token-usage histograms."""
-        reader = self._record(
-            OTELMetricAttributeFilter(exclude_list=list(self.HIGH_CARDINALITY_KEYS))
-        )
+        reader = self._record(OTELMetricAttributeFilter(exclude_list=list(self.HIGH_CARDINALITY_KEYS)))
         excluded = set(self.HIGH_CARDINALITY_KEYS)
 
         for metric_name in (self.DURATION_METRIC, self.TOKEN_METRIC):
@@ -6049,9 +5727,7 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
             metric_reader = InMemoryMetricReader()
             meter_provider = MeterProvider(metric_readers=[metric_reader])
             tracer_provider = TracerProvider()
-            tracer_provider.add_span_processor(
-                SimpleSpanProcessor(InMemorySpanExporter())
-            )
+            tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
             otel = OpenTelemetry(
                 config=OpenTelemetryConfig(exporter="console", enable_metrics=True),
                 tracer_provider=tracer_provider,
@@ -6059,16 +5735,10 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
             )
             otel.tracer = tracer_provider.get_tracer(__name__)
             # The proxy sets this only after the logger already exists.
-            litellm.callback_settings = {
-                "otel": {
-                    "attributes": {"exclude_list": list(self.HIGH_CARDINALITY_KEYS)}
-                }
-            }
+            litellm.callback_settings = {"otel": {"attributes": {"exclude_list": list(self.HIGH_CARDINALITY_KEYS)}}}
             kwargs, response_obj = self._load_fixtures()
             start = datetime.utcnow()
-            otel._handle_success(
-                kwargs, response_obj, start, start + timedelta(seconds=1)
-            )
+            otel._handle_success(kwargs, response_obj, start, start + timedelta(seconds=1))
         finally:
             litellm.callback_settings = previous
 
@@ -6104,9 +5774,7 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
             with self.assertRaises(ValueError):
                 otel._filter_metric_attributes(attrs)
 
-            litellm.callback_settings = {
-                "otel": {"attributes": {"exclude_list": ["hidden_params"]}}
-            }
+            litellm.callback_settings = {"otel": {"attributes": {"exclude_list": ["hidden_params"]}}}
             filtered = otel._filter_metric_attributes(attrs)
         finally:
             litellm.callback_settings = previous
@@ -6130,9 +5798,7 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
             OpenTelemetry(
                 config=OpenTelemetryConfig(
                     exporter="console",
-                    attributes=OTELMetricAttributeFilter(
-                        include_list=["not.a.real.attribute"]
-                    ),
+                    attributes=OTELMetricAttributeFilter(include_list=["not.a.real.attribute"]),
                 )
             )
 
@@ -6141,9 +5807,7 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
             OpenTelemetry(
                 config=OpenTelemetryConfig(
                     exporter="console",
-                    attributes=OTELMetricAttributeFilter(
-                        exclude_list=["metadata.does_not_exist"]
-                    ),
+                    attributes=OTELMetricAttributeFilter(exclude_list=["metadata.does_not_exist"]),
                 )
             )
 
@@ -6175,11 +5839,7 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
             OTELMetricAttributeFilter(include_list=["gen_ai.token.type"]),
         ):
             with self.assertRaises(ValueError):
-                OpenTelemetry(
-                    config=OpenTelemetryConfig(
-                        exporter="console", attributes=attributes
-                    )
-                )
+                OpenTelemetry(config=OpenTelemetryConfig(exporter="console", attributes=attributes))
 
 
 class TestOTELServiceTierAttributes(unittest.TestCase):
@@ -6523,9 +6183,7 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
         with logger.tracer.start_as_current_span("after"):
             pass
 
-        self.assertEqual(
-            [span.name for span in shared.get_finished_spans()], ["before", "after"]
-        )
+        self.assertEqual([span.name for span in shared.get_finished_spans()], ["before", "after"])
 
     def test_mixed_ownership_cache_shuts_down_only_the_victims_that_own_their_exporter(self):
         """Both dynamic entry points share one cache, so it can hold providers of mixed
@@ -6539,17 +6197,13 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
         # Cached by the headers path, so its processor wraps the SHARED exporter.
         logger._get_tracer_with_dynamic_headers({"authorization": "Basic shared-owner"})
         # Evicted by the config path, which builds its OWN exporter from a named kind.
-        logger._get_tracer_with_dynamic_config(
-            OpenTelemetryConfig(exporter="console", skip_set_global=True)
-        )
+        logger._get_tracer_with_dynamic_config(OpenTelemetryConfig(exporter="console", skip_set_global=True))
 
         with logger.tracer.start_as_current_span("after"):
             pass
 
         self.assertFalse(shared._stopped)
-        self.assertEqual(
-            [span.name for span in shared.get_finished_spans()], ["before", "after"]
-        )
+        self.assertEqual([span.name for span in shared.get_finished_spans()], ["before", "after"])
 
     def test_mixed_ownership_cache_still_reclaims_a_thread_owning_victim(self):
         """The other direction of the same defect: a victim that owns a real exporter
@@ -6559,9 +6213,7 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
         before = len(self._live_exporter_threads())
 
         # Cached by the config path with a named kind, so it owns a BatchSpanProcessor thread.
-        logger._get_tracer_with_dynamic_config(
-            OpenTelemetryConfig(exporter="console", skip_set_global=True)
-        )
+        logger._get_tracer_with_dynamic_config(OpenTelemetryConfig(exporter="console", skip_set_global=True))
         self.assertEqual(len(self._live_exporter_threads()) - before, 1)
 
         # Evicted by the headers path, whose own exporter is the shared instance.
@@ -6855,3 +6507,308 @@ def test_set_raw_request_attributes_stamps_only_json_object_responses(
     original_response: str, expected: dict[str, object]
 ):
     assert _raw_response_span_attributes(original_response) == expected
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def drain_logging_worker(isolate_litellm_state: None) -> AsyncIterator[None]:
+    yield
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+
+
+LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
+
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm state to the true defaults captured at conftest import time,
+    then restores after the test. This prevents module-level mutations (e.g.
+    `litellm.num_retries = 3` at the top of test_langfuse_e2e_test.py) from
+    leaking across tests within the same xdist worker.
+    """
+    from litellm.litellm_core_utils import litellm_logging as ll_logging
+    from litellm.proxy.management_helpers import audit_logs as ll_audit_logs
+
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
+    yield
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
+
+
+_LIST_ATTRS = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+    "service_callback",
+    "pre_call_rules",
+    "post_call_rules",
+)
+
+_SCALAR_ATTRS = (
+    "set_verbose",
+    "cache",
+    "num_retries",
+    "num_retries_per_request",
+    "turn_off_message_logging",
+    "redact_messages_in_exceptions",
+    "redact_user_api_key_info",
+    "s3_callback_params",
+    "s3_audit_callback_params",
+    "datadog_params",
+    "vector_store_registry",
+)
+
+_DEFAULTS: dict = {}
+
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception as e:
+            print(f"Error reloading litellm.proxy.proxy_server: {e}")
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+
+# What is this?
+## Unit tests for opentelemetry integration
+
+# What is this?
+## Unit test for presidio pii masking
+
+load_dotenv()
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
+    def test_parallel_tool_calls(self, mock_response_obj: ModelResponse):
+        tool_calls = mock_response_obj.choices[0].message.tool_calls
+        from litellm.integrations.opentelemetry import OpenTelemetry
+        from litellm.proxy._types import SpanAttributes
+
+        kv_pair_dict = OpenTelemetry._tool_calls_kv_pair(tool_calls)
+
+        assert kv_pair_dict == {
+            f"{SpanAttributes.LLM_COMPLETIONS.value}.0.function_call.arguments": '{"city": "New York"}',
+            f"{SpanAttributes.LLM_COMPLETIONS.value}.0.function_call.name": "get_weather",
+            f"{SpanAttributes.LLM_COMPLETIONS.value}.1.function_call.arguments": '{"city": "New York"}',
+            f"{SpanAttributes.LLM_COMPLETIONS.value}.1.function_call.name": "get_news",
+        }
+
+    @pytest.mark.asyncio
+    async def test_opentelemetry_integration(self):
+        """
+        Unit test to confirm external parent otel spans are NOT ended by LiteLLM.
+
+        External spans (passed via metadata) should be managed by their creators,
+        not by LiteLLM. This prevents premature closure of spans from Langfuse,
+        user code, or other external observability tools.
+        """
+        # Reset all callbacks to ensure clean state
+        litellm.logging_callback_manager._reset_all_callbacks()
+
+        parent_otel_span = MagicMock()
+        litellm.callbacks = ["otel"]
+
+        await litellm.acompletion(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hey!",
+            metadata={"litellm_parent_otel_span": parent_otel_span},
+        )
+
+        await asyncio.sleep(1)
+
+        # Verify external span was NOT ended by LiteLLM
+        # External spans should only be closed by their creators
+        parent_otel_span.end.assert_not_called()
+
+    def test_get_span_context_detects_active_span(self):
+        """
+        Unit test: _get_span_context() should auto-detect active spans from global context.
+
+        Active spans should be automatically detected without explicit metadata
+        """
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        # Setup: Create TracerProvider and tracer
+        tracer_provider = TracerProvider()
+        trace.set_tracer_provider(tracer_provider)
+        tracer = trace.get_tracer(__name__)
+
+        # Create OpenTelemetry integration
+        otel_integration = OpenTelemetry()
+
+        # Act: Create an active span and test detection
+        with tracer.start_as_current_span("test_parent") as parent_span:
+            parent_span_context = parent_span.get_span_context()
+
+            # Call _get_span_context without explicit parent in metadata
+            kwargs = {"litellm_params": {"metadata": {}}}
+            detected_context, detected_span = otel_integration._get_span_context(kwargs)
+
+            # Assert: Should detect the active span
+            assert detected_span is not None, "Should detect active span from global context"
+            assert detected_span is parent_span, "Detected span should be the active parent span"
+
+            detected_span_context = detected_span.get_span_context()
+            assert detected_span_context.trace_id == parent_span_context.trace_id, (
+                "Detected span should have same trace_id as parent"
+            )
+            assert detected_span_context.span_id == parent_span_context.span_id, (
+                "Detected span should have same span_id as parent"
+            )
+
+    def test_record_exception_on_span(self):
+        """
+        Test that _record_exception_on_span properly records exception information.
+
+        This test verifies that StandardLoggingPayloadErrorInformation is properly
+        extracted and set as span attributes using ErrorAttributes constants.
+        """
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from litellm.integrations._types.open_inference import ErrorAttributes
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        # Setup: Create TracerProvider and tracer
+        tracer_provider = TracerProvider()
+        trace.set_tracer_provider(tracer_provider)
+        tracer = trace.get_tracer(__name__)
+
+        # Create OpenTelemetry integration
+        otel_integration = OpenTelemetry()
+
+        # Create a mock span
+        mock_span = MagicMock()
+
+        # Create test exception
+        test_exception = ValueError("Test error message")
+
+        # Create kwargs with exception and error_information
+        kwargs = {
+            "exception": test_exception,
+            "standard_logging_object": {
+                "error_information": {
+                    "error_code": "500",
+                    "error_class": "ValueError",
+                    "llm_provider": "openai",
+                    "traceback": "Traceback (most recent call last)...",
+                    "error_message": "Test error message",
+                },
+                "error_str": "Test error message",
+            },
+        }
+
+        # Act: Record exception on span
+        otel_integration._record_exception_on_span(span=mock_span, kwargs=kwargs)
+
+        # Assert: span.record_exception should be called with the exception
+        mock_span.record_exception.assert_called_once_with(test_exception)
+
+        # Assert: Error attributes should be set using ErrorAttributes constants
+        expected_calls = [
+            (ErrorAttributes.ERROR_CODE, "500"),
+            (ErrorAttributes.ERROR_TYPE, "ValueError"),
+            (ErrorAttributes.ERROR_MESSAGE, "Test error message"),
+            (ErrorAttributes.ERROR_LLM_PROVIDER, "openai"),
+            (ErrorAttributes.ERROR_STACK_TRACE, "Traceback (most recent call last)..."),
+        ]
+
+        # Check that set_attribute was called with expected values
+        actual_calls = [call.args for call in mock_span.set_attribute.call_args_list]
+
+        for expected_call in expected_calls:
+            assert expected_call in actual_calls, (
+                f"Expected set_attribute call {expected_call} not found in actual calls: {actual_calls}"
+            )
+
+    def test_record_exception_on_span_with_fallback(self):
+        """
+        Test that _record_exception_on_span falls back to error_str when error_information is None.
+        """
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from litellm.integrations._types.open_inference import ErrorAttributes
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        # Setup: Create TracerProvider and tracer
+        tracer_provider = TracerProvider()
+        trace.set_tracer_provider(tracer_provider)
+        tracer = trace.get_tracer(__name__)
+
+        # Create OpenTelemetry integration
+        otel_integration = OpenTelemetry()
+
+        # Create a mock span
+        mock_span = MagicMock()
+
+        # Create test exception
+        test_exception = ValueError("Test error message")
+
+        # Create kwargs without error_information (should fallback to error_str)
+        kwargs = {
+            "exception": test_exception,
+            "standard_logging_object": {
+                "error_information": None,
+                "error_str": "Fallback error message",
+            },
+        }
+
+        # Act: Record exception on span
+        otel_integration._record_exception_on_span(span=mock_span, kwargs=kwargs)
+
+        # Assert: span.record_exception should be called
+        mock_span.record_exception.assert_called_once_with(test_exception)
+
+        # Assert: error.message should be set from error_str using ErrorAttributes constant
+        mock_span.set_attribute.assert_called_with(ErrorAttributes.ERROR_MESSAGE, "Fallback error message")

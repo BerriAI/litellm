@@ -1,14 +1,23 @@
+import asyncio
+import importlib
+import os
+from collections.abc import AsyncIterator
 from types import MappingProxyType
 from typing import Final
 
 import pytest
+import pytest_asyncio
 from pydantic import TypeAdapter
 
+import litellm
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     inherit_message_logging_privacy,
     initialize_standard_callback_dynamic_params,
     iter_client_callback_metadata_dicts,
 )
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
 def test_iter_client_callback_metadata_dicts_covers_all_read_paths():
@@ -279,3 +288,154 @@ def test_arize_sampling_rates_are_picked_up_from_metadata():
 
     assert params.get("arize_success_sampling_rate") == "0.5"
     assert params.get("arize_error_sampling_rate") == "0.1"
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def drain_logging_worker(isolate_litellm_state: None) -> AsyncIterator[None]:
+    yield
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+
+
+LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
+
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm state to the true defaults captured at conftest import time,
+    then restores after the test. This prevents module-level mutations (e.g.
+    `litellm.num_retries = 3` at the top of test_langfuse_e2e_test.py) from
+    leaking across tests within the same xdist worker.
+    """
+    from litellm.litellm_core_utils import litellm_logging as ll_logging
+    from litellm.proxy.management_helpers import audit_logs as ll_audit_logs
+
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
+    yield
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
+
+
+_LIST_ATTRS = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+    "service_callback",
+    "pre_call_rules",
+    "post_call_rules",
+)
+
+_SCALAR_ATTRS = (
+    "set_verbose",
+    "cache",
+    "num_retries",
+    "num_retries_per_request",
+    "turn_off_message_logging",
+    "redact_messages_in_exceptions",
+    "redact_user_api_key_info",
+    "s3_callback_params",
+    "s3_audit_callback_params",
+    "datadog_params",
+    "vector_store_registry",
+)
+
+_DEFAULTS: dict = {}
+
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception:
+            pass
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_dynamic_key_extraction_from_metadata():
+    """
+    Test extraction of langfuse keys from metadata in kwargs.
+    This simulates a Proxy request where keys are passed in metadata.
+    """
+    kwargs = {
+        "metadata": {
+            "langfuse_public_key": "pk-test",
+            "langfuse_secret_key": "sk-test",
+            "langfuse_host": "https://test.langfuse.com",
+        }
+    }
+
+    params = initialize_standard_callback_dynamic_params(kwargs)
+
+    assert params.get("langfuse_public_key") == "pk-test"
+    assert params.get("langfuse_secret_key") == "sk-test"
+    assert params.get("langfuse_host") == "https://test.langfuse.com"
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_dynamic_key_extraction_from_litellm_params_metadata():
+    """
+    Test extraction of langfuse keys from litellm_params.metadata.
+    """
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "langfuse_public_key": "pk-litellm",
+                "langfuse_secret_key": "sk-litellm",
+            }
+        }
+    }
+
+    params = initialize_standard_callback_dynamic_params(kwargs)
+
+    assert params.get("langfuse_public_key") == "pk-litellm"
+    assert params.get("langfuse_secret_key") == "sk-litellm"
+
+
+if __name__ == "__main__":
+    test_dynamic_key_extraction_from_metadata()
+    test_dynamic_key_extraction_from_litellm_params_metadata()

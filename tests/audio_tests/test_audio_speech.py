@@ -1,12 +1,7 @@
 # What is this?
 ## unit tests for openai tts endpoint
 
-import asyncio
 import os
-import random
-import time
-import traceback
-from litellm._uuid import uuid
 
 from dotenv import load_dotenv
 
@@ -15,7 +10,6 @@ load_dotenv()
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import openai
 import pytest
 
 import litellm
@@ -317,7 +311,8 @@ async def test_azure_ava_tts_with_custom_voice():
     Test that when using a custom Azure voice (en-US-AndrewNeural),
     the SSML request body contains the selected voice.
     """
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
+
     import httpx
 
     # Mock response
@@ -362,7 +357,8 @@ async def test_azure_ava_tts_fable_voice_mapping():
     Test that when using OpenAI voice 'fable',
     it gets mapped to Azure voice 'en-GB-RyanNeural' in the SSML.
     """
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
+
     import httpx
 
     # Mock response
@@ -410,6 +406,7 @@ async def test_aws_polly_tts_with_native_voice():
     """
     import json
     from unittest.mock import patch
+
     import httpx
 
     # Mock response - Polly returns audio bytes directly
@@ -458,6 +455,7 @@ async def test_aws_polly_tts_with_openai_voice_mapping():
     """
     import json
     from unittest.mock import patch
+
     import httpx
 
     mock_response_content = b"fake_audio_data"
@@ -500,6 +498,7 @@ async def test_aws_polly_tts_with_ssml():
     """
     import json
     from unittest.mock import patch
+
     import httpx
 
     mock_response_content = b"fake_audio_data"

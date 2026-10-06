@@ -10,13 +10,9 @@ Tests cover:
 - Error handling
 """
 
-import json
-from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-
-import litellm
 from litellm.llms.bedrock.embed.amazon_nova_transformation import (
     AmazonNovaEmbeddingConfig,
 )

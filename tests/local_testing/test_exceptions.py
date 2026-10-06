@@ -1,25 +1,25 @@
 import asyncio
 import os
-import subprocess
 import traceback
 from typing import Any
-
-import httpx
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AuthenticationError, AzureOpenAI, BadRequestError, OpenAIError, RateLimitError
-
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-
-from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+from openai import (
+    AsyncAzureOpenAI,
+    AsyncOpenAI,
+    AuthenticationError,
+    AzureOpenAI,
+    BadRequestError,
+    OpenAIError,
+)
 
 import litellm
 from litellm import (  # AuthenticationError,; RateLimitError,; ServiceUnavailableError,; OpenAIError,
-    ContextWindowExceededError,
     completion,
-    embedding,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 litellm.vertex_project = "litellm-ci-cd"
 litellm.vertex_location = "us-central1"
@@ -722,8 +722,8 @@ def test_fireworks_ai_exception_mapping():
     Based on Fireworks AI documentation: https://docs.fireworks.ai/tools-sdks/python-client/api-reference
     """
     import litellm
-    from litellm.llms.fireworks_ai.common_utils import FireworksAIException
     from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
+    from litellm.llms.fireworks_ai.common_utils import FireworksAIException
 
     # Test scenarios covering all important cases
     test_scenarios = [
@@ -965,7 +965,6 @@ async def test_exception_with_headers(sync_mode, provider, model, call_type, str
     cooldown_time = 30.0
 
     def _return_exception(*args, **kwargs):
-        import datetime
 
         from httpx import Headers, Request, Response
 
@@ -1037,7 +1036,6 @@ def test_openai_gateway_timeout_error():
     mapped_target = openai_client.chat.completions.with_raw_response  # type: ignore
 
     def _return_exception(*args, **kwargs):
-        import datetime
 
         from httpx import Headers, Request, Response
 
@@ -1108,7 +1106,6 @@ async def test_exception_with_headers_httpx(
     ```
     """
     print(f"Received args: {locals()}")
-    import openai
 
     if sync_mode:
         client = HTTPHandler()
@@ -1127,7 +1124,6 @@ async def test_exception_with_headers_httpx(
     cooldown_time = 30.0
 
     def _return_exception(*args, **kwargs):
-        import datetime
 
         from httpx import Headers, HTTPStatusError, Request, Response
 
@@ -1225,6 +1221,7 @@ def test_exceptions_base_class():
 
 def test_context_window_exceeded_error_from_litellm_proxy():
     from httpx import Response
+
     from litellm.litellm_core_utils.exception_mapping_utils import (
         extract_and_raise_litellm_exception,
     )
@@ -1248,6 +1245,7 @@ def test_bad_request_error_with_response_without_request():
     ensure it doesn't raise RuntimeError when the exception is created.
     """
     from httpx import Response
+
     from litellm.litellm_core_utils.exception_mapping_utils import (
         extract_and_raise_litellm_exception,
     )
