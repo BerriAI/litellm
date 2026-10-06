@@ -32,7 +32,7 @@
   - handlers accept `Interceptors`, never a concrete `ChannelInterceptors`
 - Construction does no work; preparation and lifecycle observation begin when the future is polled
 - Native observers receive start and terminal events through the shared call runner; a stream retains its lifecycle until exhaustion, error, or drop. Hosted routes leave terminal observation to their driver
-- A format's `route.rs` declares the concrete `Protocol` and a route method that takes a typed request and builds a `litellm_host::call::HostedMachine` with `hosted_call`
+- A hosted format's `route.rs` declares the concrete `Protocol` and a route method that takes a typed request and builds a `litellm_host::call::HostedMachine` with `hosted_call`; audio transcription has no hosted machine and returns its response directly
   - the shared call plumbing owns stream opening, delivery, backpressure, and detachment
   - request decoding belongs to the boundary before the machine starts
   - route closures only supply execution dependencies and route-specific host capabilities
@@ -49,7 +49,7 @@
 - `litellm-inference-<fmt>` mirrors the route packages (`litellm/ocr/`, `litellm/messages/`, ...)
 - Provider code never imports from `inference` or `inference-*`
 - Handlers belong in `inference-*` or `llms`, never in a host crate
-- Import every item from its canonical path. Never re-export another crate's items or give an item a second public path; the only allowed re-export is a private submodule surfacing its item at its module root (`mod error; pub use error::Error;`)
+- Import every item from its canonical path. Never re-export another crate's items or give an item a second public path; the only allowed re-exports are a private submodule surfacing its item at its module root (`mod error; pub use error::Error;`) and each format crate's `pub use litellm_inference::RouteError as Error;`, which keeps the pre-split `<fmt>::Error` name
 
 ## Error placement
 
