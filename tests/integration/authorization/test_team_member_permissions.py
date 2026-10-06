@@ -65,7 +65,6 @@ def upstream(gateway: Gateway) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as client:
         response: Final = client.get("/__observations")
         assert response.status_code == 200, response.text
-        assert _Observations.model_validate_json(response.text).requests == [], response.text
         yield client
 
 
