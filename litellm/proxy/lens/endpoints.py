@@ -40,6 +40,8 @@ from litellm.proxy.lens.models import (
     RunRequest,
     Sample,
     Scope,
+    TraceFindingCount,
+    TraceFindingsRequest,
     WatchAllResult,
     WatchSkipped,
     Worker,
@@ -238,6 +240,12 @@ async def activity_available(auth: Auth, storage: StorageDep) -> ActivityAvailab
 async def list_agents(auth: Auth, storage: StorageDep) -> tuple[str, ...]:
     scope: Final = user_scope(auth)
     return await source_reader(storage).agents(scope) if storage is not None else ()
+
+
+@router.post("/traces/findings", response_model=tuple[TraceFindingCount, ...])
+async def trace_findings(body: TraceFindingsRequest, auth: Auth) -> tuple[TraceFindingCount, ...]:
+    user_scope(auth)
+    return await repository().trace_findings(body.traces)
 
 
 def watching(lens: Lens) -> Lens:

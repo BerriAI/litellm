@@ -37,7 +37,15 @@ def execution(identity: str, count: int = 1) -> Execution:
 async def test_original_content_is_reassembled_across_character_and_span_pages() -> None:
     run: Final = execution("run", 3)
     original: Final = "before " + "x" * 7991 + "split boundary" + "y" * 10000 + " final result"
-    root: Final = TracePart(execution_id=run.id, span_id="a", name="root", kind="agent", content=original)
+    root: Final = TracePart(
+        execution_id=run.id,
+        span_id="a",
+        name="root",
+        kind="agent",
+        content=original,
+        start_time="2026-10-03 10:00:00.123456789",
+        end_time="2026-10-03 10:00:01.123456789",
+    )
     child: Final = TracePart(
         execution_id=run.id, span_id="b", parent_span_id="a", name="child", kind="agent", content="subagent evidence"
     )
