@@ -600,9 +600,17 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
 }
 
 #[rstest]
+#[case::same_key("same-key", Some(0.25))]
+#[case::other_key("other-key", None)]
+#[case::foreign_team("foreign-team", None)]
+#[case::call_id_other_key("call-id-other-key", None)]
+#[case::call_id_foreign_team("call-id-foreign-team", None)]
+#[case::transport_only("transport-only", None)]
 #[tokio::test]
 async fn assigned_call_ids_require_shared_ownership_through_detail_and_batch_reads(
     #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] id: &str,
+    #[case] expected: Option<f64>,
 ) -> TestResult {
     let fixture = migrated_database?;
     let client = &fixture.database.client;
@@ -705,20 +713,18 @@ async fn assigned_call_ids_require_shared_ownership_through_detail_and_batch_rea
         .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
         .await?;
     assert_eq!(page.data.len(), cases.len());
-    for (id, _, _, _, expected) in cases {
-        let summary = page
-            .data
-            .iter()
-            .find(|summary| summary.trace_id == id)
-            .ok_or("missing run")?;
-        let detail = reader
-            .get_trace(&store, &access, id, &summary.trace_ref)
-            .await?
-            .ok_or("missing trace")?;
-        assert_eq!(detail.summary.spend, expected, "{id}");
-        assert_eq!(summary.spend, expected, "{id}");
-        assert_eq!(summary.priced_calls, u64::from(expected.is_some()), "{id}");
-    }
+    let summary = page
+        .data
+        .iter()
+        .find(|summary| summary.trace_id == id)
+        .ok_or("missing run")?;
+    let detail = reader
+        .get_trace(&store, &access, id, &summary.trace_ref)
+        .await?
+        .ok_or("missing trace")?;
+    assert_eq!(detail.summary.spend, expected, "{id}");
+    assert_eq!(summary.spend, expected, "{id}");
+    assert_eq!(summary.priced_calls, u64::from(expected.is_some()), "{id}");
     Ok(())
 }
 

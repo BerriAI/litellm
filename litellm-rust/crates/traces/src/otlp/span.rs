@@ -20,12 +20,19 @@ pub(super) fn flatten(
     request: ExportTraceServiceRequest,
     limits: DecodeLimits,
 ) -> Result<Vec<DecodedSpan>, Error> {
+    flatten_with_budget(request, limits).map(|(spans, _)| spans)
+}
+
+pub(super) fn flatten_with_budget(
+    request: ExportTraceServiceRequest,
+    limits: DecodeLimits,
+) -> Result<(Vec<DecodedSpan>, Budget), Error> {
     let mut budget = Budget::new(limits);
     let mut spans = Vec::new();
     for resource in request.resource_spans {
         append_resource(resource, &mut budget, &mut spans)?;
     }
-    Ok(spans)
+    Ok((spans, budget))
 }
 
 fn append_resource(
@@ -124,6 +131,10 @@ fn hex_bytes(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+pub(super) fn session_trace_id(session: &str) -> Vec<u8> {
+    Sha256::digest(format!("litellm.claude.session.v1\0{session}"))[..16].to_vec()
+}
+
 fn decoded_span(
     span: Span,
     resource_attributes: &Shared<BTreeMap<String, String>>,
@@ -145,8 +156,7 @@ fn decoded_span(
             .get("session.id")
             .filter(|value| !value.is_empty())
     {
-        let trace_id =
-            hex_bytes(&Sha256::digest(format!("litellm.claude.session.v1\0{session}"))[..16]);
+        let trace_id = hex_bytes(&session_trace_id(session));
         let actor = span_attributes.get("agent_id").unwrap_or(session).clone();
         budget.consume(original_trace_id.len() + actor.len() + 256)?;
         span_attributes.insert("lens.original_trace_id".to_owned(), original_trace_id);

@@ -2575,6 +2575,20 @@ def _batch_rate(
     return fallback if rate is None else rate
 
 
+def _batch_or_half(batch_rate: float | None, standard_rate: float | None, default: float = 0.0) -> float:
+    if batch_rate is not None:
+        return batch_rate
+    if standard_rate is not None:
+        return standard_rate / 2
+    return default
+
+
+def _completion_image_tokens(usage: Usage) -> int:
+    details: Final = usage.completion_tokens_details
+    image_tokens: Final = (details.image_tokens or 0) if details is not None else 0
+    return min(image_tokens, usage.completion_tokens)
+
+
 def batch_cost_calculator(
     usage: Usage,
     model: str,
@@ -2614,13 +2628,14 @@ def batch_cost_calculator(
             "output_cost_per_token",
         )
     ):
-        # model_info was provided (e.g. deployment metadata with only id/db_model)
-        # but carries no pricing fields. Fall back to the global pricing table so
-        # that standard model pricing is used instead of silently returning $0.
+        deployment_info: Final = model_info
         try:
             global_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
             if global_info:
-                model_info = global_info
+                model_info = {
+                    **global_info,
+                    **{key: value for key, value in deployment_info.items() if value is not None},
+                }
         except Exception:
             pass
 
@@ -2654,12 +2669,15 @@ def batch_cost_calculator(
 
         cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
         total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
-    if batch_rates.output is not None:
-        total_completion_cost = usage.completion_tokens * batch_rates.output
-    elif output_cost_per_token:
-        total_completion_cost = (
-            usage.completion_tokens * (output_cost_per_token) / 2
-        )  # batch cost is usually half of the regular token cost
+    text_rate: Final = _batch_or_half(batch_rates.output, output_cost_per_token)
+    image_rate: Final = _batch_or_half(
+        model_info.get("output_cost_per_image_token_batches"),
+        model_info.get("output_cost_per_image_token"),
+        default=text_rate,
+    )
+    image_tokens: Final = _completion_image_tokens(usage)
+    text_tokens: Final = usage.completion_tokens - image_tokens
+    total_completion_cost = text_tokens * text_rate + image_tokens * image_rate
 
     uplift: Final = _get_regional_uplift_multiplier(model_info, data_residency)
     if uplift != 1.0:

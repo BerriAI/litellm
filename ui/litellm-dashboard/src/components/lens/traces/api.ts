@@ -11,6 +11,8 @@ import {
 } from "../../networking";
 import type {
   SpanDetail,
+  SpanQuery,
+  TraceDetailQuery,
   SpanErrorPage,
   Trace,
   TraceListQuery,
@@ -48,9 +50,23 @@ export interface TracesApi {
 
 /** A one-liner Claude Code / Codex can run to read the trace. */
 export const agentHandoffText = (traceId: string, spanId?: string | null, traceRef?: string): string => {
-  const url = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${traceId}?format=md${spanId ? `&span_id=${spanId}` : ""}${traceRef ? `&trace_ref=${traceRef}` : ""}`;
+  const base = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${encodeURIComponent(traceId)}`;
+  const path = spanId ? `${base}/spans/${encodeURIComponent(spanId)}` : base;
+  const query = spanId
+    ? ({ trace_ref: traceRef } satisfies SpanQuery)
+    : ({ trace_ref: traceRef, page_size: 200 } satisfies TraceDetailQuery);
+  const params = new URLSearchParams(
+    Object.entries(query)
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => [key, String(value)]),
+  ).toString();
+  const url = params ? `${path}?${params}` : path;
+  const quotedUrl = "'" + url.replaceAll("'", "'\"'\"'") + "'";
   const what = spanId ? "this step of a LiteLLM agent trace" : "this LiteLLM agent trace";
-  return `Read ${what}, explain what happened, and investigate any issues:\ncurl -s -H "Authorization: Bearer $LITELLM_API_KEY" "${url}"`;
+  const guidance = spanId
+    ? "The JSON response contains this step's captured input, output, and attributes. Report missing content and capture warnings explicitly."
+    : `The JSON response contains span summaries. Follow next_cursor by adding cursor to this URL until it is null, preserving trace_ref and page_size. Fetch captured content at ${base}/spans/{span_id}, using the same trace_ref. Report missing content and capture warnings explicitly.`;
+  return `Read ${what}, explain what happened, and investigate any issues:\ncurl --fail-with-body -sS -H "Authorization: Bearer $LITELLM_API_KEY" ${quotedUrl}\n${guidance}`;
 };
 
 export function liveTracesApi(accessToken: string): TracesApi {
