@@ -160,6 +160,14 @@ def _prompt_rows(prompt_id: str, environment: str | None = None) -> list[dict[st
     )
 
 
+def _prompt_labels(prompt_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        "SELECT environment, version, prompt_info->>'label' AS label FROM \"LiteLLM_PromptTable\" "
+        "WHERE prompt_id = %s ORDER BY environment, version",
+        (prompt_id,),
+    )
+
+
 def _params(row: dict[str, JsonValue]) -> dict[str, JsonValue]:
     raw: Final = row["litellm_params"]
     return json.loads(raw) if isinstance(raw, str) else object_value(raw)
@@ -356,6 +364,31 @@ def test_prompt_update_patch_and_environment_delete_are_isolated(gateway: Gatewa
             (2, "staging"),
             (1, "staging"),
         ), versions_response.text
+
+        production_patch: Final = gateway.request(
+            "PATCH",
+            f"/prompts/{prompt_id}",
+            {"prompt_info": {"prompt_type": "db", "environment": "production", "label": "production-patched"}},
+            params={"environment": "production"},
+        )
+        assert production_patch.status_code == 200, production_patch.text
+        production_info: Final = gateway.request(
+            "GET",
+            f"/prompts/{prompt_id}/info",
+            params={"environment": "production"},
+        )
+        assert production_info.status_code == 200, production_info.text
+        production_spec: Final = PromptInfoResponse.model_validate_json(production_info.content).prompt_spec
+        assert object_value(production_spec.prompt_info.model_dump(mode="json")).get("label") == "production-patched", (
+            production_info.text
+        )
+        prompt_labels: Final = _prompt_labels(prompt_id)
+        assert tuple((row["environment"], row["version"], row["label"]) for row in prompt_labels) == (
+            ("production", 1, "production-patched"),
+            ("staging", 1, None),
+            ("staging", 2, None),
+            ("staging", 3, None),
+        ), prompt_labels
 
         base_patch: Final = gateway.request(
             "PATCH",

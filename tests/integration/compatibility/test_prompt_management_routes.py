@@ -6,7 +6,7 @@ import httpx
 import pytest
 from integration._support.client import Gateway, Scenario
 from integration._support.wire import Reply, Request, wire_server
-from openai import OpenAI
+from openai import OpenAI, Stream
 from openai.types.chat import ChatCompletionChunk
 from pydantic import JsonValue
 
@@ -127,6 +127,76 @@ def _usage_chunk() -> bytes:
     )
 
 
+def _responses_stream_response() -> Reply:
+    events: Final[tuple[dict[str, JsonValue], ...]] = (
+        {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+                "id": "resp-integration",
+                "object": "response",
+                "created_at": 1700000000,
+                "status": "in_progress",
+                "model": "gpt-4o-mini",
+                "output": [],
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+            },
+        },
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 1,
+            "item_id": "msg-integration",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "scripted ",
+        },
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 2,
+            "item_id": "msg-integration",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "response",
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": 3,
+            "response": {
+                "id": "resp-integration",
+                "object": "response",
+                "created_at": 1700000000,
+                "status": "completed",
+                "model": "gpt-4o-mini",
+                "output": [
+                    {
+                        "id": "msg-integration",
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": _ANSWER, "annotations": []}],
+                    }
+                ],
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+                "usage": {
+                    "input_tokens": 10,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 2,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 12,
+                },
+            },
+        },
+    )
+    return Reply(
+        content_type="text/event-stream",
+        chunks=tuple(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events),
+    )
+
+
 def _prompt_setup(
     gateway: Gateway,
     scenario: Scenario,
@@ -239,8 +309,14 @@ def test_streaming_chat_completion_resolves_prompt_and_preserves_streaming(
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/chat/completions")]
 
 
+@pytest.mark.parametrize(
+    ("stream", "base_path"),
+    ((False, "/v1"), (True, "/v1"), (False, ""), (True, "")),
+)
 def test_responses_create_resolves_prompt_and_shapes_template_messages(
     gateway: Gateway,
+    stream: bool,
+    base_path: str,
 ) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
@@ -255,7 +331,10 @@ def test_responses_create_resolves_prompt_and_shapes_template_messages(
                 {"role": "user", "content": "client turn"},
             ],
             "temperature": 0.2,
+            "stream": stream,
         }, body
+        if stream:
+            return _responses_stream_response()
         return Reply(
             body=json.dumps(
                 {
@@ -268,10 +347,14 @@ def test_responses_create_resolves_prompt_and_shapes_template_messages(
                         {
                             "id": "msg-integration",
                             "type": "message",
+                            "status": "completed",
                             "role": "assistant",
                             "content": [{"type": "output_text", "text": _ANSWER, "annotations": []}],
                         }
                     ],
+                    "parallel_tool_calls": True,
+                    "tool_choice": "auto",
+                    "tools": [],
                 }
             ).encode()
         )
@@ -281,10 +364,12 @@ def test_responses_create_resolves_prompt_and_shapes_template_messages(
         key: Final = scenario.key(models=[model])
         prompt_id: Final = f"prompt-{uuid.uuid4().hex}"
         _prompt_setup(gateway, scenario, model, prompt_id)
-        with _client(gateway, key) as client:
+        _create_prompt(gateway, prompt_id, model, "production", "production two")
+        with _client(gateway, key, base_path) as client:
             response: Final = client.responses.create(
                 model=model,
                 input="client turn",
+                stream=stream,
                 extra_body={
                     "prompt_id": prompt_id,
                     "prompt_variables": {"name": "x"},
@@ -292,7 +377,18 @@ def test_responses_create_resolves_prompt_and_shapes_template_messages(
                     "prompt_environment": "staging",
                 },
             )
-        assert response.output_text == _ANSWER, response.model_dump_json()
+            if stream:
+                assert isinstance(response, Stream)
+                events: Final = tuple(response)
+                assert (
+                    "".join(event.delta for event in events if event.type == "response.output_text.delta") == _ANSWER
+                ), events
+                assert events[-1].type == "response.completed", events
+                assert events[-1].response.id == events[0].response.id, events
+                assert events[-1].response.id.startswith("resp_"), events
+            else:
+                assert not isinstance(response, Stream)
+                assert response.output_text == _ANSWER, response.model_dump_json()
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/responses")]
 
 

@@ -1,3 +1,4 @@
+import uuid
 from typing import Final
 
 import httpx
@@ -37,6 +38,14 @@ def _memory_rows(key: str) -> list[dict[str, JsonValue]]:
     )
 
 
+def _memory_create_rows(key: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        "SELECT memory_id, key, value, metadata, user_id, team_id, created_by, updated_by "
+        'FROM "LiteLLM_MemoryTable" WHERE key = %s',
+        (key,),
+    )
+
+
 def _memory_request(
     gateway: Gateway,
     method: str,
@@ -50,6 +59,107 @@ def _memory_request(
 
 def _register_memory_cleanup(scenario: Scenario, key: str) -> None:
     scenario.cleanups.callback(_delete_memory_row, key)
+
+
+def test_memory_create_enforces_personal_and_team_scope(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team()
+        other_team: Final = scenario.team()
+        member_a: Final = scenario.member(team)
+        member_b: Final = scenario.member(team)
+        key_a: Final = scenario.key(user_id=member_a, team_id=team, allowed_routes=_MEMORY_ROUTE)
+        own_key: Final = f"memory-create-own-{uuid.uuid4().hex}"
+        other_user_key: Final = f"memory-create-other-user-{uuid.uuid4().hex}"
+        other_team_key: Final = f"memory-create-other-team-{uuid.uuid4().hex}"
+        admin_key: Final = f"memory-create-admin-{uuid.uuid4().hex}"
+
+        _register_memory_cleanup(scenario, own_key)
+        own_response: Final = gateway.request(
+            "POST",
+            "/v1/memory",
+            {"key": own_key, "value": "own"},
+            key=key_a,
+        )
+        assert own_response.status_code == 200, own_response.text
+        own: Final = LiteLLM_MemoryRow.model_validate_json(own_response.content)
+        assert (
+            own.key,
+            own.value,
+            own.metadata,
+            own.user_id,
+            own.team_id,
+            own.created_by,
+            own.updated_by,
+        ) == (own_key, "own", None, member_a, team, member_a, member_a), own_response.text
+        assert own.created_at is not None and own.updated_at is not None, own_response.text
+        assert _memory_create_rows(own_key) == [
+            {
+                "memory_id": own.memory_id,
+                "key": own_key,
+                "value": "own",
+                "metadata": None,
+                "user_id": member_a,
+                "team_id": team,
+                "created_by": member_a,
+                "updated_by": member_a,
+            }
+        ], own_response.text
+
+        _register_memory_cleanup(scenario, other_user_key)
+        other_user_response: Final = gateway.request(
+            "POST",
+            "/v1/memory",
+            {"key": other_user_key, "value": "x", "user_id": member_b},
+            key=key_a,
+        )
+        assert other_user_response.status_code == 403, other_user_response.text
+        assert other_user_response.text == '{"detail":"Only proxy admins may set user_id to a different user."}', (
+            other_user_response.text
+        )
+        assert _memory_rows(other_user_key) == []
+
+        _register_memory_cleanup(scenario, other_team_key)
+        other_team_response: Final = gateway.request(
+            "POST",
+            "/v1/memory",
+            {"key": other_team_key, "value": "x", "team_id": other_team},
+            key=key_a,
+        )
+        assert other_team_response.status_code == 403, other_team_response.text
+        assert other_team_response.text == '{"detail":"Only proxy admins may set team_id to a different team."}', (
+            other_team_response.text
+        )
+        assert _memory_rows(other_team_key) == []
+
+        _register_memory_cleanup(scenario, admin_key)
+        admin_response: Final = gateway.request(
+            "POST",
+            "/v1/memory",
+            {"key": admin_key, "value": "x", "user_id": member_b},
+            key=gateway.key,
+        )
+        assert admin_response.status_code == 200, admin_response.text
+        admin_memory: Final = LiteLLM_MemoryRow.model_validate_json(admin_response.content)
+        assert (
+            admin_memory.key,
+            admin_memory.value,
+            admin_memory.user_id,
+            admin_memory.created_by,
+            admin_memory.updated_by,
+        ) == (admin_key, "x", member_b, "default_user_id", "default_user_id"), admin_response.text
+        assert admin_memory.created_at is not None and admin_memory.updated_at is not None, admin_response.text
+        assert _memory_create_rows(admin_key) == [
+            {
+                "memory_id": admin_memory.memory_id,
+                "key": admin_key,
+                "value": "x",
+                "metadata": None,
+                "user_id": member_b,
+                "team_id": None,
+                "created_by": "default_user_id",
+                "updated_by": "default_user_id",
+            }
+        ], admin_response.text
 
 
 def test_memory_routes_enforce_personal_and_team_write_ownership(gateway: Gateway) -> None:
