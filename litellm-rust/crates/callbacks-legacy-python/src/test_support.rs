@@ -3,7 +3,7 @@ use std::ffi::CStr;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
-use crate::{LegacyLogging, PublicCall};
+use crate::{InferenceAdapter, PublicCall};
 
 /// The parameters of every `callbacks_legacy_python` function, as the real module declares them.
 /// `tests/unit/rust_bridge/test_callbacks_legacy_python.py` pins this file to the Python
@@ -178,7 +178,7 @@ pub(crate) fn legacy_call(
     py: Python<'_>,
     locals: &Bound<'_, PyDict>,
     asynchronous: bool,
-) -> LegacyLogging {
+) -> InferenceAdapter {
     let request = locals
         .get_item("request")
         .unwrap()
@@ -189,5 +189,5 @@ pub(crate) fn legacy_call(
         .map(|kwargs| kwargs.cast_into::<PyDict>().unwrap())
         .unwrap_or_else(|| PyDict::new(py));
     let call = PublicCall::capture(&request, &PyTuple::empty(py), &kwargs).unwrap();
-    LegacyLogging::new(py, crate::LoggingOperation::Ocr, call, asynchronous)
+    InferenceAdapter::new(py, crate::LoggingOperation::Ocr, call, asynchronous)
 }

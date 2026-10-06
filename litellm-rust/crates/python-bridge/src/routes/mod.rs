@@ -9,7 +9,7 @@ pub(crate) mod token_counter;
 pub(crate) mod traces;
 
 use litellm_callbacks_legacy_python::LoggingOperation;
-use litellm_callbacks_legacy_python::{LegacyLogging, PublicCall};
+use litellm_callbacks_legacy_python::{InferenceAdapter, PublicCall};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
 use litellm_host_python::{HookChain, PythonBinding, PythonCallHooks, PythonHostCalls};
 use pyo3::{
@@ -29,7 +29,7 @@ fn call_hooks(
     let arguments = call.arguments(py);
     Ok((
         arguments,
-        LegacyLogging::new(py, operation, call, asynchronous),
+        InferenceAdapter::new(py, operation, call, asynchronous),
     ))
 }
 
