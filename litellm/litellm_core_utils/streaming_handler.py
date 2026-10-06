@@ -280,7 +280,7 @@ class CustomStreamWrapper:
         self._repeated_messages_count = 1
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: int | None = None
-        self._last_returned_hidden_params: dict | None = None
+        self._last_returned_hidden_params: dict[str, object] | None = None
 
         _cached_logging_provider: Final = self.logging_obj.model_call_details.get("custom_llm_provider", None)
         self._cached_logging_llm_provider: str | None = _cached_logging_provider
@@ -1838,8 +1838,9 @@ class CustomStreamWrapper:
                             continue
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
-                        usage = calculate_total_usage(chunks=self.chunks)
-                        response._hidden_params["usage"] = usage
+                        usage = _reported_total_usage(chunks=self.chunks)
+                        if usage is not None:
+                            response._hidden_params["usage"] = usage
                         self._last_returned_hidden_params = response._hidden_params
                         # Add MCP metadata to final chunk if present
                         response = self._add_mcp_metadata_to_final_chunk(response)
@@ -1936,8 +1937,10 @@ class CustomStreamWrapper:
                 if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
                     self.chunks.append(processed_chunk)
                 if self.stream_options is None:  # add usage as hidden param
-                    usage = calculate_total_usage(chunks=self.chunks)
-                    processed_chunk._hidden_params["usage"] = usage
+                    self._last_returned_hidden_params = processed_chunk._hidden_params
+                    usage = _reported_total_usage(chunks=self.chunks)
+                    if usage is not None:
+                        self._last_returned_hidden_params["usage"] = usage
                 ## LOGGING
                 executor.submit(
                     self.run_success_logging_and_cache_storage,
@@ -2048,8 +2051,9 @@ class CustomStreamWrapper:
 
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
-                        usage = calculate_total_usage(chunks=self.chunks)
-                        processed_chunk._hidden_params["usage"] = usage
+                        usage = _reported_total_usage(chunks=self.chunks)
+                        if usage is not None:
+                            processed_chunk._hidden_params["usage"] = usage
                         self._last_returned_hidden_params = processed_chunk._hidden_params
 
                     # Call post-call streaming deployment hook for final chunk
@@ -2204,8 +2208,10 @@ class CustomStreamWrapper:
             if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
                 self.chunks.append(processed_chunk)
             if self.stream_options is None:
-                usage: Final = calculate_total_usage(chunks=self.chunks)
-                processed_chunk._hidden_params["usage"] = usage  # pyright: ignore[reportPrivateUsage]  # sync parity
+                self._last_returned_hidden_params = processed_chunk._hidden_params  # pyright: ignore[reportPrivateUsage]  # sync parity
+                usage: Final = _reported_total_usage(chunks=self.chunks)
+                if usage is not None:
+                    self._last_returned_hidden_params["usage"] = usage
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log
@@ -2413,7 +2419,13 @@ def _coerce_token_details(
     return details_type(**(raw if isinstance(raw, dict) else raw.model_dump()))
 
 
-def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
+def _reported_total_usage(chunks: Sequence[ModelResponse]) -> Usage | None:
+    if not any("usage" in chunk and chunk["usage"] is not None for chunk in chunks):
+        return None
+    return calculate_total_usage(chunks=chunks)
+
+
+def calculate_total_usage(chunks: Sequence[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
         attach_cache_creation_token_details,
