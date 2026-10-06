@@ -410,7 +410,7 @@ class RouteChecks:
         if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.agent_inference_routes.value):
             return True
 
-        if route in LiteLLMRoutes.litellm_native_routes.value:
+        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.litellm_native_routes.value):
             return True
 
         # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
@@ -913,6 +913,10 @@ class RouteChecks:
 
         # Self-service password change; the endpoint only writes the caller's own row.
         if route == "/user/password/change":
+            return
+
+        # Self-service logout; the endpoint only revokes the caller's own session key.
+        if route == "/session/logout":
             return
 
         # Hard-block known write routes regardless of HTTP method (defensive

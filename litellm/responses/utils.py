@@ -1,6 +1,6 @@
 import base64
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from functools import reduce
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
@@ -68,7 +68,7 @@ def _is_chat_text_part(part: object) -> bool:
 
 def _as_input_text_part(part: object) -> object:
     if isinstance(part, dict) and part.get("type") == "text":
-        return {**part, "type": "input_text"}  # mutable-ok: fresh part so the caller's block keeps its chat type
+        return {**part, "type": "input_text"}
     return part
 
 
@@ -85,8 +85,8 @@ class ResponsesAPIRequestUtils:
         content: object = message.get("content")
         if not isinstance(content, list) or not any(_is_chat_text_part(part) for part in content):
             return message
-        shaped_content: Final = [_as_input_text_part(part) for part in content]  # mutable-ok: Responses-shaped copy
-        return {**message, "content": shaped_content}  # mutable-ok: copy, the hook's message stays untouched
+        shaped_content: Final = [_as_input_text_part(part) for part in content]
+        return {**message, "content": shaped_content}
 
     @staticmethod
     def responses_input_to_chat_messages(
@@ -312,17 +312,17 @@ class ResponsesAPIRequestUtils:
     def _update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse,
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: dict[str, object] | None = None,
     ) -> ResponsesAPIResponse: 
         ...
 
     @overload
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
-        responses_api_response: dict[str, Any],
+        responses_api_response: dict[str, object],
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]: 
+        litellm_metadata: dict[str, object] | None = None,
+    ) -> dict[str, object]: 
         ...
 
     # fmt: on
@@ -332,7 +332,7 @@ class ResponsesAPIRequestUtils:
         responses_api_response: ResponsesAPIResponse | dict[str, Any],
         custom_llm_provider: str | None,
         litellm_metadata: dict[str, Any] | None = None,
-    ) -> ResponsesAPIResponse | dict[str, Any]:
+    ) -> ResponsesAPIResponse | dict[str, object]:
         """Update the responses_api_response_id with model_id and custom_llm_provider.
 
         Handles both ``ResponsesAPIResponse`` objects and plain dictionaries returned
@@ -556,7 +556,11 @@ class ResponsesAPIRequestUtils:
         return request_input
 
     @staticmethod
-    def strip_encrypted_reasoning_from_input(request_input: object) -> None:
+    def strip_encrypted_reasoning_from_input(
+        request_input: object,
+        *,
+        should_strip: Callable[[Mapping[str, object]], bool] | None = None,
+    ) -> None:
         """Drop reasoning items the routed deployment cannot decrypt, keeping their readable summary.
 
         Mutates ``request_input`` in place: the router's fallback snapshot shares this
@@ -565,8 +569,13 @@ class ResponsesAPIRequestUtils:
         if not isinstance(request_input, list):
             return
         items: Final = cast(list[object], request_input)  # cast-ok: untyped client json
-        stripped: Final = tuple(ResponsesAPIRequestUtils._without_encrypted_reasoning(item) for item in items)
-        items[:] = (item for item in stripped if item is not None)  # rebind-ok: list shared with fallback snapshot
+        stripped: Final = tuple(
+            ResponsesAPIRequestUtils._without_encrypted_reasoning(item)
+            if should_strip is None or (isinstance(item, Mapping) and should_strip(cast(Mapping[str, object], item)))
+            else item
+            for item in items
+        )
+        items[:] = (item for item in stripped if item is not None)
 
     @staticmethod
     def _without_encrypted_reasoning(item: object) -> object | None:
@@ -995,7 +1004,7 @@ class ResponsesAPIRequestUtils:
         responses_api_response: ResponsesAPIResponse | dict[str, Any],
         custom_llm_provider: str | None,
         litellm_metadata: dict[str, Any] | None = None,
-    ) -> ResponsesAPIResponse | dict[str, Any]:
+    ) -> ResponsesAPIResponse | dict[str, object]:
         """Encode container IDs in the response output with provider/model info.
 
         This walks through all output items and encodes any container_id fields

@@ -13,13 +13,14 @@ from types import MappingProxyType
 from typing import Any, Final, get_args
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.config_resolvers import FieldSource, SettingsStore, source_for
 from litellm.router import Router
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints import (
     ROUTER_SETTINGS_FIELDS,
     ROUTING_STRATEGY_DESCRIPTIONS,
@@ -29,18 +30,24 @@ from litellm.types.management_endpoints import (
 router: Final = APIRouter()
 
 
-class RouterSettingsResponse(BaseModel):
+class RouterSettingsResponse(LiteLLMBaseModel):
     fields: list[RouterSettingsField] = Field(description="List of all configurable router settings with metadata")
     current_values: dict[str, Any] = Field(description="Current values of router settings")
     routing_strategy_descriptions: dict[str, str] = Field(description="Descriptions for each routing strategy option")
+    routing_group_strategies: tuple[str, ...] = Field(
+        description="Strategies supported when constructing a routing group"
+    )
     source: dict[str, FieldSource] = Field(description="Source of each current router setting")
 
 
-class RouterFieldsResponse(BaseModel):
+class RouterFieldsResponse(LiteLLMBaseModel):
     fields: list[RouterSettingsField] = Field(
         description="List of all configurable router settings with metadata (without field values)"
     )
     routing_strategy_descriptions: dict[str, str] = Field(description="Descriptions for each routing strategy option")
+    routing_group_strategies: tuple[str, ...] = Field(
+        description="Strategies supported when constructing a routing group"
+    )
 
 
 def _router_setting_source(
@@ -110,11 +117,14 @@ async def get_router_settings(
         config: Final = await proxy_config.get_config()
         router_settings_from_config: Final = config.get("router_settings", {})
 
-        current_values: Final[dict[str, Any]] = {}
+        current_values: Final[dict[str, object]] = {}
         if llm_router is not None:
             # Router exposes routing groups as private `_routing_groups`; the
             # generic `hasattr` loop below would miss them.
-            current_values["routing_groups"] = [group.model_dump() for group in llm_router._routing_groups.values()]
+            current_values["routing_groups"] = [
+                group.model_dump(exclude=frozenset(("model_priorities",)) if group.model_priorities is None else None)
+                for group in llm_router._routing_groups.values()
+            ]
             for field in router_fields:
                 if field.field_name == "routing_groups":
                     continue
@@ -147,6 +157,7 @@ async def get_router_settings(
             fields=router_fields,
             current_values=current_values,
             routing_strategy_descriptions=ROUTING_STRATEGY_DESCRIPTIONS,
+            routing_group_strategies=(*available_routing_strategies, "priority"),
             source=source,
         )
     except Exception as e:
@@ -196,6 +207,7 @@ async def get_router_fields(
         return RouterFieldsResponse(
             fields=router_fields,
             routing_strategy_descriptions=ROUTING_STRATEGY_DESCRIPTIONS,
+            routing_group_strategies=(*available_routing_strategies, "priority"),
         )
     except Exception as e:
         verbose_proxy_logger.error("Error fetching router fields: %s", e)

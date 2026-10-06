@@ -10,6 +10,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
 
 router: Final = APIRouter()
 
@@ -57,7 +58,7 @@ async def search(
     Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
     ```bash
     curl -X POST "http://localhost:4000/v1/search/litellm-search" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "query": "latest AI developments 2024",
@@ -70,7 +71,7 @@ async def search(
     Example with search_tool_name in body:
     ```bash
     curl -X POST "http://localhost:4000/v1/search" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "search_tool_name": "litellm-search",
@@ -133,6 +134,11 @@ async def search(
     # If search_tool_name is provided in URL path, use it (takes precedence over body)
     if search_tool_name is not None:
         data["search_tool_name"] = search_tool_name
+
+    if not (
+        data.get("search_tool_name") or data.get("model") or general_settings.get("completion_model") or user_model
+    ):
+        raise ProxyMissingRequiredParamError(route="/search", param="search_tool_name")
 
     if "search_tool_name" in data and data["search_tool_name"]:
         data["model"] = data["search_tool_name"]
@@ -264,7 +270,7 @@ async def list_search_tools(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/search/tools" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Response:

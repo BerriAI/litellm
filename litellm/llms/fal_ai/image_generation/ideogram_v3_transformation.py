@@ -1,6 +1,8 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageObject, ImageResponse
@@ -8,13 +10,14 @@ from litellm.types.utils import ImageObject, ImageResponse
 from .transformation import FalAIBaseConfig
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class FalAIIdeogramV3Config(FalAIBaseConfig):
@@ -89,7 +92,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
 
         return optional_params
 
-    def _map_image_size(self, size: Any) -> Any:
+    def _map_image_size(self, size: Any) -> object:
         if isinstance(size, dict):
             width = size.get("width")
             height = size.get("height")
@@ -150,7 +153,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -170,7 +173,8 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         if not model_response.data:
             model_response.data = []
 
-        images: Final = response_data.get("images", [])
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        images: Final = response_object.get("images", [])
         if isinstance(images, list):
             for image_entry in images:
                 if isinstance(image_entry, dict):
@@ -185,7 +189,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
                     )
                 )
 
-        if hasattr(model_response, "_hidden_params") and "seed" in response_data:
-            model_response._hidden_params["seed"] = response_data["seed"]
+        if hasattr(model_response, "_hidden_params") and "seed" in response_object:
+            model_response._hidden_params["seed"] = response_object["seed"]
 
         return model_response

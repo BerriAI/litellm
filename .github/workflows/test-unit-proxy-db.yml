@@ -4,13 +4,10 @@ on:
   pull_request:
     branches:
       - main
-      - litellm_internal_staging
-      - litellm_oss_staging
       - "litellm_**"
   push:
     branches:
       - main
-      - litellm_internal_staging
 
 permissions:
   contents: read
@@ -61,7 +58,7 @@ jobs:
   proxy-db:
     needs: assert-shard-coverage
     # Display only the semantic shard name in the checks UI instead of GHA's
-    # default "proxy-db (key-generation, tests/proxy_unit_tests/…, 0, loadscope, 20)"
+    # default "proxy-db (key-generation, tests/unit/proxy/…, 0, loadscope, 20)"
     # which includes every matrix field and gets truncated past the test-path.
     name: ${{ matrix.test-group }}
     permissions:
@@ -74,7 +71,8 @@ jobs:
         include:
           # Must run serially — event-loop conflict with the logging worker.
           - test-group: key-generation
-            test-path: "tests/proxy_unit_tests/test_key_generate_prisma.py"
+            test-path: >-
+              tests/unit/proxy/management_endpoints/test_key_generate_prisma.py
             workers: 0
             dist: loadscope
             timeout: 20
@@ -82,25 +80,26 @@ jobs:
           # ---- auth: split into 2 shards ----
           - test-group: auth-checks
             test-path: >-
-              tests/proxy_unit_tests/test_auth_checks.py
-              tests/proxy_unit_tests/test_user_api_key_auth.py
-              tests/proxy_unit_tests/test_deprecated_key_grace_period.py
+              tests/unit/proxy/auth/test_auth_checks.py
+              tests/unit/proxy/auth/test_user_api_key_auth.py
+              tests/unit/proxy/test_credential_slot_registry.py
+              tests/unit/proxy/test_deprecated_key_grace_period.py
             workers: 4
             dist: loadscope
             timeout: 15
           - test-group: jwt-and-keys
             test-path: >-
-              tests/proxy_unit_tests/test_jwt.py
-              tests/proxy_unit_tests/test_jwt_key_mapping.py
-              tests/proxy_unit_tests/test_proxy_custom_auth.py
-              tests/proxy_unit_tests/test_key_generate_dynamodb.py
+              tests/unit/proxy/auth/test_jwt.py
+              tests/unit/proxy/management_endpoints/test_jwt_key_mapping.py
+              tests/unit/proxy/test_proxy_custom_auth.py
             workers: 4
             dist: loadscope
             timeout: 15
 
           # ---- test_proxy_utils.py, single shard, worksteal distribution ----
           - test-group: proxy-utils
-            test-path: "tests/proxy_unit_tests/test_proxy_utils.py"
+            test-path: >-
+              tests/unit/proxy/test_proxy_utils.py
             workers: 4
             dist: worksteal
             timeout: 15
@@ -108,20 +107,21 @@ jobs:
           # ---- proxy server: split into 2 shards ----
           - test-group: proxy-server-core
             test-path: >-
-              tests/proxy_unit_tests/test_proxy_server.py
-              tests/proxy_unit_tests/test_aproxy_startup.py
+              tests/proxy_unit_tests/test_proxy_server_gemini_pass_through.py
+              tests/unit/proxy/test__lazy_features.py
+              tests/unit/proxy/test_aproxy_startup.py
+              tests/unit/proxy/test_proxy_server.py
             workers: 4
             dist: loadscope
             timeout: 15
           - test-group: proxy-runtime
             test-path: >-
-              tests/proxy_unit_tests/test_proxy_config_unit_test.py
-              tests/proxy_unit_tests/test_proxy_routes.py
-              tests/proxy_unit_tests/test_server_root_path.py
-              tests/proxy_unit_tests/test_proxy_pass_user_config.py
-              tests/proxy_unit_tests/test_proxy_token_counter.py
-              tests/proxy_unit_tests/test_request_size_limit_middleware.py
-              tests/proxy_unit_tests/test_multipart_bypass_repro.py
+              tests/unit/proxy/auth/test_multipart_bypass_repro.py
+              tests/unit/proxy/auth/test_proxy_routes.py
+              tests/unit/proxy/middleware/test_request_size_limit_middleware.py
+              tests/unit/proxy/test_proxy_config_unit_test.py
+              tests/unit/proxy/test_proxy_token_counter.py
+              tests/unit/proxy/test_server_root_path.py
             workers: 4
             dist: loadscope
             timeout: 15
@@ -129,30 +129,30 @@ jobs:
           # ---- logging: split into 2 shards ----
           - test-group: custom-logging
             test-path: >-
-              tests/proxy_unit_tests/test_custom_callback_input.py
-              tests/proxy_unit_tests/test_custom_logger_s3_gcs.py
               tests/proxy_unit_tests/test_proxy_custom_logger.py
+              tests/unit/proxy/test_custom_callback_input.py
+              tests/unit/proxy/test_custom_logger_s3_gcs.py
             workers: 4
             dist: loadscope
             timeout: 15
           - test-group: logging-misc
             test-path: >-
-              tests/proxy_unit_tests/test_proxy_reject_logging.py
-              tests/proxy_unit_tests/test_audit_logs_proxy.py
-              tests/proxy_unit_tests/test_search_api_logging.py
+              tests/unit/proxy/management_helpers/test_audit_logs_proxy.py
+              tests/unit/proxy/spend_tracking/test_search_api_logging.py
+              tests/unit/proxy/test_proxy_reject_logging.py
             workers: 4
             dist: loadscope
             timeout: 15
 
           - test-group: db-and-spend
             test-path: >-
-              tests/proxy_unit_tests/test_prisma_client_backoff_retry.py
-              tests/proxy_unit_tests/test_db_schema_changes.py
-              tests/proxy_unit_tests/test_e2e_pod_lock_manager.py
-              tests/proxy_unit_tests/test_skills_db.py
-              tests/proxy_unit_tests/test_update_daily_tag_spend.py
-              tests/proxy_unit_tests/test_update_spend.py
-              tests/proxy_unit_tests/test_proxy_encrypt_decrypt.py
+              tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
+              tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
+              tests/unit/proxy/db/test_update_daily_tag_spend.py
+              tests/unit/proxy/test_db_schema_changes.py
+              tests/unit/proxy/test_prisma_client_backoff_retry.py
+              tests/unit/proxy/test_update_spend.py
+              tests/unit/skills/test_skills_db.py
             workers: 4
             dist: loadscope
             timeout: 15
@@ -160,40 +160,41 @@ jobs:
           # ---- guardrails + budget + hooks: split into 2 ----
           - test-group: guardrails-hooks
             test-path: >-
-              tests/proxy_unit_tests/test_proxy_setting_guardrails.py
-              tests/proxy_unit_tests/test_banned_keyword_list.py
-              tests/proxy_unit_tests/test_unit_test_proxy_hooks.py
+              tests/unit/proxy/hooks/test_banned_keyword_list.py
+              tests/unit/proxy/test_proxy_setting_guardrails.py
+              tests/unit/proxy/test_unit_test_proxy_hooks.py
             workers: 4
             dist: loadscope
             timeout: 15
           - test-group: budgets
             test-path: >-
-              tests/proxy_unit_tests/test_default_end_user_budget_simple.py
-              tests/proxy_unit_tests/test_unit_test_max_model_budget_limiter.py
-              tests/proxy_unit_tests/test_zero_cost_model_budget_bypass.py
+              tests/unit/proxy/auth/test_default_end_user_budget_simple.py
+              tests/unit/proxy/hooks/test_unit_test_max_model_budget_limiter.py
+              tests/unit/proxy/test_zero_cost_model_budget_bypass.py
             workers: 4
             dist: loadscope
             timeout: 15
 
           - test-group: endpoints-and-responses
             test-path: >-
-              tests/proxy_unit_tests/test_blog_posts_endpoint.py
-              tests/proxy_unit_tests/test_models_fallback_endpoint.py
-              tests/proxy_unit_tests/test_google_endpoint_routing.py
-              tests/proxy_unit_tests/test_google_gemini_proxy_request.py
-              tests/proxy_unit_tests/test_gemini_agents_endpoints.py
-              tests/proxy_unit_tests/test_get_favicon.py
-              tests/proxy_unit_tests/test_get_image.py
-              tests/proxy_unit_tests/test_reducto_ocr_route.py
-              tests/proxy_unit_tests/test_ui_path_detection.py
-              tests/proxy_unit_tests/test_prompt_test_endpoint.py
-              tests/proxy_unit_tests/test_check_batch_cost.py
-              tests/proxy_unit_tests/test_check_responses_cost.py
-              tests/proxy_unit_tests/test_response_polling_handler.py
-              tests/proxy_unit_tests/test_response_polling_pre_call_checks.py
-              tests/proxy_unit_tests/test_realtime_cache.py
               tests/proxy_unit_tests/test_proxy_exception_mapping.py
-              tests/proxy_unit_tests/test_custom_tokenizer_bug.py
+              tests/unit/proxy/lens
+              tests/unit/proxy/auth/test_models_fallback_endpoint.py
+              tests/unit/proxy/common_utils/test_check_batch_cost.py
+              tests/unit/proxy/common_utils/test_check_responses_cost.py
+              tests/unit/proxy/common_utils/test_realtime_cache.py
+              tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py
+              tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py
+              tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py
+              tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py
+              tests/unit/proxy/response_polling
+              tests/unit/proxy/test_custom_tokenizer_bug.py
+              tests/unit/proxy/test_get_favicon.py
+              tests/unit/proxy/test_get_image.py
+              tests/unit/proxy/test_prompt_test_endpoint.py
+              tests/unit/proxy/test_reducto_ocr_route.py
+              tests/unit/proxy/test_response_polling_pre_call_checks.py
+              tests/unit/proxy/test_ui_path_detection.py
             workers: 4
             dist: loadscope
             timeout: 15

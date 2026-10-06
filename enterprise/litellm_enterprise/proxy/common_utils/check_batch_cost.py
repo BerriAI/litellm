@@ -11,9 +11,14 @@ from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tupl
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
+    CLI_SESSION_KEY_PREFIX,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
 )
+from litellm.repositories.table_repositories import ManagedObjectRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -57,25 +62,19 @@ class _ManagedObjectRow(Protocol):
 
 
 def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[_ManagedObjectRow]":
-    table: Final[TableActions[_ManagedObjectRow]] = prisma_client.db.litellm_managedobjecttable
-    return table
+    return ManagedObjectRepository(prisma_client).table
 
 
 def _user_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_UserTable]":
-    table: Final[TableActions[prisma_models.LiteLLM_UserTable]] = prisma_client.db.litellm_usertable
-    return table
+    return UserRepository(prisma_client).table
 
 
 def _token_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
-    table: Final[TableActions[prisma_models.LiteLLM_VerificationToken]] = (
-        prisma_client.db.litellm_verificationtoken
-    )
-    return table
+    return VerificationTokenRepository(prisma_client).table
 
 
 def _team_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
-    table: Final[TableActions[prisma_models.LiteLLM_TeamTable]] = prisma_client.db.litellm_teamtable
-    return table
+    return TeamRepository(prisma_client).table
 
 
 class CheckBatchCost:
@@ -147,10 +146,12 @@ class CheckBatchCost:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}")
             return {}
 
-    async def _get_key_alias(self, batch_id: str, api_key: str | None) -> str | None:
+    async def _get_key_alias(self, batch_id: str, api_key: str | None, created_by: str | None) -> str | None:
         """Resolve the creating virtual key's alias from its hashed token."""
         if not api_key:
             return None
+        if created_by and api_key == f"{CLI_SESSION_KEY_PREFIX}-{created_by}":
+            return api_key
         try:
             key_row: prisma_models.LiteLLM_VerificationToken | None = await _token_table(
                 self.prisma_client
@@ -231,7 +232,7 @@ class CheckBatchCost:
             **(await self._get_user_info(batch_id, job.created_by)),
         }
 
-        key_alias = await self._get_key_alias(batch_id, api_key)
+        key_alias = await self._get_key_alias(batch_id, api_key, job.created_by)
         if key_alias is not None:
             metadata["user_api_key_alias"] = key_alias
         team_alias = await self._get_team_alias(team_id)

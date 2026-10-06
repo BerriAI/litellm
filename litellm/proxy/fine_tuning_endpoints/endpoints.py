@@ -87,7 +87,7 @@ async def create_fine_tuning_job(
     ```
     curl http://localhost:4000/v1/fine_tuning/jobs \
       -H "Content-Type: application/json" \
-      -H "Authorization: Bearer sk-1234" \
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
       -d '{
         "model": "gpt-3.5-turbo",
         "training_file": "file-abc123",
@@ -426,7 +426,7 @@ async def list_fine_tuning_jobs(
             route_type=CallTypes.alist_fine_tuning_jobs.value,
         )
 
-        response: Any | None = None
+        response: object = None
         if target_model_names and isinstance(target_model_names, str):
             target_model_names_list: Final = target_model_names.split(",")
             if len(target_model_names_list) != 1:

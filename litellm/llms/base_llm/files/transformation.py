@@ -6,7 +6,6 @@ import httpx
 from openai.types.file_deleted import FileDeleted
 
 from litellm.files.types import FileContentStreamingResult
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.files import TwoStepFileUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -21,19 +20,21 @@ from litellm.types.utils import LlmProviders, ModelResponse
 from ..chat.transformation import BaseConfig
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+    from litellm.proxy._types import UserAPIKeyAuth as _UserAPIKeyAuth
     from litellm.router import Router as _Router
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     Span = Any
     Router = _Router
+    UserAPIKeyAuth = _UserAPIKeyAuth
 else:
     LiteLLMLoggingObj = Any
     Span = Any
     Router = Any
+    UserAPIKeyAuth = Any
 
 
 class BaseFileUploadStream(ABC):
@@ -231,7 +232,7 @@ class BaseFilesConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

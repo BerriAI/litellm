@@ -263,7 +263,7 @@ def test_trimming_should_not_change_original_messages():
     assert messages == messages_copy
 
 
-@pytest.mark.parametrize("model", ["gpt-4-0125-preview", "claude-sonnet-4-6"])
+@pytest.mark.parametrize("model", ["gpt-5.4-mini", "claude-sonnet-4-6"])
 def test_trimming_with_model_cost_max_input_tokens(model):
     messages = [
         {"role": "system", "content": "This is a normal system message"},
@@ -842,6 +842,7 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
     """
     - Unit test for `_get_trace_id` function in Logging obj
     """
+    from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     litellm.success_callback = ["langfuse"]
@@ -874,24 +875,18 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
     time.sleep(3)
     assert litellm_logging_obj._get_trace_id(service_name="langfuse") is not None
 
-    ## if existing_trace_id exists
+    # langfuse addresses a trace by a 32-hex id, so the id litellm reports back is the
+    # resolved form of whichever source won; that is what the alerting deep link needs
     if langfuse_existing_trace_id is not None:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == langfuse_existing_trace_id
-        )
-    ## if trace_id exists
+        expected_source = langfuse_existing_trace_id
     elif langfuse_trace_id is not None:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == langfuse_trace_id
-        )
-    ## if no trace_id or existing_trace_id is provided, use litellm_trace_id
+        expected_source = langfuse_trace_id
     else:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == litellm_logging_obj.litellm_trace_id
-        )
+        expected_source = litellm_logging_obj.litellm_trace_id
+
+    assert litellm_logging_obj._get_trace_id(service_name="langfuse") == resolve_trace_id(
+        expected_source
+    )
 
 
 def test_convert_model_response_object():
@@ -1348,12 +1343,16 @@ def test_is_prompt_caching_enabled_error_handling():
 
 def test_is_prompt_caching_enabled_return_default_image_dimensions():
     """
-    Assert that `is_prompt_caching_valid_prompt` calls token_counter with use_default_image_token_count=True
+    Assert that `is_prompt_caching_valid_prompt` counts tokens with use_default_image_token_count=True
     when processing messages containing images
 
     IMPORTANT: Ensures Get token counter does not make a GET request to the image url
     """
-    with patch("litellm.utils.token_counter") as mock_token_counter:
+    mock_token_counter = MagicMock(return_value=False)
+    with patch(
+        "litellm.utils._get_messages_reach_token_count",
+        return_value=mock_token_counter,
+    ):
         litellm.utils.is_prompt_caching_valid_prompt(
             messages=[
                 {
@@ -1437,7 +1436,7 @@ def test_get_valid_models_openai_proxy(monkeypatch):
 
     litellm._turn_on_debug()
 
-    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-9876")
     monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://litellm-api.up.railway.app/")
     monkeypatch.delenv("FIREWORKS_AI_ACCOUNT_ID", None)
     monkeypatch.delenv("FIREWORKS_AI_API_KEY", None)
@@ -1472,7 +1471,7 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
 
     litellm._turn_on_debug()
 
-    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-9876")
     monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", "1234")
     monkeypatch.setattr(litellm, "provider_list", ["fireworks_ai"])
 
@@ -1558,7 +1557,7 @@ def test_get_valid_models_default(monkeypatch):
     """
     from litellm.utils import get_valid_models
 
-    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-9876")
     valid_models = get_valid_models()
     assert len(valid_models) > 0
 

@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -70,6 +71,12 @@ def _next_sync_or_exhausted(it: Any) -> object:
         return next(it)
     except StopIteration:
         return _SYNC_ITER_EXHAUSTED
+
+
+def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming_response: ModelResponse) -> None:
+    served_tier: Final = complete_streaming_response.model_dump().get("service_tier")
+    if isinstance(served_tier, str) and served_tier:
+        setattr(response, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
 
 
 def is_async_iterable(obj: object) -> bool:
@@ -158,7 +165,7 @@ class _VertexChunkLike(Protocol):
     candidates: Sequence[_VertexCandidateLike]
 
 
-class _ParsedChunkHiddenParams(BaseModel):
+class _ParsedChunkHiddenParams(LiteLLMBaseModel):
     provider_specific_fields: Mapping[str, object] | None = None
 
 
@@ -183,9 +190,7 @@ def _provider_hidden_params(
     hidden: Final[object] = getattr(chunk, "_hidden_params", None)
     parsed: Final = _parsed_provider_hidden_params(hidden)
     provider_specific_fields: Final[object | None] = (
-        dict(parsed.provider_specific_fields)  # mutable-ok: stream assembly merges provider metadata into this dict
-        if parsed is not None and parsed.provider_specific_fields
-        else None
+        dict(parsed.provider_specific_fields) if parsed is not None and parsed.provider_specific_fields else None
     )
     params: Final[Mapping[str, object]] = MappingProxyType(
         {
@@ -816,7 +821,7 @@ class CustomStreamWrapper:
         self,
         completion_obj: dict[str, Any],
         model_response: ModelResponseStream,
-        response_obj: dict[str, Any],
+        response_obj: Mapping[str, object],
     ) -> bool:
         if (
             "content" in completion_obj
@@ -1100,7 +1105,7 @@ class CustomStreamWrapper:
         self,
         chunk: Any,
         model_response: ModelResponseStream,
-        completion_obj: dict[str, Any],
+        completion_obj: dict[str, object],
     ) -> _ProviderChunkResult:
         response_obj: dict[str, Any] = {}
         if (
@@ -1329,7 +1334,7 @@ class CustomStreamWrapper:
                 "is_finished": chunk_finish_reason is not None,
                 "finish_reason": chunk_finish_reason,
                 "original_chunk": cached_chunk,
-                "tool_calls": (getattr(cached_choice.delta, "tool_calls", None) if cached_choice is not None else None),
+                "tool_calls": cached_choice.delta.tool_calls if cached_choice is not None else None,
             }
 
             completion_obj["content"] = response_obj["text"]
@@ -1504,8 +1509,11 @@ class CustomStreamWrapper:
 
                 self.tool_call = True
 
-            if hasattr(chunk, "usage") and chunk.usage is not None:
-                model_response.usage = chunk.usage
+            chunk_usage: Final = getattr(chunk, "usage", None)
+            if isinstance(chunk_usage, Usage):
+                model_response.usage = chunk_usage
+            elif isinstance(chunk_usage, BaseModel):
+                model_response.usage = Usage(**chunk_usage.model_dump())
 
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(
@@ -1873,6 +1881,7 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
+                    _stamp_served_service_tier(response, complete_streaming_response)
                     try:
                         _cache_copy = complete_streaming_response.model_copy(deep=True)
                         _log_copy = complete_streaming_response.model_copy(deep=True)
@@ -1922,6 +1931,10 @@ class CustomStreamWrapper:
             else:
                 self.sent_last_chunk = True
                 processed_chunk: Final = self.finish_reason_handler()
+                # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
+                # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
+                if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
+                    self.chunks.append(processed_chunk)
                 if self.stream_options is None:  # add usage as hidden param
                     usage = calculate_total_usage(chunks=self.chunks)
                     processed_chunk._hidden_params["usage"] = usage
@@ -2124,6 +2137,7 @@ class CustomStreamWrapper:
                     "usage",
                     getattr(complete_streaming_response, "usage"),
                 )
+                _stamp_served_service_tier(response, complete_streaming_response)
                 try:
                     _copy = complete_streaming_response.model_copy(deep=True)
                 except RuntimeError:
@@ -2185,6 +2199,10 @@ class CustomStreamWrapper:
         else:
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
+            # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
+            # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
+            if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
+                self.chunks.append(processed_chunk)
             if self.stream_options is None:
                 usage: Final = calculate_total_usage(chunks=self.chunks)
                 processed_chunk._hidden_params["usage"] = usage  # pyright: ignore[reportPrivateUsage]  # sync parity

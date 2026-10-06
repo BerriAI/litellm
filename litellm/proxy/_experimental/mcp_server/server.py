@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import JSONResponse
+from starlette.routing import Route
 from starlette.types import Message, Receive, Scope, Send
 
 from litellm._logging import verbose_logger
@@ -65,7 +66,13 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_route_relative_request_path,
     well_known_root_suffix,
 )
-from litellm.proxy._experimental.mcp_server.ui_session_utils import is_ui_session_credential
+from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+    ActingUser,
+    GrantedToolsetIds,
+    acting_user_auth,
+    granted_toolset_ids,
+    is_ui_session_credential,
+)
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -110,6 +117,13 @@ _MCP_DESTINATIONS_SCOPE_KEY: Final = "litellm_otel_request_destinations"
 _MCP_PROTOCOL_VERSION_HEADER: Final = b"mcp-protocol-version"
 
 
+def reject_disallowed_mcp_origin(request: StarletteRequest) -> None:
+    from litellm.proxy.proxy_server import origins  # noqa: PLC0415  # proxy imports this module during startup
+
+    if "*" not in origins and any(origin not in origins for origin in request.headers.getlist("origin")):
+        raise HTTPException(status_code=403, detail="Invalid Origin header")
+
+
 def unsupported_protocol_version(scope: Scope) -> str | None:
     """Return the unsupported ``MCP-Protocol-Version`` header value, if any.
 
@@ -117,12 +131,14 @@ def unsupported_protocol_version(scope: Scope) -> str | None:
     ``HANDSHAKE_PROTOCOL_VERSIONS`` to the modern single-exchange path, which
     bypasses litellm's session/auth model, so the ASGI entry rejects it.
     """
+    from litellm.proxy._experimental.mcp_server.capabilities import configured_versions
+
     headers: Final[Iterable[tuple[bytes, bytes]]] = scope.get("headers") or ()
     values: Final = tuple(
         raw.decode("latin-1").strip() for key, raw in headers if key.lower() == _MCP_PROTOCOL_VERSION_HEADER
     )
     for value in values:
-        if value and value not in HANDSHAKE_PROTOCOL_VERSIONS:
+        if value and value not in configured_versions():
             return value
     return None
 
@@ -137,10 +153,14 @@ try:
 
     from mcp import ReadResourceResult, Resource
     from mcp.server import Server
+    from mcp.server.runner import serve_loop
     from mcp.server.session import ServerSession as _McpServerSession
     from mcp.types import (
         BlobResourceContents,
+        DiscoverRequest,
+        DiscoverResult,
         GetPromptResult,
+        RequestParams,
         ResourceTemplate,
         TextResourceContents,
     )
@@ -456,7 +476,7 @@ if MCP_AVAILABLE:
         "_run_post_mcp_call_guardrails",
         "_server_answers_to",
         "_tool_name_matches",
-        "apply_tool_overrides",
+        "apply_display_name_overrides",
         "call_mcp_tool",
         "execute_mcp_tool",
         "filter_tools_by_allowed_tools",
@@ -474,6 +494,8 @@ if MCP_AVAILABLE:
         AuthContextMiddleware,
         auth_context_var,
     )
+    from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+    from mcp.server.auth.provider import AccessToken
     from mcp.server.context import ServerRequestContext
     from mcp.server.lowlevel.server import NotificationOptions
     from mcp.server.models import InitializationOptions
@@ -494,6 +516,7 @@ if MCP_AVAILABLE:
         _invalidate_byok_cred_cache,
         _mcp_session_id_from_headers,
     )
+    from litellm.proxy._experimental.mcp_server.result_conversion import wire_compat_for
 
     try:
         from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -506,6 +529,7 @@ if MCP_AVAILABLE:
         GetPromptRequestParams,
         Implementation,
         InitializeRequest,
+        InputRequiredResult,
         ListPromptsResult,
         ListResourcesResult,
         ListResourceTemplatesResult,
@@ -513,11 +537,11 @@ if MCP_AVAILABLE:
         PaginatedRequestParams,
         ReadResourceRequestParams,
     )
-    from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
     )
+    from litellm.proxy._experimental.mcp_server.capabilities import GatewayVersionPolicy, configured_versions
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
         global_mcp_server_manager,
@@ -547,10 +571,8 @@ if MCP_AVAILABLE:
         )
         opts: Final = (
             base_options.model_copy(
-                update={  # mutable-ok: Pydantic update payload
-                    "capabilities": base_options.capabilities.model_copy(
-                        update={"prompts": None, "resources": None}  # mutable-ok: Pydantic update payload
-                    )
+                update={
+                    "capabilities": base_options.capabilities.model_copy(update={"prompts": None, "resources": None})
                 }
             )
             if _mcp_proxy_mode.get()
@@ -572,8 +594,9 @@ if MCP_AVAILABLE:
         name=LITELLM_MCP_SERVER_NAME,
         version=LITELLM_MCP_SERVER_VERSION,
     )
+    server.middleware.append(GatewayVersionPolicy())
     server.create_initialization_options = types.MethodType(_gateway_create_initialization_options, server)
-    sse: Final[SseServerTransport] = SseServerTransport("/mcp/sse/messages")
+    sse: Final[SseServerTransport] = SseServerTransport("/sse/messages")
 
     # Create session managers
     session_manager_stateless: Final = StreamableHTTPSessionManager(
@@ -629,18 +652,9 @@ if MCP_AVAILABLE:
     # Keep this alias so existing references to session_manager still work
     session_manager: Final = session_manager_stateless
 
-    # Create SSE session manager
-    sse_session_manager: Final = StreamableHTTPSessionManager(
-        app=server,
-        event_store=None,
-        json_response=False,  # Use SSE responses for this endpoint
-        stateless=True,
-    )
-
     # Context managers for proper lifecycle management
     _session_manager_cm = None
     _session_manager_stateful_cm = None
-    _sse_session_manager_cm = None
     _stateful_auth_context_cleanup_task: asyncio.Task | None = None
 
     async def _purge_expired_stateful_session_auth_contexts(
@@ -732,7 +746,6 @@ if MCP_AVAILABLE:
             _SESSION_MANAGERS_INITIALIZED, \
             _session_manager_cm, \
             _session_manager_stateful_cm, \
-            _sse_session_manager_cm, \
             _stateful_auth_context_cleanup_task
 
         # Use async lock to prevent concurrent initialization
@@ -745,12 +758,10 @@ if MCP_AVAILABLE:
             # Start the session managers with context managers
             _session_manager_cm = session_manager_stateless.run()
             _session_manager_stateful_cm = session_manager_stateful.run()
-            _sse_session_manager_cm = sse_session_manager.run()
 
             # Enter the context managers
             await _session_manager_cm.__aenter__()
             await _session_manager_stateful_cm.__aenter__()
-            await _sse_session_manager_cm.__aenter__()
             _stateful_auth_context_cleanup_task = asyncio.create_task(_cleanup_expired_stateful_session_auth_contexts())
 
             _SESSION_MANAGERS_INITIALIZED = True
@@ -762,7 +773,6 @@ if MCP_AVAILABLE:
             _SESSION_MANAGERS_INITIALIZED, \
             _session_manager_cm, \
             _session_manager_stateful_cm, \
-            _sse_session_manager_cm, \
             _stateful_auth_context_cleanup_task
 
         if _SESSION_MANAGERS_INITIALIZED:
@@ -773,8 +783,6 @@ if MCP_AVAILABLE:
                     _stateful_auth_context_cleanup_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await _stateful_auth_context_cleanup_task
-                if _sse_session_manager_cm:
-                    await _sse_session_manager_cm.__aexit__(None, None, None)
                 if _session_manager_stateful_cm:
                     await _session_manager_stateful_cm.__aexit__(None, None, None)
                 if _session_manager_cm:
@@ -784,7 +792,6 @@ if MCP_AVAILABLE:
 
             _session_manager_cm = None
             _session_manager_stateful_cm = None
-            _sse_session_manager_cm = None
             _stateful_auth_context_cleanup_task = None
             _SESSION_MANAGERS_INITIALIZED = False
 
@@ -824,7 +831,16 @@ if MCP_AVAILABLE:
                 client_ip,
             ) = await get_or_extract_auth_context()
             yield operations.prepare_context(
-                auth, token, servers, server_headers, oauth_headers, headers, client_ip, _mcp_proxy_mode.get()
+                auth,
+                token,
+                servers,
+                server_headers,
+                oauth_headers,
+                headers,
+                client_ip,
+                _mcp_proxy_mode.get(),
+                wire_compat_for(ctx.protocol_version),
+                ctx.protocol_version,
             )
 
     async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListToolsResult:
@@ -881,7 +897,9 @@ if MCP_AVAILABLE:
         _dispatch_virtual_mcp_tool,
     )
 
-    async def mcp_server_tool_call(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    async def mcp_server_tool_call(
+        ctx: ServerRequestContext, params: CallToolRequestParams
+    ) -> CallToolResult | InputRequiredResult:
         async with _legacy_operation_context(ctx, trace=True) as context:
             return await operations.GatewayOperations(_capture_host_progress_callback(ctx)).execute(
                 CallToolRequest(params=params), context
@@ -941,6 +959,11 @@ if MCP_AVAILABLE:
                 ReadResourceRequest(params=params), context
             )
 
+    async def discover(ctx: ServerRequestContext, params: RequestParams) -> DiscoverResult:
+        async with _legacy_operation_context(ctx, trace=False) as context:
+            return await operations.GatewayOperations().execute(DiscoverRequest(params=params), context)
+
+    server.add_request_handler("server/discover", RequestParams, discover)
     server.add_request_handler("tools/list", PaginatedRequestParams, handle_list_tools)
     server.add_request_handler("tools/call", CallToolRequestParams, mcp_server_tool_call)
     server.add_request_handler("prompts/list", PaginatedRequestParams, list_prompts)
@@ -971,7 +994,7 @@ if MCP_AVAILABLE:
         _raise_if_initialize_grants_no_mcp_servers,
         _server_answers_to,
         _tool_name_matches,
-        apply_tool_overrides,
+        apply_display_name_overrides,
         filter_tools_by_allowed_tools,
         raise_denied_scoped_mcp_access,
     )
@@ -1054,6 +1077,8 @@ if MCP_AVAILABLE:
         """
         import re
 
+        if path.rstrip("/") in ("/mcp/sse", "/mcp/sse/messages"):
+            return None
         mcp_servers_from_path: list[str] | None = None
         segments: Final = [s for s in path.split("/") if s]
         if len(segments) >= 2 and segments[1] == "mcp" and segments[0] != "mcp":
@@ -1476,7 +1501,7 @@ if MCP_AVAILABLE:
         if _is_admin_terminated_session_id(_session_id, time.monotonic()):
             terminated_response: Final = JSONResponse(
                 status_code=404,
-                content={  # mutable-ok: JSONResponse content must be a plain dict
+                content={
                     "error": "Not Found",
                     "details": "mcp-session-id was terminated by an administrator. Send initialize to start a new session.",
                 },
@@ -1496,16 +1521,21 @@ if MCP_AVAILABLE:
     async def _apply_toolset_scope(
         user_api_key_auth: UserAPIKeyAuth,
         toolset_id: str,
+        acting_user: ActingUser = acting_user_auth,
+        granted: GrantedToolsetIds = granted_toolset_ids,
     ) -> UserAPIKeyAuth:
         """
-        Restrict a key's MCP permissions to a single toolset.
+        Pin a principal's MCP permissions to a single toolset for /toolset/{name}/mcp.
 
-        When a request arrives via /toolset/{name}/mcp we override the key's
-        object_permission so that only the toolset's tools are visible.
+        A virtual key (and an admin session) has its object_permission rewritten to
+        the toolset's servers and tools. A keyless subject resolves per grant source,
+        so a non-admin dashboard session first becomes its admitted user and the
+        toolset rides along as ``mcp_toolset_id``, which every source's grant is
+        intersected with; a team-granted toolset is served without the user's own
+        row capping it.
 
-        Raises HTTPException(403) if the key has an explicit toolset grant list
-        that does not include toolset_id (i.e. mcp_toolsets is set but empty,
-        or set to a list that omits this toolset).  Admin keys always pass.
+        Raises HTTPException(403) unless the principal holds toolset_id through one
+        of its grant sources. Admins always pass.
         """
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
         from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
@@ -1521,26 +1551,31 @@ if MCP_AVAILABLE:
                 detail="API key is scoped to no MCP servers; toolset access is denied.",
             )
 
-        # Access control: non-admin keys must have this toolset in their grant list.
-        # Use _user_has_admin_view so that PROXY_ADMIN_VIEW_ONLY is also treated as admin.
-        is_admin: Final = _user_has_admin_view(user_api_key_auth)
-        if not is_admin:
-            op: Final = user_api_key_auth.object_permission
-            granted: Final = getattr(op, "mcp_toolsets", None) if op else None
-            # granted=None → key has no explicit toolset grants → deny (same semantics as
-            # fetch_mcp_toolsets which returns [] for non-admin keys with no grants configured).
-            # granted=[] or list without toolset_id → also deny.
-            if granted is None or toolset_id not in granted:
+        acting: Final = await acting_user(user_api_key_auth)
+        is_admin: Final = _user_has_admin_view(acting)
+        if not is_admin and toolset_id not in await granted(acting):
+            raise HTTPException(
+                status_code=403,
+                detail=f"API key does not have access to toolset '{toolset_id}'.",
+            )
+        if _is_mcp_admitted_user_subject(acting):
+            resource_server_id: Final = acting.mcp_session_resource_server_id
+            if resource_server_id is not None and resource_server_id not in (
+                await operations.global_mcp_server_manager.resolve_toolset_tool_permissions(
+                    toolset_ids=[toolset_id], requires_fresh_policy=acting.requires_fresh_policy
+                )
+            ):
                 raise HTTPException(
                     status_code=403,
                     detail=f"API key does not have access to toolset '{toolset_id}'.",
                 )
+            return acting.model_copy(update={"mcp_toolset_id": toolset_id})
 
         tool_permissions = await operations.global_mcp_server_manager.resolve_toolset_tool_permissions(
             toolset_ids=[toolset_id]
         )
         server_ids: Final = list(tool_permissions.keys())
-        existing_op: Final = user_api_key_auth.object_permission
+        existing_op: Final = acting.object_permission
         if existing_op is not None:
             updated_op = existing_op.model_copy(
                 update={
@@ -1557,7 +1592,12 @@ if MCP_AVAILABLE:
                 mcp_servers=server_ids,
                 mcp_tool_permissions=tool_permissions,
             )
-        return user_api_key_auth.model_copy(update={"object_permission": updated_op, "mcp_toolset_id": toolset_id})
+        return acting.model_copy(update={"object_permission": updated_op, "mcp_toolset_id": toolset_id})
+
+    async def _toolset_server_ids(toolset_id: str) -> set[str]:
+        return set(
+            await operations.global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=[toolset_id])
+        )
 
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
@@ -1942,12 +1982,13 @@ if MCP_AVAILABLE:
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
+            reject_disallowed_mcp_origin(StarletteRequest(scope))
             bad_version: Final = unsupported_protocol_version(scope)
             if bad_version is not None:
-                supported: Final = ", ".join(sorted(HANDSHAKE_PROTOCOL_VERSIONS))
+                supported: Final = ", ".join(configured_versions())
                 await JSONResponse(
                     status_code=400,
-                    content={  # mutable-ok: JSON-RPC error payload
+                    content={
                         "jsonrpc": "2.0",
                         "id": None,
                         "error": {
@@ -1987,8 +2028,7 @@ if MCP_AVAILABLE:
             toolset_allowed_server_ids: set[str] | None = None
             if active_toolset_id and user_api_key_auth is not None:
                 user_api_key_auth = await _apply_toolset_scope(user_api_key_auth, active_toolset_id)
-                op: Final = user_api_key_auth.object_permission
-                toolset_allowed_server_ids = set(op.mcp_servers or []) if op else set()
+                toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
 
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived
@@ -2286,7 +2326,25 @@ if MCP_AVAILABLE:
     async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through SSE."""
         try:
-            path: Final[str] = scope.get("path", "")
+            reject_disallowed_mcp_origin(StarletteRequest(scope))
+            bad_version: Final = unsupported_protocol_version(scope)
+            if bad_version is not None:
+                supported: Final = ", ".join(configured_versions())
+                await JSONResponse(
+                    status_code=400,
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {
+                            "code": INVALID_REQUEST,
+                            "message": f"Unsupported MCP-Protocol-Version {bad_version}; supported: {supported}",
+                        },
+                    },
+                )(scope, receive, send)
+                return
+            from litellm.proxy.auth.auth_utils import get_request_route
+
+            path: Final = get_request_route(StarletteRequest(scope))
             (
                 user_api_key_auth,
                 mcp_auth_header,
@@ -2317,8 +2375,7 @@ if MCP_AVAILABLE:
             toolset_allowed_server_ids: set[str] | None = None
             if active_toolset_id and user_api_key_auth is not None:
                 user_api_key_auth = await _apply_toolset_scope(user_api_key_auth, active_toolset_id)
-                op: Final = user_api_key_auth.object_permission
-                toolset_allowed_server_ids = set(op.mcp_servers or []) if op else set()
+                toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
 
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived
@@ -2353,9 +2410,14 @@ if MCP_AVAILABLE:
                 client_ip=_sse_client_ip,
             )
 
-            if not _SESSION_MANAGERS_INITIALIZED:
-                await initialize_session_managers()
-                await asyncio.sleep(0.1)
+            owner: Final = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _sse_client_ip)
+            transport_scope: Final[Scope] = {
+                **scope,
+                "user": AuthenticatedUser(AccessToken(token=owner, client_id=owner, scopes=[])),
+            }
+            if scope["method"] == "POST":
+                await sse.handle_post_message(transport_scope, receive, send)
+                return
 
             async with _gateway_initialize_instructions_request_scope(
                 user_api_key_auth,
@@ -2364,7 +2426,17 @@ if MCP_AVAILABLE:
                 scoped_server_endpoint=scoped_server_endpoint,
                 is_initialize=scope.get("method") == "GET",
             ):
-                await sse_session_manager.handle_request(scope, receive, send)
+                async with (
+                    sse.connect_sse(transport_scope, receive, send) as (read_stream, write_stream),
+                    server.lifespan(server) as lifespan_state,
+                ):
+                    await serve_loop(
+                        server,
+                        read_stream,
+                        write_stream,
+                        lifespan_state=lifespan_state,
+                        init_options=server.create_initialization_options(),
+                    )
         except MCPUpstreamAuthError as e:
             # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
@@ -2387,7 +2459,6 @@ if MCP_AVAILABLE:
             # Try to send a graceful error response for non-HTTP exceptions
             try:
                 # Send a proper HTTP error response instead of letting the exception bubble up
-                from starlette.responses import JSONResponse
                 from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
 
                 error_response: Final = JSONResponse(
@@ -2418,11 +2489,22 @@ if MCP_AVAILABLE:
         """
         return {"enabled": MCP_AVAILABLE}
 
+    class _LegacySseEndpoint:
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            await handle_sse_mcp(scope, receive, send)
+
+    for sse_path, sse_method in (
+        ("/sse", "GET"),
+        ("/sse/", "GET"),
+        ("/sse/messages", "POST"),
+        ("/sse/messages/", "POST"),
+    ):
+        app.router.routes.append(Route(sse_path, endpoint=_LegacySseEndpoint(), methods=[sse_method]))
+
     # Mount the MCP handlers
     app.mount("/", handle_streamable_http_mcp)
     app.mount("/mcp", handle_streamable_http_mcp)
     app.mount("/{mcp_server_name}/mcp", handle_streamable_http_mcp)
-    app.mount("/sse", handle_sse_mcp)
     app.add_middleware(AuthContextMiddleware)
 
     ########################################################

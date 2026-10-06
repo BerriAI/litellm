@@ -21,13 +21,14 @@ from ..common_utils import EdenAIException, authorized_headers, endpoint_url, re
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 def _usage_with_reported_cost(
     usage: Mapping[str, object] | None, body: bytes
 ) -> dict[str, object]:  # mutable-ok: VideoObject.usage is a plain dict field
     cost: Final = reported_cost(body)
-    return {  # mutable-ok: VideoObject.usage is a plain dict field
+    return {
         key: value
         for key, value in (*(usage.items() if usage else ()), ("provider_reported_cost_usd", cost))
         if value is not None
@@ -79,13 +80,13 @@ class EdenAIVideoConfig(OpenAIVideoConfig):
             model=model,
             prompt=prompt,
             api_base=api_base,
-            video_create_optional_request_params={  # mutable-ok: inherited contract
+            video_create_optional_request_params={
                 key: value for key, value in video_create_optional_request_params.items() if key != "input_reference"
             },
             litellm_params=litellm_params,
             headers=headers,
         )
-        return {**data, "input_reference": dict(reference)}, files, url  # mutable-ok: JSON body
+        return {**data, "input_reference": dict(reference)}, files, url
 
     def transform_video_create_response(
         self,
@@ -110,6 +111,7 @@ class EdenAIVideoConfig(OpenAIVideoConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str | None = None,
+        client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         raw_response.raise_for_status()  # the shared GET helpers return error bodies instead of raising
         video: Final = super().transform_video_status_retrieve_response(

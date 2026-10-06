@@ -1,9 +1,17 @@
+import reprlib
 from collections.abc import Mapping, MutableMapping
+from dataclasses import dataclass, fields
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.litellm_params import MAX_CONTROL_INT_DIGITS, ControlOptions
+from litellm.types.router import CustomPricingLiteLLMParams
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
@@ -23,10 +31,7 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     }
 )
 
-# Keys `completion()` forwards from its own kwargs into `get_litellm_params`,
-# which are otherwise invisible to it because that call site passes explicit
-# named arguments rather than `**kwargs`.
-FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS
+PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -46,6 +51,8 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "bucket_name",
             "s3_endpoint_url",
             "s3_region_name",
+            "s3_access_key_id",
+            "s3_secret_access_key",
             "vertex_credentials",
             "vertex_project",
             "vertex_location",
@@ -60,13 +67,60 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "itpm",
             "otpm",
             "use_xai_oauth",
+            PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
+    | ANTHROPIC_WIF_KWARGS_KEYS
+    | OPENAI_WIF_KWARGS_KEYS
+    | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
 
 # Backward-compatible alias for existing imports/tests.
 _OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
+
+_CONTROL_OPTIONS: Final = TypeAdapter(ControlOptions)
+_CONTROL_OPTION_NAMES: Final = tuple(field.name for field in fields(ControlOptions))
+_MAX_SHOWN_INT_BITS: Final = 64
+_EXPECTED: Final = f"expected a positive integer of at most {MAX_CONTROL_INT_DIGITS} digits"
+
+
+class _BoundedRepr(reprlib.Repr):
+    def repr_int(self, x: int, level: int) -> str:
+        if x.bit_length() > _MAX_SHOWN_INT_BITS:
+            return f"<int of {x.bit_length()} bits>"
+        return super().repr_int(x, level)
+
+
+_BOUNDED_REPR: Final = _BoundedRepr()
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidControlOption:
+    param: str
+    message: str
+
+
+def parse_control_options(kwargs: Mapping[str, object]) -> ControlOptions | InvalidControlOption:
+    given: Final = {name: kwargs[name] for name in _CONTROL_OPTION_NAMES if name in kwargs}
+    try:
+        return _CONTROL_OPTIONS.validate_python(given)
+    except ValidationError as e:
+        param: Final = str(e.errors(include_url=False)[0]["loc"][0])
+        return InvalidControlOption(
+            param=param, message=f"Invalid {param}={_BOUNDED_REPR.repr(given[param])}: {_EXPECTED}"
+        )
+
+
+def stored_control_options(litellm_params: Mapping[str, object]) -> ControlOptions:
+    control: Final = litellm_params.get(CONTROL_OPTIONS_KEY)
+    return control if isinstance(control, ControlOptions) else ControlOptions()
+
+
+def with_control_options(litellm_params: Mapping[str, object], control: ControlOptions) -> dict[str, object]:
+    if control == ControlOptions():
+        return dict(litellm_params)
+    return {**litellm_params, CONTROL_OPTIONS_KEY: control}
 
 
 def _get_base_model_from_litellm_call_metadata(
@@ -102,6 +156,7 @@ def get_litellm_params(
     allm_passthrough_route=None,
     preset_cache_key=None,
     no_log=None,
+    cost_per_second: float | None = None,
     input_cost_per_second=None,
     input_cost_per_token=None,
     output_cost_per_token=None,
@@ -163,6 +218,7 @@ def get_litellm_params(
         "preset_cache_key": preset_cache_key,
         "no-log": no_log or kwargs.get("no-log"),
         "stream_response": {},  # litellm_call_id: ModelResponse Dict
+        "cost_per_second": cost_per_second,
         "input_cost_per_token": input_cost_per_token,
         "input_cost_per_second": input_cost_per_second,
         "output_cost_per_token": output_cost_per_token,

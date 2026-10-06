@@ -244,7 +244,7 @@ async def create_batch(
     Example Curl
     ```
     curl http://localhost:4000/v1/batches \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "input_file_id": "file-abc123",
@@ -283,7 +283,7 @@ async def create_batch(
         )
         data["metadata"] = sanitize_openai_provider_metadata(data.get("metadata"))
 
-        raise_if_required_body_param_missing(route_type="acreate_batch", data=data)
+        raise_if_required_body_param_missing(route_type="acreate_batch", data=data, llm_router=llm_router)
 
         ## check if model is a loadbalanced model
         router_model: str | None = None
@@ -554,7 +554,7 @@ async def retrieve_batch(
     Example Curl
     ```
     curl http://localhost:4000/v1/batches/batch_abc123 \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -H "Content-Type: application/json" \
 
     ```
@@ -861,7 +861,7 @@ async def list_batches(
     Example Curl
     ```
     curl http://localhost:4000/v1/batches?limit=2 \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -H "Content-Type: application/json" \
 
     ```
@@ -1045,7 +1045,7 @@ async def cancel_batch(
     Example Curl
     ```
     curl http://localhost:4000/v1/batches/batch_abc123/cancel \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -X POST
 

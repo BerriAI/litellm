@@ -50,6 +50,7 @@ from litellm.types.integrations.datadog import DatadogInitParams
 from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm.litellm_core_utils.core_helpers import drop_params_env_flag
 from litellm.types.integrations.pointfive import PointFiveInitParams
+from litellm.types.integrations.zerobus import ZerobusInitParams
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -156,7 +157,9 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "smtp_email",
     "deepeval",
     "s3_v2",
+    "clickhouse",
     "pointfive",
+    "zerobus",
     "aws_sqs",
     "vector_store_pre_call_hook",
     "dotprompt",
@@ -170,6 +173,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "levo",
     "compression_interception",
     "newrelic",
+    "signoz",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -207,6 +211,7 @@ standard_logging_payload_excluded_fields: Optional[List[str]] = (
 )
 log_raw_request_response: bool = False
 log_client_error_tracebacks: bool = False
+log_auth_failure_key_identity: bool = False
 request_correlation_in_logs: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
@@ -381,6 +386,7 @@ enable_model_config_credential_overrides: bool = False
 enable_key_alias_format_validation: bool = (
     False  # opt-in validation of key_alias format on /key/generate and /key/update
 )
+key_alias_pattern: str | None = None
 enable_gemini_default_thinking_level_low: bool = (
     False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
@@ -441,6 +447,7 @@ datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]]
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
 newrelic_params: Optional[Union[NewRelicInitParams, Dict]] = None
 pointfive_params: Optional[Union[PointFiveInitParams, Mapping[str, object]]] = None
+zerobus_params: Optional[Union[ZerobusInitParams, Mapping[str, object]]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
@@ -494,6 +501,9 @@ prometheus_user_budget_label_include_email_alias: bool = False
 prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
 prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
 prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
+prometheus_metrics_max_series_per_metric: Optional[int] = None
+prometheus_metrics_ttl_seconds: Optional[float] = None
+prometheus_metrics_cleanup_interval_seconds: Optional[float] = 60.0
 disable_add_prefix_to_prompt: bool = False  # used by anthropic, to disable adding prefix to prompt
 disable_copilot_system_to_assistant: bool = False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 public_mcp_servers: Optional[List[str]] = None
@@ -656,6 +666,7 @@ azure_anthropic_models: Set = set()
 azure_text_models: Set = set()
 anyscale_models: Set = set()
 cerebras_models: Set = set()
+nadir_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
@@ -689,7 +700,7 @@ recraft_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
-edenai_models: Set = set()  # mutable-ok: filled from the price map at import, like the sibling provider sets
+edenai_models: Set = set()
 volcengine_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
@@ -892,6 +903,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             anyscale_models.add(key)
         elif value.get("litellm_provider") == "cerebras":
             cerebras_models.add(key)
+        elif value.get("litellm_provider") == "nadir":
+            nadir_models.add(key)
         elif value.get("litellm_provider") == "galadriel":
             galadriel_models.add(key)
         elif value.get("litellm_provider") == "nvidia_nim":
@@ -1082,6 +1095,7 @@ model_list = list(
     | azure_anthropic_models
     | anyscale_models
     | cerebras_models
+    | nadir_models
     | galadriel_models
     | nvidia_nim_models
     | nvidia_riva_models
@@ -1190,6 +1204,7 @@ def _build_models_by_provider() -> dict:
         "azure_text": azure_text_models,
         "anyscale": anyscale_models,
         "cerebras": cerebras_models,
+        "nadir": nadir_models,
         "galadriel": galadriel_models,
         "nvidia_nim": nvidia_nim_models,
         "nvidia_riva": nvidia_riva_models,
@@ -1401,6 +1416,7 @@ from .exceptions import (
     JSONSchemaValidationError,
     LITELLM_EXCEPTION_TYPES,
     MockException,
+    ModelNotMappedError as ModelNotMappedError,
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
@@ -1456,9 +1472,12 @@ from .skills.main import (
 from .containers.main import *
 from .ocr.dispatch import *
 from .chat_completions.dispatch import *
+from .embeddings.dispatch import *
 from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *
+from .decisions.main import *
+from .tool_loop import ToolLoopMaxRoundsExceeded, arun_tool_loop, run_tool_loop
 from .search.main import *
 from .realtime_api.main import (
     _arealtime,
@@ -1523,20 +1542,20 @@ from .passthrough import allm_passthrough_route, llm_passthrough_route
 from .google_genai import agenerate_content
 
 ### GLOBAL CONFIG ###
-global_bitbucket_config: Optional[Dict[str, Any]] = None
+global_bitbucket_config: Optional[Mapping[str, object]] = None
 
 
-def set_global_bitbucket_config(config: Dict[str, Any]) -> None:
+def set_global_bitbucket_config(config: Mapping[str, object]) -> None:
     """Set global BitBucket configuration for prompt management."""
     global global_bitbucket_config
     global_bitbucket_config = config
 
 
 ### GLOBAL CONFIG ###
-global_gitlab_config: Optional[Dict[str, Any]] = None
+global_gitlab_config: Optional[Mapping[str, object]] = None
 
 
-def set_global_gitlab_config(config: Dict[str, Any]) -> None:
+def set_global_gitlab_config(config: Mapping[str, object]) -> None:
     """Set global BitBucket configuration for prompt management."""
     global global_gitlab_config
     global_gitlab_config = config
@@ -1633,6 +1652,9 @@ if TYPE_CHECKING:
     from .llms.jina_ai.rerank.transformation import (
         JinaAIRerankConfig as JinaAIRerankConfig,
     )
+    from .llms.scaleway.rerank.transformation import (
+        ScalewayRerankConfig as ScalewayRerankConfig,
+    )
     from .llms.deepinfra.rerank.transformation import (
         DeepinfraRerankConfig as DeepinfraRerankConfig,
     )
@@ -1680,7 +1702,7 @@ if TYPE_CHECKING:
         SagemakerNovaConfig as SagemakerNovaConfig,
     )
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
-    from .llms.anthropic.experimental_pass_through.messages.transformation import (
+    from .llms.anthropic.pass_through.messages.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,
     )
     from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
@@ -1765,6 +1787,9 @@ if TYPE_CHECKING:
     )
     from .llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
         AmazonBedrockOpenAIConfig as AmazonBedrockOpenAIConfig,
+    )
+    from .llms.bedrock.chat.chat_completions.transformation import (
+        AmazonBedrockRuntimeChatCompletionsConfig as AmazonBedrockRuntimeChatCompletionsConfig,
     )
     from .llms.bedrock.image_generation.amazon_stability1_transformation import (
         AmazonStabilityConfig as AmazonStabilityConfig,
@@ -1868,6 +1893,9 @@ if TYPE_CHECKING:
     )
     from .llms.openrouter.responses.transformation import (
         OpenRouterResponsesAPIConfig as OpenRouterResponsesAPIConfig,
+    )
+    from .llms.bedrock.responses.transformation import (
+        BedrockOpenAIResponsesConfig as BedrockOpenAIResponsesConfig,
     )
     from .llms.bedrock_mantle.responses.transformation import (
         BedrockMantleResponsesAPIConfig as BedrockMantleResponsesAPIConfig,
@@ -1988,6 +2016,7 @@ if TYPE_CHECKING:
         FeatherlessAIConfig as FeatherlessAIConfig,
     )
     from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
+    from .llms.nadir.chat.transformation import NadirConfig as NadirConfig
     from .llms.baseten.chat import BasetenConfig as BasetenConfig
     from .llms.sambanova.chat import SambanovaConfig as SambanovaConfig
     from .llms.sambanova.embedding.transformation import (
@@ -2146,6 +2175,10 @@ if TYPE_CHECKING:
     from .llms.edenai.videos.transformation import (
         EdenAIVideoConfig as EdenAIVideoConfig,
     )
+    from .llms.fal_ai.chat.transformation import (
+        FalAIChatConfig as FalAIChatConfig,
+        FalAIError as FalAIError,
+    )
     from .llms.ovhcloud.chat.transformation import (
         OVHCloudChatConfig as OVHCloudChatConfig,
     )
@@ -2177,12 +2210,13 @@ if TYPE_CHECKING:
         DefaultTeamSSOParams,
         LiteLLM_UpperboundKeyGenerateParams,
     )
+    from litellm.utils import ModelResponseListIterator as _ModelResponseListIterator
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
     completion_cost: Callable[..., float]
-    response_cost_calculator: Any
-    modify_integration: Any
+    response_cost_calculator: Callable[..., float]
+    modify_integration: Callable[..., None]
 
     # Utils functions - type stubs for truly lazy loaded functions only
     # (functions NOT imported via "from .main import *")
@@ -2216,7 +2250,7 @@ if TYPE_CHECKING:
     remove_index_from_tool_calls: Callable[..., None]
 
     # Response types - truly lazy loaded only (not in main.py or elsewhere)
-    ModelResponseListIterator: Type[Any]
+    ModelResponseListIterator: Type[_ModelResponseListIterator]
 
     # HTTP handler singletons (created lazily via __getattr__ at runtime)
     module_level_aclient: AsyncHTTPHandler
@@ -2260,6 +2294,24 @@ if TYPE_CHECKING:
 # Track if async client cleanup has been registered (for lazy loading)
 _async_client_cleanup_registered = False
 
+_AGENT_EXPORTS: Final = frozenset(
+    {
+        "agent",
+        "aagent",
+        "agent_session",
+        "aagent_session",
+        "agent_resume",
+        "aagent_resume",
+        "agent_capabilities",
+        "Harness",
+        "ClaudeCodeOptions",
+        "CodexOptions",
+        "OpenCodeOptions",
+        "DeepAgentsOptions",
+        "ToolLoopOptions",
+    }
+)
+
 # Eager loading for backwards compatibility with VCR and other HTTP recording tools
 # When LITELLM_DISABLE_LAZY_LOADING is set, lazy-loaded attributes are loaded at import time
 # For now, this only affects encoding (tiktoken) as it was the only reported issue
@@ -2292,6 +2344,12 @@ def __getattr__(name: str) -> Any:
     if name in registry:
         handler_func: Final = registry[name]
         return handler_func(name)
+
+    if name == "harness" or name in _AGENT_EXPORTS:
+        import importlib
+
+        harness_module = importlib.import_module("litellm.harness")
+        return harness_module if name == "harness" else getattr(harness_module, name)
 
     # Lazy load encoding from main.py to avoid heavy tiktoken import
     if name == "encoding":

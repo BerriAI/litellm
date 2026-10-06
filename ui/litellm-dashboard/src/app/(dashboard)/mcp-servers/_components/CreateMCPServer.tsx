@@ -35,6 +35,7 @@ import {
   buildCreateServerPayload,
   reduceStaticHeaders,
 } from "./createServerPayload";
+import { DUPLICATE_IDENTIFIER_MESSAGE, findDuplicateMcpServer, mcpSubmitErrorReason } from "./duplicateServerCheck";
 import { readCreateUiSnapshot, writeCreateUiSnapshot } from "./createOAuthUiState";
 import AwsSigV4Fields from "./AwsSigV4Fields";
 import OpenApiByokFields from "./OpenApiByokFields";
@@ -47,6 +48,7 @@ import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
+import { StdioDisabledBanner, TransportSelectItems } from "./StdioAvailability";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
@@ -54,7 +56,7 @@ import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import { toast } from "@/lib/toast";
-import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
+import { useMcpOAuthFlow, type McpDcrCredentials } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 import {
   MountedFormField,
@@ -78,8 +80,10 @@ interface CreateMCPServerProps {
   isModalVisible: boolean;
   setModalVisible: (visible: boolean) => void;
   availableAccessGroups: string[];
+  existingServers?: MCPServer[];
   prefillData?: DiscoverableMCPServer | null;
   onBackToDiscovery?: () => void;
+  stdioEnabled?: boolean;
 }
 
 const payloadErrorMessage = (result: Exclude<BuildCreatePayloadResult, { kind: "ok" }>): string => {
@@ -108,8 +112,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   isModalVisible,
   setModalVisible,
   availableAccessGroups,
+  existingServers,
   prefillData,
   onBackToDiscovery,
+  stdioEnabled = true,
 }) => {
   const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: CREATE_DEFAULTS });
   const registry = useMountRegistry();
@@ -138,7 +144,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   // it can never be collected as a client-forwarded server's declared app; injected into the payload
   // only on an oauth2 submit (where persisting the registered client is correct), and cleared on any
   // invalidation or modal close. An abandoned authorize leaves it null, which is the desired asymmetry.
-  const dcrClientRef = React.useRef<{ client_id: string; client_secret?: string } | null>(null);
+  const dcrClientRef = React.useRef<McpDcrCredentials | null>(null);
   // Set when the upstream identity (url/endpoints) changed while a declared app is present, so the
   // section can warn that the saved app may not match the new upstream (the app is kept, not wiped).
   const [appMayNotMatchUpstream, setAppMayNotMatchUpstream] = useState(false);
@@ -258,12 +264,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       // The DCR-minted client is held in a ref, NOT written into form.credentials, so it can never be
       // collected as a client-forwarded server's declared app; it is injected into the payload only on
       // an oauth2 submit. An admin-typed client already lives in form.credentials and is left untouched.
-      dcrClientRef.current = registeredClient?.clientId
-        ? {
-            client_id: registeredClient.clientId,
-            ...(registeredClient.clientSecret && { client_secret: registeredClient.clientSecret }),
-          }
-        : null;
+      dcrClientRef.current = registeredClient ?? null;
 
       const current = (allFieldsValue(form).credentials as Record<string, unknown> | undefined) ?? {};
       const nextCredentials = {
@@ -418,6 +419,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   };
 
   const handleCreate = async (values: Record<string, unknown>) => {
+    const duplicate = findDuplicateMcpServer(
+      existingServers,
+      typeof values.server_name === "string" ? values.server_name : undefined,
+      typeof values.alias === "string" ? values.alias : undefined,
+    );
+    if (duplicate) {
+      form.setError(duplicate.field, { type: "duplicate", message: DUPLICATE_IDENTIFIER_MESSAGE });
+      toast.fromError(DUPLICATE_IDENTIFIER_MESSAGE);
+      return;
+    }
     const built = buildCreateServerPayload(values, {
       transportType,
       costConfig,
@@ -488,7 +499,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         onCreateSuccess(response);
       }
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = mcpSubmitErrorReason(error);
       toast.fromError(isAdmin ? `Error creating MCP Server: ${reason}` : `Error submitting MCP Server: ${reason}`);
     } finally {
       setIsLoading(false);
@@ -737,11 +748,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                           <SelectValue placeholder="Select transport" />
                         </SelectTrigger>
                         <SelectContent>
-                          {TRANSPORT_ITEMS.map((item) => (
-                            <SelectItem key={item.value} value={item.value}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
+                          <TransportSelectItems stdioEnabled={stdioEnabled} />
                         </SelectContent>
                       </Select>
                     )}
@@ -904,6 +911,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   {transportType !== "stdio" && transportType !== "" && isAwsSigV4AuthType && <AwsSigV4Fields />}
 
                   {/* Stdio Configuration - only show for stdio transport */}
+                  {transportType === "stdio" && !stdioEnabled && <StdioDisabledBanner />}
                   <StdioConfiguration isVisible={transportType === "stdio"} />
                 </div>
 

@@ -55,6 +55,12 @@ vi.mock("@/components/networking", () => ({
   getClaudeCodePluginsList: vi.fn().mockResolvedValue({ plugins: [], count: 0 }),
 }));
 
+const { bulkUpdatePOST } = vi.hoisted(() => ({ bulkUpdatePOST: vi.fn() }));
+vi.mock("@/lib/http/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/http/api")>();
+  return { ...actual, fetchClient: { ...actual.fetchClient, POST: bulkUpdatePOST } };
+});
+
 const can = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
   default: (...args: unknown[]) => can(...args),
@@ -77,7 +83,8 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: vi.fn(),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/(dashboard)/hooks/teams/useTeams")>()),
   useTeam: vi.fn(),
 }));
 
@@ -227,7 +234,7 @@ vi.mock("../key_team_helpers/filter_helpers", () => ({
 import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { teamKeys, teamsTableKeys, useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
@@ -1138,6 +1145,26 @@ describe("TeamInfoView", () => {
           }),
         );
       });
+    });
+
+    it("invalidates the cached team list and team detail queries after saving team settings", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+      const tableKey = teamsTableKeys.list({ page: 1, limit: 10 });
+      const detailKey = teamKeys.detail("123");
+      testQueryClient.setQueryData(tableKey, { teams: [], total: 0 });
+      testQueryClient.setQueryData(detailKey, { team_id: "123" });
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      await screen.findByLabelText("Team Name");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(testQueryClient.getQueryState(tableKey)?.isInvalidated).toBe(true));
+      expect(testQueryClient.getQueryState(detailKey)?.isInvalidated).toBe(true);
     });
 
     const openSettingsEditorForTeam = async (
@@ -2091,6 +2118,43 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     expect(JSON.parse(JSON.stringify(payload))).not.toHaveProperty("team_member_budget_duration");
   });
 
+  it("sends a null team_member_budget when Default Budget is cleared, instead of a $0 cap", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    fireEvent.change(await screen.findByLabelText("Default Budget (USD)"), { target: { value: "" } });
+    const payload = await save(user);
+
+    expect(JSON.parse(JSON.stringify(payload))).toMatchObject({
+      team_member_budget: null,
+      team_member_tpm_limit: 11,
+      team_member_rpm_limit: 22,
+    });
+  });
+
+  it("keeps a member default with no dollar cap uncapped when Team Member Settings is saved", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, { max_budget: null, budget_duration: "30d", tpm_limit: null, rpm_limit: 60 });
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const payload = await save(user);
+
+    expect(JSON.parse(JSON.stringify(payload))).toMatchObject({ team_member_budget: null, team_member_rpm_limit: 60 });
+  });
+
+  it("sends a typed Default Budget as a number", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    fireEvent.change(await screen.findByLabelText("Default Budget (USD)"), { target: { value: "12.5" } });
+    const payload = await save(user);
+
+    expect(payload.team_member_budget).toBe(12.5);
+  });
+
   it("omits object_permission.search_tools while Search Tool Settings is closed", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
@@ -2332,7 +2396,104 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(wireBody(payload)).toStrictEqual(expected);
   });
 
-  it("carries every typed value to the update payload at the type and shape antd sends today", async () => {
+  const openEditorWithMemberBudgetAlerts = async (user: ReturnType<typeof userEvent.setup>) => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: ["gpt-4"],
+        team_member_budget_table: { max_budget: 42 },
+        metadata: { team_member_max_budget_alert_emails: { "50": [], "100": ["finance@test.com"] } },
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  const memberBudgetAlertEmails = (payload: Record<string, unknown>) =>
+    (wireBody(payload).metadata as Record<string, unknown>).team_member_max_budget_alert_emails;
+
+  it("resends the stored team member budget alert thresholds when the section stays closed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    const payload = await save(user);
+
+    expect(memberBudgetAlertEmails(payload)).toStrictEqual({ "50": [], "100": ["finance@test.com"] });
+  });
+
+  it("sends the edited team member budget alert thresholds as a percent to recipients map", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const thresholds = screen.getAllByPlaceholderText("% of budget");
+    const recipients = screen.getAllByPlaceholderText(/Additional recipients/);
+    expect(thresholds.map((input) => (input as HTMLInputElement).value)).toStrictEqual(["50", "100"]);
+    expect(recipients.map((input) => (input as HTMLInputElement).value)).toStrictEqual(["", "finance@test.com"]);
+
+    fireEvent.change(thresholds[0], { target: { value: "75" } });
+    fireEvent.change(recipients[0], { target: { value: " lead@test.com, finance@test.com " } });
+    await user.click(screen.getByRole("button", { name: "Add Budget Alert Threshold" }));
+    fireEvent.change(screen.getAllByPlaceholderText("% of budget")[2], { target: { value: "90" } });
+
+    const payload = await save(user);
+
+    expect(memberBudgetAlertEmails(payload)).toStrictEqual({
+      "75": ["lead@test.com", "finance@test.com"],
+      "100": ["finance@test.com"],
+      "90": [],
+    });
+  });
+
+  it("drops the team member budget alert thresholds key once every row is removed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const removeButtons = screen.getAllByRole("button", { name: "Remove budget alert threshold" });
+    await user.click(removeButtons[1]);
+    await user.click(removeButtons[0]);
+
+    const payload = await save(user);
+
+    expect(memberBudgetAlertEmails(payload)).toBeUndefined();
+  });
+
+  it("blocks the save when a team member budget alert threshold is above 100", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const threshold = screen.getAllByPlaceholderText("% of budget")[0] as HTMLInputElement;
+    fireEvent.change(threshold, { target: { value: "150" } });
+    expect(threshold.validity.rangeOverflow).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).not.toHaveBeenCalled());
+  });
+
+  it("refuses to save a team member budget alert row with no threshold", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    await user.click(screen.getByRole("button", { name: "Add Budget Alert Threshold" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await screen.findByText("Enter a whole number from 1 to 100");
+    expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+  });
+
+  it("carries every typed value to the update payload, with numeric fields as numbers", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
 
@@ -2355,8 +2516,8 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     const payload = await save(user);
 
     expect(payload.team_alias).toBe("Renamed Team");
-    expect(payload.soft_budget).toBe("9.5");
-    expect(payload.tpm_limit).toBe("555");
+    expect(payload.soft_budget).toBe(9.5);
+    expect(payload.tpm_limit).toBe(555);
     expect((payload.metadata as Record<string, unknown>).soft_budget_alerting_emails).toStrictEqual([
       "a@test.com",
       "b@test.com",
@@ -2956,5 +3117,52 @@ describe("TeamInfo MCP permission retention", () => {
     );
     expect(networking.teamUpdateCall).not.toHaveBeenCalled();
     errorToast.mockRestore();
+  });
+});
+
+describe("TeamInfoView - disable_global_guardrails switch gating", () => {
+  beforeEach(() => {
+    seedDefaultMocks();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    authState.userRole = "Admin";
+  });
+
+  const props = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_team_admin: true,
+    is_proxy_admin: true,
+    userModels: ["gpt-4"],
+    editTeam: false,
+    premiumUser: false,
+  };
+
+  const openEditForm = async () => {
+    const user = userEvent.setup({ delay: null });
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  it("hides the Disable all global guardrails switch from a non-admin", async () => {
+    authState.userRole = "Internal User";
+    renderWithProviders(<TeamInfoView {...props} is_proxy_admin={false} />);
+    await openEditForm();
+
+    expect(screen.queryByRole("switch", { name: /Disable all global guardrails/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the Disable all global guardrails switch to a proxy admin", async () => {
+    renderWithProviders(<TeamInfoView {...props} />);
+    await openEditForm();
+
+    expect(await screen.findByRole("switch", { name: /Disable all global guardrails/i })).toBeInTheDocument();
   });
 });

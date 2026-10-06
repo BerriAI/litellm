@@ -244,6 +244,21 @@ def test_native_ocr_maps_provider_400_with_public_provider_details(ocr_server: R
     assert "invalid OCR request" in str(caught.value)
 
 
+def test_native_ocr_encodes_python_file_input_and_drops_unknown_arguments(ocr_server: RecordingServer) -> None:
+    response: Final = call_native_ocr(
+        ocr_server,
+        document={"type": "file", "file": BytesIO(b"abc"), "mime_type": "image/png"},
+        opaque_extension=object(),
+    )
+
+    assert response.pages[0].markdown == "native OCR response"
+    assert_native_request(ocr_server)
+    assert ocr_server.requests[0].body == {
+        "model": "mistral-ocr-latest",
+        "document": {"type": "image_url", "image_url": "data:image/png;base64,YWJj"},
+    }
+
+
 class TokenAbort(BaseException):
     pass
 
@@ -593,7 +608,7 @@ def test_native_projection_errors_never_select_python(
     import ssl
 
     from litellm.rust_bridge import runtime, settings
-    from litellm.rust_bridge.catalog import Context, Route, Rule
+    from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
     from litellm.rust_bridge.configuration import Rollout
     from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR, LiteLLMOcrRequest
 
@@ -621,11 +636,11 @@ def test_native_projection_errors_never_select_python(
 
     with pytest.raises(RuntimeError if failure == "schema" else ValueError, match="http_settings"):
         runtime.run(
-            Context(Route.OCR, provider="mistral"),
+            RouteContext(Route.OCR, provider="mistral"),
             binding=NATIVE_OCR,
             native=lambda native: native(request, (), {}),
             python=python_fallback,
-            rules=(Rule(Route.OCR, Rollout.RUST_REQUIRED if required else Rollout.RUST_OPT_OUT),),
+            rules=(RouteRule(Route.OCR, Rollout.RUST_REQUIRED if required else Rollout.RUST_OPT_OUT),),
         )
     assert ocr_server.requests == []
 
