@@ -88,7 +88,13 @@ def test_callback_forwards_the_code_only_for_the_sealed_issuer_and_relays_idp_er
             cookies={wrong_cookie: wrong_cookie_value},
         )
         assert wrong.status_code == 400, wrong.text
-        assert "invalid_issuer" in wrong.text, wrong.text
+        assert wrong.headers["content-type"] == "text/html; charset=utf-8", wrong.headers
+        assert wrong.text == (
+            "<html><body><h2>Authentication failed</h2><p><strong>Error:</strong> invalid_issuer</p>"
+            "<p>This authorization response came from a different identity provider than the one this "
+            "MCP server is configured to use.</p>"
+            "<p>You can close this window and try again.</p></body></html>"
+        ), wrong.text
         assert "location" not in wrong.headers, wrong.headers
         assert wrong_code not in wrong.text, wrong.text
         _assert_cleared_oauth_state_cookie(wrong, wrong_cookie)
@@ -126,7 +132,12 @@ def test_callback_forwards_the_code_only_for_the_sealed_issuer_and_relays_idp_er
 
         missing: Final = gateway.client.get("/callback")
         assert missing.status_code == 400, missing.text
-        assert "invalid_request" in missing.text and "code" in missing.text and "state" in missing.text, missing.text
+        assert missing.headers["content-type"] == "text/html; charset=utf-8", missing.headers
+        assert missing.text == (
+            "<html><body><h2>Authentication failed</h2><p><strong>Error:</strong> invalid_request</p>"
+            "<p>Missing authorization &#x27;code&#x27; and &#x27;state&#x27; parameter(s).</p>"
+            "<p>You can close this window and try again.</p></body></html>"
+        ), missing.text
 
 
 @pytest.mark.covers("other.mcp.oauth.discovery_cannot_erase_configured_authorization_endpoint")

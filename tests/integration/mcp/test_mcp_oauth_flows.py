@@ -1,12 +1,13 @@
 import base64
 import hashlib
 import json
+import os
 import re
 import secrets
 import textwrap
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -59,6 +60,19 @@ def _open_aliases() -> frozenset[str]:
 def _without_foreign_open_servers(tools: tuple[str, ...], open_aliases: frozenset[str]) -> set[str]:
     prefixes: Final = tuple(f"{alias}-" for alias in open_aliases)
     return {tool for tool in tools if not tool.startswith(prefixes)}
+
+
+def _assert_upstream_call(call: Mapping[str, object], name: str, arguments: Mapping[str, object]) -> None:
+    body: Final = call["body"]
+    assert isinstance(body, Mapping), call
+    params: Final = body["params"]
+    assert isinstance(params, Mapping), call
+    assert set(params) == {"name", "arguments", "_meta"}, call
+    assert params["name"] == name, call
+    assert params["arguments"] == arguments, call
+    metadata: Final = params["_meta"]
+    assert isinstance(metadata, Mapping), call
+    assert set(metadata) == {"progressToken"}, call
 
 
 def _authorizations(peer: McpPeer) -> tuple[bytes | None, ...]:
@@ -695,6 +709,23 @@ def test_spec_client_discovers_the_aggregate_authorization_server_and_signs_in_t
             f"{alias}-multiply",
             f"{alias}-fail",
         }, listed.tools
+        peer.drain()
+        called_response: Final = gateway.client.post(
+            "/mcp",
+            headers={"Authorization": f"Bearer {bearer}", **ACCEPT},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": f"{alias}-add", "arguments": {"a": 20, "b": 22}},
+            },
+        )
+        assert called_response.status_code == 200, called_response.text
+        called: Final = _outcome_from_rpc(called_response)
+        assert called.ok and called.text == "42", called.raw
+        calls: Final = tool_calls(peer.drain())
+        assert len(calls) == 1, calls
+        _assert_upstream_call(calls[0], "add", {"a": 20, "b": 22})
 
 
 def test_rotated_session_refresh_token_cannot_be_replayed_after_revocation(gateway: Gateway) -> None:
@@ -909,28 +940,36 @@ class _IdpRig:
     dead_jwks: Wire
 
 
-def _idp_proxy_config(directory: Path) -> Path:
+def _proxy_config_with_general_settings(directory: Path, name: str, overrides: Mapping[str, object]) -> Path:
     raw_config: Final[object] = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config: Final = TypeAdapter(dict[str, object]).validate_python(raw_config)
-    raw_general_settings: Final = config["general_settings"]
-    general_settings: Final = TypeAdapter(dict[str, object]).validate_python(raw_general_settings)
-    config_with_idp: Final = {
-        **config,
-        "general_settings": {
-            **general_settings,
+    general_settings: Final = TypeAdapter(dict[str, object]).validate_python(config["general_settings"])
+    merged: Final = {**config, "general_settings": {**general_settings, **overrides}}
+    config_path: Final = directory / name
+    config_path.write_text(yaml.safe_dump(merged))
+    return config_path
+
+
+def _idp_proxy_config(directory: Path) -> Path:
+    return _proxy_config_with_general_settings(
+        directory,
+        "mcp_idp.yaml",
+        {
             "enable_jwt_auth": True,
             "litellm_jwtauth": {"user_id_jwt_field": "sub", "user_id_upsert": True},
             "use_x_forwarded_for": True,
             "mcp_trusted_proxy_ranges": ["127.0.0.1/32"],
         },
-    }
-    config_path: Final = directory / "mcp_idp.yaml"
-    config_path.write_text(yaml.safe_dump(config_with_idp))
-    return config_path
+    )
 
 
 @pytest.fixture(scope="module")
 def idp_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_IdpRig]:
+    assert os.environ.get("LITELLM_LICENSE"), (
+        "enable_jwt_auth is enterprise-only: these tests need LITELLM_LICENSE (CI forwards it); "
+        "without it /token answers 400 'JWT auth is an enterprise only feature; no license is set' "
+        "and the failure reads as a regression instead of a missing license"
+    )
     private_key: Final = generate_private_key(public_exponent=65537, key_size=2048)
     other_private_key: Final = generate_private_key(public_exponent=65537, key_size=2048)
     kid: Final = "kid-a"
@@ -965,9 +1004,42 @@ def idp_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_IdpRig]:
 
 
 @pytest.fixture(scope="module")
-def untrusted_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+def forwarded_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("mcp-forwarded")
+    config: Final = _proxy_config_with_general_settings(
+        directory,
+        "mcp_forwarded.yaml",
+        {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["127.0.0.1/32"]},
+    )
+    with (
+        gateway_from_environment() as gateway,
+        owned_proxy(
+            gateway,
+            directory,
+            {"FORWARDED_ALLOW_IPS": "192.0.2.1"},
+            config=config,
+            remove_environment=("PROXY_BASE_URL",),
+            workers=1,
+        ) as candidate,
+    ):
+        yield candidate
+
+
+@pytest.fixture(
+    scope="module",
+    params=(
+        {},
+        {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["192.0.2.0/24"]},
+    ),
+    ids=("xff-off", "outside-trusted-range"),
+)
+def untrusted_gateway(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
     directory: Final = tmp_path_factory.mktemp("mcp-untrusted-forwarded")
-    config: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
+    config: Final = _proxy_config_with_general_settings(
+        directory,
+        "mcp_untrusted.yaml",
+        TypeAdapter(dict[str, object]).validate_python(request.param),
+    )
     with (
         gateway_from_environment() as gateway,
         owned_proxy(
@@ -1104,6 +1176,11 @@ def test_idp_jwks_server_error_answers_temporarily_unavailable(tmp_path: Path) -
         "BUG: an IdP JWKS answering HTTP 503 makes the gateway /token token-exchange answer 400 invalid_request "
         "(subject_token rejected) instead of 503 temporarily_unavailable"
     )
+    assert os.environ.get("LITELLM_LICENSE"), (
+        "enable_jwt_auth is enterprise-only: these tests need LITELLM_LICENSE (CI forwards it); "
+        "without it /token answers 400 'JWT auth is an enterprise only feature; no license is set' "
+        "and the failure reads as a regression instead of a missing license"
+    )
     private_key: Final = generate_private_key(public_exponent=65537, key_size=2048)
     kid: Final = "mcp-runtime-503"
 
@@ -1159,7 +1236,7 @@ def test_idp_jwks_server_error_answers_temporarily_unavailable(tmp_path: Path) -
 
 
 def test_standard_pattern_discovery_names_the_per_server_issuer_and_follows_forwarded_headers(
-    gateway: Gateway, idp_rig: _IdpRig
+    gateway: Gateway, forwarded_gateway: Gateway
 ) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "rt8" + uuid.uuid4().hex[:10]
@@ -1233,7 +1310,7 @@ def test_standard_pattern_discovery_names_the_per_server_issuer_and_follows_forw
         metadata: Final = gateway.client.get(urljoin(base + "/", metadata_ref.group(1)))
         assert metadata.status_code == 200, metadata.text
         assert _response_object(metadata) == expected_protected, metadata.text
-    with mcp_peer() as peer, idp_rig.gateway.scenario() as scenario:
+    with mcp_peer() as peer, forwarded_gateway.scenario() as scenario:
         alias: Final = "rt8f" + uuid.uuid4().hex[:9]
         register_mcp(
             scenario,
@@ -1248,7 +1325,7 @@ def test_standard_pattern_discovery_names_the_per_server_issuer_and_follows_forw
             "X-Forwarded-Proto": "https",
             "X-Forwarded-Host": "gw.example.test",
         }
-        forwarded_prm: Final = idp_rig.gateway.client.get(
+        forwarded_prm: Final = forwarded_gateway.client.get(
             f"/.well-known/oauth-protected-resource/mcp/{alias}", headers=forwarded_headers
         )
         assert forwarded_prm.status_code == 200, forwarded_prm.text
@@ -1257,7 +1334,7 @@ def test_standard_pattern_discovery_names_the_per_server_issuer_and_follows_forw
             "resource": f"{forwarded_base}/mcp/{alias}",
             "scopes_supported": [],
         }, forwarded_prm.text
-        forwarded_as: Final = idp_rig.gateway.client.get(
+        forwarded_as: Final = forwarded_gateway.client.get(
             f"/.well-known/oauth-authorization-server/mcp/{alias}", headers=forwarded_headers
         )
         assert forwarded_as.status_code == 200, forwarded_as.text
@@ -1272,8 +1349,8 @@ def test_standard_pattern_discovery_names_the_per_server_issuer_and_follows_forw
             "token_endpoint_auth_methods_supported": ["client_secret_post"],
             "registration_endpoint": f"{forwarded_base}/{alias}/register",
         }, forwarded_as.text
-        local_base: Final = _base(idp_rig.gateway)
-        local_as: Final = idp_rig.gateway.client.get(f"/.well-known/oauth-authorization-server/mcp/{alias}")
+        local_base: Final = _base(forwarded_gateway)
+        local_as: Final = forwarded_gateway.client.get(f"/.well-known/oauth-authorization-server/mcp/{alias}")
         assert local_as.status_code == 200, local_as.text
         assert _response_object(local_as) == {
             "issuer": f"{local_base}/mcp/{alias}",
