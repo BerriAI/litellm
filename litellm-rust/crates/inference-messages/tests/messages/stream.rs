@@ -5,11 +5,11 @@ use std::{
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
-use litellm_inference::messages::{
+use litellm_inference::test_support::{RecordingSecrets, no_secrets};
+use litellm_inference_messages::{
     MessagesCallResponse,
     route::{Messages, MessagesStreamHead},
 };
-use litellm_inference::test_support::{RecordingSecrets, no_secrets};
 use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::rstest;
 use tokio::{
@@ -36,7 +36,7 @@ struct TraceSink(mpsc::Sender<(String, Value)>);
 
 impl Sink for TraceSink {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        metadata.target().starts_with("litellm_inference::messages")
+        metadata.target().starts_with("litellm_inference_messages")
     }
 
     fn emit(&self, record: &Record) {

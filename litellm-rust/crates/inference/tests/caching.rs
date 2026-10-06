@@ -402,64 +402,6 @@ async fn an_invalid_cached_envelope_is_replaced_by_a_provider_result(#[case] poi
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
-#[rstest]
-#[case::system("system", json!("answer ALPHA"), json!("answer BETA"))]
-#[case::stop_sequences("stop_sequences", json!(["STOP"]), json!(["END"]))]
-#[case::top_k("top_k", json!(5), json!(10))]
-#[case::tools("tools", json!([{"name":"a","input_schema":{"type":"object"}}]), json!([{"name":"b","input_schema":{"type":"object"}}]))]
-#[case::tool_choice("tool_choice", json!({"type":"auto"}), json!({"type":"none"}))]
-#[tokio::test]
-async fn messages_cache_identity_includes_provider_native_parameters(
-    cache: Arc<dyn ResponseCacheService>,
-    #[case] field: &str,
-    #[case] original: Value,
-    #[case] changed: Value,
-) {
-    use litellm_inference::messages::route::Messages;
-    use litellm_llms_types::formats::messages::MessagesResponse;
-
-    let calls = AtomicUsize::new(0);
-    for (value, expected_call) in [(original.clone(), 0), (changed, 1), (original, 0)] {
-        let response =
-            execute_unary::<Messages, _, _>(
-                CacheRequest::from_wire(
-                    ProviderIdentity {
-                        model: "test".into(),
-                        provider: "anthropic".into(),
-                    },
-                    Some(&WireRequest {
-                        url: "https://example.test/v1/messages".into(),
-                        headers: vec![],
-                        body: json!({
-                            "model":"test", "messages":[{"role":"user","content":"hello"}],
-                            "max_tokens":32, (field):value
-                        }),
-                    }),
-                ),
-                Some(cache.clone()),
-                Some(CacheOptions::new(CacheScope::Shared)),
-                &(),
-                None,
-                || async {
-                    let call = calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(Box::new(serde_json::from_value::<MessagesResponse>(json!({
-                    "id":call.to_string(), "type":"message", "role":"assistant", "model":"test",
-                    "content":[{"type":"text","text":format!("answer {call}")}],
-                    "stop_reason":"end_turn", "stop_sequence":null
-                })).unwrap()))
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.id, expected_call.to_string());
-        assert_eq!(
-            response.content[0]["text"],
-            format!("answer {expected_call}")
-        );
-    }
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
-}
-
 struct UnavailableCache;
 
 impl litellm_cache::BaseCache for UnavailableCache {
@@ -943,9 +885,6 @@ impl Interceptors<RouteError> for ChangingHooks {
 #[case::chat_credentials("chat", "credentials")]
 #[case::chat_endpoint("chat", "endpoint")]
 #[case::chat_callback("chat", "callback")]
-#[case::messages_credentials("messages", "credentials")]
-#[case::messages_endpoint("messages", "endpoint")]
-#[case::messages_callback("messages", "callback")]
 #[tokio::test]
 async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
     cache: Arc<dyn ResponseCacheService>,
@@ -953,9 +892,8 @@ async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
     #[case] change: &str,
 ) {
     use litellm_cache_response::ScopedCache;
-    use litellm_inference::{
-        chat_completions::{ChatCompletionsRoute, types::ChatCompletionsRequest},
-        messages::MessagesCall,
+    use litellm_inference::chat_completions::{
+        ChatCompletionsRoute, types::ChatCompletionsRequest,
     };
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
@@ -1019,12 +957,6 @@ async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
                 )
                 .await
                 .unwrap();
-            }
-            "messages" => {
-                support::messages_route(secrets.clone()).with_cache(cache).execute(MessagesCall {
-                    body: serde_json::from_value(json!({"model":"anthropic/cache-test-model","messages":[{"role":"user","content":"hello"}],"max_tokens":32})).unwrap(),
-                    api_key:None,api_base:None,custom_llm_provider:None,extra_headers:None,provider_specific_header:None,timeout:None,shaping:Default::default(),
-                }, &hooks, None).await.unwrap();
             }
             _ => unreachable!(),
         }

@@ -67,7 +67,7 @@ mod tests {
     use rstest::rstest;
 
     use super::{MessagesProvider, messages_provider, string_headers, truncate_error_body};
-    use crate::messages::Error;
+    use crate::Error;
     use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
     #[rstest]

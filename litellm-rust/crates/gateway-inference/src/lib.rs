@@ -17,9 +17,9 @@ use std::sync::Arc;
 use axum::{Router, routing::post};
 use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
 use litellm_inference::{
-    chat_completions::ChatCompletionsRoute, messages::MessagesRoute, ocr::OcrRoute,
-    resources::CoreResources,
+    chat_completions::ChatCompletionsRoute, ocr::OcrRoute, resources::CoreResources,
 };
+use litellm_inference_messages::MessagesRoute;
 use litellm_inference_responses::ResponsesRoute;
 use litellm_inference_transcription::AudioTranscriptionRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
