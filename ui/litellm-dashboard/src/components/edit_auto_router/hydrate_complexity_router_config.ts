@@ -149,6 +149,16 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.context_window_escalation_buffer === "number"
         ? parsedConfig.context_window_escalation_buffer
         : undefined,
+    cache_aware_routing:
+      typeof parsedConfig.cache_aware_routing === "boolean" ? parsedConfig.cache_aware_routing : undefined,
+    cache_aware_routing_output_tokens:
+      typeof parsedConfig.cache_aware_routing_output_tokens === "number"
+        ? parsedConfig.cache_aware_routing_output_tokens
+        : undefined,
+    cache_aware_routing_timeout_ms:
+      typeof parsedConfig.cache_aware_routing_timeout_ms === "number"
+        ? parsedConfig.cache_aware_routing_timeout_ms
+        : undefined,
     stall_escalation_enabled: parsedConfig.stall_escalation_enabled === true || undefined,
     stall_escalation_window:
       typeof parsedConfig.stall_escalation_window === "number" ? parsedConfig.stall_escalation_window : undefined,

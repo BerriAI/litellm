@@ -5835,6 +5835,7 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 encoding=_get_encoding(),
                 stream=stream,
+                cache=kwargs.get("cache"),
             )
         elif (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
             custom_llm_provider == "azure"

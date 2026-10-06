@@ -4301,6 +4301,7 @@ export interface paths {
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
+         *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
          *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
@@ -4332,6 +4333,7 @@ export interface paths {
          *             "user_id" : "ishaan-jaff-3",
          *             "allowed_region": "eu",
          *             "budget_id": "free_tier",
+         *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
          *         }'
          *
@@ -4411,6 +4413,7 @@ export interface paths {
          *     - default_model: Optional[str] = (
          *         None  # if no equivalent model in allowed region - default all requests to this model
          *     )
+         *     - models: Optional[list[str]] = None  # omitted or null leaves the allowlist unchanged; an empty list clears it
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
          *         Supported fields:
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
@@ -4426,7 +4429,8 @@ export interface paths {
          *     ```
          *     curl --location 'http://0.0.0.0:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "test-litellm-user-4",
-         *         "budget_id": "paid_tier"
+         *         "budget_id": "paid_tier",
+         *         "models": ["gpt-4o-mini"]
          *     }'
          *
          *     # Updating object permissions
@@ -4963,6 +4967,7 @@ export interface paths {
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
+         *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
          *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
@@ -4994,6 +4999,7 @@ export interface paths {
          *             "user_id" : "ishaan-jaff-3",
          *             "allowed_region": "eu",
          *             "budget_id": "free_tier",
+         *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
          *         }'
          *
@@ -5073,6 +5079,7 @@ export interface paths {
          *     - default_model: Optional[str] = (
          *         None  # if no equivalent model in allowed region - default all requests to this model
          *     )
+         *     - models: Optional[list[str]] = None  # omitted or null leaves the allowlist unchanged; an empty list clears it
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
          *         Supported fields:
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
@@ -5088,7 +5095,8 @@ export interface paths {
          *     ```
          *     curl --location 'http://0.0.0.0:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "test-litellm-user-4",
-         *         "budget_id": "paid_tier"
+         *         "budget_id": "paid_tier",
+         *         "models": ["gpt-4o-mini"]
          *     }'
          *
          *     # Updating object permissions
@@ -8992,6 +9000,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/traces/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Trace Findings */
+        post: operations["trace_findings_lens_traces_findings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/watch-all": {
         parameters: {
             query?: never;
@@ -9275,6 +9300,23 @@ export interface paths {
         };
         /** Read Run */
         get: operations["read_run_lens__lens_id__runs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/{lens_id}/runs/{job_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Reviews */
+        get: operations["read_reviews_lens__lens_id__runs__job_id__reviews_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -20343,6 +20385,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest Otlp Traces */
+        post: operations["ingest_otlp_traces_v1_logs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/access_groups": {
         parameters: {
             query?: never;
@@ -25284,6 +25343,43 @@ export interface components {
         ActiveUsersAnalyticsResponse: {
             /** Results */
             results: components["schemas"]["TagActiveUsersResponse"][];
+        };
+        /** Activity */
+        Activity: {
+            /**
+             * Execution Ids
+             * @default []
+             */
+            execution_ids: string[];
+            /**
+             * Finished
+             * @default false
+             */
+            finished: boolean;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Operations
+             * @default []
+             */
+            operations: ("model" | "read" | "search" | "python" | "catalog" | "review_catalog" | "read_reviews" | "search_reviews" | "history" | "checkpoint")[];
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "load" | "review" | "group" | "reconcile" | "investigate";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["ToolCount"][];
         };
         /** ActivityAvailability */
         ActivityAvailability: {
@@ -30683,6 +30779,11 @@ export interface components {
              */
             eligible: number;
             /**
+             * Failed Tasks
+             * @default 0
+             */
+            failed_tasks: number;
+            /**
              * Grouped Batches
              * @default 0
              */
@@ -30889,6 +30990,8 @@ export interface components {
             /** Default Model */
             default_model?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | null;
+            /** Models */
+            models?: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -33006,6 +33109,20 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** InFlight */
+        InFlight: {
+            /** Agent */
+            agent: string;
+            /** Execution Id */
+            execution_id: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Trace Id */
+            trace_id: string;
+        };
         /**
          * IncompleteDetails
          * @description Details about why the response is incomplete.
@@ -33262,6 +33379,11 @@ export interface components {
         /** Job */
         Job: {
             /**
+             * Activities
+             * @default []
+             */
+            activities: components["schemas"]["Activity"][];
+            /**
              * Assessments
              * @default []
              */
@@ -33280,6 +33402,7 @@ export interface components {
              * @default {
              *       "candidates": 0,
              *       "eligible": 0,
+             *       "failed_tasks": 0,
              *       "grouped_batches": 0,
              *       "grouping_batches": 0,
              *       "inconclusive": 0,
@@ -33314,6 +33437,21 @@ export interface components {
             id: string;
             /** Lease Until */
             lease_until?: string | null;
+            /**
+             * Reading
+             * @default []
+             */
+            reading: components["schemas"]["InFlight"][];
+            /**
+             * Reviewed
+             * @default 0
+             */
+            reviewed: number;
+            /**
+             * Reviews
+             * @default []
+             */
+            reviews: components["schemas"]["Review"][];
             /** Revision */
             revision: number;
             sample?: components["schemas"]["Sample"] | null;
@@ -34318,6 +34456,8 @@ export interface components {
             /** Default Model */
             default_model?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Models */
+            models?: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -38166,6 +38306,16 @@ export interface components {
             /** Top Models */
             top_models: components["schemas"]["ModelInsightMetric"][];
         };
+        /** ModelMessage */
+        ModelMessage: {
+            /** Content */
+            content: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "system" | "user" | "assistant";
+        };
         /** ModelParams */
         ModelParams: {
             /** Litellm Params */
@@ -38178,6 +38328,11 @@ export interface components {
         };
         /** ModelRequest */
         ModelRequest: {
+            /**
+             * Messages
+             * @default []
+             */
+            messages: components["schemas"]["ModelMessage"][];
             /** Prompt */
             prompt: string;
             /**
@@ -38207,6 +38362,11 @@ export interface components {
         ModelResult: {
             /** Content */
             content: string;
+            /**
+             * Context Exceeded
+             * @default false
+             */
+            context_exceeded: boolean;
             /** Cost */
             cost: number;
         };
@@ -38332,6 +38492,8 @@ export interface components {
             model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            /** Models */
+            models?: string[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /**
              * Rpm Limit
@@ -40893,23 +41055,13 @@ export interface components {
         };
         /** Progress */
         Progress: {
-            /**
-             * @default {
-             *       "candidates": 0,
-             *       "eligible": 0,
-             *       "grouped_batches": 0,
-             *       "grouping_batches": 0,
-             *       "inconclusive": 0,
-             *       "investigated": 0,
-             *       "partial": 0,
-             *       "screened": 0,
-             *       "selected": 0,
-             *       "unassessable": 0
-             *     }
-             */
-            coverage: components["schemas"]["Coverage"];
+            activity?: components["schemas"]["Activity"] | null;
+            coverage?: components["schemas"]["Coverage"] | null;
+            /** Reading */
+            reading?: components["schemas"]["InFlight"][] | null;
+            review?: components["schemas"]["Review"] | null;
             /** Stage */
-            stage: string;
+            stage?: string | null;
         };
         /** Prompt */
         Prompt: {
@@ -43670,6 +43822,86 @@ export interface components {
             ServiceUnavailableErrorRetries?: number | null;
             /** Timeouterrorretries */
             TimeoutErrorRetries?: number | null;
+        };
+        /** Review */
+        Review: {
+            /** Agent */
+            agent: string;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Cannot Assess
+             * @default false
+             */
+            cannot_assess: boolean;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Execution Id */
+            execution_id: string;
+            /** Model */
+            model: string;
+            /** Name */
+            name: string;
+            /**
+             * Reasoning
+             * @default
+             */
+            reasoning: string;
+            /**
+             * Spans
+             * @default []
+             */
+            spans: components["schemas"]["ReviewSpan"][];
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["ToolCount"][];
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Verdicts
+             * @default []
+             */
+            verdicts: components["schemas"]["ReviewVerdict"][];
+        };
+        /** ReviewPage */
+        ReviewPage: {
+            /** Reviewed */
+            reviewed: number;
+            /** Reviews */
+            reviews: components["schemas"]["Review"][];
+        };
+        /** ReviewSpan */
+        ReviewSpan: {
+            /**
+             * Cited
+             * @default false
+             */
+            cited: boolean;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Preview */
+            preview: string;
+            /** Span Id */
+            span_id: string;
+        };
+        /** ReviewVerdict */
+        ReviewVerdict: {
+            /** Check Id */
+            check_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "issue" | "pattern";
+            /** Summary */
+            summary: string;
         };
         /**
          * RoleMappings
@@ -46438,6 +46670,16 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** ToolCount */
+        ToolCount: {
+            /** Calls */
+            calls: number;
+            /**
+             * Name
+             * @enum {string}
+             */
+            name: "model" | "read" | "search" | "python" | "catalog" | "review_catalog" | "read_reviews" | "search_reviews" | "history" | "checkpoint";
+        };
         /** ToolDetailResponse */
         ToolDetailResponse: {
             /** Overrides */
@@ -46748,6 +46990,33 @@ export interface components {
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
         };
+        /** TraceFindingCount */
+        TraceFindingCount: {
+            /** Finding Count */
+            finding_count: number | null;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
+        /** TraceFindingsRequest */
+        TraceFindingsRequest: {
+            /** Traces */
+            traces: components["schemas"]["TraceIdentity"][];
+        };
+        /** TraceIdentity */
+        TraceIdentity: {
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
         /** TracePage */
         TracePage: {
             /** Data */
@@ -46759,6 +47028,11 @@ export interface components {
         TracePart: {
             /** Content */
             content: string;
+            /**
+             * End Time
+             * @default
+             */
+            end_time: string;
             /** Execution Id */
             execution_id: string;
             /** Kind */
@@ -46772,6 +47046,11 @@ export interface components {
             parent_span_id: string;
             /** Span Id */
             span_id: string;
+            /**
+             * Start Time
+             * @default
+             */
+            start_time: string;
             /**
              * Truncated
              * @default false
@@ -47243,6 +47522,8 @@ export interface components {
             default_model?: string | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Models */
+            models?: string[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** User Id */
             user_id: string;
@@ -62049,6 +62330,39 @@ export interface operations {
             };
         };
     };
+    trace_findings_lens_traces_findings_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TraceFindingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceFindingCount"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     watch_all_lens_watch_all_post: {
         parameters: {
             query?: never;
@@ -62663,6 +62977,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_reviews_lens__lens_id__runs__job_id__reviews_get: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewPage"];
                 };
             };
             /** @description Validation Error */
@@ -77093,6 +77441,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_otlp_traces_v1_logs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

@@ -14,11 +14,16 @@ const coverage: Job["coverage"] = {
   candidates: 0,
   partial: 0,
   unassessable: 0,
+  failed_tasks: 0,
 };
 
 const job: Job = {
   assessments: [],
   steps: [],
+  reviews: [],
+  reviewed: 0,
+  reading: [],
+  activities: [],
   trigger: "schedule",
   coverage,
   attempts: 0,
