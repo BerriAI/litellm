@@ -1,5 +1,7 @@
 import json
+import threading
 from collections.abc import Iterator
+from itertools import accumulate, dropwhile
 from pathlib import Path
 from typing import Final
 
@@ -46,11 +48,13 @@ _SSE_EVENTS: Final[tuple[dict[str, JsonValue], ...]] = (
     {"type": "message_stop"},
 )
 _SSE_FRAMES: Final = tuple(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in _SSE_EVENTS)
+_CLAUDE_CODE_STREAM_GATE: Final = threading.Event()
 
 
 def _respond(request: Request) -> Reply:
     if _JSON_OBJECT.validate_json(request.body).get("stream") is True:
-        return Reply(chunks=_SSE_FRAMES, content_type="text/event-stream")
+        gate: Final = _CLAUDE_CODE_STREAM_GATE if request.headers.get("x-app") == "cli" else None
+        return Reply(chunks=_SSE_FRAMES, content_type="text/event-stream", gate_after_first=gate)
     return Reply(body=json.dumps(_MESSAGE).encode())
 
 
@@ -164,6 +168,7 @@ def test_anthropic_sdk_call_reaches_upstream_with_full_body_and_proxy_key(
 def test_claude_code_bearer_stream_merges_caller_beta_with_the_credential_beta(
     oauth_proxy: Gateway, wire: Wire
 ) -> None:
+    _CLAUDE_CODE_STREAM_GATE.clear()
     with oauth_proxy.scenario() as scenario:
         key: Final = scenario.key()
         body: Final[dict[str, JsonValue]] = {
@@ -186,9 +191,22 @@ def test_claude_code_bearer_stream_merges_caller_beta_with_the_credential_beta(
                 "x-app": "cli",
             },
         ) as response:
-            streamed: Final = response.read()
-            assert response.status_code == 200, streamed
-        assert streamed == b"".join(_SSE_FRAMES), streamed
+            raw: Final = iter(response.iter_raw())
+            try:
+                assert response.status_code == 200, response.status_code
+                assert response.headers.get("content-type", "").startswith("text/event-stream"), response.headers
+                first_frame: Final = next(
+                    dropwhile(
+                        lambda buffered: b"\n\n" not in buffered,
+                        accumulate(raw, lambda buffered, chunk: buffered + chunk, initial=b""),
+                    )
+                )
+                assert first_frame == _SSE_FRAMES[0], first_frame
+            finally:
+                _CLAUDE_CODE_STREAM_GATE.set()
+            streamed: Final = first_frame + b"".join(raw)
+            assert streamed == b"".join(_SSE_FRAMES), streamed
+        _CLAUDE_CODE_STREAM_GATE.clear()
         upstream: Final = _only_upstream_request(wire)
         assert _JSON_OBJECT.validate_json(upstream.body) == body, upstream.body
         assert upstream.headers["authorization"] == f"Bearer {_OAUTH_TOKEN}", upstream.headers

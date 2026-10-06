@@ -200,6 +200,8 @@ def test_file_less_multipart_form_stays_multipart_with_every_repeated_field(prox
             ],
         )
         assert response.status_code == 200, response.text
+        parsed: Final = _ImageResponse.model_validate_json(response.content)
+        assert parsed == _ImageResponse(created=1, data=(_Image(b64_json=_EDITED),)), response.text
         upstream: Final = _only_upstream(wire, "/v1/images/edits")
         assert upstream.headers["content-type"].startswith("multipart/form-data; boundary="), upstream.headers
         assert _parts(upstream.headers["content-type"], upstream.body) == (

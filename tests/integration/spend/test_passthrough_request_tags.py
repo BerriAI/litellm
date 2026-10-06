@@ -461,6 +461,18 @@ def _stored_endpoint_ids() -> list[JsonValue]:
     return [endpoint["id"] for endpoint in stored]
 
 
+def _stored_endpoint(endpoint_id: str) -> dict[str, JsonValue]:
+    rows: Final = read_rows(
+        "SELECT param_value FROM \"LiteLLM_Config\" WHERE param_name = %s", ("general_settings",)
+    )
+    assert len(rows) == 1, rows
+    settings: Final = object_value(rows[0]["param_value"])
+    stored: Final = _ENDPOINTS.validate_python(settings.get("pass_through_endpoints") or [])
+    matches: Final = [endpoint for endpoint in stored if endpoint.get("id") == endpoint_id]
+    assert len(matches) == 1, matches
+    return matches[0]
+
+
 def _query(request: Request) -> tuple[str, dict[str, str]]:
     path, _, query = request.target.partition("?")
     return path, dict(parse_qsl(query, keep_blank_values=True))
@@ -549,7 +561,11 @@ def test_configured_endpoint_forwards_json_multipart_and_query_and_an_update_kee
         assert retargeted.status_code == 200, retargeted.text
         expected: Final = {**created, "target": f"{wire.url}/v2"}
         assert _ENDPOINTS.validate_python(retargeted.json()["endpoints"]) == [expected], retargeted.text
-        assert _readback(candidate, endpoint_id) == [expected]
+        retargeted_readback: Final = _readback(candidate, endpoint_id)
+        assert retargeted_readback == [expected]
+        assert _stored_endpoint(endpoint_id) == {
+            key: value for key, value in retargeted_readback[0].items() if key != "is_from_config"
+        }
         after_retarget: Final = candidate.client.post(path, json=body)
         assert after_retarget.status_code == 200, after_retarget.text
         assert after_retarget.json() == {"received": "/v2?api-version=2024-01-01"}, after_retarget.text
@@ -565,7 +581,12 @@ def test_configured_endpoint_forwards_json_multipart_and_query_and_an_update_kee
             {"path": path, "target": f"{wire.url}/v2", "auth": True, "headers": {"x-static": "static-v2"}},
         )
         assert locked.status_code == 200, locked.text
-        assert _readback(candidate, endpoint_id) == [{**expected, "auth": True, "headers": {"x-static": "static-v2"}}]
+        locked_expected: Final = {**expected, "auth": True, "headers": {"x-static": "static-v2"}}
+        locked_readback: Final = _readback(candidate, endpoint_id)
+        assert locked_readback == [locked_expected]
+        assert _stored_endpoint(endpoint_id) == {
+            key: value for key, value in locked_readback[0].items() if key != "is_from_config"
+        }
         anonymous: Final = candidate.client.post(path, json=body)
         assert anonymous.status_code == 401, anonymous.text
         assert wire.drain() == ()
@@ -577,6 +598,106 @@ def test_configured_endpoint_forwards_json_multipart_and_query_and_an_update_kee
         ], locked_request
         assert locked_request[0].headers["x-static"] == "static-v2", locked_request[0].headers
         assert "authorization" not in locked_request[0].headers, locked_request[0].headers
+
+
+def test_renaming_a_subpath_endpoint_moves_both_routes_keeps_stored_fields_and_never_forwards_caller_headers(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    path: Final = f"/integration-rename-{marker}"
+    renamed_path: Final = f"/integration-renamed-{marker}"
+    body: Final[dict[str, JsonValue]] = {"input": marker}
+    with (
+        wire_server(_received_reply) as wire,
+        owned_proxy(gateway, tmp_path, {}, workers=1) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        created: Final = _create_endpoint(
+            candidate,
+            scenario,
+            {
+                "path": path,
+                "target": f"{wire.url}/base",
+                "include_subpath": True,
+                "auth": True,
+                "forward_headers": True,
+                "headers": {"x-static": "v1"},
+            },
+        )
+        endpoint_id: Final = str(created["id"])
+        expected: Final = {
+            "id": endpoint_id,
+            "path": path,
+            "target": f"{wire.url}/base",
+            "headers": {"x-static": "v1"},
+            "default_query_params": {},
+            "include_subpath": True,
+            "cost_per_request": 0.0,
+            "timeout": None,
+            "auth": True,
+            "guardrails": None,
+            "is_from_config": False,
+            "methods": None,
+        }
+        assert created == expected, created
+        assert _readback(candidate, endpoint_id) == [expected]
+        key: Final = scenario.key(allowed_passthrough_routes=[path, renamed_path])
+        caller_headers: Final = {"x-caller": f"caller-{marker}"}
+        first: Final = candidate.request("POST", path, body, key=key, headers=caller_headers)
+        assert first.status_code == 200, first.text
+        assert first.json() == {"received": "/base"}, first.text
+        second: Final = candidate.request("POST", f"{path}/sub", body, key=key, headers=caller_headers)
+        assert second.status_code == 200, second.text
+        assert second.json() == {"received": "/base/sub"}, second.text
+        initial_requests: Final = wire.drain()
+        assert [(request.method, request.target) for request in initial_requests] == [
+            ("POST", "/base"),
+            ("POST", "/base/sub"),
+        ], initial_requests
+
+        updated: Final = candidate.request(
+            "POST",
+            f"/config/pass_through_endpoint/{endpoint_id}",
+            {"path": renamed_path, "target": f"{wire.url}/base"},
+        )
+        assert updated.status_code == 200, updated.text
+        updated_expected: Final = {**expected, "path": renamed_path}
+        assert _ENDPOINTS.validate_python(updated.json()["endpoints"]) == [updated_expected], updated.text
+        updated_readback: Final = _readback(candidate, endpoint_id)
+        assert updated_readback == [updated_expected]
+        assert _stored_endpoint(endpoint_id) == {
+            key: value for key, value in updated_readback[0].items() if key != "is_from_config"
+        }
+
+        old_path: Final = candidate.request("POST", path, body, key=key, headers=caller_headers)
+        old_subpath: Final = candidate.request("POST", f"{path}/sub", body, key=key, headers=caller_headers)
+        assert old_path.status_code == 404, old_path.text
+        assert old_subpath.status_code == 404, old_subpath.text
+        assert wire.drain() == ()
+
+        renamed: Final = candidate.request("POST", renamed_path, body, key=key, headers=caller_headers)
+        assert renamed.status_code == 200, renamed.text
+        assert renamed.json() == {"received": "/base"}, renamed.text
+        renamed_subpath: Final = candidate.request(
+            "POST", f"{renamed_path}/sub", body, key=key, headers=caller_headers
+        )
+        assert renamed_subpath.status_code == 200, renamed_subpath.text
+        assert renamed_subpath.json() == {"received": "/base/sub"}, renamed_subpath.text
+        anonymous: Final = candidate.client.post(f"{renamed_path}/sub", json=body, headers=caller_headers)
+        assert anonymous.status_code == 401, anonymous.text
+        renamed_requests: Final = wire.drain()
+        assert [(request.method, request.target) for request in (*initial_requests, *renamed_requests)] == [
+            ("POST", "/base"),
+            ("POST", "/base/sub"),
+            ("POST", "/base"),
+            ("POST", "/base/sub"),
+        ], renamed_requests
+        for upstream in (*initial_requests, *renamed_requests):
+            assert upstream.headers["x-static"] == "v1", upstream.headers
+            assert "x-caller" not in upstream.headers, upstream.headers
+            assert {name: value for name, value in upstream.headers.items() if key in value} == {}, upstream.headers
+            assert key not in upstream.target, upstream.target
+        assert wire.drain() == ()
 
 
 def test_configured_endpoint_without_auth_serves_its_subpaths_without_a_key(gateway: Gateway) -> None:

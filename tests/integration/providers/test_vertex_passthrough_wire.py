@@ -20,6 +20,9 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
+from google import genai
+from google.genai import types
+from google.oauth2.credentials import Credentials
 from integration._support.client import Gateway, gateway_from_environment
 from integration._support.process import owned_proxy
 from integration._support.vertex import service_account_json
@@ -45,6 +48,10 @@ _GEMINI_BODY: Final[dict[str, JsonValue]] = {
     "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
     "systemInstruction": {"parts": [{"text": "be terse"}]},
     "generationConfig": {"temperature": 0.2, "maxOutputTokens": 32},
+}
+_GEMINI_SDK_BODY: Final[dict[str, JsonValue]] = {
+    **_GEMINI_BODY,
+    "systemInstruction": {"parts": [{"text": "be terse"}], "role": "user"},
 }
 _CLAUDE_REPLY: Final[dict[str, JsonValue]] = {
     "id": "msg_scripted",
@@ -235,10 +242,86 @@ def _assert_minted_token_and_no_virtual_key(upstream: Request, key: str) -> None
 
 @pytest.mark.parametrize("alias", ["/vertex_ai", "/vertex-ai"])
 def test_google_genai_vertex_calls_reach_the_router_deployment_with_a_minted_token(rig: _Rig, alias: str) -> None:
+    with rig.proxy.scenario() as scenario:
+        key: Final = scenario.key()
+        sent: Final[list[httpx.Request]] = []
+        client: Final = genai.Client(
+            vertexai=True,
+            project=_PROJECT,
+            location="us-central1",
+            credentials=Credentials(token=key),
+            http_options=types.HttpOptions(
+                base_url=f"{str(rig.proxy.client.base_url).rstrip('/')}{alias}",
+                client_args={"event_hooks": {"request": [sent.append]}, "timeout": 30, "trust_env": False},
+            ),
+        )
+        generated: Final = client.models.generate_content(
+            model=_GEMINI_ROUTER_NAME,
+            contents="hi",
+            config=types.GenerateContentConfig(
+                system_instruction="be terse",
+                temperature=0.2,
+                max_output_tokens=32,
+            ),
+        )
+        streamed: Final = "".join(
+            chunk.text or ""
+            for chunk in client.models.generate_content_stream(
+                model=_GEMINI_ROUTER_NAME,
+                contents="hi",
+                config=types.GenerateContentConfig(
+                    system_instruction="be terse",
+                    temperature=0.2,
+                    max_output_tokens=32,
+                ),
+            )
+        )
+        assert generated.text == "scripted vertex", generated
+        assert streamed == "scripted vertex", streamed
+        received: Final = rig.vertex.drain()
+        model_path: Final = f"/v1beta1/projects/{_PROJECT}/locations/us-central1/publishers/google/models"
+        assert [(request.method, request.target) for request in received] == [
+            ("POST", f"{model_path}/gemini-2.5-flash:generateContent"),
+            ("POST", f"{model_path}/gemini-2.5-flash:streamGenerateContent?alt=sse"),
+        ], received
+        assert rig.tunnel.drain() == [_REGIONAL, _REGIONAL]
+        assert len(sent) == len(received), sent
+        for upstream, sdk_request in zip(received, sent, strict=True):
+            sdk_body: Final = _JSON_OBJECT.validate_json(sdk_request.content)
+            assert _JSON_OBJECT.validate_json(upstream.body) == sdk_body, upstream.body
+            assert sdk_body == _GEMINI_SDK_BODY, upstream.body
+            _assert_minted_token_and_no_virtual_key(upstream, key)
+
+
+def test_vertex_abbreviated_beta_route_uses_router_project_and_location(rig: _Rig) -> None:
+    with rig.proxy.scenario() as scenario:
+        key: Final = scenario.key()
+        response: Final = rig.proxy.client.post(
+            f"/vertex-ai/v1beta1/publishers/google/models/{_GEMINI_ROUTER_NAME}:generateContent",
+            json=_GEMINI_BODY,
+            headers={"Authorization": f"Bearer {key}"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == _GEMINI_REPLY, response.text
+        received: Final = rig.vertex.drain()
+        assert [(request.method, request.target) for request in received] == [
+            (
+                "POST",
+                f"/v1beta1/projects/{_PROJECT}/locations/us-central1/publishers/google/models/"
+                "gemini-2.5-flash:generateContent",
+            )
+        ], received
+        assert rig.tunnel.drain() == [_REGIONAL]
+        assert _JSON_OBJECT.validate_json(received[0].body) == _GEMINI_BODY, received[0].body
+        _assert_minted_token_and_no_virtual_key(received[0], key)
+
+
+@pytest.mark.parametrize("alias", ["/vertex_ai", "/vertex-ai"])
+def test_vertex_rest_spellings_mint_token_and_add_sse_query_upstream(rig: _Rig, alias: str) -> None:
     model_path: Final = f"/v1/projects/{_PROJECT}/locations/us-central1/publishers/google/models"
     with rig.proxy.scenario() as scenario:
         key: Final = scenario.key()
-        headers: Final = {"Authorization": f"Bearer {key}", "x-goog-api-client": "google-genai-sdk/1.0.0"}
+        headers: Final = {"Authorization": f"Bearer {key}"}
         generated: Final = rig.proxy.client.post(
             f"{alias}{model_path}/{_GEMINI_ROUTER_NAME}:generateContent", json=_GEMINI_BODY, headers=headers
         )
@@ -247,7 +330,6 @@ def test_google_genai_vertex_calls_reach_the_router_deployment_with_a_minted_tok
         with rig.proxy.client.stream(
             "POST",
             f"{alias}{model_path}/{_GEMINI_ROUTER_NAME}:streamGenerateContent",
-            params={"alt": "sse"},
             json=_GEMINI_BODY,
             headers=headers,
         ) as streamed_response:
@@ -265,15 +347,16 @@ def test_google_genai_vertex_calls_reach_the_router_deployment_with_a_minted_tok
             _assert_minted_token_and_no_virtual_key(upstream, key)
 
 
+@pytest.mark.parametrize("alias", ["/vertex_ai", "/vertex-ai"])
 @pytest.mark.parametrize("stream", [False, True], ids=["rawPredict", "streamRawPredict"])
 def test_anthropic_vertex_sdk_partner_call_on_the_global_location_reaches_upstream_intact(
-    rig: _Rig, stream: bool
+    rig: _Rig, alias: str, stream: bool
 ) -> None:
     sent: Final[list[httpx.Request]] = []
     with rig.proxy.scenario() as scenario:
         key: Final = scenario.key()
         client: Final = anthropic.AnthropicVertex(
-            base_url=f"{str(rig.proxy.client.base_url).rstrip('/')}/vertex_ai/v1",
+            base_url=f"{str(rig.proxy.client.base_url).rstrip('/')}{alias}/v1",
             region="global",
             project_id=_PROJECT,
             access_token=key,
