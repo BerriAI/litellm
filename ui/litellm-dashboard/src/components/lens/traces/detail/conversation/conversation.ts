@@ -463,17 +463,17 @@ export function conversationWarnings(details: ReadonlyMap<string, SpanDetail>, c
       (message) => message.role === "assistant" && message.content.trim(),
     ),
   );
-  if (
-    complete &&
-    !hasAssistantText &&
-    ![...details.values()].some((detail) => detail.attributes["event.name"] === "assistant_response") &&
-    [...details.values()].some(
-      (detail) =>
-        detail.attributes["span.type"] === "llm_request" &&
-        !detail.output &&
-        !messages(detail.output, detail.output_ui, "assistant").length,
-    )
-  ) {
+  const hasReplyEvent = [...details.values()].some(
+    (detail) => detail.attributes["event.name"] === "assistant_response",
+  );
+  const hasEmptyRequest = [...details.values()].some(
+    (detail) =>
+      detail.attributes["span.type"] === "llm_request" &&
+      !detail.output &&
+      !messages(detail.output, detail.output_ui, "assistant").length,
+  );
+  const missingReplies = !hasAssistantText && !hasReplyEvent && hasEmptyRequest;
+  if (complete && missingReplies) {
     warnings.push(
       "This Claude Code trace has no recorded assistant replies. Enable assistant response logs for future sessions.",
     );
