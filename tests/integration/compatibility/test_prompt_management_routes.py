@@ -12,6 +12,11 @@ from pydantic import JsonValue
 
 _OPENAI_KEY: Final = "synthetic-openai-key"
 _ANSWER: Final = "scripted response"
+_DISCOVERY_PROBE: Final = ("GET", "/v1/models")
+
+
+def _is_discovery_probe(request: Request) -> bool:
+    return (request.method, request.target) == _DISCOVERY_PROBE
 
 
 def _content(model: str, marker: str) -> str:
@@ -229,6 +234,8 @@ def test_chat_completion_resolves_prompt_id_by_version_and_environment(
     base_path: str,
 ) -> None:
     def respond(request: Request) -> Reply:
+        if _is_discovery_probe(request):
+            return Reply(body=b'{"object":"list","data":[]}')
         assert request.method == "POST"
         assert request.target == "/v1/chat/completions"
         assert request.headers["authorization"] == f"Bearer {_OPENAI_KEY}"
@@ -263,13 +270,16 @@ def test_chat_completion_resolves_prompt_id_by_version_and_environment(
                 extra_body=extras,
             )
         assert response.choices[0].message.content == _ANSWER, response.model_dump_json()
-        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/chat/completions")]
+        requests: Final = [request for request in wire.drain() if not _is_discovery_probe(request)]
+        assert [(request.method, request.target) for request in requests] == [("POST", "/v1/chat/completions")]
 
 
 def test_streaming_chat_completion_resolves_prompt_and_preserves_streaming(
     gateway: Gateway,
 ) -> None:
     def respond(request: Request) -> Reply:
+        if _is_discovery_probe(request):
+            return Reply(body=b'{"object":"list","data":[]}')
         assert request.method == "POST"
         assert request.target == "/v1/chat/completions"
         assert request.headers["authorization"] == f"Bearer {_OPENAI_KEY}"
@@ -306,7 +316,8 @@ def test_streaming_chat_completion_resolves_prompt_and_preserves_streaming(
             )
             chunks: Final = tuple(stream)
         assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == _ANSWER, chunks
-        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/chat/completions")]
+        requests: Final = [request for request in wire.drain() if not _is_discovery_probe(request)]
+        assert [(request.method, request.target) for request in requests] == [("POST", "/v1/chat/completions")]
 
 
 @pytest.mark.parametrize(
@@ -319,6 +330,8 @@ def test_responses_create_resolves_prompt_and_shapes_template_messages(
     base_path: str,
 ) -> None:
     def respond(request: Request) -> Reply:
+        if _is_discovery_probe(request):
+            return Reply(body=b'{"object":"list","data":[]}')
         assert request.method == "POST"
         assert request.target == "/v1/responses"
         assert request.headers["authorization"] == f"Bearer {_OPENAI_KEY}"
@@ -389,7 +402,8 @@ def test_responses_create_resolves_prompt_and_shapes_template_messages(
             else:
                 assert not isinstance(response, Stream)
                 assert response.output_text == _ANSWER, response.model_dump_json()
-        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/responses")]
+        requests: Final = [request for request in wire.drain() if not _is_discovery_probe(request)]
+        assert [(request.method, request.target) for request in requests] == [("POST", "/v1/responses")]
 
 
 @pytest.mark.parametrize(
@@ -408,6 +422,8 @@ def test_prompt_test_streams_rendered_prompt_with_optional_history(
     expected_messages: list[dict[str, JsonValue]],
 ) -> None:
     def respond(request: Request) -> Reply:
+        if _is_discovery_probe(request):
+            return Reply(body=b'{"object":"list","data":[]}')
         assert request.method == "POST"
         assert request.target == "/v1/chat/completions"
         assert request.headers["authorization"] == f"Bearer {_OPENAI_KEY}"
@@ -438,4 +454,5 @@ def test_prompt_test_streams_rendered_prompt_with_optional_history(
         assert events[-1] == "[DONE]", response.text
         chunks: Final = tuple(ChatCompletionChunk.model_validate_json(event) for event in events[:-1])
         assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == _ANSWER, response.text
-        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/chat/completions")]
+        requests: Final = [request for request in wire.drain() if not _is_discovery_probe(request)]
+        assert [(request.method, request.target) for request in requests] == [("POST", "/v1/chat/completions")]

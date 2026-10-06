@@ -13,6 +13,7 @@ from pydantic import JsonValue
 from litellm.types.prompts.init_prompts import ListPromptsResponse, PromptInfoResponse, PromptSpec
 
 _PROVIDER_KEY: Final = "synthetic-prompt-provider-key"
+_DISCOVERY_PROBE: Final = ("GET", "/v1/models")
 _PROMPT_LIFECYCLE_STAGING_LATEST_BODY: Final[dict[str, JsonValue]] = {
     "model": "gpt-4o-mini",
     "messages": [
@@ -40,6 +41,10 @@ _PROMPT_LIFECYCLE_PRODUCTION_BODY: Final[dict[str, JsonValue]] = {
     ],
     "temperature": 0.2,
 }
+
+
+def _is_discovery_probe(request: Request) -> bool:
+    return (request.method, request.target) == _DISCOVERY_PROBE
 
 
 def _template(model: str, marker: str) -> str:
@@ -131,6 +136,8 @@ def _chat_reply(content: str) -> Reply:
 
 
 def _provider_reply(request: Request) -> Reply:
+    if _is_discovery_probe(request):
+        return Reply(body=b'{"object":"list","data":[]}')
     assert request.method == "POST"
     assert request.target == "/v1/chat/completions"
     body: Final[dict[str, JsonValue]] = json.loads(request.body)
@@ -175,6 +182,8 @@ def _params(row: dict[str, JsonValue]) -> dict[str, JsonValue]:
 
 def test_prompt_create_persists_and_resolves_on_primary(gateway: Gateway) -> None:
     def respond(request: Request) -> Reply:
+        if _is_discovery_probe(request):
+            return Reply(body=b'{"object":"list","data":[]}')
         assert request.headers["authorization"] == f"Bearer {_PROVIDER_KEY}"
         return _provider_reply(request)
 
@@ -240,13 +249,16 @@ def test_prompt_create_persists_and_resolves_on_primary(gateway: Gateway) -> Non
         )
 
         _assert_chat_response(_chat(gateway, model, prompt_id, "staging"))
-        assert [(request.method, request.target) for request in wire.drain()] == [
+        requests: Final = [request for request in wire.drain() if not _is_discovery_probe(request)]
+        assert [(request.method, request.target) for request in requests] == [
             ("POST", "/v1/chat/completions"),
         ]
 
 
 def test_prompt_create_resolves_on_peer_after_database_sync(gateway: Gateway, peer: Gateway) -> None:
     def respond(request: Request) -> Reply:
+        if _is_discovery_probe(request):
+            return Reply(body=b'{"object":"list","data":[]}')
         assert request.headers["authorization"] == f"Bearer {_PROVIDER_KEY}"
         assert request.method == "POST"
         assert request.target == "/v1/chat/completions"
@@ -280,7 +292,7 @@ def test_prompt_create_resolves_on_peer_after_database_sync(gateway: Gateway, pe
             seconds=60,
         )
         _assert_chat_response(response)
-        requests: Final = wire.drain()
+        requests: Final = [request for request in wire.drain() if not _is_discovery_probe(request)]
         assert requests
         assert all((request.method, request.target) == ("POST", "/v1/chat/completions") for request in requests), (
             requests
@@ -298,6 +310,8 @@ def test_prompt_create_resolves_on_peer_after_database_sync(gateway: Gateway, pe
 
 def test_prompt_update_patch_and_environment_delete_are_isolated(gateway: Gateway) -> None:
     def respond(request: Request) -> Reply:
+        if _is_discovery_probe(request):
+            return Reply(body=b'{"object":"list","data":[]}')
         assert request.method == "POST"
         assert request.target == "/v1/chat/completions"
         body: Final[dict[str, JsonValue]] = json.loads(request.body)
@@ -484,7 +498,7 @@ def test_prompt_update_patch_and_environment_delete_are_isolated(gateway: Gatewa
         )
 
         _assert_chat_response(_chat(gateway, model, prompt_id, None))
-        requests: Final = wire.drain()
+        requests: Final = [request for request in wire.drain() if not _is_discovery_probe(request)]
         expected_requests: Final = [
             ("POST", "/v1/chat/completions", _PROMPT_LIFECYCLE_STAGING_LATEST_BODY),
             ("POST", "/v1/chat/completions", _PROMPT_LIFECYCLE_STAGING_V2_BODY),
@@ -502,6 +516,8 @@ def test_prompt_environment_delete_stops_applying_the_deleted_template(gateway: 
     )
 
     def respond(request: Request) -> Reply:
+        if _is_discovery_probe(request):
+            return Reply(body=b'{"object":"list","data":[]}')
         assert request.method == "POST"
         assert request.target == "/v1/chat/completions"
         assert request.headers["authorization"] == f"Bearer {_PROVIDER_KEY}"
@@ -527,7 +543,7 @@ def test_prompt_environment_delete_stops_applying_the_deleted_template(gateway: 
 
         response: Final = _chat(gateway, model, prompt_id, "staging")
         _assert_chat_response(response)
-        requests: Final = wire.drain()
+        requests: Final = [request for request in wire.drain() if not _is_discovery_probe(request)]
         assert [(request.method, request.target) for request in requests] == [
             ("POST", "/v1/chat/completions"),
         ]
