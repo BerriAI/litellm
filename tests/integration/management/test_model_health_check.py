@@ -9,9 +9,12 @@ from typing import Final
 
 import httpx
 import pytest
-from integration._support.client import JSON_OBJECT, Gateway, Scenario, object_value, string_value
+import yaml
+from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
+from integration._support.database import scratch_database
+from integration._support.process import owned_proxy
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.cost_calculation.cost_tracking_case import JsonResponse
 from pydantic import JsonValue
 
@@ -109,6 +112,139 @@ def _health_report(gateway: Gateway, model: str) -> dict[str, JsonValue]:
     health: Final = gateway.request("GET", "/health", params={"model": model})
     assert health.status_code == 200, health.text
     return health.json()
+
+
+def _background_health_reply(request: Request, *, model: str, api_key: str) -> Reply:
+    if request.method == "GET":
+        assert request.target == "/v1/models", request.target
+        assert request.headers["authorization"] == f"Bearer {api_key}", request.headers
+        return Reply(
+            body=json.dumps(
+                {
+                    "object": "list",
+                    "data": [{"id": model, "object": "model", "created": 1700000000, "owned_by": "integration"}],
+                }
+            ).encode()
+        )
+    return _health_chat_reply(request, api_key=api_key, model=model)
+
+
+def _assert_background_health_requests(wire: Wire, *, model: str, api_key: str) -> None:
+    requests: Final = wire.drain()
+    assert len(requests) == 2, requests
+    assert (
+        requests[0].method,
+        requests[0].target,
+        requests[0].headers["authorization"],
+        requests[0].body,
+    ) == ("GET", "/v1/models", f"Bearer {api_key}", b""), requests
+    assert (
+        requests[1].method,
+        requests[1].target,
+        requests[1].headers["authorization"],
+        JSON_OBJECT.validate_json(requests[1].body),
+    ) in (
+        (
+            "POST",
+            "/v1/chat/completions",
+            f"Bearer {api_key}",
+            {"model": model, "messages": _HEALTH_CHAT_MESSAGES[0], "max_tokens": 16},
+        ),
+        (
+            "POST",
+            "/v1/chat/completions",
+            f"Bearer {api_key}",
+            {"model": model, "messages": _HEALTH_CHAT_MESSAGES[1], "max_tokens": 16},
+        ),
+    ), requests[1].body.decode()
+
+
+def test_background_health_results_are_scoped_to_the_key_models(gateway: Gateway, tmp_path: Path) -> None:
+    public_a: Final = f"background-health-a-{uuid.uuid4().hex}"
+    public_b: Final = f"background-health-b-{uuid.uuid4().hex}"
+    provider_model_a: Final = f"openai/background-health-a-{uuid.uuid4().hex}"
+    provider_model_b: Final = f"openai/background-health-b-{uuid.uuid4().hex}"
+    wire_model_a: Final = provider_model_a.removeprefix("openai/")
+    wire_model_b: Final = provider_model_b.removeprefix("openai/")
+    model_id_a: Final = f"background-health-a-{uuid.uuid4().hex}"
+    model_id_b: Final = f"background-health-b-{uuid.uuid4().hex}"
+    api_key_a: Final = "synthetic-background-health-a"
+    api_key_b: Final = "synthetic-background-health-b"
+
+    with (
+        scratch_database() as database_url,
+        wire_server(lambda request: _background_health_reply(request, model=wire_model_a, api_key=api_key_a)) as wire_a,
+        wire_server(lambda request: _background_health_reply(request, model=wire_model_b, api_key=api_key_b)) as wire_b,
+    ):
+        base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config: Final = {
+            **base,
+            "general_settings": {
+                **base["general_settings"],
+                "background_health_checks": True,
+                "health_check_interval": 3600,
+            },
+            "model_list": [
+                {
+                    "model_name": public_a,
+                    "litellm_params": {
+                        "model": provider_model_a,
+                        "api_base": f"{wire_a.url}/v1",
+                        "api_key": api_key_a,
+                    },
+                    "model_info": {"id": model_id_a},
+                },
+                {
+                    "model_name": public_b,
+                    "litellm_params": {
+                        "model": provider_model_b,
+                        "api_base": f"{wire_b.url}/v1",
+                        "api_key": api_key_b,
+                    },
+                    "model_info": {"id": model_id_b},
+                },
+            ],
+        }
+        config_path: Final = tmp_path / "background_health.yaml"
+        config_path.write_text(yaml.safe_dump(config))
+
+        with owned_proxy(gateway, tmp_path, {"DATABASE_URL": database_url}, config=config_path) as candidate:
+            with candidate.scenario() as scenario:
+                key: Final = scenario.key(models=[public_a])
+                scoped_health: Final = eventually(
+                    lambda: candidate.request("GET", "/health", key=key),
+                    lambda response: (
+                        response.status_code == 200
+                        and any(
+                            endpoint.get("model_id") == model_id_a
+                            for endpoint in response.json().get("healthy_endpoints", [])
+                        )
+                    ),
+                    seconds=70,
+                    return_last_on_timeout=True,
+                )
+                assert scoped_health.status_code == 200, scoped_health.text
+                assert JSON_OBJECT.validate_json(scoped_health.content) == {
+                    "healthy_endpoints": [{"model": provider_model_a, "model_id": model_id_a}],
+                    "unhealthy_endpoints": [],
+                    "healthy_count": 1,
+                    "unhealthy_count": 0,
+                }, scoped_health.text
+
+                admin_health: Final = candidate.request("GET", "/health")
+                assert admin_health.status_code == 200, admin_health.text
+                assert JSON_OBJECT.validate_json(admin_health.content) == {
+                    "healthy_endpoints": [
+                        {"model": provider_model_a, "api_base": f"{wire_a.url}/v1", "model_id": model_id_a},
+                        {"model": provider_model_b, "api_base": f"{wire_b.url}/v1", "model_id": model_id_b},
+                    ],
+                    "unhealthy_endpoints": [],
+                    "healthy_count": 2,
+                    "unhealthy_count": 0,
+                }, admin_health.text
+
+        _assert_background_health_requests(wire_a, model=wire_model_a, api_key=api_key_a)
+        _assert_background_health_requests(wire_b, model=wire_model_b, api_key=api_key_b)
 
 
 def _probes_sent_to(gateway: Gateway, handle: ScenarioHandle) -> list[tuple[str, JsonValue]]:
@@ -565,12 +701,39 @@ def _health_connection_credential(gateway: Gateway, credential_name: str, api_ke
     assert created.status_code == 200, created.text
 
 
+def _create_health_connection_deployment(
+    gateway: Gateway,
+    scenario: Scenario,
+    *,
+    public_model_name: str,
+    provider_model: str,
+    api_base: str,
+    api_key: str,
+) -> str:
+    created: Final = gateway.post(
+        "/model/new",
+        {
+            "model_name": public_model_name,
+            "litellm_params": {
+                "model": f"openai/{provider_model}",
+                "api_base": api_base,
+                "api_key": api_key,
+            },
+        },
+    )
+    model_info: Final = object_value(created["model_info"])
+    model_id: Final = string_value(model_info["id"])
+    scenario.cleanups.callback(scenario.delete_model, model_id)
+    return model_id
+
+
 def _health_connection_response(
     request: Request,
     model: str,
     *,
     validate_request_body: bool = True,
     expected_temperature: float | None = None,
+    expected_api_key: str = "synthetic-health-credential",
 ) -> Reply:
     response_body: Final = {
         "/v1/chat/completions": {
@@ -691,7 +854,7 @@ def _health_connection_response(
         assert request.headers["anthropic-version"] == "2023-06-01", request.headers
         assert "authorization" not in request.headers, request.headers
     else:
-        assert request.headers["authorization"] == "Bearer synthetic-health-credential", request.headers
+        assert request.headers["authorization"] == f"Bearer {expected_api_key}", request.headers
     return Reply(body=json.dumps(response_body[request.target]).encode())
 
 
@@ -823,6 +986,127 @@ def test_health_test_connection_modes_use_stored_credentials_and_reject_environm
             }, rejected.text
             assert submitted_wire.drain() == ()
             assert configured_wire.drain() == ()
+
+            rejected_model_info: Final = gateway.request(
+                "POST",
+                "/health/test_connection",
+                {
+                    "litellm_params": {
+                        "model": configured_model,
+                        "api_base": submitted_base,
+                    },
+                    "model_info": {"mode": "chat", "base_model": "os.environ/X"},
+                    "mode": "chat",
+                },
+            )
+            assert rejected_model_info.status_code == 400, rejected_model_info.text
+            assert JSON_OBJECT.validate_json(rejected_model_info.content) == {
+                "detail": {"error": "Environment variable references are not permitted in request parameters."}
+            }, rejected_model_info.text
+            assert submitted_wire.drain() == ()
+            assert configured_wire.drain() == ()
+
+
+def test_health_test_connection_uses_model_info_id_for_duplicate_provider_models(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        provider_model: Final = f"health-duplicate-{uuid.uuid4().hex}"
+        public_model_name: Final = f"health-duplicate-public-{uuid.uuid4().hex}"
+        api_key_a: Final = "synthetic-health-credential-a"
+        api_key_b: Final = "synthetic-health-credential-b"
+        with (
+            wire_server(
+                lambda request: _health_connection_response(request, provider_model, expected_api_key=api_key_a)
+            ) as wire_a,
+            wire_server(
+                lambda request: _health_connection_response(request, provider_model, expected_api_key=api_key_b)
+            ) as wire_b,
+        ):
+            api_base_a: Final = f"{wire_a.url}/v1"
+            api_base_b: Final = f"{wire_b.url}/v1"
+            model_id_a: Final = _create_health_connection_deployment(
+                gateway,
+                scenario,
+                public_model_name=public_model_name,
+                provider_model=provider_model,
+                api_base=api_base_a,
+                api_key=api_key_a,
+            )
+            model_id_b: Final = _create_health_connection_deployment(
+                gateway,
+                scenario,
+                public_model_name=public_model_name,
+                provider_model=provider_model,
+                api_base=api_base_b,
+                api_key=api_key_b,
+            )
+            model: Final = f"openai/{provider_model}"
+            request_body: Final = {"litellm_params": {"model": model}}
+
+            response_a: Final = gateway.request(
+                "POST",
+                "/health/test_connection",
+                {**request_body, "model_info": {"id": model_id_a}, "mode": "chat"},
+            )
+            assert response_a.status_code == 200, response_a.text
+            assert JSON_OBJECT.validate_json(response_a.content) == {
+                "status": "success",
+                "result": {"model": model, "api_base": api_base_a},
+            }, response_a.text
+            requests_a: Final = wire_a.drain()
+            assert len(requests_a) == 1, response_a.text
+            assert (
+                requests_a[0].method,
+                requests_a[0].target,
+                requests_a[0].headers["authorization"],
+                JSON_OBJECT.validate_json(requests_a[0].body),
+            ) in (
+                (
+                    "POST",
+                    "/v1/chat/completions",
+                    f"Bearer {api_key_a}",
+                    {"model": provider_model, "messages": _HEALTH_CHAT_MESSAGES[0], "max_tokens": 16},
+                ),
+                (
+                    "POST",
+                    "/v1/chat/completions",
+                    f"Bearer {api_key_a}",
+                    {"model": provider_model, "messages": _HEALTH_CHAT_MESSAGES[1], "max_tokens": 16},
+                ),
+            ), requests_a[0].body.decode()
+            assert wire_b.drain() == ()
+
+            response_b: Final = gateway.request(
+                "POST",
+                "/health/test_connection",
+                {**request_body, "model_info": {"id": model_id_b}, "mode": "chat"},
+            )
+            assert response_b.status_code == 200, response_b.text
+            assert JSON_OBJECT.validate_json(response_b.content) == {
+                "status": "success",
+                "result": {"model": model, "api_base": api_base_b},
+            }, response_b.text
+            requests_b: Final = wire_b.drain()
+            assert len(requests_b) == 1, response_b.text
+            assert (
+                requests_b[0].method,
+                requests_b[0].target,
+                requests_b[0].headers["authorization"],
+                JSON_OBJECT.validate_json(requests_b[0].body),
+            ) in (
+                (
+                    "POST",
+                    "/v1/chat/completions",
+                    f"Bearer {api_key_b}",
+                    {"model": provider_model, "messages": _HEALTH_CHAT_MESSAGES[0], "max_tokens": 16},
+                ),
+                (
+                    "POST",
+                    "/v1/chat/completions",
+                    f"Bearer {api_key_b}",
+                    {"model": provider_model, "messages": _HEALTH_CHAT_MESSAGES[1], "max_tokens": 16},
+                ),
+            ), requests_b[0].body.decode()
+            assert wire_a.drain() == ()
 
 
 @pytest.mark.parametrize(

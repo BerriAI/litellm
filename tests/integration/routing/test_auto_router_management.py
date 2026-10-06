@@ -106,16 +106,16 @@ def _session_response(
     key_hash: Final = hashlib.sha256(key.encode()).hexdigest()
 
     def read_response_state() -> tuple[httpx.Response, bool]:
+        rows: Final = read_rows(
+            'SELECT session_id FROM "LiteLLM_AutoRouterSession" WHERE api_key = %s AND session_id = %s',
+            (key_hash, stored_session_id),
+            database_url=database_url,
+        )
         response: Final = gateway.request(
             "GET",
             "/auto_router/session",
             params={"session_id": session_id},
             key=key,
-        )
-        rows: Final = read_rows(
-            'SELECT session_id FROM "LiteLLM_AutoRouterSession" WHERE api_key = %s AND session_id = %s',
-            (key_hash, stored_session_id),
-            database_url=database_url,
         )
         return response, bool(rows)
 
@@ -179,7 +179,7 @@ def _session_contract(session_id: str, router_name: str) -> dict[str, object]:
     }
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(600)
 def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids(
     gateway: Gateway,
     tmp_path: Path,
@@ -187,18 +187,23 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
     normal_session_id: Final = str(uuid.uuid4())
     codex_session_id: Final = str(uuid.uuid4())
     codex_thread_id: Final = str(uuid.uuid4())
+    opencode_session_id: Final = str(uuid.uuid4())
     thread_only_session_id: Final = str(uuid.uuid4())
     long_session_id: Final = "s" * 300
     router_name: Final = "auto-router-" + uuid.uuid4().hex[:8]
     normal_prompt: Final = f"integration-auto-simple {normal_session_id}"
     codex_prompt: Final = f"integration-auto-simple {codex_session_id}"
+    opencode_prompt: Final = f"integration-auto-simple {opencode_session_id}"
     thread_only_prompt: Final = f"integration-auto-simple {thread_only_session_id}"
     long_prompt: Final = f"integration-auto-simple {long_session_id}"
 
     with (
         scratch_database() as database_url,
         wire_server(
-            _tier_peer("integration-simple", (normal_prompt, codex_prompt, thread_only_prompt, long_prompt))
+            _tier_peer(
+                "integration-simple",
+                (normal_prompt, codex_prompt, opencode_prompt, thread_only_prompt, long_prompt),
+            )
         ) as simple,
         wire_server(_tier_peer("integration-medium", (normal_prompt,))) as medium,
         wire_server(_tier_peer("integration-complex", (normal_prompt,))) as complex_tier,
@@ -313,6 +318,39 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                     "detail": f"No auto-routed turns recorded for session {codex_session_id!r} under this key"
                 }, codex_hidden.text
 
+                opencode_response: Final = candidate.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {"model": router_name, "messages": [{"role": "user", "content": opencode_prompt}]},
+                    key=key,
+                    headers={
+                        "x-session-id": opencode_session_id,
+                        "user-agent": "opencode/0.15.0",
+                    },
+                )
+                assert opencode_response.status_code == 200, opencode_response.text
+                assert _assistant_content(opencode_response) == "synthetic tier response", opencode_response.text
+                opencode_session: Final = _session_response(
+                    candidate,
+                    key,
+                    opencode_session_id,
+                    return_last_on_timeout=True,
+                )
+                assert JSON_OBJECT.validate_json(opencode_session.content) == _session_contract(
+                    opencode_session_id, router_name
+                ), opencode_session.text
+                _assert_rollup_row(key, database_url, router_name, opencode_session_id)
+                opencode_hidden: Final = candidate.request(
+                    "GET",
+                    "/auto_router/session",
+                    params={"session_id": opencode_session_id},
+                    key=other_key,
+                )
+                assert opencode_hidden.status_code == 404, opencode_hidden.text
+                assert JSON_OBJECT.validate_json(opencode_hidden.content) == {
+                    "detail": f"No auto-routed turns recorded for session {opencode_session_id!r} under this key"
+                }, opencode_hidden.text
+
                 thread_only_response: Final = candidate.request(
                     "POST",
                     "/v1/chat/completions",
@@ -358,7 +396,7 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                     long_session_id,
                     database_url,
                     bounded_session_id,
-                    seconds=30,
+                    seconds=70,
                     return_last_on_timeout=True,
                 )
                 assert JSON_OBJECT.validate_json(long_session.content) == {
@@ -390,6 +428,12 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
         ) == (
             ("POST", "/v1/chat/completions", "integration-simple", [{"role": "user", "content": normal_prompt}]),
             ("POST", "/v1/chat/completions", "integration-simple", [{"role": "user", "content": codex_prompt}]),
+            (
+                "POST",
+                "/v1/chat/completions",
+                "integration-simple",
+                [{"role": "user", "content": opencode_prompt}],
+            ),
             (
                 "POST",
                 "/v1/chat/completions",

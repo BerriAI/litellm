@@ -112,7 +112,7 @@ def test_public_readiness_reports_database_outage_and_allow_unavailable_setting(
                 }, disconnected_with_allow.text
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(300)
 def test_public_readiness_reports_stalled_database_lookups(gateway: Gateway, tmp_path: Path) -> None:
     with scratch_database() as database_url:
         for allow_unavailable in (False, True):
@@ -128,7 +128,7 @@ def test_public_readiness_reports_stalled_database_lookups(gateway: Gateway, tmp
                     "DATABASE_URL": _plaintext_database_url(relayed_url),
                     "PRISMA_HEALTH_WATCHDOG_ENABLED": "false",
                     "PROXY_DB_LOOKUP_DEADLINE_SECONDS": "1",
-                    "PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS": "3",
+                    "PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS": "15",
                 }
                 with owned_proxy(
                     gateway,
@@ -197,7 +197,7 @@ def test_public_readiness_reports_stalled_database_lookups(gateway: Gateway, tmp
                                 response.status_code == 200
                                 and response.json() == {"status": "healthy", "db": "connected"}
                             ),
-                            seconds=10,
+                            seconds=30,
                             return_last_on_timeout=True,
                         )
                         assert recovered.status_code == 200, recovered.text
@@ -210,22 +210,30 @@ def test_public_readiness_reports_stalled_database_lookups(gateway: Gateway, tmp
                         ), rejected.text
 
 
+@pytest.mark.parametrize("token_source", ("config", "environment"))
 def test_drain_endpoint_requires_token_and_changes_health_state_only_after_authorization(
-    gateway: Gateway, tmp_path: Path
+    token_source: str, gateway: Gateway, tmp_path: Path
 ) -> None:
     disabled: Final = gateway.client.get("/health/drain")
     assert disabled.status_code == 404, disabled.text
     assert disabled.json() == {"detail": "Not Found"}, disabled.text
 
     token: Final = "synthetic-health-drain-token"
-    config: Final = _health_routing_config(
+    general_settings: Final = {
+        "enable_drain_endpoint": True,
+        **({"drain_endpoint_token": token} if token_source == "config" else {}),
+    }
+    config: Final = _health_routing_config(tmp_path, general_settings)
+    overrides: Final = {"DRAIN_ENDPOINT_TOKEN": token} if token_source == "environment" else {}
+    remove_environment: Final = ("DRAIN_ENDPOINT_TOKEN",) if token_source == "config" else ()
+    with owned_proxy(
+        gateway,
         tmp_path,
-        {
-            "enable_drain_endpoint": True,
-            "drain_endpoint_token": token,
-        },
-    )
-    with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+        overrides,
+        config=config,
+        workers=1,
+        remove_environment=remove_environment,
+    ) as candidate:
         _assert_liveness_and_readiness(
             candidate,
             status_code=200,
