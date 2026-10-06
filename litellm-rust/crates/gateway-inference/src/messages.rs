@@ -42,6 +42,7 @@ async fn handle(
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
+    let model_group = request::model_name(&body)?.to_owned();
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.messages.clone();
@@ -54,7 +55,14 @@ async fn handle(
     };
 
     let call = project(deployment, body, headers)?;
-    let machine = route.machine(call, cache_options.policy);
+    let machine = route.machine(
+        call,
+        litellm_core::CallOptions {
+            cache: Some(cache_options.policy),
+            model_group: Some(model_group),
+            observers: None,
+        },
+    );
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
     let headers = crate::caching::CacheHeaders::default();

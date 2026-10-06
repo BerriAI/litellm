@@ -75,9 +75,8 @@ impl MessagesRoute {
             let cache_input = self
                 .cache
                 .as_ref()
-                .map(|_| call.cache_key_input())
-                .transpose()?
-                .unwrap_or_default();
+                .map(|_| call.cache_key_input(context.model_group.as_deref()))
+                .transpose()?;
             let prepared = prepare::prepare(call, self.secrets.as_ref()).await?;
             litellm_inference::diagnostic::provider(
                 &prepared.body.model,

@@ -32,10 +32,7 @@ async fn service_honors_per_call_expiry_and_freshness() {
         context: ExactCacheContext {
             ttl: Some(Duration::from_secs(5)),
         },
-        ..ResponseCacheRequest::new(CacheKeyInput {
-            preset: Some("entry".into()),
-            ..Default::default()
-        })
+        ..ResponseCacheRequest::new(CacheKeyInput::Preset("entry".into()))
     };
     let key = cache.key(&request).await.unwrap();
     cache
@@ -113,12 +110,7 @@ async fn entry_limit_applies_to_sync_async_and_batch_writes() {
     });
     let small = json!({"answer":7});
     let large = json!({"answer":"too large"});
-    let request = |key: &str| {
-        ResponseCacheRequest::new(CacheKeyInput {
-            preset: Some(key.into()),
-            ..Default::default()
-        })
-    };
+    let request = |key: &str| ResponseCacheRequest::new(CacheKeyInput::Preset(key.into()));
     cache
         .store(&request("sync"), large.clone(), Duration::ZERO)
         .unwrap();
@@ -179,12 +171,10 @@ impl ResponseCacheService for SingleLookupService {
         request: &'a ResponseCacheRequest,
     ) -> BoxFuture<'a, Result<CacheKey, Error>> {
         Box::pin(async move {
-            request
-                .key
-                .preset
-                .clone()
-                .map(CacheKey::delegated)
-                .ok_or(Error::Unavailable)
+            match &request.key {
+                CacheKeyInput::Preset(key) => Ok(CacheKey::delegated(key.clone())),
+                CacheKeyInput::Request { .. } => Err(Error::Unavailable),
+            }
         })
     }
 
@@ -218,10 +208,7 @@ impl ResponseCacheService for SingleLookupService {
 }
 
 fn request(key: &str) -> ResponseCacheRequest {
-    ResponseCacheRequest::new(CacheKeyInput {
-        preset: Some(key.into()),
-        ..Default::default()
-    })
+    ResponseCacheRequest::new(CacheKeyInput::Preset(key.into()))
 }
 
 async fn keyed(

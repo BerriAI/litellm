@@ -50,6 +50,7 @@ fn run_messages(
                             &interceptors,
                             litellm_core::CallOptions {
                                 cache: options.map(|options| options.policy),
+                                model_group: None,
                                 observers,
                             },
                         )

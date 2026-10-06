@@ -24,10 +24,7 @@ pub fn request() -> ResponseCacheRequest {
 }
 
 pub fn keyed(key: &str) -> ResponseCacheRequest {
-    ResponseCacheRequest::new(CacheKeyInput {
-        preset: Some(key.into()),
-        ..Default::default()
-    })
+    ResponseCacheRequest::new(CacheKeyInput::Preset(key.into()))
 }
 
 /// A Redis response cache that must receive exactly `commands`, in order.

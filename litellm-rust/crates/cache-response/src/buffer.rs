@@ -119,7 +119,7 @@ mod tests {
         });
         let cache = ResponseCache::new(backend.clone());
         let buffer = WriteBuffer::new(2);
-        let request = ResponseCacheRequest::new(CacheKeyInput::default());
+        let request = ResponseCacheRequest::new(CacheKeyInput::Preset("buffered".into()));
 
         for batch in 0..=failed_flushes {
             let first = json!(batch * 2);

@@ -19,7 +19,7 @@ pub(super) async fn execute(
     auth: &AuthServices,
     request: (
         ProviderChatCompletionsRequest,
-        litellm_cache_response::CacheKeyInput,
+        Option<litellm_cache_response::CacheKeyInput>,
     ),
     cache: Option<litellm_cache_response::ScopedCache>,
     cache_options: Option<litellm_cache_response::CachePolicy>,
@@ -251,10 +251,7 @@ mod tests {
         execute(
             &Client::plain_for_test(),
             &AuthServices::default(),
-            (
-                prepared(&upstream.uri()),
-                litellm_cache_response::CacheKeyInput::default(),
-            ),
+            (prepared(&upstream.uri()), None),
             None,
             None,
             &interceptors,
@@ -295,10 +292,7 @@ mod tests {
         let error = execute(
             &Client::plain_for_test(),
             &AuthServices::default(),
-            (
-                prepared(&upstream.uri()),
-                litellm_cache_response::CacheKeyInput::default(),
-            ),
+            (prepared(&upstream.uri()), None),
             None,
             None,
             &interceptors,

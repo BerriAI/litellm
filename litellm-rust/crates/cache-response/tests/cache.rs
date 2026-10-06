@@ -11,7 +11,8 @@ use std::{
 use litellm_cache::BaseCache;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheAccess, CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheRequest,
+    CacheAccess, CacheEntry, CacheKeyInput, CacheTarget, ResponseCache, ResponseCacheConfig,
+    ResponseCacheRequest,
 };
 use redis_test::MockCmd;
 use rstest::{fixture, rstest};
@@ -247,21 +248,19 @@ async fn captured_service_keeps_the_selected_backend_for_background_writes(
 }
 
 #[rstest]
-#[case::with_namespace(Some("tenant"))]
-#[case::without_namespace(None)]
-fn generated_keys_preserve_namespace_and_explicit_keys(
-    memory: Memory,
-    #[case] namespace: Option<&str>,
-) {
-    let key = CacheKeyInput {
-        fields: vec![CacheKeyField {
-            name: "model".into(),
-            value: Some("a".into()),
-        }],
-        namespace: namespace.map(str::to_owned),
-        ..Default::default()
-    };
-    let generated = ResponseCacheRequest::new(key.clone());
+#[case::with_namespace("tenant")]
+#[case::without_namespace("")]
+fn generated_keys_preserve_namespace_and_explicit_keys(#[case] namespace: &str) {
+    let memory = ResponseCache::new(Arc::new(InMemoryCache::<CacheEntry>::default())).with_config(
+        ResponseCacheConfig {
+            namespace: namespace.into(),
+            ..ResponseCacheConfig::default()
+        },
+    );
+    let generated = ResponseCacheRequest::new(CacheKeyInput::request(
+        CacheTarget::Model("a".into()),
+        json!({}),
+    ));
     let explicit = keyed(memory.key(&generated).as_str());
     memory
         .store(&generated, json!({"value": 7}), Duration::from_secs(100))

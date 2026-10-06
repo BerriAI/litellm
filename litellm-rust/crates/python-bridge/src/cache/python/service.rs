@@ -3,8 +3,8 @@ use std::time::Duration;
 use futures_util::future::BoxFuture;
 use litellm_cache::Error;
 use litellm_cache_response::{
-    CacheKey, CacheScope, RequestRewrite, ResponseCacheConfig, ResponseCacheRequest,
-    ResponseCacheService, ResponseEnvelope,
+    CacheKey, CacheScope, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
+    ResponseEnvelope,
 };
 use litellm_core::{
     caching::{Cachable, CachedOutput},
@@ -103,11 +103,9 @@ where
         request: &'a ResponseCacheRequest,
     ) -> BoxFuture<'a, Result<CacheKey, Error>> {
         Box::pin(async move {
-            match (&request.scope, request.rewrite) {
-                (CacheScope::Isolated(_), _) | (_, RequestRewrite::Rewritten) => {
-                    Err(Error::UnsupportedOperation)
-                }
-                (CacheScope::Shared, RequestRewrite::Unchanged) => self
+            match request.scope {
+                CacheScope::Isolated(_) => Err(Error::UnsupportedOperation),
+                CacheScope::Shared => self
                     .services
                     .call(|reply| CacheCall::GetCacheKey { reply })
                     .await

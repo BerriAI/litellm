@@ -31,15 +31,22 @@ impl ChatCompletionsRoute {
     ) -> HostedMachine<ChatCompletions> {
         let litellm_inference::CallOptions {
             cache: cache_options,
+            model_group,
             observers,
         } = options.into();
         hosted_call(
             call,
             observers,
             move |call, _, interceptors, observers| async move {
-                self.run_call(call, cache_options, &interceptors, observers.as_ref())
-                    .await
-                    .map(CallOutput::Complete)
+                self.run_call(
+                    call,
+                    cache_options,
+                    model_group.as_deref(),
+                    &interceptors,
+                    observers.as_ref(),
+                )
+                .await
+                .map(CallOutput::Complete)
             },
         )
     }
@@ -56,6 +63,7 @@ impl ChatCompletionsRoute {
         &self,
         call: ChatCompletionsCall,
         cache_options: Option<litellm_cache_response::CachePolicy>,
+        model_group: Option<&str>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
@@ -70,7 +78,7 @@ impl ChatCompletionsRoute {
                 extra_headers: call.extra_headers,
                 timeout: call.timeout,
             };
-            self.run(request, cache_options, interceptors, observers)
+            self.run(request, cache_options, model_group, interceptors, observers)
                 .await
         })
         .await

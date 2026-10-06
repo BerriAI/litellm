@@ -36,7 +36,8 @@ impl super::MessagesRoute {
         options: impl Into<litellm_inference::CallOptions>,
     ) -> MessagesMachine {
         let litellm_inference::CallOptions {
-            cache: cache_options,
+            cache,
+            model_group,
             observers,
         } = options.into();
         hosted_call(
@@ -46,7 +47,8 @@ impl super::MessagesRoute {
                 let context = litellm_inference::context::CallContext::new(
                     &interceptors,
                     litellm_inference::CallOptions {
-                        cache: cache_options,
+                        cache,
+                        model_group,
                         observers,
                     },
                 );

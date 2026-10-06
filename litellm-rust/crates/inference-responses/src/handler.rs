@@ -16,7 +16,7 @@ pub(super) async fn execute(
     auth: &litellm_auth::AuthServices,
     request: (
         ProviderResponsesRequest,
-        litellm_cache_response::CacheKeyInput,
+        Option<litellm_cache_response::CacheKeyInput>,
     ),
     cache: Option<litellm_cache_response::ScopedCache>,
     cache_options: Option<litellm_cache_response::CachePolicy>,

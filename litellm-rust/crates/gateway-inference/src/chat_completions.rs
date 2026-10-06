@@ -41,6 +41,7 @@ async fn handle(
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
+    let model_group = request::model_name(&body)?.to_owned();
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.chat_completions.clone();
@@ -69,7 +70,11 @@ async fn handle(
                 extra_headers: None,
                 timeout: deployment.timeout,
             },
-            cache_options.policy,
+            litellm_core::CallOptions {
+                cache: Some(cache_options.policy),
+                model_group: Some(model_group),
+                observers: None,
+            },
         ),
         (),
         headers.clone(),

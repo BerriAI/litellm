@@ -60,7 +60,12 @@ where
     }
 
     pub fn key(&self, request: &ResponseCacheRequest<B::Context>) -> CacheKey {
-        CacheKey::derive(&request.key)
+        CacheKey::derive(
+            &self.config.namespace,
+            &request.surface,
+            &request.scope,
+            &request.key,
+        )
     }
 
     pub fn lookup(

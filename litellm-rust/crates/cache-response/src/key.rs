@@ -1,58 +1,51 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct CacheKeyField {
-    pub name: String,
-    pub value: Option<String>,
+use crate::CacheScope;
+
+const KEY_VERSION: &str = "inference-v3";
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheTarget {
+    ModelGroup(String),
+    Model(String),
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct CacheKeyTransport {
-    pub provider: String,
-    pub url: String,
-    pub headers: Vec<(String, String)>,
+impl CacheTarget {
+    pub fn resolve(model: &str, model_group: Option<&str>) -> Self {
+        match model_group {
+            Some(group) => Self::ModelGroup(group.to_owned()),
+            None => Self::Model(model.to_owned()),
+        }
+    }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct CacheKeyRequest {
-    pub url: String,
-    pub headers: Vec<(String, String)>,
-    pub body: Value,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct CacheKeyInput {
-    pub fields: Vec<CacheKeyField>,
-    pub preset: Option<String>,
-    pub namespace: Option<String>,
-    pub transport: Option<CacheKeyTransport>,
-    pub rewritten_request: Option<CacheKeyRequest>,
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheKeyInput {
+    Preset(String),
+    Request {
+        target: CacheTarget,
+        parameters: Value,
+    },
 }
 
 impl CacheKeyInput {
-    pub fn from_parameters(parameters: Value) -> Self {
-        let fields = match canonical(parameters) {
-            Value::Object(fields) => fields
-                .into_iter()
-                .map(|(name, value)| CacheKeyField {
-                    name,
-                    value: (!value.is_null()).then(|| value.to_string()),
-                })
-                .collect(),
-            value => vec![CacheKeyField {
-                name: "request".into(),
-                value: Some(value.to_string()),
-            }],
+    pub fn request(target: CacheTarget, parameters: Value) -> Self {
+        let parameters = match canonical(parameters) {
+            Value::Object(fields) => Value::Object(
+                fields
+                    .into_iter()
+                    .filter(|(_, value)| !value.is_null())
+                    .collect(),
+            ),
+            value => value,
         };
-        Self {
-            fields,
-            ..Self::default()
-        }
+        Self::Request { target, parameters }
     }
 }
 
@@ -79,8 +72,28 @@ impl CacheKey {
         Self(key)
     }
 
-    pub(crate) fn derive(input: &CacheKeyInput) -> Self {
-        Self(get_cache_key(input))
+    pub(crate) fn derive(
+        namespace: &str,
+        surface: &str,
+        scope: &CacheScope,
+        input: &CacheKeyInput,
+    ) -> Self {
+        if let (CacheScope::Shared, CacheKeyInput::Preset(key)) = (scope, input) {
+            return Self(key.clone());
+        }
+        let material = serde_json::json!({
+            "surface": surface,
+            "scope": match scope {
+                CacheScope::Shared => None,
+                CacheScope::Isolated(scope) => Some(scope),
+            },
+            "input": input,
+        });
+        let hash = format!("{:x}", Sha256::digest(material.to_string()));
+        Self(match namespace {
+            "" => format!("{KEY_VERSION}:{hash}"),
+            namespace => format!("{namespace}:{KEY_VERSION}:{hash}"),
+        })
     }
 
     pub fn as_str(&self) -> &str {
@@ -92,32 +105,4 @@ impl From<CacheKey> for String {
     fn from(key: CacheKey) -> Self {
         key.0
     }
-}
-
-fn get_cache_key(input: &CacheKeyInput) -> String {
-    if let Some(preset) = &input.preset {
-        return preset.clone();
-    }
-    let mut digest = Sha256::new();
-    for field in &input.fields {
-        if let Some(value) = &field.value {
-            digest.update(field.name.as_bytes());
-            digest.update(b": ");
-            digest.update(value.as_bytes());
-        }
-    }
-    if let Some(transport) = &input.transport {
-        digest.update(b"transport: ");
-        digest.update(serde_json::json!(transport).to_string().as_bytes());
-    }
-    if let Some(request) = &input.rewritten_request {
-        digest.update(b"wire_changes: ");
-        digest.update(serde_json::json!(request).to_string().as_bytes());
-    }
-    let hash = format!("{:x}", digest.finalize());
-    input
-        .namespace
-        .as_deref()
-        .filter(|namespace| !namespace.is_empty())
-        .map_or(hash.clone(), |namespace| format!("{namespace}:{hash}"))
 }

@@ -8,8 +8,7 @@ use litellm_cache::{
 };
 use litellm_cache_azure_blob::AzureBlobCache;
 use litellm_cache_response::{
-    CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheCodec,
-    ResponseCacheRequest,
+    CacheEntry, CacheKeyInput, CacheTarget, ResponseCache, ResponseCacheCodec, ResponseCacheRequest,
 };
 use rstest::{fixture, rstest};
 use serde_json::json;
@@ -28,13 +27,10 @@ fn response_cache(fixture: &Fixture) -> ResponseCache<AzureBlobCache<ResponseCac
 }
 
 fn request(model: &str) -> ResponseCacheRequest {
-    ResponseCacheRequest::new(CacheKeyInput {
-        fields: vec![CacheKeyField {
-            name: "model".into(),
-            value: Some(model.into()),
-        }],
-        ..Default::default()
-    })
+    ResponseCacheRequest::new(CacheKeyInput::request(
+        CacheTarget::Model(model.into()),
+        serde_json::json!({}),
+    ))
 }
 
 fn now() -> Duration {

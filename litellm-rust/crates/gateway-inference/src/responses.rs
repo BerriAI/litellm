@@ -14,6 +14,7 @@ pub(crate) async fn create(
     JsonObject(body): JsonObject,
 ) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(&gateway, &body)?;
+    let model_group = request::model_name(&body)?.to_owned();
     request::authorize_model(&identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(&identity, body)?;
     let route = gateway.responses.clone();
@@ -38,7 +39,14 @@ pub(crate) async fn create(
         extra_headers: None,
         timeout: deployment.timeout,
     };
-    let machine = route.machine(call, cache_options.policy);
+    let machine = route.machine(
+        call,
+        litellm_core::CallOptions {
+            cache: Some(cache_options.policy),
+            model_group: Some(model_group),
+            observers: None,
+        },
+    );
     let stream = Sse::<Responses, _, _>::new(Json, |error| {
         let error = Error::from(error);
         Bytes::from(format!(

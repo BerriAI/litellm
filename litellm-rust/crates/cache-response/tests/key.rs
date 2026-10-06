@@ -2,122 +2,132 @@ use std::sync::Arc;
 
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheEntry, CacheKey, CacheKeyField, CacheKeyInput, CacheKeyRequest, CacheKeyTransport,
-    ResponseCache, ResponseCacheRequest,
+    CacheEntry, CacheKey, CacheKeyInput, CacheOptions, CacheScope, CacheTarget, ResponseCache,
+    ResponseCacheConfig,
 };
 use rstest::rstest;
-use sha2::{Digest, Sha256};
+use serde_json::{Value, json};
 
-fn field(name: &str, value: Option<&str>) -> CacheKeyField {
-    CacheKeyField {
-        name: name.into(),
-        value: value.map(str::to_owned),
-    }
-}
-
-fn key(input: &CacheKeyInput) -> CacheKey {
+fn key_in(namespace: &str, input: CacheKeyInput) -> CacheKey {
     ResponseCache::new(Arc::new(InMemoryCache::<CacheEntry>::default()))
-        .key(&ResponseCacheRequest::new(input.clone()))
+        .with_config(ResponseCacheConfig {
+            namespace: namespace.into(),
+            ..ResponseCacheConfig::default()
+        })
+        .key(&CacheOptions::new(CacheScope::Shared).request("responses", input))
 }
 
-fn hash(preimage: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(preimage))
+fn key(input: CacheKeyInput) -> CacheKey {
+    key_in("test", input)
 }
 
-#[rstest]
-#[case::without_namespace(None)]
-#[case::with_namespace(Some("team"))]
-fn preset_keys_are_used_verbatim(#[case] namespace: Option<&str>) {
-    let input = CacheKeyInput {
-        fields: vec![field("model", Some("a"))],
-        preset: Some("preset".into()),
-        namespace: namespace.map(str::to_owned),
-        ..Default::default()
-    };
-    assert_eq!(key(&input).as_str(), "preset");
+fn group(name: &str, parameters: Value) -> CacheKeyInput {
+    CacheKeyInput::request(CacheTarget::ModelGroup(name.into()), parameters)
 }
 
 #[rstest]
-#[case::unchanged(false)]
-#[case::rewritten(true)]
-fn typed_transport_preserves_existing_key_bytes(#[case] rewritten: bool) {
-    let transport = serde_json::json!({
-        "provider": "test", "url": "https://provider.test/infer", "headers": [["x-route", "a"]]
-    });
-    let request = serde_json::json!({
-        "url": "https://provider.test/infer", "headers": [["x-route", "a"]], "body": {"input": "changed"}
-    });
-    let input = CacheKeyInput {
-        fields: vec![field("model", Some("model"))],
-        transport: Some(serde_json::from_value::<CacheKeyTransport>(transport.clone()).unwrap()),
-        rewritten_request: rewritten
-            .then(|| serde_json::from_value::<CacheKeyRequest>(request.clone()).unwrap()),
-        ..Default::default()
-    };
-    let preimage = match rewritten {
-        false => format!("model: modeltransport: {transport}"),
-        true => format!("model: modeltransport: {transport}wire_changes: {request}"),
-    };
-    assert_eq!(key(&input).as_str(), hash(preimage.as_bytes()));
-}
-
-#[rstest]
-fn selected_parameters_use_json_value_encoding() {
-    let input = CacheKeyInput::from_parameters(serde_json::json!({
-        "model": "logical",
-        "messages": [{"role": "user", "content": "hello"}],
-        "temperature": 0.5,
-        "stream": false,
-        "max_tokens": null,
-    }));
-    assert_eq!(key(&input).as_str(), hash(
-        br#"messages: [{"content":"hello","role":"user"}]model: "logical"stream: falsetemperature: 0.5"#
-    ));
-}
-
-#[rstest]
-fn parameter_keys_ignore_nested_object_order() {
-    let first: serde_json::Value = serde_json::from_str(
-        r#"{"model":"logical","messages":[{"role":"user","content":{"text":"hello","detail":1}}]}"#,
-    )
-    .unwrap();
-    let second: serde_json::Value = serde_json::from_str(
-        r#"{"messages":[{"content":{"detail":1,"text":"hello"},"role":"user"}],"model":"logical"}"#,
-    )
-    .unwrap();
+#[case::without_namespace("")]
+#[case::with_namespace("team")]
+fn preset_keys_are_used_verbatim(#[case] namespace: &str) {
     assert_eq!(
-        key(&CacheKeyInput::from_parameters(first)),
-        key(&CacheKeyInput::from_parameters(second)),
+        key_in(namespace, CacheKeyInput::Preset("preset".into())).as_str(),
+        "preset"
     );
 }
 
 #[rstest]
-#[case::boolean(serde_json::json!(false), serde_json::json!("false"))]
-#[case::number(serde_json::json!(1), serde_json::json!("1"))]
-#[case::array_order(serde_json::json!([1, 2]), serde_json::json!([2, 1]))]
-fn parameter_keys_preserve_value_identity(
-    #[case] first: serde_json::Value,
-    #[case] second: serde_json::Value,
+#[case::without_namespace("", "inference-v3:")]
+#[case::with_namespace("litellm", "litellm:inference-v3:")]
+fn the_namespace_prefixes_generated_keys_exactly_once(
+    #[case] namespace: &str,
+    #[case] prefix: &str,
 ) {
+    let key = key_in(
+        namespace,
+        group("litellm", json!({"input": "litellm:inference-v3:x"})),
+    );
+    let hash = key.as_str().strip_prefix(prefix).unwrap();
+    assert_eq!(hash.len(), 64);
+    assert!(hash.chars().all(|char| char.is_ascii_hexdigit()));
+}
+
+#[rstest]
+fn deployments_in_one_model_group_share_a_key() {
+    let request = json!({"input": "hello"});
+    assert_eq!(
+        key(CacheKeyInput::request(
+            CacheTarget::resolve("azure/gpt-5", Some("gpt-5")),
+            request.clone()
+        )),
+        key(CacheKeyInput::request(
+            CacheTarget::resolve("openai/gpt-5", Some("gpt-5")),
+            request
+        )),
+    );
+}
+
+#[rstest]
+#[case::different_groups(
+    CacheTarget::resolve("openai/gpt-5", Some("fast")),
+    CacheTarget::resolve("openai/gpt-5", Some("smart"))
+)]
+#[case::different_models_without_a_group(
+    CacheTarget::resolve("openai/gpt-5", None),
+    CacheTarget::resolve("openai/gpt-5-mini", None)
+)]
+#[case::group_and_model_with_the_same_name(
+    CacheTarget::resolve("gpt-5", Some("gpt-5")),
+    CacheTarget::resolve("gpt-5", None)
+)]
+fn distinct_targets_never_share_a_key(#[case] first: CacheTarget, #[case] second: CacheTarget) {
+    let request = json!({"input": "hello"});
     assert_ne!(
-        key(&CacheKeyInput::from_parameters(
-            serde_json::json!({"input": first})
-        )),
-        key(&CacheKeyInput::from_parameters(
-            serde_json::json!({"input": second})
-        )),
+        key(CacheKeyInput::request(first, request.clone())),
+        key(CacheKeyInput::request(second, request)),
+    );
+}
+
+#[rstest]
+fn parameter_keys_ignore_nested_object_order() {
+    let first: Value = serde_json::from_str(
+        r#"{"messages":[{"role":"user","content":{"text":"hello","detail":1}}]}"#,
+    )
+    .unwrap();
+    let second: Value = serde_json::from_str(
+        r#"{"messages":[{"content":{"detail":1,"text":"hello"},"role":"user"}]}"#,
+    )
+    .unwrap();
+    assert_eq!(key(group("g", first)), key(group("g", second)));
+}
+
+#[rstest]
+#[case::boolean(json!(false), json!("false"))]
+#[case::number(json!(1), json!("1"))]
+#[case::array_order(json!([1, 2]), json!([2, 1]))]
+#[case::nested_null(json!({"a": null}), json!({}))]
+fn parameter_keys_preserve_value_identity(#[case] first: Value, #[case] second: Value) {
+    assert_ne!(
+        key(group("g", json!({"input": first}))),
+        key(group("g", json!({"input": second}))),
+    );
+}
+
+#[rstest]
+fn top_level_null_parameters_match_absent_ones() {
+    assert_eq!(
+        key(group("g", json!({"input": "hello", "user": null}))),
+        key(group("g", json!({"input": "hello"}))),
     );
 }
 
 #[rstest]
 #[case::api_parameter("temperature")]
-#[case::provider_parameter("top_k")]
+#[case::messages_system("system")]
+#[case::messages_top_k("top_k")]
+#[case::responses_instructions("instructions")]
 #[case::unknown_parameter("x-anything")]
 fn every_parameter_changes_the_key(#[case] name: &str) {
-    let base = serde_json::json!({"model": "logical", "messages": "hello"});
-    let varied = serde_json::json!({"model": "logical", "messages": "hello", name: 1});
-    assert_ne!(
-        key(&CacheKeyInput::from_parameters(base)),
-        key(&CacheKeyInput::from_parameters(varied)),
-    );
+    let base = json!({"input": "hello"});
+    let varied = json!({"input": "hello", name: 1});
+    assert_ne!(key(group("g", base)), key(group("g", varied)));
 }

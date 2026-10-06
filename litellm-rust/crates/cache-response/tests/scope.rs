@@ -1,10 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_cache::ExactCacheContext;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheAccess, CacheEntry, CacheKey, CacheKeyInput, CacheKeyRequest, CacheOptions, CacheScope,
-    RequestRewrite, ResponseCache, ResponseCacheRequest,
+    CacheAccess, CacheEntry, CacheKey, CacheKeyInput, CacheTarget, ResponseCache,
+    ResponseCacheRequest,
 };
 use rstest::rstest;
 use serde_json::json;
@@ -30,7 +29,7 @@ async fn isolated_policy_controls_actual_entry_reuse(
                 ttl: Some(Duration::from_secs(30)),
                 ..CachePolicy::default()
             }))
-            .request("test", "messages", json!({"prompt":"hello"}))
+            .request("messages", input(json!({"prompt":"hello"})))
     };
     service
         .async_store(
@@ -62,7 +61,7 @@ async fn isolated_policy_controls_actual_entry_reuse(
 #[rstest]
 fn policy_does_not_change_logical_identity() {
     use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope};
-    let input = CacheKeyInput::from_parameters(json!({"model":"deployment", "input":"hello"}));
+    let input = input(json!({"input":"hello"}));
     let baseline = CacheOptions::new(CacheScope::Shared);
     let controlled = CacheOptions {
         policy: CachePolicy {
@@ -74,8 +73,8 @@ fn policy_does_not_change_logical_identity() {
         },
         ..baseline.clone()
     }
-    .request_with_key("test", "responses", input.clone());
-    let original = baseline.request_with_key("test", "responses", input);
+    .request("responses", input.clone());
+    let original = baseline.request("responses", input);
     assert_eq!(key(&original), key(&controlled));
     assert_eq!(controlled.context.ttl, Some(Duration::from_secs(9)));
     assert_eq!(controlled.max_age, Some(Duration::from_secs(3)));
@@ -85,61 +84,30 @@ fn policy_does_not_change_logical_identity() {
 #[rstest]
 fn preset_keys_keep_isolated_callers_separate() {
     use litellm_cache_response::{CacheOptions, CacheScope};
-    let input = CacheKeyInput {
-        preset: Some("explicit".into()),
-        ..Default::default()
-    };
-    let first = CacheOptions::new(CacheScope::Isolated("first".into())).request_with_key(
-        "test",
-        "responses",
-        input.clone(),
-    );
-    let second = CacheOptions::new(CacheScope::Isolated("second".into())).request_with_key(
-        "test",
-        "responses",
-        input.clone(),
-    );
-    let shared = CacheOptions::new(CacheScope::Shared).request_with_key("test", "responses", input);
+    let input = CacheKeyInput::Preset("explicit".into());
+    let first =
+        CacheOptions::new(CacheScope::Isolated("first".into())).request("responses", input.clone());
+    let second = CacheOptions::new(CacheScope::Isolated("second".into()))
+        .request("responses", input.clone());
+    let shared = CacheOptions::new(CacheScope::Shared).request("responses", input);
     assert_ne!(key(&first), key(&second));
     assert_eq!(key(&shared).as_str(), "explicit");
 }
 
 #[rstest]
-#[case::logical(false, false)]
-#[case::logical_with_rewrite(true, false)]
-#[case::preset(false, true)]
-#[case::preset_with_rewrite(true, true)]
-fn isolated_presets_ignore_rewrites(#[case] rewritten: bool, #[case] preset: bool) {
-    let input = |rewritten: bool| CacheKeyInput {
-        preset: preset.then(|| "explicit".into()),
-        rewritten_request: rewritten.then(|| CacheKeyRequest {
-            url: "https://provider.test/infer".into(),
-            headers: vec![],
-            body: json!({"input":"changed"}),
-        }),
-        ..CacheKeyInput::from_parameters(json!({"model":"provider"}))
-    };
-    let options = CacheOptions::new(CacheScope::Isolated("caller".into()));
-    let baseline = options
-        .clone()
-        .request_with_key("test", "responses", input(false));
-    let request = options.request_with_key("test", "responses", input(rewritten));
-    assert_eq!(
-        request.rewrite,
-        match rewritten {
-            true => RequestRewrite::Rewritten,
-            false => RequestRewrite::Unchanged,
-        }
-    );
-    assert_eq!(request.scope, CacheScope::Isolated("caller".into()));
-    assert_eq!(key(&request) == key(&baseline), !rewritten || preset);
-    assert_eq!(
-        request
+fn surfaces_never_share_a_key() {
+    use litellm_cache_response::{CacheOptions, CacheScope};
+    let options = CacheOptions::new(CacheScope::Shared);
+    assert_ne!(
+        key(&options
             .clone()
-            .with_context(ExactCacheContext::default())
-            .rewrite,
-        request.rewrite
+            .request("responses", input(json!({"input":"hello"})))),
+        key(&options.request("messages", input(json!({"input":"hello"})))),
     );
+}
+
+fn input(parameters: serde_json::Value) -> CacheKeyInput {
+    CacheKeyInput::request(CacheTarget::ModelGroup("group".into()), parameters)
 }
 
 fn key(request: &ResponseCacheRequest) -> CacheKey {

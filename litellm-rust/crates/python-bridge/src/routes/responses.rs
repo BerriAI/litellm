@@ -104,6 +104,7 @@ fn run_public(
                             &interceptors,
                             litellm_core::CallOptions {
                                 cache: options.map(|options| options.policy),
+                                model_group: None,
                                 observers,
                             },
                         )

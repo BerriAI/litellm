@@ -54,11 +54,18 @@ impl ResponsesRoute {
     ) -> Result<ResponsesOutput, Error> {
         let litellm_inference::CallOptions {
             cache: cache_options,
+            model_group,
             observers,
         } = options.into();
         litellm_host::lifecycle::observe_call(
             observers.clone(),
-            self.run(call, cache_options, interceptors, observers.as_ref()),
+            self.run(
+                call,
+                cache_options,
+                model_group.as_deref(),
+                interceptors,
+                observers.as_ref(),
+            ),
         )
         .await
     }
@@ -75,11 +82,12 @@ impl ResponsesRoute {
         &self,
         call: ResponsesCall,
         cache_options: Option<litellm_cache_response::CachePolicy>,
+        model_group: Option<&str>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
         litellm_inference::diagnostic::call(async {
-            self.run_provider(call, cache_options, interceptors, observers)
+            self.run_provider(call, cache_options, model_group, interceptors, observers)
                 .await
         })
         .await
@@ -89,15 +97,15 @@ impl ResponsesRoute {
         &self,
         call: ResponsesCall,
         cache_options: Option<litellm_cache_response::CachePolicy>,
+        model_group: Option<&str>,
         interceptors: &impl Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
         let cache_input = self
             .cache
             .as_ref()
-            .map(|_| call.cache_key_input())
-            .transpose()?
-            .unwrap_or_default();
+            .map(|_| call.cache_key_input(model_group))
+            .transpose()?;
         let request = prepare::prepare(call, self.secrets.as_ref()).await?;
         litellm_inference::diagnostic::provider(
             &request.context.model,

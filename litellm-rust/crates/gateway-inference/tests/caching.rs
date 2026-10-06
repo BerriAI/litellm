@@ -75,7 +75,7 @@ async fn all_inference_endpoints_share_native_cache(
     let stored = cache
         .lookup(
             &CacheKey::delegated(cache_key.to_str().unwrap().into()),
-            &ResponseCacheRequest::new(CacheKeyInput::default()),
+            &ResponseCacheRequest::new(CacheKeyInput::Preset(cache_key.to_str().unwrap().into())),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap(),
@@ -181,4 +181,55 @@ async fn authenticated_callers_do_not_share_cached_responses(
         first_again.headers().get("x-litellm-cache-key"),
         Some(first_key)
     );
+}
+
+#[rstest]
+#[case::chat("/v1/chat/completions", "anthropic/test-model")]
+#[case::messages("/v1/messages", "anthropic/test-model")]
+#[case::responses("/v1/responses", "openai/test-model")]
+#[tokio::test]
+async fn model_groups_over_one_deployment_do_not_share_cached_responses(
+    #[case] path: &str,
+    #[case] model: &str,
+) {
+    let upstream = MockServer::start().await;
+    let provider_body = if path.ends_with("responses") {
+        json!({"id":"response-1", "model":"test-model", "status":"completed", "output":[]})
+    } else {
+        json!({"id":"message-1", "model":"test-model", "type":"message", "role":"assistant", "content":[{"type":"text","text":"hello"}], "stop_reason":"end_turn", "usage":{"input_tokens":1,"output_tokens":1}})
+    };
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(provider_body))
+        .expect(2)
+        .mount(&upstream)
+        .await;
+    let cache: Arc<dyn ResponseCacheService> = Arc::new(ResponseCache::new(Arc::new(
+        InMemoryCache::new(Some(100), Some(Duration::from_secs(60))),
+    )));
+    let app = support::app_with_cache_for_models(
+        &["public/fast", "public/smart"],
+        model,
+        &upstream.uri(),
+        cache,
+    );
+    let request = |name: &str| {
+        if path.ends_with("responses") {
+            json!({"model":name, "input":"hello"})
+        } else {
+            json!({"model":name, "messages":[{"role":"user","content":"hello"}], "max_tokens":16})
+        }
+    };
+    for (name, cached) in [
+        ("public/fast", false),
+        ("public/smart", false),
+        ("public/fast", true),
+    ] {
+        let response = support::post(app.clone(), path, request(name)).await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers().contains_key("x-litellm-cache-key"),
+            cached
+        );
+    }
+    upstream.verify().await;
 }

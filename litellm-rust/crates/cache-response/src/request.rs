@@ -23,41 +23,25 @@ impl CacheAccess {
     };
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum RequestRewrite {
-    #[default]
-    Unchanged,
-    Rewritten,
-}
-
-impl From<&CacheKeyInput> for RequestRewrite {
-    fn from(input: &CacheKeyInput) -> Self {
-        match input.rewritten_request {
-            Some(_) => Self::Rewritten,
-            None => Self::Unchanged,
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct ResponseCacheRequest<C: CacheContext = ExactCacheContext> {
     pub key: CacheKeyInput,
+    pub surface: String,
+    pub scope: CacheScope,
     pub access: CacheAccess,
     pub context: C,
     pub max_age: Option<Duration>,
-    pub rewrite: RequestRewrite,
-    pub scope: CacheScope,
 }
 
 impl<C: CacheContext + Default> ResponseCacheRequest<C> {
     pub fn new(key: CacheKeyInput) -> Self {
         Self {
-            rewrite: RequestRewrite::from(&key),
             key,
+            surface: String::new(),
+            scope: CacheScope::Shared,
             access: CacheAccess::READ_WRITE,
             context: C::default(),
             max_age: None,
-            scope: CacheScope::Shared,
         }
     }
 }
@@ -66,11 +50,11 @@ impl<C: CacheContext> ResponseCacheRequest<C> {
     pub fn with_context<D: CacheContext>(self, context: D) -> ResponseCacheRequest<D> {
         ResponseCacheRequest {
             key: self.key,
+            surface: self.surface,
+            scope: self.scope,
             access: self.access,
             context,
             max_age: self.max_age,
-            rewrite: self.rewrite,
-            scope: self.scope,
         }
     }
 }
