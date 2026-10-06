@@ -1501,7 +1501,7 @@ def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
     usage = Usage(prompt_tokens=15, completion_tokens=5, total_tokens=20)
-    for model in ("claude-haiku-4-5@20251001", "gemini-3.5-flash"):
+    for model in ("claude-haiku-4-5@20251001", "gemini-3.5-flash", "gemini-3.1-flash-image"):
         global_prompt, global_completion = cost_per_token(
             model=model,
             custom_llm_provider="vertex_ai",
@@ -1558,6 +1558,29 @@ def test_vertex_regional_image_generation_costs_uplift_over_global(monkeypatch, 
         return completion_cost(
             completion_response=ImageResponse(data=[ImageObject(b64_json="img")], usage=usage),
             model="vertex_ai/fake-regional-image-model",
+            call_type="image_generation",
+            vertex_location=vertex_location,
+        )
+
+    global_cost: Final = image_cost("global")
+    assert global_cost > 0
+    assert image_cost("us-central1") == pytest.approx(global_cost * 1.10, rel=1e-9)
+
+
+def test_vertex_gemini_flash_image_generation_regional_costs_uplift_over_global(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    usage: Final = ImageUsage(
+        input_tokens=100,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=100),
+        output_tokens=1120,
+        total_tokens=1220,
+    )
+
+    def image_cost(vertex_location: str) -> float:
+        return completion_cost(
+            completion_response=ImageResponse(data=[ImageObject(b64_json="img")], usage=usage),
+            model="vertex_ai/gemini-3.1-flash-image",
             call_type="image_generation",
             vertex_location=vertex_location,
         )

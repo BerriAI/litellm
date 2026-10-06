@@ -120,11 +120,15 @@ export function listPollInterval(list: LensList | undefined, settingsOpen: boole
   return running || (settingsOpen && !connected) ? 2000 : 10000;
 }
 
+export function budgetReached(lens: Lens, now = new Date()): boolean {
+  const spent = lens.budget_month === now.toISOString().slice(0, 7) ? lens.spent ?? 0 : 0;
+  return spent >= (lens.settings.monthly_budget ?? 100);
+}
+
 export function lensStatus(lens: Lens, connected: boolean): string {
   const active = lens.jobs?.find((job) => ["queued", "running"].includes(job.status ?? ""));
   if (active) return connected ? active.stage ?? "Queued" : "Waiting for analyzer";
-  const spent = lens.budget_month === new Date().toISOString().slice(0, 7) ? lens.spent ?? 0 : 0;
-  if (spent >= (lens.settings.monthly_budget ?? 100)) return "Budget reached";
+  if (budgetReached(lens)) return "Budget reached";
   const latest = lens.jobs?.[0];
   return latest ? runStatus(latest) : "Ready";
 }
