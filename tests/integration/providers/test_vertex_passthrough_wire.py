@@ -425,3 +425,39 @@ def test_credential_less_vertex_project_forwards_the_caller_google_token_and_str
         assert "authorization" not in upstream.headers, upstream.headers
         assert "x-litellm-api-key" not in upstream.headers, upstream.headers
         assert _JSON_OBJECT.validate_json(upstream.body) == body, upstream.body
+
+
+@pytest.mark.parametrize("alias", ["/vertex_ai", "/vertex-ai"])
+def test_credential_less_vertex_project_forwards_the_caller_bearer_token_when_the_virtual_key_rides_in_x_litellm_api_key(
+    rig: _Rig, alias: str
+) -> None:
+    model_path: Final = "/v1/projects/byo-project/locations/us-east5/publishers/anthropic/models/claude-byo"
+    with rig.proxy.scenario() as scenario:
+        key: Final = scenario.key()
+        body: Final[dict[str, JsonValue]] = {
+            "anthropic_version": "vertex-2023-10-16",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        response: Final = rig.proxy.client.post(
+            f"{alias}{model_path}:rawPredict",
+            json=body,
+            headers={
+                "x-litellm-api-key": f"Bearer {key}",
+                "Authorization": f"Bearer {_CALLER_GOOGLE_TOKEN}",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == _CLAUDE_REPLY, response.text
+        received: Final = rig.vertex.drain()
+        assert [(request.method, request.target) for request in received] == [
+            ("POST", f"{model_path}:rawPredict")
+        ], received
+        assert rig.tunnel.drain() == [_BYO]
+        upstream: Final = received[0]
+        assert upstream.headers["authorization"] == f"Bearer {_CALLER_GOOGLE_TOKEN}", upstream.headers
+        assert {name: value for name, value in upstream.headers.items() if key in value} == {}, upstream.headers
+        assert "x-litellm-api-key" not in upstream.headers, upstream.headers
+        assert "x-goog-api-key" not in upstream.headers, upstream.headers
+        assert key not in upstream.target, upstream.target
+        assert _JSON_OBJECT.validate_json(upstream.body) == body, upstream.body

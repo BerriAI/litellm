@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qsl, urlsplit
 
+from google import genai
+from google.genai import types
 import httpx
 import pytest
 import yaml
@@ -612,6 +614,10 @@ _GEMINI_BODY: Final[dict[str, JsonValue]] = {
     "systemInstruction": {"parts": [{"text": "be terse"}]},
     "generationConfig": {"temperature": 0.2, "maxOutputTokens": 32, "thinkingConfig": {"thinkingBudget": 0}},
 }
+_GEMINI_SDK_BODY: Final[dict[str, JsonValue]] = {
+    **_GEMINI_BODY,
+    "systemInstruction": {"parts": [{"text": "be terse"}], "role": "user"},
+}
 
 
 def _upstream_query(request: Request) -> tuple[str, list[tuple[str, str]]]:
@@ -635,12 +641,42 @@ def test_gemini_passthrough_both_auth_spellings_swap_the_virtual_key_for_the_pro
             candidate: Final = owned.gateway
             with candidate.scenario() as scenario:
                 key: Final = scenario.key()
-                sdk_headers: Final = {"x-goog-api-key": key, "x-goog-api-client": "google-genai-sdk/1.0.0"}
-                header_spelling: Final = candidate.client.post(
-                    f"/gemini{model_path}:generateContent", json=_GEMINI_BODY, headers=sdk_headers
+                sent: Final[list[httpx.Request]] = []
+                client: Final = genai.Client(
+                    api_key=key,
+                    http_options=types.HttpOptions(
+                        base_url=f"{str(candidate.client.base_url).rstrip('/')}/gemini",
+                        client_args={"event_hooks": {"request": [sent.append]}, "timeout": 30, "trust_env": False},
+                    ),
                 )
-                assert header_spelling.status_code == 200, header_spelling.text
-                assert header_spelling.json() == _GEMINI_REPLY, header_spelling.text
+                generated: Final = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents="hi",
+                    config=types.GenerateContentConfig(
+                        system_instruction="be terse",
+                        temperature=0.2,
+                        max_output_tokens=32,
+                        thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    ),
+                )
+                streamed_text: Final = "".join(
+                    chunk.text or ""
+                    for chunk in client.models.generate_content_stream(
+                        model="gemini-2.5-flash",
+                        contents="hi",
+                        config=types.GenerateContentConfig(
+                            system_instruction="be terse",
+                            temperature=0.2,
+                            max_output_tokens=32,
+                            thinking_config=types.ThinkingConfig(thinking_budget=0),
+                        ),
+                    )
+                )
+                assert generated.text == "scripted gemini", generated
+                assert streamed_text == "scripted gemini", streamed_text
+                assert len(sent) == 2, sent
+                assert all(request.headers.get("x-goog-api-key") == key for request in sent), sent
+                assert parse_qsl(sent[1].url.query.decode(), keep_blank_values=True) == [("alt", "sse")], sent[1].url
                 query_spelling: Final = candidate.client.post(
                     f"/gemini{model_path}:generateContent", params={"key": key}, json=_GEMINI_BODY
                 )
@@ -658,15 +694,22 @@ def test_gemini_passthrough_both_auth_spellings_swap_the_virtual_key_for_the_pro
                 received: Final = wire.drain()
                 assert [(request.method, *_upstream_query(request)) for request in received] == [
                     ("POST", f"{model_path}:generateContent", [("key", "scripted")]),
+                    ("POST", f"{model_path}:streamGenerateContent", [("alt", "sse"), ("key", "scripted")]),
                     ("POST", f"{model_path}:generateContent", [("key", "scripted")]),
                     ("POST", f"{model_path}:streamGenerateContent", [("key", "scripted"), ("alt", "sse")]),
                 ], received
-                for request in received:
+                for upstream, sdk_request in zip(received[:2], sent, strict=True):
+                    sdk_body: Final = json.loads(sdk_request.content)
+                    assert json.loads(upstream.body) == sdk_body, upstream.body
+                    assert sdk_body == _GEMINI_SDK_BODY, sdk_request.content
+                for request in received[2:]:
                     assert json.loads(request.body) == _GEMINI_BODY, request.body
+                for request in received:
                     assert {name: value for name, value in request.headers.items() if key in value} == {}, (
                         request.headers
                     )
                     assert "x-goog-api-key" not in request.headers, request.headers
+                    assert key not in request.target, request.target
 
 
 _CHAT_REPLY: Final[dict[str, JsonValue]] = {
