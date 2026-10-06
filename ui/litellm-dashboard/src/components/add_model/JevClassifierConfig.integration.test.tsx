@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
+import { chooseSelectOption, fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
@@ -124,8 +124,7 @@ describe("JEV classifier editor", () => {
       fireEvent.click(screen.getByRole("radio", { name: label }));
       if (provider === "bespoke") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent("nimble-latest");
       if (provider !== "jev") {
-        await userEvent.click(screen.getByLabelText("Classifier Model"));
-        await userEvent.click(screen.getByRole("option", { name: model }));
+        await chooseSelectOption(userEvent, screen.getByLabelText("Classifier Model"), model);
       } else {
         fireEvent.change(screen.getByLabelText("Classifier Model"), { target: { value: model } });
       }
