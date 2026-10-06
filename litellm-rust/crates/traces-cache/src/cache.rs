@@ -298,6 +298,7 @@ mod tests {
     fn row(span_id: &str) -> TraceSpansRow {
         TraceSpansRow {
             trace_id: String::new(),
+            original_trace_id: String::new(),
             span_id: span_id.into(),
             parent_span_id: String::new(),
             name: "run".into(),

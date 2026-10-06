@@ -2214,6 +2214,7 @@ class BaseLLMHTTPHandler:
 
         # used for logging + cost tracking
         logging_obj.model_call_details["httpx_response"] = response
+        logging_obj.model_call_details["response_headers"] = dict(response.headers)
 
         initial_response: AsyncIterator | AnthropicMessagesResponse
         if stream:

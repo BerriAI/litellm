@@ -17,6 +17,7 @@ const TTL: Duration = Duration::from_secs(120);
 fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> TraceSpansRow {
     TraceSpansRow {
         trace_id: String::new(),
+        original_trace_id: String::new(),
         span_id: span_id.into(),
         parent_span_id: parent.into(),
         name: name.into(),

@@ -260,6 +260,7 @@ fn access() -> ReadAccessParams {
 fn span(index: usize) -> TraceSpansRow {
     TraceSpansRow {
         trace_id: "trace".into(),
+        original_trace_id: String::new(),
         span_id: format!("span-{index}"),
         parent_span_id: if index == 0 {
             String::new()
@@ -523,6 +524,7 @@ fn spend_row(response_id: &str, cost: f64) -> SpendByResponseIdsRow {
         litellm_call_id: String::new(),
         response_id: response_id.into(),
         upstream_response_id: String::new(),
+        provider_request_id: String::new(),
         trace_id: String::new(),
         span_id: String::new(),
         team_id: "team".into(),

@@ -26,6 +26,8 @@ function makeTrace(scene: Scenario, index: number, now: number) {
     parent_span_id: null,
     span_id: spanId(0),
     spend: null,
+    spend_log_request_id: null,
+    spend_match: null,
     start_offset_ms: 0,
     status: "ok",
     type: "agent",
@@ -53,6 +55,7 @@ function makeTrace(scene: Scenario, index: number, now: number) {
     input_tokens: 520 + index * 41,
     output_tokens: 48 + index * 7,
     spend: 0.003 + index * 0.0002,
+    spend_match: "matched",
   };
   const trace: Trace = {
     summary: {
@@ -71,6 +74,7 @@ function makeTrace(scene: Scenario, index: number, now: number) {
       service: "demo-agents",
       span_count: toolCount + 2,
       spend: model.spend,
+      priced_calls: 1,
       start_time: iso(now - (index + 1) * 35 * 60_000),
       status: scene.failed ? "error" : "ok",
       tool_calls: toolCount,
@@ -85,6 +89,7 @@ function makeTrace(scene: Scenario, index: number, now: number) {
         llm_calls: 1,
         tool_calls: toolCount,
         spend: model.spend,
+        priced_calls: 1,
       },
     ],
     spans: [base, ...tools, model],

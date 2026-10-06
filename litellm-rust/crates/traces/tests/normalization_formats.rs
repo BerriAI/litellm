@@ -928,3 +928,28 @@ fn convention_markers_keep_genai_call_evidence(
     let marked = decode(span, scope, &marked_attributes, vec![]).unwrap();
     assert_eq!(marked.normalized.calls, plain.normalized.calls);
 }
+
+#[rstest]
+#[case::request("req_native", CallKey::ProviderRequest("req_native".into()))]
+#[case::legacy_message("msg_legacy", CallKey::ProviderResponse("msg_legacy".into()))]
+fn native_claude_preserves_the_provider_id_family(
+    span: Span,
+    #[case] id: &str,
+    #[case] key: CallKey,
+) {
+    let native = Span {
+        name: "claude_code.llm_request".into(),
+        ..span
+    };
+    let decoded = decode(
+        native,
+        "com.anthropic.claude_code.tracing",
+        &[("gen_ai.response.id", id)],
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        decoded.normalized.calls,
+        CallEvidence::Complete(std::collections::BTreeSet::from([key]))
+    );
+}

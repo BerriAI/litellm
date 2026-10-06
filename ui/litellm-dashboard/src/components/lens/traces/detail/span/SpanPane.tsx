@@ -12,6 +12,7 @@ import { ContentTab, useSpanDetail } from "../content/ContentTab";
 import { AttributesTab } from "./AttributesTab";
 import { PaneHeader } from "./PaneHeader";
 import { RequestTab } from "./RequestTab";
+import { SpendLogLink } from "./SpendLogLink";
 
 const TAB_LABELS: Record<SpanTab, string> = { content: "Content", request: "Request", attributes: "Attributes" };
 
@@ -26,7 +27,7 @@ const spanFacts = (span: Span): readonly Fact[] => {
   const tokens = span.input_tokens + span.output_tokens;
   const optional: readonly (Fact | null)[] = [
     tokens > 0 ? ["Tokens", fmtTok(tokens)] : null,
-    span.spend != null ? ["Cost", formatCost(span.spend)] : null,
+    span.spend != null && span.spend_log_request_id == null ? ["Cost", formatCost(span.spend)] : null,
     span.type === "llm" && span.model ? ["Step", span.name] : null,
   ];
   return [["Duration", fmtMs(span.duration_ms)], ...optional.filter((fact): fact is Fact => fact !== null)];
@@ -42,6 +43,7 @@ export function SpanPane({
 }: SpanTabProps & { trace: Trace; span: Span; accessToken: string; onClose: () => void }) {
   const { trace_id: traceId, trace_ref: traceRef, start_time: startTime } = trace.summary;
   const handoff = useTracesApi(accessToken).handoff(traceId, span.span_id, traceRef);
+  const traceStartMs = Date.parse(startTime);
   const detailQuery = useSpanDetail(accessToken, traceId, tab === "attributes" ? span.span_id : null, traceRef);
   return (
     <aside className="flex h-full min-w-0 flex-col bg-background text-sm text-foreground" aria-label="Span details">
@@ -52,6 +54,7 @@ export function SpanPane({
         title={span.type === "llm" ? span.model || span.name : span.name}
         idValue={span.span_id}
         facts={spanFacts(span)}
+        links={<SpendLogLink span={span} accessToken={accessToken} traceStartMs={traceStartMs} />}
         actions={<CopyButton variant="action" value={handoff.text} label="Copy step" copiedLabel={handoff.copied} />}
         onClose={onClose}
       />
@@ -69,7 +72,7 @@ export function SpanPane({
           <ContentTab accessToken={accessToken} traceId={traceId} traceRef={traceRef} span={span} />
         </TabsContent>
         <TabsContent value="request" className="min-h-0 overflow-auto">
-          <RequestTab span={span} accessToken={accessToken} traceStartMs={Date.parse(startTime)} />
+          <RequestTab span={span} accessToken={accessToken} traceStartMs={traceStartMs} />
         </TabsContent>
         <TabsContent value="attributes" className="min-h-0 overflow-auto">
           <AttributesTab

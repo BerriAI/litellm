@@ -8,6 +8,7 @@ import pytest
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
     _get_llm_provider_headers,
+    get_provider_request_id,
 )
 
 
@@ -72,3 +73,17 @@ def test_get_llm_provider_headers():
     }
     result = _get_llm_provider_headers(input_headers)
     assert result == expected_output, "Unexpected output for _get_llm_provider_headers"
+
+
+@pytest.mark.parametrize("header", ("request-id", "Request-Id", "x-request-id", "llm_provider-request-id"))
+def test_native_clients_receive_the_provider_request_id(header: str) -> None:
+    result = get_response_headers({header: "req_test", "unrelated": "value"})
+    assert result["request-id"] == "req_test"
+    assert get_provider_request_id(result) == "req_test"
+    assert result["llm_provider-unrelated"] == "value"
+    assert "unrelated" not in result
+
+
+@pytest.mark.parametrize("headers", (None, {}, {"request-id": ""}, {"request-id": 42}))
+def test_invalid_provider_request_ids_remain_absent(headers: object) -> None:
+    assert get_provider_request_id(headers) is None

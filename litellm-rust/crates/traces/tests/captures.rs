@@ -117,6 +117,7 @@ fn captured_spend_rows(spend_logs: &str) -> (FixtureCapture, Vec<SpendByResponse
                 litellm_call_id: record.litellm_call_id,
                 response_id: record.response_id,
                 upstream_response_id,
+                provider_request_id: String::new(),
                 trace_id: record.trace_id,
                 span_id: record.span_id,
                 team_id: record.team_id,
@@ -171,12 +172,13 @@ fn trace_span(span: DecodedSpan) -> TraceSpansRow {
         .into_iter()
         .flatten()
         .find_map(|key| match key {
-            CallKey::ProviderResponse(id) => Some(id.clone()),
+            CallKey::ProviderResponse(id) | CallKey::ProviderRequest(id) => Some(id.clone()),
             CallKey::LiteLlmRequest(_) | CallKey::Transport | CallKey::GatewayAttempt => None,
         })
         .unwrap_or_default();
     TraceSpansRow {
         trace_id: span.trace_id,
+        original_trace_id: String::new(),
         span_id: span.span_id,
         parent_span_id: span.parent_span_id,
         name: span.name,
@@ -267,6 +269,7 @@ fn unrelated_transport(call: &TraceSpansRow) -> TraceSpansRow {
             .expect("valid unrelated transport timestamp");
     TraceSpansRow {
         trace_id: call.trace_id.clone(),
+        original_trace_id: call.original_trace_id.clone(),
         span_id: format!("unrelated-transport-{}", call.span_id),
         parent_span_id: call.parent_span_id.clone(),
         name: "unrelated-http".into(),
@@ -405,7 +408,9 @@ fn redundant_genai_response_id_keeps_call_evidence(
             let response_ids: Vec<_> = keys
                 .iter()
                 .filter_map(|key| match key {
-                    CallKey::ProviderResponse(id) => Some(id.clone()),
+                    CallKey::ProviderResponse(id) | CallKey::ProviderRequest(id) => {
+                        Some(id.clone())
+                    }
                     CallKey::LiteLlmRequest(_) | CallKey::Transport | CallKey::GatewayAttempt => {
                         None
                     }

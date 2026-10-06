@@ -284,6 +284,7 @@ fn llamaindex_wrapped_responses_keep_provider_call_keys(#[case] body: &[u8]) {
 #[rstest]
 #[case::request(litellm_traces::CallKey::LiteLlmRequest("request:with:colons".to_owned()))]
 #[case::response(litellm_traces::CallKey::ProviderResponse("response:with:colons".to_owned()))]
+#[case::provider_request(litellm_traces::CallKey::ProviderRequest("req_native".into()))]
 #[case::transport(litellm_traces::CallKey::Transport)]
 #[case::gateway_attempt(litellm_traces::CallKey::GatewayAttempt)]
 fn call_keys_round_trip_through_storage(#[case] key: litellm_traces::CallKey) {
@@ -305,6 +306,7 @@ fn call_keys_round_trip_through_storage(#[case] key: litellm_traces::CallKey) {
 #[rstest]
 #[case::missing_separator("provider_response")]
 #[case::missing_response("provider_response:")]
+#[case::missing_provider_request("provider_request:")]
 #[case::missing_request("litellm_request:")]
 #[case::transport_id("transport:unexpected")]
 #[case::gateway_attempt_separator("gateway_attempt")]

@@ -216,7 +216,16 @@ impl Instrumentation {
 
 fn with_call_ids(context: &SpanContext<'_>, facts: SpanFacts) -> SpanFacts {
     let calls = [
-        present(context.attributes, &["gen_ai.response.id"]).map(CallKey::ProviderResponse),
+        present(context.attributes, &["gen_ai.response.id"]).map(|id| {
+            if matches!(
+                context.scope,
+                crate::normalize::CLAUDE_CODE_SCOPE | crate::normalize::CLAUDE_CODE_EVENTS_SCOPE
+            ) {
+                crate::normalize::claude_call_key(id)
+            } else {
+                CallKey::ProviderResponse(id)
+            }
+        }),
         present(context.attributes, &["litellm.call_id"]).map(CallKey::LiteLlmRequest),
     ]
     .into_iter()

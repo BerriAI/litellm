@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import { Inspector } from "@/components/shared/Inspector";
 import traceList from "../__fixtures__/trace_list.json";
-import { AgentTracesTable } from "./AgentTracesTable";
+import { AgentTracesTable, runCost } from "./AgentTracesTable";
 import { traceKey } from "../routing";
 import type { TracePage, TraceSummary } from "../types";
 
@@ -110,6 +110,58 @@ describe("AgentTracesTable virtualization", () => {
     expect(screen.getAllByTestId("agent-trace-row").length).toBeLessThan(50);
     expect(screen.getByText("question 499")).toBeInTheDocument();
     expect(screen.queryByText("question 0")).not.toBeInTheDocument();
+  });
+});
+
+describe("runCost", () => {
+  it.each([
+    { spend: 0.42, priced_calls: 20, llm_calls: 20, expected: { label: "$0.42", partial: null } },
+    {
+      spend: 0.38,
+      priced_calls: 18,
+      llm_calls: 20,
+      expected: { label: "≥ $0.38", partial: { short: "18/20 priced", long: "18 of 20 calls priced" } },
+    },
+    { spend: null, priced_calls: 0, llm_calls: 20, expected: null },
+    { spend: 0, priced_calls: 0, llm_calls: 0, expected: null },
+  ])("prices $priced_calls of $llm_calls calls", ({ expected, ...summary }) => {
+    expect(runCost(summary)).toEqual(expected);
+  });
+});
+
+describe("AgentTracesTable cost cell", () => {
+  const template = (traceList as TracePage).data[0] as TraceSummary;
+  const costCell = (run: Partial<TraceSummary>) => {
+    renderWithProviders(
+      inList(
+        <AgentTracesTable
+          traces={[{ ...template, llm_calls: 20, ...run }]}
+          findings={new Map()}
+          isLoading={false}
+          error={null}
+          hasMore={false}
+          onLoadMore={vi.fn()}
+          onSetUpTracing={vi.fn()}
+        />,
+      ),
+    );
+    const costColumn = screen.getAllByRole("columnheader").findIndex((header) => header.textContent === "Cost");
+    return within(screen.getByTestId("agent-trace-row")).getAllByRole("cell")[costColumn];
+  };
+
+  it("shows an exact cost when every call is priced", () => {
+    expect(costCell({ spend: 0.42, priced_calls: 20 })).toHaveTextContent("$0.42");
+  });
+
+  it("marks a partial cost as a lower bound and says how many calls were priced", () => {
+    const cell = costCell({ spend: 0.38, priced_calls: 18 });
+    expect(cell).toHaveTextContent("≥ $0.38");
+    expect(cell).toHaveTextContent("18/20 priced");
+    expect(within(cell).getByTitle("18 of 20 calls priced")).toBeInTheDocument();
+  });
+
+  it("shows a dash when no call is priced", () => {
+    expect(costCell({ spend: null, priced_calls: 0 })).toHaveTextContent("—");
   });
 });
 

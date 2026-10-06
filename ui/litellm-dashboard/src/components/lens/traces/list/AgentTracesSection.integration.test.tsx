@@ -360,7 +360,7 @@ describe("AgentTracesSection", () => {
   it("shows the spend returned for a run", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({
       ...(traceList as TracePage),
-      data: [{ ...runs[0], spend: 0.025 }],
+      data: [{ ...runs[0], spend: 0.025, priced_calls: runs[0].llm_calls }],
     });
     renderSection();
 

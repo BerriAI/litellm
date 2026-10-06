@@ -536,7 +536,7 @@ impl LegacyLogging {
             head.bind(py).set_item("cache_key", key)?;
             head.bind(py).set_item("cache_hit", true)?;
         }
-        Streaming::Opened.call(py, (self.logger()?.object(py),))?;
+        Streaming::Opened.call(py, (self.logger()?.object(py), head.bind(py)))?;
         self.stream = Some(DeliveredStream {
             chunks: PyList::empty(py).unbind(),
             first_chunk: None,
@@ -1768,13 +1768,13 @@ assert logger.calls[1][1] is response
     fn stream_bindings_deliver_collected_chunks_in_order_without_success_fan_out() {
         Python::initialize();
         Python::attach(|py| {
-            let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None");
+            let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None\nhead = {'additional_headers': {'request-id': 'req_native'}}");
             let mut logging = LegacyLogging {
                 operation: crate::LoggingOperation::Messages,
                 ..logged(py, &locals, true)
             };
             logging
-                .on_stream_open(py, &pyo3::types::PyDict::new(py).into_any().unbind())
+                .on_stream_open(py, &local(&locals, "head").unbind())
                 .unwrap();
             logging
                 .on_stream_chunk(py, &local(&locals, "first").unbind())
@@ -1791,6 +1791,7 @@ assert logger.calls[1][1] is response
                 &locals,
                 c"
 assert logger.names() == ['stream_opened', 'stream_success'], logger.calls
+assert logger.calls[0][1] is head
 chunks = logger.calls[1][1]
 assert len(chunks) == 2
 assert chunks[0] is first

@@ -4,6 +4,7 @@ import { MoreHorizontal } from "lucide-react";
 
 import { cn } from "@/lib/cva.config";
 
+import { formatCost } from "../../list/AgentTracesTable";
 import { FoldChevron } from "../../ui/Collapse";
 import { FAMILY_BAR, SPAN_FAMILY, SpanIcon } from "../../ui/SpanIcon";
 import type { GroupRowData, LoadMoreRowData, SpanRowData } from "../../tree";
@@ -177,6 +178,11 @@ export function SpanRow({ row, ctx }: { row: SpanRowData; ctx: RowContext }) {
             </span>
           )}
           {ctx.layout === "tree" && <span className={META}>{fmtMs(span.duration_ms)}</span>}
+          {ctx.layout === "tree" && span.spend_match != null && (
+            <span className={META} data-testid="step-cost">
+              {span.spend_match === "matched" && span.spend != null ? formatCost(span.spend) : "—"}
+            </span>
+          )}
           {hint && (
             <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={hint}>
               {hint}
