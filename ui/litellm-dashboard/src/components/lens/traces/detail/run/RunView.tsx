@@ -92,6 +92,7 @@ function LoadedRun({
   const traces = useTracesApi(accessToken);
   const queryClient = useQueryClient();
   const [live, setLive] = useState(traces.live);
+  const [manualRead, setManualRead] = useState(false);
   const queryKey = ["agentTrace", traceId, traceRef, accessToken];
   const traceQueryOptions = {
     queryKey,
@@ -109,8 +110,15 @@ function LoadedRun({
   const traceQuery = useSuspenseInfiniteQuery(traceQueryOptions);
   const refreshTrace = () => queryClient.resetQueries({ queryKey, exact: true });
   const failure = traceQuery.isFetchNextPageError ? classifyTraceReadFailure(traceQuery.error) : null;
+  const readManually = (read: () => Promise<unknown>) => {
+    setManualRead(true);
+    void read().finally(() => setManualRead(false));
+  };
+  const refreshRun = () => readManually(() => traceQuery.refetch());
   const toggleLive = () => {
-    if (live) void queryClient.cancelQueries({ queryKey, exact: true });
+    if (live && !manualRead && !traceQuery.isFetchingNextPage) {
+      void queryClient.cancelQueries({ queryKey, exact: true });
+    }
     setLive((enabled) => !enabled);
   };
   const trace = useMemo(() => {
@@ -147,7 +155,7 @@ function LoadedRun({
         onBack={onBack}
         embedded={embedded}
         refreshing={traceQuery.isFetching}
-        onRefresh={() => void traceQuery.refetch()}
+        onRefresh={refreshRun}
         live={live}
         canLive={traces.live}
         onLiveChange={toggleLive}
@@ -155,12 +163,7 @@ function LoadedRun({
       {traceQuery.isRefetchError && (
         <div role="alert" className="flex items-center gap-3 border-b p-3 text-xs text-muted-foreground">
           Could not refresh this run. Previously received steps are still shown.
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={traceQuery.isFetching}
-            onClick={() => void traceQuery.refetch()}
-          >
+          <Button variant="outline" size="sm" disabled={traceQuery.isFetching} onClick={refreshRun}>
             Retry refresh
           </Button>
         </div>
@@ -171,8 +174,8 @@ function LoadedRun({
           total={trace.summary.span_count}
           failure={failure}
           busy={traceQuery.isFetching}
-          onLoadMore={() => void traceQuery.fetchNextPage()}
-          onRefresh={() => void refreshTrace()}
+          onLoadMore={() => readManually(() => traceQuery.fetchNextPage())}
+          onRefresh={() => readManually(refreshTrace)}
         />
       )}
       <RunBody

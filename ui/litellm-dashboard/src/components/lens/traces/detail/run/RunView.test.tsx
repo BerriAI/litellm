@@ -464,14 +464,14 @@ describe("RunView", () => {
   it("cancels an in-flight refresh and stops interval requests when live updates pause", async () => {
     vi.useFakeTimers();
     try {
-      let completeRefresh!: (trace: Trace) => void;
+      const updated = { ...research, summary: { ...research.summary, span_count: research.summary.span_count + 7 } };
       vi.mocked(agentTraceCall).mockReset();
       vi.mocked(agentTraceCall)
         .mockResolvedValueOnce(research)
         .mockImplementationOnce(
           () =>
             new Promise<Trace>((resolve) => {
-              completeRefresh = resolve;
+              setTimeout(() => resolve(updated), 1_000);
             }),
         );
       renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
@@ -481,7 +481,6 @@ describe("RunView", () => {
       expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(2);
       fireEvent.click(screen.getByRole("button", { name: "Live updates" }));
       await act(async () => {
-        completeRefresh({ ...research, summary: { ...research.summary, span_count: research.summary.span_count + 7 } });
         await vi.advanceTimersByTimeAsync(60_100);
       });
       expect(screen.getByRole("banner")).toHaveTextContent(`Steps ${research.summary.span_count}`);
@@ -490,6 +489,48 @@ describe("RunView", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each(["Refresh run", "Load more steps"])(
+    "keeps an in-flight manual %s when live updates pause",
+    async (action) => {
+      vi.useFakeTimers();
+      try {
+        const first: Trace = { ...research, next_cursor: "next-page" };
+        const updated: Trace = {
+          ...research,
+          summary: { ...research.summary, span_count: research.summary.span_count + 7 },
+          next_cursor: null,
+        };
+        vi.mocked(agentTraceCall).mockReset();
+        vi.mocked(agentTraceCall)
+          .mockResolvedValueOnce(first)
+          .mockImplementationOnce(
+            () =>
+              new Promise<Trace>((resolve) => {
+                setTimeout(() => resolve(updated), 1_000);
+              }),
+          );
+        renderWithProviders(
+          <RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />,
+        );
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(100);
+        });
+        fireEvent.click(screen.getByRole("button", { name: action }));
+        fireEvent.click(screen.getByRole("button", { name: "Live updates" }));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(60_100);
+        });
+        expect(screen.queryByRole("button", { name: "Load more steps" })).not.toBeInTheDocument();
+        expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(2);
+        if (action === "Refresh run") {
+          expect(screen.getByRole("banner")).toHaveTextContent(`Steps ${updated.summary.span_count}`);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("retries a failed refresh without calling the next-page operation", async () => {
     vi.mocked(agentTraceCall).mockReset();
