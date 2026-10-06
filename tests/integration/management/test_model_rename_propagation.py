@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Final
 
 import httpx
+import pytest
 from pydantic import BaseModel
 
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
@@ -150,7 +151,10 @@ def _served(gateway: Gateway, model: str, caller: _Holder) -> httpx.Response:
     return served
 
 
-def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that_named_it(gateway: Gateway) -> None:
+@pytest.mark.parametrize("rename_style", ("patch", "legacy_post"))
+def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that_named_it(
+    gateway: Gateway, rename_style: str
+) -> None:
     with gateway.scenario() as scenario:
         old: Final = scenario.model()
         model_id: Final = _model_id(gateway, old)
@@ -164,7 +168,15 @@ def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that
                 _assert_listing(gateway, caller, served=old, gone=None)
 
             new: Final = f"integration-renamed-{uuid.uuid4().hex}"
-            renamed: Final = gateway.request("PATCH", f"/model/{model_id}/update", {"model_name": new})
+            renamed: Final = (
+                gateway.request("PATCH", f"/model/{model_id}/update", {"model_name": new})
+                if rename_style == "patch"
+                else gateway.request(
+                    "POST",
+                    "/model/update",
+                    {"model_name": new, "model_info": {"id": model_id}, "litellm_params": {}},
+                )
+            )
             assert renamed.status_code == 200, renamed.text
             assert read_rows('SELECT model_name FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (model_id,)) == [
                 {"model_name": new}

@@ -235,6 +235,27 @@ def _bearer(rig: Rig, marker: Canary, secret: Canary) -> None:
     )
 
 
+def _provider_chat_matches(rig: Rig, marker: Canary, secret: Canary, text: str) -> bool:
+    delivered: Final = rig.provider.carrying(marker.value)
+    actual: Final = tuple(
+        (
+            entry.method,
+            entry.target,
+            entry.headers.get("authorization"),
+            json.loads(entry.body),
+        )
+        for entry in delivered
+    )
+    return actual == (
+        (
+            "POST",
+            "/v1/chat/completions",
+            f"Bearer {secret.value}",
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": text}]},
+        ),
+    )
+
+
 @pytest.mark.timeout(240)
 @pytest.mark.parametrize("outcome", OUTCOMES)
 def test_virtual_key_raw_value_authenticates_and_is_stored_only_as_a_hash(
@@ -399,7 +420,9 @@ def test_partial_legacy_model_update_keeps_the_stored_api_key_usable(rig: Rig) -
         )
         caller: Final = _caller(scenario, models=[model])
         _chat(rig.proxy, caller.key, model, "B2", marker, "success")
-        _bearer(rig, marker, b2)
+        assert _provider_chat_matches(rig, marker, b2, f"slot B2 {marker.value}"), (
+            "The partial legacy update did not preserve the exact provider request"
+        )
 
 
 @pytest.mark.timeout(240)
@@ -436,7 +459,9 @@ def test_patched_model_api_key_rotates_the_provider_bearer_and_is_never_stored_o
         )
         caller: Final = _caller(scenario, models=[model])
         response, request_id = _chat(rig.proxy, caller.key, model, "B2", marker, "success")
-        _bearer(rig, marker, rotated)
+        assert _provider_chat_matches(rig, marker, rotated, f"slot B2 {marker.value}"), (
+            "The rotated key did not produce the exact provider request"
+        )
         _finish(
             rig,
             rig.proxy,

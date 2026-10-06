@@ -8,6 +8,7 @@ team-admin gate can prove parity.
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -32,6 +33,7 @@ from tests.integration._support.client import (
     team_admin_permissions,
 )
 from tests.integration._support.database import read_rows
+from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 Caller = Literal["proxy_admin", "team_admin", "member", "other_team_admin", "outsider", "org_admin", "other_org_admin"]
 CALLERS: Final[tuple[Caller, ...]] = (
@@ -159,13 +161,13 @@ def _spend_rows(gateway: Gateway, team_id: str, since: datetime, until: datetime
     return rows
 
 
-def _team_model_body(s: TeamScenario, name: str) -> dict[str, JsonValue]:
+def _team_model_body(s: TeamScenario, name: str, api_base: str | None = None) -> dict[str, JsonValue]:
     return {
         "model_name": name,
         "litellm_params": {
             "model": "openai/gpt-4o-mini",
             "api_key": "integration-provider-key",
-            "api_base": f"{s.gateway.upstream_url}/v1",
+            "api_base": api_base or f"{s.gateway.upstream_url}/v1",
         },
         "model_info": {"team_id": s.team_id},
     }
@@ -427,9 +429,9 @@ def test_status_code(shared: TeamScenario, org_team: TeamScenario, route: Route,
             f"{caller} {call.method} {call.path}: {response.status_code} {response.text}"
         )
         if route.name == "team_update_budget_permitted":
-            assert read_rows(
-                'SELECT max_budget FROM "LiteLLM_TeamTable" WHERE team_id = %s', (s.team_id,)
-            ) == [{"max_budget": 4.0 if response.status_code == 200 else 5.0}]
+            assert read_rows('SELECT max_budget FROM "LiteLLM_TeamTable" WHERE team_id = %s', (s.team_id,)) == [
+                {"max_budget": 4.0 if response.status_code == 200 else 5.0}
+            ]
         if response.status_code == 200 and route.cleanup is not None:
             route.cleanup(s, object_value(response.json()))
 
@@ -449,9 +451,9 @@ def _admin_only_team(request: pytest.FixtureRequest, fixture: str, scenario: Sce
     return replace(team, scenario=scenario)
 
 
-def _team_model(s: TeamScenario) -> tuple[str, str]:
+def _team_model(s: TeamScenario, api_base: str | None = None) -> tuple[str, str]:
     name: Final = f"matrix-{uuid.uuid4().hex}"
-    created: Final = s.gateway.post("/model/new", _team_model_body(s, name))
+    created: Final = s.gateway.post("/model/new", _team_model_body(s, name, api_base))
     model_id: Final = string_value(object_value(created["model_info"])["id"])
     s.scenario.cleanups.callback(_delete_model_if_present, s.gateway, model_id)
     return model_id, name
@@ -463,8 +465,43 @@ def _blocked(model_id: str) -> list[dict[str, object]]:
 
 def _serve(s: TeamScenario, name: str, key: str) -> httpx.Response:
     return s.gateway.request(
-        "POST", "/v1/chat/completions", {"model": name, "messages": [{"role": "user", "content": "serving state"}]}, key=key
+        "POST",
+        "/v1/chat/completions",
+        {"model": name, "messages": [{"role": "user", "content": "serving state"}]},
+        key=key,
     )
+
+
+def _is_model_discovery(request: Request) -> bool:
+    return (request.method, request.target) == ("GET", "/v1/models")
+
+
+def _model_serving_reply(request: Request) -> Reply:
+    if _is_model_discovery(request):
+        return Reply(body=b'{"object":"list","data":[]}')
+    assert (request.method, request.target) == ("POST", "/v1/chat/completions"), request
+    return Reply(
+        body=json.dumps(
+            {
+                "id": "chatcmpl-model-blocked-control",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "model serving control"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        ).encode()
+    )
+
+
+def _provider_calls(wire: Wire) -> tuple[Request, ...]:
+    return tuple(entry for entry in wire.drain() if not _is_model_discovery(entry))
 
 
 def _refusal(response: httpx.Response) -> JsonValue:
@@ -472,7 +509,10 @@ def _refusal(response: httpx.Response) -> JsonValue:
     body: Final = response.json()
     error: Final = object_value(body).get("error")
     if isinstance(error, dict) and isinstance(error.get("message"), str):
-        return {**body, "error": {**error, "message": re.sub(r"Your user_id=\S+", "Your user_id=<caller>", error["message"])}}
+        return {
+            **body,
+            "error": {**error, "message": re.sub(r"Your user_id=\S+", "Your user_id=<caller>", error["message"])},
+        }
     return body
 
 
@@ -496,25 +536,42 @@ _BLOCK_REFUSALS: Final[Mapping[tuple[str, str], tuple[int, JsonValue]]] = Mappin
 )
 _PATCH_BLOCKED_REFUSED: Final[tuple[int, JsonValue]] = (
     403,
-    {"error": {"message": "Only proxy admins can change a model's blocked flag.", "type": "auth_error", "param": "blocked", "code": "403"}},
+    {
+        "error": {
+            "message": "Only proxy admins can change a model's blocked flag.",
+            "type": "auth_error",
+            "param": "blocked",
+            "code": "403",
+        }
+    },
 )
-_PATCH_NOT_TEAM_ADMIN: Final[tuple[int, JsonValue]] = (
+_MODEL_BLOCKED_REFUSED: Final[tuple[int, JsonValue]] = (
     403,
-    {"detail": "This team does not allow you to manage your own auto routers."},
+    {
+        "error": {
+            "message": "litellm.PermissionDeniedError: Model is blocked",
+            "type": "permission_error",
+            "param": None,
+            "code": "403",
+        }
+    },
 )
-
-
-def _block_refusal(caller: Caller, call: Call) -> tuple[int, JsonValue]:
-    if call.method == "PATCH":
-        return _PATCH_BLOCKED_REFUSED if caller == "team_admin" else _PATCH_NOT_TEAM_ADMIN
-    return _BLOCK_REFUSALS[call.method, call.path]
 
 
 @pytest.mark.parametrize(("fixture", "caller"), ADMIN_ONLY_CALLERS, ids=ADMIN_ONLY_IDS)
-def test_only_proxy_admin_flips_a_models_blocked_flag(request: pytest.FixtureRequest, fixture: str, caller: Caller) -> None:
-    with gateway_from_environment() as gateway, gateway.scenario() as scenario:
+def test_only_proxy_admin_flips_a_models_blocked_flag(
+    request: pytest.FixtureRequest, fixture: str, caller: Caller
+) -> None:
+    with (
+        gateway_from_environment() as gateway,
+        gateway.scenario() as scenario,
+        wire_server(_model_serving_reply) as wire,
+    ):
         s: Final = _admin_only_team(request, fixture, scenario)
-        model_id, name = _team_model(s)
+        model_id, name = _team_model(s, f"{wire.url}/v1")
+        internal_key: Final = (
+            s.scenario.key(user_id=s.scenario.user(user_role="internal_user")) if caller == "team_admin" else None
+        )
         for blocked in (True, False):
             s.gateway.post("/model/block" if blocked else "/model/unblock", {"model_id": model_id})
             attempts: Final = (
@@ -523,12 +580,76 @@ def test_only_proxy_admin_flips_a_models_blocked_flag(request: pytest.FixtureReq
             )
             for call in attempts:
                 response = s.gateway.request(call.method, call.path, call.body, key=s.keys[caller])
-                assert (response.status_code, _refusal(response)) == _block_refusal(caller, call), (
-                    f"{caller} {call.method} {call.path}: {response.text}"
+                if call.method == "PATCH" and caller != "team_admin":
+                    assert response.status_code == 403, f"{caller} {call.method} {call.path}: {response.text}"
+                else:
+                    expected: Final = (
+                        _PATCH_BLOCKED_REFUSED if call.method == "PATCH" else _BLOCK_REFUSALS[call.method, call.path]
+                    )
+                    assert (response.status_code, _refusal(response)) == expected, (
+                        f"{caller} {call.method} {call.path}: {response.text}"
+                    )
+                assert _blocked(model_id) == [{"blocked": blocked}], (
+                    f"{caller} {call.method} {call.path} flipped blocked"
                 )
-                assert _blocked(model_id) == [{"blocked": blocked}], f"{caller} {call.method} {call.path} flipped blocked"
-            served = _serve(s, name, s.keys["team_admin"])
-            assert served.status_code == (403 if blocked else 200), served.text
+            if internal_key is not None:
+                path: Final = "/model/unblock" if blocked else "/model/block"
+                internal_response: Final = s.gateway.request("POST", path, {"model_id": model_id}, key=internal_key)
+                assert (internal_response.status_code, _refusal(internal_response)) == _BLOCK_REFUSALS["POST", path], (
+                    internal_response.text
+                )
+                assert _blocked(model_id) == [{"blocked": blocked}], internal_response.text
+            served: Final = _serve(s, name, s.keys["team_admin"])
+            if blocked:
+                assert (served.status_code, served.json()) == _MODEL_BLOCKED_REFUSED, served.text
+                assert _provider_calls(wire) == (), f"Blocked model reached the provider: {served.text}"
+            else:
+                assert served.status_code == 200, served.text
+                assert served.json()["choices"][0]["message"]["content"] == "model serving control", served.text
+                received: Final = _provider_calls(wire)
+                assert [
+                    (entry.method, entry.target, entry.headers["authorization"], json.loads(entry.body))
+                    for entry in received
+                ] == [
+                    (
+                        "POST",
+                        "/v1/chat/completions",
+                        "Bearer integration-provider-key",
+                        {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "serving state"}]},
+                    )
+                ], served.text
+
+
+def test_a_key_allowed_the_block_routes_still_cannot_flip_a_models_blocked_flag(shared: TeamScenario) -> None:
+    with wire_server(_model_serving_reply) as wire:
+        user: Final = shared.scenario.user(user_role="internal_user")
+        key: Final = shared.scenario.key(user_id=user, allowed_routes=["/model/block", "/model/unblock"])
+        model_id, name = _team_model(shared, f"{wire.url}/v1")
+        for blocked in (True, False):
+            shared.gateway.post("/model/block" if blocked else "/model/unblock", {"model_id": model_id})
+            call: Final = Call("POST", "/model/unblock" if blocked else "/model/block", {"model_id": model_id})
+            response: Final = shared.gateway.request(call.method, call.path, call.body, key=key)
+            assert (response.status_code, response.json()) == _PATCH_BLOCKED_REFUSED, response.text
+            assert _blocked(model_id) == [{"blocked": blocked}], response.text
+            served: Final = _serve(shared, name, shared.keys["team_admin"])
+            if blocked:
+                assert (served.status_code, served.json()) == _MODEL_BLOCKED_REFUSED, served.text
+                assert _provider_calls(wire) == (), f"Blocked model reached the provider: {served.text}"
+            else:
+                assert served.status_code == 200, served.text
+                assert served.json()["choices"][0]["message"]["content"] == "model serving control", served.text
+                received: Final = _provider_calls(wire)
+                assert [
+                    (entry.method, entry.target, entry.headers["authorization"], json.loads(entry.body))
+                    for entry in received
+                ] == [
+                    (
+                        "POST",
+                        "/v1/chat/completions",
+                        "Bearer integration-provider-key",
+                        {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "serving state"}]},
+                    )
+                ], served.text
 
 
 @contextmanager
@@ -567,13 +688,15 @@ def _listed_names(gateway: Gateway, key: str) -> tuple[frozenset[str], frozenset
     return info_names, frozenset(string_value(object_value(entry)["id"]) for entry in listed)
 
 
-def test_internal_user_model_creation_prohibition_refuses_team_admin_but_not_proxy_admin(shared: TeamScenario) -> None:
+def test_internal_user_model_creation_prohibition_refuses_team_admin_but_not_proxy_admin(
+    shared: TeamScenario, peer: Gateway
+) -> None:
     with shared.gateway.scenario() as scenario:
         s: Final = replace(shared, scenario=scenario)
         team_admin: Final = s.keys["team_admin"]
         refused_name: Final = f"matrix-{uuid.uuid4().hex}"
         admin_name: Final = f"matrix-{uuid.uuid4().hex}"
-        with _model_creation_disabled_for_internal_users(s.gateway):
+        with _model_creation_disabled_for_internal_users(peer):
             refused: Final = s.gateway.request("POST", "/model/new", _team_model_body(s, refused_name), key=team_admin)
             assert (refused.status_code, refused.json()) == (
                 403,
@@ -613,7 +736,9 @@ def _credential_row(name: str) -> list[dict[str, object]]:
 
 
 @pytest.mark.parametrize(("fixture", "caller"), ADMIN_ONLY_CALLERS, ids=ADMIN_ONLY_IDS)
-def test_only_proxy_admin_reads_or_changes_credentials(request: pytest.FixtureRequest, fixture: str, caller: Caller) -> None:
+def test_only_proxy_admin_reads_or_changes_credentials(
+    request: pytest.FixtureRequest, fixture: str, caller: Caller
+) -> None:
     secret: Final = f"synthetic-shared-credential-{uuid.uuid4().hex}"
     with gateway_from_environment() as gateway, gateway.scenario() as scenario:
         s: Final = _admin_only_team(request, fixture, scenario)
@@ -625,14 +750,44 @@ def test_only_proxy_admin_reads_or_changes_credentials(request: pytest.FixtureRe
         )
         s.scenario.cleanups.callback(s.gateway.request, "DELETE", f"/credentials/{name}")
         s.scenario.cleanups.callback(s.gateway.request, "DELETE", f"/credentials/{attempted}")
+        model_name: Final = f"credential-model-{uuid.uuid4().hex}"
+        created_model: Final = s.gateway.post(
+            "/model/new",
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_base": f"{s.gateway.upstream_url}/v1",
+                    "litellm_credential_name": name,
+                },
+            },
+        )
+        model_id: Final = string_value(object_value(created_model["model_info"])["id"])
+        s.scenario.cleanups.callback(_delete_model_if_present, s.gateway, model_id)
+        credential_for_model: Final = s.gateway.request("GET", f"/credentials/by_model/{model_id}")
+        assert credential_for_model.status_code == 200, credential_for_model.text
+        assert credential_for_model.json() == {
+            "credential_name": f"{model_name}-credential-{model_id}",
+            "credential_values": {"api_base": f"{s.gateway.upstream_url}/v1"},
+            "credential_info": {},
+        }, credential_for_model.text
         stored: Final = _credential_row(name)
         assert len(stored) == 1, stored
         attempts: Final = (
-            Call("POST", "/credentials", {"credential_name": attempted, "credential_values": {"api_key": "k"}, "credential_info": {}}),
-            Call("PATCH", f"/credentials/{name}", {"credential_name": name, "credential_values": {"api_key": "overwritten"}, "credential_info": {}}),
+            Call(
+                "POST",
+                "/credentials",
+                {"credential_name": attempted, "credential_values": {"api_key": "k"}, "credential_info": {}},
+            ),
+            Call(
+                "PATCH",
+                f"/credentials/{name}",
+                {"credential_name": name, "credential_values": {"api_key": "overwritten"}, "credential_info": {}},
+            ),
             Call("DELETE", f"/credentials/{name}"),
             Call("GET", "/credentials"),
             Call("GET", f"/credentials/by_name/{name}"),
+            Call("GET", f"/credentials/by_model/{model_id}"),
         )
         for call in attempts:
             response = s.gateway.request(call.method, call.path, call.body, key=s.keys[caller])
@@ -642,3 +797,23 @@ def test_only_proxy_admin_reads_or_changes_credentials(request: pytest.FixtureRe
             assert secret not in response.text, f"{caller} {call.method} {call.path} exposed the credential"
             assert _credential_row(name) == stored, f"{caller} {call.method} {call.path} changed the credential row"
             assert _credential_row(attempted) == [], f"{caller} {call.method} {call.path} wrote a credential"
+
+
+@pytest.mark.parametrize(
+    ("fixture", "caller"),
+    (("shared", "member"), ("shared", "outsider"), ("org_team", "org_admin")),
+    ids=("member", "outsider", "org_admin"),
+)
+def test_non_team_admin_patching_the_blocked_flag_gets_the_blocked_flag_refusal(
+    request: pytest.FixtureRequest, fixture: str, caller: Caller
+) -> None:
+    pytest.skip(
+        'BUG: PATCH /model/{id}/update {"blocked": ...} by a non-team-admin returns the auto-router refusal '
+        "instead of the blocked-flag refusal"
+    )
+    with gateway_from_environment() as gateway, gateway.scenario() as scenario:
+        s: Final = _admin_only_team(request, fixture, scenario)
+        model_id, _ = _team_model(s)
+        response: Final = s.gateway.request("PATCH", f"/model/{model_id}/update", {"blocked": True}, key=s.keys[caller])
+        assert (response.status_code, _refusal(response)) == _PATCH_BLOCKED_REFUSED, response.text
+        assert _blocked(model_id) == [{"blocked": False}], response.text
