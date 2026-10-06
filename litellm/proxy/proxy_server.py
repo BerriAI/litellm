@@ -8409,9 +8409,19 @@ class ProxyConfig:
                     if active_hooks:
                         for active_hook in active_hooks:
                             if isinstance(active_hook, SemanticToolFilterHook):
-                                if active_hook.index_build_task is not None:
+                                build_task: Final = active_hook.index_build_task
+                                if build_task is not None and not build_task.done():
                                     verbose_proxy_logger.debug(
-                                        "Semantic filter settings unchanged, deferred index build already started; skipping reinitialization"
+                                        "Semantic filter settings unchanged, index build still in flight; skipping reinitialization"
+                                    )
+                                    return
+                                if (
+                                    build_task is not None
+                                    and active_hook.filter is not None
+                                    and active_hook.filter.context_window_error is None
+                                ):
+                                    verbose_proxy_logger.debug(
+                                        "Semantic filter settings unchanged, deferred index build already ran; skipping reinitialization"
                                     )
                                     return
                                 if active_hook.filter is not None and active_hook.filter.tool_router is not None:
