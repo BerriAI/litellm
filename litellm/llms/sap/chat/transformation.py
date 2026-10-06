@@ -2,13 +2,14 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
+import os
 from collections.abc import AsyncIterator, Iterator
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -38,6 +39,10 @@ from .models import (
     SAPToolChatMessage,
     SAPUserMessage,
 )
+
+# Env var that an operator can set to pin a specific orchestration deployment URL.
+# An empty string is treated as unset and falls through to auto-discovery.
+_AICORE_ORCHESTRATION_DEPLOYMENT_URL_ENV_VAR = "AICORE_ORCHESTRATION_DEPLOYMENT_URL"
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
@@ -135,6 +140,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         self.token_creator = None
         self._base_url = None
         self._resource_group = None
+        self._cached_deployment_url: str | None = None  # None = not yet resolved
 
     def run_env_setup(self, service_key: str | None = None) -> None:
         try:
@@ -166,23 +172,63 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             self.run_env_setup()
         return self._resource_group
 
-    @cached_property
+    @property
     def deployment_url(self) -> str:
-        # Keep a short, tight client lifecycle here to avoid fd leaks
-        client: Final = litellm.module_level_client
-        # with httpx.Client(timeout=30) as client:
-        deployments: Final = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
-        valid: Final[list[tuple[str, str]]] = []
-        for dep in deployments.get("resources", []):
-            if dep.get("scenarioId") == "orchestration":
-                cfg = client.get(
-                    f"{self.base_url}/lm/configurations/{dep['configurationId']}",
-                    headers=self.headers,
-                ).json()
-                if cfg.get("executableId") == "orchestration":
-                    valid.append((dep["deploymentUrl"], dep["createdAt"]))
-            # newest first
-        return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
+        """Resolve the orchestration deployment URL, with caching.
+
+        Resolution order:
+        1. ``_AICORE_ORCHESTRATION_DEPLOYMENT_URL_ENV_VAR`` env var (operator-level pin).
+           An empty string is treated as unset and falls through to discovery.
+        2. Auto-discovery via ``/lm/deployments`` (one network call, cached).
+
+        A per-request override via ``optional_params["deployment_url"]`` is
+        handled one level up in ``get_complete_url`` before this property
+        is ever called.
+        """
+        cached = self._cached_deployment_url
+        if cached is None:
+            env = os.environ.get(_AICORE_ORCHESTRATION_DEPLOYMENT_URL_ENV_VAR)
+            cached = env or self._resolve_deployment_url()
+            self._cached_deployment_url = cached
+        return cached
+
+    def _resolve_deployment_url(self) -> str:
+        resources: Final = (
+            litellm.module_level_client.get(
+                f"{self.base_url}/lm/deployments",
+                headers=self.headers,
+                params={  # mutable-ok: one-shot query-params dict passed directly to httpx, not stored
+                    "scenarioId": "orchestration",
+                    "executableIds": ["orchestration"],
+                    "status": "RUNNING",
+                },
+            )
+            .json()
+            .get("resources", [])
+        )
+        candidates: Final[list[tuple[str, str, str]]] = sorted(
+            (
+                (dep["deploymentUrl"], dep["createdAt"], dep.get("configurationName", ""))
+                for dep in resources
+                if dep.get("deploymentUrl")
+            ),
+            key=lambda c: c[1],
+            reverse=True,
+        )
+        if not candidates:
+            raise GenAIHubOrchestrationError(
+                status_code=404,
+                message="No orchestration deployment found in SAP AI Core.",
+            )
+        if len(candidates) > 1:
+            verbose_logger.warning(
+                "SAP: %d orchestration deployments found; using newest (name=%r, url=%r). Others ignored: %s.",
+                len(candidates),
+                candidates[0][2],
+                candidates[0][0],
+                tuple(v[2] or v[0] for v in candidates[1:]),
+            )
+        return candidates[0][0]
 
     @classmethod
     def get_config(cls):
@@ -249,8 +295,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ):
-        api_base_: Final = f"{self.deployment_url}/v2/completion"
-        return api_base_
+        # Per-request override wins; deployment_url handles env var + discovery.
+        base = optional_params.get("deployment_url") or self.deployment_url
+        return f"{base}/v2/completion"
 
     def _build_prompt_module(
         self,
