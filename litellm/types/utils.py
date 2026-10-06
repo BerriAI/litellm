@@ -1390,6 +1390,7 @@ def add_provider_specific_fields(object: BaseModel, provider_specific_fields: di
 class Message(SafeAttributeModel, OpenAIObject):
     content: str | None
     role: Literal["assistant", "user", "system", "tool", "function"]
+    refusal: str | None = None
     tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
     function_call: FunctionCall | None
     audio: ChatCompletionAudioResponse | None = None
@@ -1466,6 +1467,9 @@ class Message(SafeAttributeModel, OpenAIObject):
             # Some OpenAI compatible APIs raise an error if annotations are passed in
             if hasattr(self, "annotations"):
                 del self.annotations
+
+        if "refusal" not in params and hasattr(self, "refusal"):
+            del self.refusal
 
         if reasoning_content is None:
             # ensure default response matches OpenAI spec
@@ -2182,6 +2186,12 @@ class ModelResponse(ModelResponseBase):
     choices: list[Choices]
     """The list of completion choices the model generated for the input prompt."""
 
+    @staticmethod
+    def _system_fingerprint_init_values(system_fingerprint: str | None) -> Mapping[str, str]:
+        if system_fingerprint is None:
+            return {}
+        return {"system_fingerprint": system_fingerprint}
+
     def __init__(
         self,
         id=None,
@@ -2189,7 +2199,7 @@ class ModelResponse(ModelResponseBase):
         created=None,
         model=None,
         object=None,
-        system_fingerprint=None,
+        system_fingerprint: str | None = None,
         usage=None,
         stream=None,
         stream_options=None,
@@ -2246,8 +2256,9 @@ class ModelResponse(ModelResponseBase):
             "created": created,
             "model": model,
             "object": object,
-            "system_fingerprint": system_fingerprint,
         }
+
+        init_values.update(ModelResponse._system_fingerprint_init_values(system_fingerprint))
 
         if usage is not None:
             init_values["usage"] = usage

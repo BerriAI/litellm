@@ -24,7 +24,4 @@ from integration.translation.runner import assert_translation
     ids=lambda case: case.id,
 )
 def test_chat_completions_basic_openai(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
-    pytest.skip(
-        "BUG: LIT-9235 chat completions moves message.refusal into provider_specific_fields and drops null system_fingerprint and logprobs"
-    )
     assert_translation(case, gateway, provider)

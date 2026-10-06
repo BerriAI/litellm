@@ -108,7 +108,7 @@ except ImportError:
     raise ImportError("backoff is not installed. Please install it via 'pip install backoff'")
 
 from fastapi import HTTPException, status
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 import litellm.litellm_core_utils
@@ -8979,12 +8979,40 @@ def validate_model_access(
 _PRESERVED_NONE_FIELDS: Final[list[tuple[str, str]]] = [
     ("message", "content"),  # null when tool_calls present (issue #6677)
     ("message", "role"),  # always required by OpenAI spec
+    ("message", "refusal"),
     ("delta", "content"),  # null in streaming chunks
 ]
+_PRESERVED_NONE_CHOICE_FIELDS: Final = ("logprobs",)
+_PRESERVED_NONE_RESPONSE_FIELDS: Final = ("system_fingerprint",)
+
+
+def _get_preserved_nested_field(
+    choice_obj: object,
+    choice_dict: dict[str, object],
+    sub_object: str,
+    field_name: str,
+) -> tuple[str, object] | None:
+    sub_dict: Final = choice_dict.get(sub_object)
+    if not isinstance(sub_dict, dict) or field_name in sub_dict:
+        return None
+    sub_obj: Final = getattr(choice_obj, sub_object, None)
+    if sub_obj is None or not hasattr(sub_obj, field_name):
+        return None
+    return field_name, getattr(sub_obj, field_name)
+
+
+def _get_preserved_choice_field(
+    choice_obj: object,
+    choice_dict: dict[str, object],
+) -> tuple[str, object] | None:
+    for field_name in _PRESERVED_NONE_CHOICE_FIELDS:
+        if field_name not in choice_dict and hasattr(choice_obj, field_name):
+            return field_name, getattr(choice_obj, field_name)
+    return None
 
 
 def model_dump_with_preserved_fields(
-    obj: Any,
+    obj: BaseModel,
     preserve_fields: list[str] | None = None,
     exclude_unset: bool = True,
 ) -> dict[str, object]:
@@ -8992,8 +9020,9 @@ def model_dump_with_preserved_fields(
     Serialize a Pydantic model to a dictionary while preserving specific fields
     even if they are None.
 
-    Fields listed in _PRESERVED_NONE_FIELDS are restored after
-    model_dump(exclude_none=True) strips them.
+    Explicit null values in _PRESERVED_NONE_FIELDS, _PRESERVED_NONE_CHOICE_FIELDS,
+    and _PRESERVED_NONE_RESPONSE_FIELDS are restored after model_dump(exclude_none=True)
+    strips them.
 
     Args:
         obj: The Pydantic BaseModel instance to serialize
@@ -9003,21 +9032,42 @@ def model_dump_with_preserved_fields(
     Returns:
         Dictionary representation with None values excluded except for preserved fields
     """
-    result: Final = obj.model_dump(exclude_none=True, exclude_unset=exclude_unset)
+    result: Final = cast(  # cast-ok: Pydantic model_dump returns serialized model fields
+        dict[str, object],
+        obj.model_dump(exclude_none=True, exclude_unset=exclude_unset),
+    )
 
-    choices: Final = result.get("choices")
+    for field_name in _PRESERVED_NONE_RESPONSE_FIELDS:
+        if field_name not in result and field_name in obj.model_fields_set:
+            result[field_name] = getattr(obj, field_name)
+
+    choices: Final = cast(  # cast-ok: serialized chat completion choices are dictionaries
+        Sequence[dict[str, object]] | None,
+        result.get("choices"),
+    )
     if not choices:
         return result
 
-    obj_choices: Final = obj.choices
+    obj_choices: Final = cast(  # cast-ok: chat completion choices are SDK choice objects
+        Sequence[object],
+        getattr(obj, "choices", ()),
+    )
     for choice_obj, choice_dict in zip(obj_choices, choices):
         for sub_object, field_name in _PRESERVED_NONE_FIELDS:
-            sub_dict = choice_dict.get(sub_object)
-            if sub_dict is None:
-                continue
-            if field_name not in sub_dict:
-                sub_obj = getattr(choice_obj, sub_object, None)
-                if sub_obj is not None and hasattr(sub_obj, field_name):
-                    sub_dict[field_name] = getattr(sub_obj, field_name)
+            if (
+                preserved_sub_field := _get_preserved_nested_field(
+                    choice_obj,
+                    choice_dict,
+                    sub_object,
+                    field_name,
+                )
+            ) is not None:
+                cast(  # cast-ok: serialized nested fields are dictionaries
+                    dict[str, object],
+                    choice_dict[sub_object],
+                )[preserved_sub_field[0]] = preserved_sub_field[1]
+
+        if (preserved_choice_field := _get_preserved_choice_field(choice_obj, choice_dict)) is not None:
+            choice_dict[preserved_choice_field[0]] = preserved_choice_field[1]
 
     return result

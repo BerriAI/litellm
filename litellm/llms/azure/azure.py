@@ -354,7 +354,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                         status_code=500,
                         message=f"Unexpected string response from Azure: {response[:500]}",
                     )
-                stringified_response: Final = response.model_dump()
+                stringified_response: Final = response.model_dump(exclude_unset=True)
                 ## LOGGING
                 logging_obj.post_call(
                     input=messages,
@@ -449,7 +449,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     status_code=500,
                     message=f"Unexpected string response from Azure: {response[:500]}",
                 )
-            stringified_response: Final = response.model_dump()
+            stringified_response: Final = response.model_dump(exclude_unset=True)
             logging_obj.post_call(
                 input=data["messages"],
                 api_key=api_key,

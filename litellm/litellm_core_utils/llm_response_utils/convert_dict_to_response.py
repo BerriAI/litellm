@@ -6,6 +6,8 @@ import traceback
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, cast
 
+from typing_extensions import ReadOnly, TypedDict
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
@@ -23,6 +25,7 @@ from litellm.types.utils import (
     ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     ChatCompletionRedactedThinkingBlock,
+    ChoiceLogprobs,
     Choices,
     CompletionTokensDetailsWrapper,
     Delta,
@@ -545,6 +548,46 @@ def _should_convert_tool_call_to_json_mode(
     return False
 
 
+class _RefusalKwargs(TypedDict, total=False):
+    refusal: ReadOnly[str | None]
+
+
+def _message_kwargs_from_provider_message(provider_message: Mapping[str, object]) -> _RefusalKwargs:
+    if "refusal" in provider_message:
+        return {
+            "refusal": cast(  # cast-ok: Message validates the provider refusal field
+                str | None,
+                provider_message["refusal"],
+            )
+        }
+    return {}
+
+
+def _choice_from_provider_choice(
+    provider_choice: Mapping[str, object],
+    finish_reason: str | None,
+    index: int,
+    message: Message | None,
+) -> Choices:
+    provider_specific_fields: Final = {
+        field_name: provider_choice[field_name] for field_name in provider_choice.keys() - _CHOICES_FIELDS
+    }
+    choice_object: Final = Choices(
+        finish_reason=finish_reason,
+        index=index,
+        message=message,
+        logprobs=cast(  # cast-ok: provider logprobs match the Choices model contract
+            ChoiceLogprobs | dict[str, object] | None,
+            provider_choice.get("logprobs"),
+        ),
+        enhancements=provider_choice.get("enhancements"),
+        provider_specific_fields=provider_specific_fields,
+    )
+    if "logprobs" in provider_choice and provider_choice["logprobs"] is None:
+        choice_object.logprobs = None
+    return choice_object
+
+
 def convert_to_model_response_object(
     response_object: dict | None = None,
     model_response_object: ModelResponse
@@ -659,7 +702,15 @@ def convert_to_model_response_object(
                     # to support 'json_schema' logic on older models
                     json_mode_content_str: str | None = tool_calls[0]["function"].get("arguments")
                     if json_mode_content_str is not None:
-                        message = litellm.Message(content=json_mode_content_str)
+                        message = litellm.Message(
+                            content=json_mode_content_str,
+                            **_message_kwargs_from_provider_message(
+                                cast(  # cast-ok: response messages are string-keyed provider mappings
+                                    Mapping[str, object],
+                                    choice["message"],
+                                )
+                            ),
+                        )
                         finish_reason = "stop"
                 if message is None:
                     # Preserve provider_specific_fields if already present
@@ -690,6 +741,12 @@ def convert_to_model_response_object(
                         thinking_blocks=thinking_blocks,
                         annotations=choice["message"].get("annotations", None),
                         images=_normalize_images_for_message(choice["message"].get("images", None)),
+                        **_message_kwargs_from_provider_message(
+                            cast(  # cast-ok: response messages are string-keyed provider mappings
+                                Mapping[str, object],
+                                choice["message"],
+                            )
+                        ),
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:
@@ -698,20 +755,20 @@ def convert_to_model_response_object(
                 if finish_reason == "stop" and message.tool_calls and len(message.tool_calls) > 0:
                     finish_reason = "tool_calls"
 
-                ## PROVIDER SPECIFIC FIELDS ##
-                provider_specific_fields = {f: choice[f] for f in choice.keys() - _CHOICES_FIELDS}
-
-                logprobs = choice.get("logprobs", None)
-                enhancements = choice.get("enhancements", None)
-                choice = Choices(
-                    finish_reason=finish_reason,
-                    index=idx,
-                    message=message,
-                    logprobs=logprobs,
-                    enhancements=enhancements,
-                    provider_specific_fields=provider_specific_fields,
+                choice_list.append(
+                    _choice_from_provider_choice(
+                        cast(  # cast-ok: provider choice fields are string-keyed
+                            Mapping[str, object],
+                            choice,
+                        ),
+                        cast(  # cast-ok: provider finish reasons are strings or null
+                            str | None,
+                            finish_reason,
+                        ),
+                        idx,
+                        message,
+                    )
                 )
-                choice_list.append(choice)
             model_response_object.choices = choice_list
 
             if "usage" in response_object and response_object["usage"] is not None:
