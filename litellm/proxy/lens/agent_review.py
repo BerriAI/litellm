@@ -14,20 +14,6 @@ class Findings(Record):
     findings: tuple[FindingDraft, ...] = ()
 
 
-class Hunch(Record):
-    check_id: str
-    hypothesis: str
-    evidence: tuple[Evidence, ...] = ()
-    uncertainty: str = ""
-
-
-class SessionReview(Record):
-    execution_id: str
-    interpretation: str
-    hunches: tuple[Hunch, ...] = ()
-    cannot_assess: bool = False
-
-
 async def validate_evidence(
     claim: Claim, workspace: EvidenceWorkspace, check_id: str, evidence: tuple[Evidence, ...], path: str
 ) -> str | None:
