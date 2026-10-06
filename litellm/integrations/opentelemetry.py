@@ -32,6 +32,7 @@ from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
 from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
+from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
@@ -2413,6 +2414,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             metadata: Final = standard_logging_payload["metadata"]
             for key, value in metadata.items():
                 self.safe_set_attribute(span=span, key=f"metadata.{key}", value=value)
+            decision: Final = metadata.get("routing_decision")
+            span.set_attributes(routing_decision_attributes(decision))
 
             # get hidden params
             hidden_params: Final = getattr(standard_logging_payload, "hidden_params", None) or (
