@@ -44,6 +44,11 @@ _MESSAGE: Final[dict[str, JsonValue]] = {
     "status": "completed",
     "thread_id": "thread_abc",
 }
+_IMAGE_PARTS: Final[list[JsonValue]] = [
+    {"type": "text", "text": "Compare these"},
+    {"type": "image_file", "image_file": {"file_id": "file-img", "detail": "low"}},
+    {"type": "image_url", "image_url": {"url": "https://example.invalid/chart.png", "detail": "high"}},
+]
 _RUN: Final[dict[str, JsonValue]] = {
     "id": "run_abc",
     "assistant_id": "asst_abc",
@@ -155,8 +160,17 @@ def test_create_thread_forwards_sdk_body(gateway: Gateway, tmp_path: Path, prefi
         ("Summarize the attachment", "/v1"),
         ([{"type": "text", "text": "Summarize the attachment"}], ""),
         ([{"type": "text", "text": "Summarize the attachment"}], "/v1"),
+        (_IMAGE_PARTS, ""),
+        (_IMAGE_PARTS, "/v1"),
     ),
-    ids=("string-root-alias", "string-v1-alias", "parts-root-alias", "parts-v1-alias"),
+    ids=(
+        "string-root-alias",
+        "string-v1-alias",
+        "parts-root-alias",
+        "parts-v1-alias",
+        "image-parts-root-alias",
+        "image-parts-v1-alias",
+    ),
 )
 def test_add_message_forwards_content_parts_attachments_metadata(
     gateway: Gateway, tmp_path: Path, content: JsonValue, prefix: str

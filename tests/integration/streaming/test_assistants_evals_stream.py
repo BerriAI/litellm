@@ -6,7 +6,7 @@ from typing import Final
 
 import pytest
 import yaml
-from integration._support.client import JSON_OBJECT, Gateway, object_value
+from integration._support.client import Gateway
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from openai import OpenAI
@@ -132,8 +132,7 @@ def _parse_frames(body: str) -> tuple[tuple[str, JsonValue], ...]:
 @pytest.mark.parametrize("prefix", ("", "/v1"), ids=("root-alias", "v1-alias"))
 def test_run_stream_relays_upstream_events(gateway: Gateway, tmp_path: Path, prefix: str) -> None:
     pytest.skip(
-        "BUG: streamed run frames carry the event name inside data with no event: line "
-        "and drop run options upstream"
+        "BUG: streamed run frames carry the event name inside data with no event: line and drop run options upstream"
     )
     with wire_server(_respond) as wire:
         config: Final = _assistant_config(tmp_path, f"{wire.url}/v1")
@@ -158,10 +157,7 @@ def test_run_stream_relays_upstream_events(gateway: Gateway, tmp_path: Path, pre
 
 
 def test_sdk_run_stream_event_handler_sees_events(gateway: Gateway, tmp_path: Path) -> None:
-    pytest.skip(
-        "BUG: runs.stream drops additional_messages, sampling, token caps and other run "
-        "options upstream"
-    )
+    pytest.skip("BUG: runs.stream drops additional_messages, sampling, token caps and other run options upstream")
     with wire_server(_respond) as wire:
         config: Final = _assistant_config(tmp_path, f"{wire.url}/v1")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
@@ -188,20 +184,14 @@ def test_sdk_run_stream_event_handler_sees_events(gateway: Gateway, tmp_path: Pa
                     response_format={"type": "json_object"},
                     parallel_tool_calls=False,
                 ) as stream:
-                    events: Final = tuple(stream)
-            response_text: Final = json.dumps([event.model_dump(mode="json") for event in events])
-            assert tuple(event.event for event in events) == (
-                "thread.run.created",
-                "thread.message.created",
-                "thread.message.delta",
-                "thread.run.completed",
+                    events: Final = tuple((event.event, event.data.to_dict(mode="json")) for event in stream)
+            response_text: Final = json.dumps(events)
+            assert events == (
+                ("thread.run.created", _QUEUED_RUN),
+                ("thread.message.created", _MESSAGE_CREATED),
+                ("thread.message.delta", _MESSAGE_DELTA),
+                ("thread.run.completed", _COMPLETED_RUN),
             ), response_text
-            delta: Final = JSON_OBJECT.validate_python(events[2].model_dump(mode="json"))
-            delta_data: Final = object_value(delta["data"])
-            delta_content: Final = object_value(delta_data["delta"])["content"]
-            assert isinstance(delta_content, list), response_text
-            delta_text: Final = object_value(object_value(delta_content[0])["text"])["value"]
-            assert delta_text == "Hi", response_text
             requests: Final = wire.drain()
             assert [(request.method, request.target) for request in requests] == [
                 ("POST", "/v1/threads/thread_abc/runs")
@@ -211,10 +201,7 @@ def test_sdk_run_stream_event_handler_sees_events(gateway: Gateway, tmp_path: Pa
 
 
 def test_sdk_run_create_stream_yields_events(gateway: Gateway, tmp_path: Path) -> None:
-    pytest.skip(
-        "BUG: runs.create(stream=True) yields null event names and drops run options "
-        "upstream"
-    )
+    pytest.skip("BUG: runs.create(stream=True) yields null event names and drops run options upstream")
     with wire_server(_respond) as wire:
         config: Final = _assistant_config(tmp_path, f"{wire.url}/v1")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
@@ -242,28 +229,14 @@ def test_sdk_run_create_stream_yields_events(gateway: Gateway, tmp_path: Path) -
                     parallel_tool_calls=False,
                     stream=True,
                 ) as stream:
-                    events: Final = tuple(stream)
-            response_text: Final = json.dumps([event.model_dump(mode="json") for event in events])
-            assert tuple(event.event for event in events) == (
-                "thread.run.created",
-                "thread.message.created",
-                "thread.message.delta",
-                "thread.run.completed",
+                    events: Final = tuple((event.event, event.data.to_dict(mode="json")) for event in stream)
+            response_text: Final = json.dumps(events)
+            assert events == (
+                ("thread.run.created", _QUEUED_RUN),
+                ("thread.message.created", _MESSAGE_CREATED),
+                ("thread.message.delta", _MESSAGE_DELTA),
+                ("thread.run.completed", _COMPLETED_RUN),
             ), response_text
-            delta: Final = JSON_OBJECT.validate_python(events[2].model_dump(mode="json"))
-            delta_data: Final = object_value(delta["data"])
-            delta_content: Final = object_value(delta_data["delta"])["content"]
-            assert isinstance(delta_content, list), response_text
-            delta_text: Final = object_value(object_value(delta_content[0])["text"])["value"]
-            assert delta_text == "Hi", response_text
-            completed_run: Final = JSON_OBJECT.validate_python(
-                next(
-                    event.model_dump(mode="json")["data"]
-                    for event in events
-                    if event.event == "thread.run.completed"
-                )
-            )
-            assert completed_run["status"] == "completed", response_text
             requests: Final = wire.drain()
             assert [(request.method, request.target) for request in requests] == [
                 ("POST", "/v1/threads/thread_abc/runs")
