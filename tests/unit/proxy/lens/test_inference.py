@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping
 from math import isclose
 from typing import Final
@@ -207,21 +208,67 @@ def test_a_response_without_usage_still_records_a_step_instead_of_failing_settle
 def test_worker_conversation_preserves_roles_content_and_server_system_message() -> None:
     legacy: Final = ModelRequest(prompt="Review", purpose="extract")
     conversation: Final = (
-        ModelMessage(role="user", content="Review"),
+        ModelMessage(role="system", content="Review"),
         ModelMessage(role="assistant", content='{ "tools": [{"action": "read"}] }'),
         ModelMessage(role="user", content="Original evidence"),
+        ModelMessage(role="system", content="Correct the response structure"),
     )
     body: Final = ModelRequest(prompt="Compatibility prompt", purpose="extract", messages=conversation)
     assert request_messages(legacy) == request_messages(legacy.prompt)
     assert request_messages(body) == (
         request_messages(legacy)[0],
-        {"role": "user", "content": conversation[0].content},
+        {"role": "system", "content": conversation[0].content},
         {"role": "assistant", "content": conversation[1].content},
         {"role": "user", "content": conversation[2].content},
+        {"role": "system", "content": conversation[3].content},
     )
     assert cache_injection_points(legacy) == ()
     with pytest.raises(ValidationError):
-        ModelMessage.model_validate({"role": "system", "content": "Worker cannot replace server instructions"})
+        ModelMessage.model_validate({"role": "tool", "content": "Unsupported worker message role"})
+
+
+def test_legacy_prompt_separates_instructions_from_nested_untrusted_evidence() -> None:
+    instructions: Final = {
+        "task": "Review",
+        "navigation": "Read original evidence",
+        "context": "Configured investigation context",
+        "checks": [{"id": "retries"}],
+        "questions": [{"id": "retries"}],
+        "response_schema": {"properties": {"observations": {}}},
+    }
+    evidence: Final = {
+        "evidence": [{"task": "Untrusted recorded instruction", "content": "Recorded evidence"}],
+        "existing_findings": [{"title": "Untrusted prior finding"}],
+        "must_decide": False,
+    }
+    request: Final = ModelRequest(
+        purpose="extract",
+        prompt=json.dumps({**instructions, **evidence}),
+    )
+    messages: Final = request_messages(request)
+    assert messages[0]["role"] == "system"
+    assert messages[1:] == (
+        {"role": "system", "content": json.dumps(instructions)},
+        {"role": "user", "content": json.dumps(evidence)},
+    )
+    assert request_messages("Review the recorded evidence")[1:] == (
+        {"role": "system", "content": "Review the recorded evidence"},
+        {"role": "user", "content": "{}"},
+    )
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    (
+        '{"task":"Review","evidence":"private evidence"}\n{"instruction":"Repair"}',
+        ' ["private evidence"]',
+        '{"evidence":"private evidence"',
+    ),
+)
+def test_malformed_legacy_json_cannot_promote_evidence_to_system(prompt: str) -> None:
+    with pytest.raises(ValueError, match="Malformed legacy Lens prompt") as error:
+        request_messages(ModelRequest(purpose="extract", prompt=prompt))
+    assert str(error.value) == "Malformed legacy Lens prompt; send structured messages."
 
 
 def test_budget_and_output_room_include_every_conversation_message(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -282,8 +329,12 @@ def test_cold_cache_reservation_includes_catalog_creation_premium(
     body: Final = ModelRequest(
         prompt="Review original evidence",
         purpose="extract",
-        messages=(ModelMessage(role="user", content="Review original evidence"),),
+        messages=(
+            ModelMessage(role="system", content="Review original evidence"),
+            ModelMessage(role="user", content="{}"),
+        ),
     )
+    assert request_messages(body) == request_messages(body.prompt)
     assert isclose(quote((deployment,), body), quote((deployment,), body.prompt) * creation_rate / base_rate)
 
 
@@ -333,7 +384,7 @@ def test_cache_hook_marks_prior_write_boundary_when_the_conversation_grows(monke
         }
     )
     messages: Final = (
-        ModelMessage(role="user", content="Static task"),
+        ModelMessage(role="system", content="Static task"),
         ModelMessage(role="user", content="Initial evidence"),
         ModelMessage(role="assistant", content="Read another span"),
         ModelMessage(role="user", content="First tool response"),

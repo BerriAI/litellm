@@ -1,8 +1,10 @@
 import asyncio
+from itertools import chain
 from queue import SimpleQueue
-from typing import Final
+from typing import Final, Literal
 
 import pytest
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.lens.agent_runtime import (
     AgentTurn,
@@ -22,7 +24,16 @@ from litellm.proxy.lens.agent_workspace import (
     SessionContent,
 )
 from litellm.proxy.lens.analysis import AnalysisResponseError, Extraction, Observation
-from litellm.proxy.lens.models import Claim, Evidence, ModelMessage, ModelRequest, ModelResult, Record, TracePart
+from litellm.proxy.lens.models import (
+    Claim,
+    Evidence,
+    Finding,
+    ModelMessage,
+    ModelRequest,
+    ModelResult,
+    Record,
+    TracePart,
+)
 from litellm.proxy.lens.state import queue_job
 from tests.unit.proxy.lens.test_agent_workspace import execution
 from tests.unit.proxy.lens.test_state import NOW, lens
@@ -31,6 +42,7 @@ from tests.unit.proxy.lens.test_state import NOW, lens
 class InitialPrompt(Record):
     initial_evidence: tuple[TracePart, ...]
     supplied: str
+    existing_findings: tuple[Finding, ...] = ()
 
 
 class ToolReply(Record):
@@ -40,13 +52,12 @@ class ToolReply(Record):
 
 class CheckpointPrompt(Record):
     working_notes: str
+    initial_context_archived: bool
 
 
 class CompactedPrompt(CheckpointPrompt):
     journal_turns: int
     resume_history_from_turn: int
-    initial_context_archived: bool
-    continuation: str
 
 
 class PythonError(Record):
@@ -55,10 +66,67 @@ class PythonError(Record):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enable_python", (False, True))
+async def test_bare_final_response_is_repaired_with_the_complete_turn_schema_and_can_reread_evidence(
+    enable_python: bool,
+) -> None:
+    from litellm.proxy.lens.agent_review import review_context
+
+    part: Final = TracePart(
+        execution_id="run", span_id="tool", name="tool", kind="tool", content="Original timeout evidence"
+    )
+    session: Final = SessionContent(execution=execution("run"), parts=(part,), partial=False)
+    expected: Final = Extraction(
+        observations=(
+            Observation(
+                check_id="retries",
+                summary="Tool timed out",
+                evidence=(Evidence(execution_id="run", span_id="tool", quote=part.content),),
+            ),
+        ),
+        reasoning="The original tool result records the timeout",
+    )
+    response_schema: Final = PythonAgentTurn[Extraction] if enable_python else AgentTurn[Extraction]
+    turns: Final = iter(range(4))
+
+    async def model(request: ModelRequest) -> ModelResult:
+        turn: Final = next(turns)
+        if turn == 1:
+            assert part.content in request.messages[-1].content
+            return ModelResult(content=expected.model_dump_json(), cost=0)
+        if turn == 2:
+            correction: Final = TypeAdapter(dict[str, JsonValue]).validate_json(request.messages[-1].content)
+            assert correction["response_schema"] == response_schema.model_json_schema()
+            assert part.content not in request.messages[-1].content
+        if turn == 3:
+            assert EvidenceReply.model_validate_json(
+                ToolReply.model_validate_json(request.messages[-1].content).tool_results[0]
+            ).parts == (part,)
+            return ModelResult(content=response_schema(result=expected).model_dump_json(), cost=0)
+        return ModelResult(
+            content=response_schema(tools=(EvidenceRequest(action="read", execution_id="run"),)).model_dump_json(),
+            cost=0,
+        )
+
+    result: Final = await review_context(
+        Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=()),
+        session,
+        EvidenceWorkspace(sessions=(session,)),
+        model,
+        enable_python=enable_python,
+    )
+    assert result.observations == expected.observations
+    assert result.parts == (part.model_copy(update={"truncated": True}),)
+    assert next(turns, None) is None
+
+
+@pytest.mark.asyncio
 async def test_agent_reads_other_sessions_and_retains_all_prior_evidence_between_turns() -> None:
     first: Final = execution("first")
     other: Final = execution("other")
-    root: Final = TracePart(execution_id=first.id, span_id="a", name="root", kind="agent", content="assigned session")
+    root: Final = TracePart(
+        execution_id=first.id, span_id="a", name="root", kind="agent", content="original root sentinel"
+    )
     nested: Final = TracePart(
         execution_id=other.id, span_id="c", parent_span_id="b", name="child", kind="agent", content="failure found here"
     )
@@ -87,7 +155,9 @@ async def test_agent_reads_other_sessions_and_retains_all_prior_evidence_between
         turn: Final = next(turns)
         initial: Final = InitialPrompt.model_validate_json(request.messages[1].content)
         assert initial.initial_evidence == (root,)
-        assert request.messages[0] == ModelMessage(role="user", content=request.prompt)
+        assert request.messages[0] == ModelMessage(role="system", content=request.prompt)
+        assert all(root.content not in message.content for message in request.messages if message.role == "system")
+        assert all(nested.content not in message.content for message in request.messages if message.role == "system")
         if turn == 0:
             assert len(request.messages) == 2
             requests.put(request)
@@ -338,6 +408,63 @@ async def test_unfit_task_fails_without_an_endless_compaction_loop() -> None:
             model=model,
             schema=Extraction,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recover", (False, True))
+@pytest.mark.parametrize("between", ("none", "read", "checkpoint", "compaction"))
+async def test_result_validation_allows_three_retries_without_resetting_after_other_turns(
+    recover: bool, between: Literal["none", "read", "checkpoint", "compaction"]
+) -> None:
+    from litellm.proxy.lens.agent_context import Checkpoint
+
+    rejected: Final = ModelResult(
+        content=AgentTurn[Extraction](result=Extraction(reasoning="unsupported")).model_dump_json(), cost=0
+    )
+    accepted: Final = ModelResult(content=AgentTurn[Extraction](result=Extraction()).model_dump_json(), cost=0)
+    continuation: Final = {
+        "none": (),
+        "read": (
+            ModelResult(
+                content=AgentTurn[Extraction](tools=(EvidenceRequest(action="read"),)).model_dump_json(), cost=0
+            ),
+        ),
+        "checkpoint": (
+            ModelResult(content=AgentTurn[Extraction](checkpoint="Recheck the evidence").model_dump_json(), cost=0),
+        ),
+        "compaction": (
+            ModelResult(content="", cost=0, context_exceeded=True),
+            ModelResult(content=Checkpoint(working_notes="Recheck the evidence").model_dump_json(), cost=0),
+        ),
+    }[between]
+    responses: Final = iter(
+        (*chain.from_iterable((rejected, *continuation) for _ in range(3)), accepted if recover else rejected, accepted)
+    )
+    calls: Final = SimpleQueue[ModelRequest]()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        calls.put(request)
+        return next(responses)
+
+    async def run() -> Extraction:
+        return await run_agent(
+            stage="review",
+            task="Review",
+            purpose="extract",
+            claim=Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=()),
+            workspace=EvidenceWorkspace(),
+            model=model,
+            schema=Extraction,
+            validate=lambda result: "Unsupported evidence" if result.reasoning else None,
+        )
+
+    if recover:
+        assert await run() == Extraction()
+    else:
+        with pytest.raises(AnalysisResponseError, match="Result validation failed after 3 retries") as error:
+            await run()
+        assert "Unsupported evidence" in str(error.value)
+    assert calls.qsize() == 4 + 3 * len(continuation)
 
 
 @pytest.mark.asyncio

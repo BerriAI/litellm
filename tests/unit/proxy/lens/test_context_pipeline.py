@@ -489,7 +489,7 @@ async def test_candidate_investigators_overlap_browse_reviews_and_keep_original_
 
 
 @pytest.mark.asyncio
-async def test_candidate_investigator_rejects_fabricated_original_quotes() -> None:
+async def test_candidate_investigator_rejects_fabricated_original_quotes_and_allows_withdrawal() -> None:
     run: Final = execution("run")
     workspace: Final = EvidenceWorkspace(
         sessions=(
@@ -504,6 +504,11 @@ async def test_candidate_investigator_rejects_fabricated_original_quotes() -> No
 
     async def model(request: ModelRequest) -> ModelResult:
         attempts.put(request.prompt)
+        if attempts.qsize() == 2:
+            assert request.messages[-1].role == "system"
+            assert "result.findings[0].evidence[0]" in request.messages[-1].content
+            assert "Every evidence quote must exactly match" in request.messages[-1].content
+            return ModelResult(content=AgentTurn[Findings](result=Findings()).model_dump_json(), cost=0)
         return ModelResult(
             content=AgentTurn[Findings](
                 result=Findings(
@@ -529,7 +534,7 @@ async def test_candidate_investigator_rejects_fabricated_original_quotes() -> No
         model,
     )
     assert result.findings == ()
-    assert "Every evidence quote must exactly match" in result.error
+    assert result.error == ""
     assert attempts.qsize() == 2
 
 
@@ -635,6 +640,8 @@ async def test_investigator_only_injects_candidate_sessions_for_full_access(
         ("invalid", True),
         ("context", True),
         ("invalid", False),
+        ("citations", True),
+        ("citations", False),
         ("cursor", True),
         ("span", True),
         ("eof", True),
@@ -648,6 +655,7 @@ async def test_failed_session_review_preserves_other_results_and_reports_its_err
         execution(identity).model_copy(update=MappingProxyType({"root_seen": True})) for identity in ("failed", "valid")
     )
     reviews: Final = SimpleQueue[Review]()
+    rejected: Final = SimpleQueue[ModelRequest]()
 
     async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
         if identity == "failed" and failure == "cursor":
@@ -683,6 +691,25 @@ async def test_failed_session_review_preserves_other_results_and_reports_its_err
         if request.purpose == "extract":
             assigned: Final = AssignedSession.model_validate_json(payload.supplied).execution
             if assigned.name == "failed":
+                if failure == "citations":
+                    rejected.put(request)
+                    assert rejected.qsize() <= 4
+                    return ModelResult(
+                        content=AgentTurn[Extraction](
+                            result=Extraction(
+                                observations=(
+                                    Observation(
+                                        check_id="retries",
+                                        summary="Unsupported claim",
+                                        evidence=(
+                                            Evidence(execution_id=assigned.id, span_id="child", quote="invented"),
+                                        ),
+                                    ),
+                                )
+                            )
+                        ).model_dump_json(),
+                        cost=0,
+                    )
                 if failure in ("cursor", "span", "eof"):
                     if len(request.messages) > 2:
                         reply: Final = ToolReply.model_validate_json(request.messages[-1].content)
@@ -770,10 +797,90 @@ async def test_failed_session_review_preserves_other_results_and_reports_its_err
     assert result.error
     assert "raw-private-response-sentinel" not in result.error
     assert ("context window" in result.error) is (failure == "context")
+    if failure == "citations":
+        assert rejected.qsize() == 4
+        assert result.coverage.failed_tasks == 1
+        assert "Result validation failed after 3 retries" in result.error
+        assert "invented" not in result.error
     if failure in ("cursor", "span", "eof"):
         assert "Original trace" in result.error
     completed: Final = tuple(reviews.get_nowait() for _ in range(reviews.qsize()))
     assert {review.execution_id: review.cannot_assess for review in completed} == {"failed": True, "valid": False}
+
+
+@pytest.mark.asyncio
+async def test_exhausted_candidate_retries_preserve_a_sibling_that_recovers_on_its_last_retry() -> None:
+    run: Final = execution("run").model_copy(update=MappingProxyType({"root_seen": True}))
+    attempts: Final = MappingProxyType({title: SimpleQueue[ModelRequest]() for title in ("valid", "invalid")})
+
+    async def read(_identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(
+            execution=run,
+            parts=(TracePart(execution_id=run.id, span_id="child", name="tool", kind="tool", content="timeout"),),
+        )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if request.purpose == "cluster":
+            groups: Final = GroupPrompt.model_validate_json(request.prompt)
+            return ModelResult(content=Clusters(candidates=groups.candidates).model_dump_json(), cost=0)
+        payload: Final = InitialPrompt.model_validate_json(request.messages[1].content)
+        if request.purpose == "extract":
+            assigned: Final = AssignedSession.model_validate_json(payload.supplied).execution
+            return ModelResult(
+                content=AgentTurn[Extraction](
+                    result=Extraction(
+                        observations=tuple(
+                            Observation(
+                                check_id="retries",
+                                summary=title,
+                                evidence=(Evidence(execution_id=assigned.id, span_id="child", quote="timeout"),),
+                            )
+                            for title in attempts
+                        )
+                    )
+                ).model_dump_json(),
+                cost=0,
+            )
+        candidate: Final = Candidate.model_validate_json(payload.supplied)
+        calls: Final = attempts[candidate.title]
+        calls.put(request)
+        assert calls.qsize() <= 4
+        return ModelResult(
+            content=AgentTurn[Findings](
+                result=Findings(
+                    findings=(
+                        FindingDraft(
+                            title=candidate.title,
+                            description="A recorded operation timed out",
+                            check_id="retries",
+                            brief=issue_brief("The operation timed out"),
+                            evidence=(
+                                Evidence(
+                                    execution_id=candidate.execution_ids[0],
+                                    span_id="child",
+                                    quote="timeout"
+                                    if candidate.title == "valid" and calls.qsize() == 4
+                                    else "invented",
+                                ),
+                            ),
+                        ),
+                    )
+                )
+            ).model_dump_json(),
+            cost=0,
+        )
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    result: Final = await analyze_sample(claim, Sample(executions=(run,), eligible=1), read, model, ignore_progress)
+    assert tuple(finding.title for finding in result.findings) == ("valid",)
+    assert result.findings[0].evidence == (Evidence(execution_id=run.id, span_id="child", quote="timeout"),)
+    assert result.coverage.investigated == result.coverage.candidates == 2
+    assert result.coverage.inconclusive == 1
+    assert result.coverage.unassessable == 0
+    assert result.coverage.failed_tasks == 1
+    assert "Result validation failed after 3 retries" in result.error
+    assert "invented" not in result.error
+    assert {title: calls.qsize() for title, calls in attempts.items()} == {"valid": 4, "invalid": 4}
 
 
 @pytest.mark.asyncio
