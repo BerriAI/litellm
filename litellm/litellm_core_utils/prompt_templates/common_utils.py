@@ -13,6 +13,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
+from pydantic import BaseModel
+
 import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
@@ -199,7 +201,7 @@ def get_semantic_cache_prompt_from_messages(messages: object) -> str:
     only in their tool exchange embed differently. Call ids are random per session, so each result names the
     position of the call it answers instead
     """
-    message_dicts: Final = _dumped_dicts(messages)
+    message_dicts: Final = _dicts(_plain(messages))
     positions: Final = _tool_call_positions(_messages_tool_call_ids(message_dicts))
     return "".join(_message_text(message, positions) for message in message_dicts)
 
@@ -209,11 +211,9 @@ def get_semantic_cache_prompt_from_responses_input(responses_input: object) -> s
     The text the semantic cache embeds for a Responses API ``input``: each text part stripped and on its own
     line, with ``function_call`` and ``function_call_output`` items encoded like tool calls and results above
     """
-    items: Final = tuple(_dumped(item) for item in _sequence(responses_input))
-    call_ids: Final = (
-        item.get("call_id") for item in items if isinstance(item, Mapping) and item.get("type") == "function_call"
-    )
-    return _responses_text(responses_input, _tool_call_positions(call_ids))
+    items: Final = _plain(responses_input)
+    call_ids: Final = (item.get("call_id") for item in _dicts(items) if item.get("type") == "function_call")
+    return _responses_text(items, _tool_call_positions(call_ids))
 
 
 def _message_text(message: Mapping[str, object], positions: Mapping[str, int]) -> str:
@@ -226,7 +226,7 @@ def _message_text(message: Mapping[str, object], positions: Mapping[str, int]) -
 def _content_text(content: object, positions: Mapping[str, int]) -> str:
     if isinstance(content, str):
         return content
-    return "".join(_messages_api_block_text(block, positions) for block in _dumped_dicts(content))
+    return "".join(_messages_api_block_text(block, positions) for block in _dicts(content))
 
 
 def _messages_api_block_text(block: Mapping[str, object], positions: Mapping[str, int]) -> str:
@@ -247,12 +247,12 @@ def _chat_completions_message_text(
         else content_text
     )
     return result_or_content + "".join(
-        _chat_completions_tool_call_text(tool_call) for tool_call in _dumped_dicts(message.get("tool_calls"))
+        _chat_completions_tool_call_text(tool_call) for tool_call in _dicts(message.get("tool_calls"))
     )
 
 
 def _chat_completions_tool_call_text(tool_call: Mapping[str, object]) -> str:
-    function: Final = _dumped(tool_call.get("function"))
+    function: Final = tool_call.get("function")
     if not isinstance(function, Mapping):
         return _tool_call_text(None, None)
     return _tool_call_text(function.get("name"), function.get("arguments"))
@@ -260,53 +260,37 @@ def _chat_completions_tool_call_text(tool_call: Mapping[str, object]) -> str:
 
 def _messages_tool_call_ids(messages: Iterable[Mapping[str, object]]) -> Iterator[object]:
     for message in messages:
-        for block in _dumped_dicts(message.get("content")):
+        for block in _dicts(message.get("content")):
             if block.get("type") == "tool_use":
                 yield block.get("id")
-        for tool_call in _dumped_dicts(message.get("tool_calls")):
+        for tool_call in _dicts(message.get("tool_calls")):
             yield tool_call.get("id")
 
 
 def _responses_text(value: object, positions: Mapping[str, int]) -> str:
-    return "\n".join(_responses_text_parts(value, positions)).strip()
+    return "\n".join(_responses_text_lines(value, positions)).strip()
 
 
-def _responses_text_parts(value: object, positions: Mapping[str, int]) -> Iterator[str]:
-    item: Final = _dumped(value)
-    if item is None:
-        return
-    if isinstance(item, str):
-        if item.strip():
-            yield item.strip()
-        return
-    if isinstance(item, (list, tuple)):
-        for nested in item:
-            yield from _responses_text_parts(nested, positions)
-        return
-    if isinstance(item, Mapping) and item.get("type") == "function_call":
+def _responses_text_lines(value: object, positions: Mapping[str, int]) -> Iterator[str]:
+    if isinstance(value, str):
+        if value.strip():
+            yield value.strip()
+    elif isinstance(value, list):
+        for item in value:
+            yield from _responses_text_lines(item, positions)
+    elif isinstance(value, Mapping):
+        yield from _responses_item_lines(value, positions)
+
+
+def _responses_item_lines(item: Mapping[str, object], positions: Mapping[str, int]) -> Iterator[str]:
+    if item.get("type") == "function_call":
         yield _tool_call_text(item.get("name"), item.get("arguments"))
-        return
-    if isinstance(item, Mapping) and item.get("type") == "function_call_output":
+    elif item.get("type") == "function_call_output":
         yield _tool_result_text(item.get("call_id"), _responses_text(item.get("output"), positions), positions)
-        return
-    content: Final = _field(item, "content")
-    if content is not None:
-        yield from _responses_text_parts(content, positions)
-        return
-    yield from _responses_first_text_field(item, positions)
-
-
-def _responses_first_text_field(item: object, positions: Mapping[str, int]) -> Iterator[str]:
-    fields: Final = (_field(item, key) for key in ("text", "output", "input_text", "output_text"))
-    text: Final = next((field for field in fields if _is_text_field(field)), None)
-    if isinstance(text, (list, tuple)):
-        yield from _responses_text_parts(text, positions)
-    elif isinstance(text, str):
-        yield text.strip()
-
-
-def _is_text_field(field: object) -> bool:
-    return isinstance(field, (list, tuple)) or (isinstance(field, str) and bool(field.strip()))
+    elif item.get("content") is not None:
+        yield from _responses_text_lines(item.get("content"), positions)
+    else:
+        yield from _responses_text_lines(item.get("text"), positions)
 
 
 def _tool_call_text(name: object, arguments: object) -> str:
@@ -327,29 +311,21 @@ def _compact_json(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), default=str)
 
 
-def _dumped_dicts(values: object) -> tuple[Mapping[str, object], ...]:
-    return tuple(item for item in map(_dumped, _sequence(values)) if isinstance(item, Mapping))
-
-
-def _sequence(values: object) -> Sequence[object]:
-    return values if isinstance(values, (list, tuple)) else ()
-
-
-def _dumped(value: object) -> object:
-    """pydantic models, and anything else that dumps itself, as the dict the request carried"""
-    model_dump: Final = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        return model_dump()
-    dict_method: Final = getattr(value, "dict", None)
-    if callable(dict_method):
-        return dict_method()
+def _plain(value: object) -> object:
+    """SDK callers pass pydantic items (``input += response.output``); dump them to the dicts the request carried"""
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    if isinstance(value, Mapping):
+        return {key: _plain(item) for key, item in value.items()}
     return value
 
 
-def _field(item: object, key: str) -> object:
-    if isinstance(item, Mapping):
-        return item.get(key)
-    return getattr(item, key, None)
+def _dicts(values: object) -> tuple[Mapping[str, object], ...]:
+    if not isinstance(values, list):
+        return ()
+    return tuple(value for value in values if isinstance(value, Mapping))
 
 
 def is_non_content_values_set(message: AllMessageValues) -> bool:
