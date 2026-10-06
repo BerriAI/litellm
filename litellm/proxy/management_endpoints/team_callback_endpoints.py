@@ -44,7 +44,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_validated_callback_metadata,
     convert_key_logging_metadata_to_callback,
 )
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN, team_access_denied
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.team_endpoints import _refresh_cached_team
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
@@ -295,7 +295,7 @@ async def add_team_callbacks(
     ```
     curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback' \
         -H 'Content-Type: application/json' \
-        -H 'Authorization: Bearer sk-1234' \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -d '{
         "callback_name": "langfuse",
         "callback_type": "success",
@@ -468,7 +468,7 @@ async def delete_team_callback(
     Example curl:
     ```
     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Covers callbacks registered through POST /team/{team_id}/callback and the Admin UI. Teams still
@@ -604,7 +604,7 @@ async def disable_team_logging(
     Example curl:
     ```
     curl -X POST 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/disable_logging' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
 
@@ -736,7 +736,7 @@ async def get_team_callbacks(
     Example curl:
     ```
     curl -X GET 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     This will return the callback settings for the team with id dbe2f686-a686-4896-864a-4c3924458709

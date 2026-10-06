@@ -230,7 +230,9 @@ async def test_master_key_auth_skips_end_user_model_budget_when_flag_disabled():
     )
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
     flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = False  # test-quality-ok: feature-flag toggle required by design (PR description)
+    litellm.enforce_end_user_model_max_budget_on_master_key = (
+        False  # test-quality-ok: feature-flag toggle required by design (PR description)
+    )
 
     try:
         for k, v in attrs.items():
@@ -265,7 +267,9 @@ async def test_master_key_auth_skips_end_user_model_budget_when_flag_disabled():
         assert result.end_user_model_max_budget == {MODEL: MODEL_BUDGET}
         limiter.is_end_user_within_model_budget.assert_not_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
+        litellm.enforce_end_user_model_max_budget_on_master_key = (
+            flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
+        )
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
@@ -281,7 +285,9 @@ async def test_master_key_auth_passes_when_flag_enabled_and_within_budget():
     attrs, limiter = _proxy_server_attrs_for_master_key_auth()
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
     flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = True  # test-quality-ok: feature-flag toggle required by design (PR description)
+    litellm.enforce_end_user_model_max_budget_on_master_key = (
+        True  # test-quality-ok: feature-flag toggle required by design (PR description)
+    )
 
     try:
         for k, v in attrs.items():
@@ -319,7 +325,9 @@ async def test_master_key_auth_passes_when_flag_enabled_and_within_budget():
         assert result.end_user_model_max_budget == {MODEL: MODEL_BUDGET}
         limiter.is_end_user_within_model_budget.assert_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
+        litellm.enforce_end_user_model_max_budget_on_master_key = (
+            flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
+        )
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
@@ -383,7 +391,9 @@ async def test_master_key_auth_enforces_end_user_model_budget_when_flag_enabled(
     )
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
     flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = True  # test-quality-ok: feature-flag toggle required by design (PR description)
+    litellm.enforce_end_user_model_max_budget_on_master_key = (
+        True  # test-quality-ok: feature-flag toggle required by design (PR description)
+    )
 
     try:
         for k, v in attrs.items():
@@ -422,7 +432,9 @@ async def test_master_key_auth_enforces_end_user_model_budget_when_flag_enabled(
             assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
             limiter.is_end_user_within_model_budget.assert_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
+        litellm.enforce_end_user_model_max_budget_on_master_key = (
+            flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
+        )
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
@@ -453,7 +465,9 @@ async def test_cached_master_key_auth_enforces_end_user_model_budget_when_flag_e
     attrs, limiter = _proxy_server_attrs_for_master_key_auth()
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
     flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = True  # test-quality-ok: feature-flag toggle required by design (PR description)
+    litellm.enforce_end_user_model_max_budget_on_master_key = (
+        True  # test-quality-ok: feature-flag toggle required by design (PR description)
+    )
 
     try:
         for k, v in attrs.items():
@@ -495,7 +509,9 @@ async def test_cached_master_key_auth_enforces_end_user_model_budget_when_flag_e
         assert result.end_user_model_max_budget == {MODEL: MODEL_BUDGET}
         limiter.is_end_user_within_model_budget.assert_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
+        litellm.enforce_end_user_model_max_budget_on_master_key = (
+            flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
+        )
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
@@ -528,7 +544,9 @@ async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcemen
     )
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
     flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = True  # test-quality-ok: feature-flag toggle required by design (PR description)
+    litellm.enforce_end_user_model_max_budget_on_master_key = (
+        True  # test-quality-ok: feature-flag toggle required by design (PR description)
+    )
 
     try:
         for k, v in attrs.items():
@@ -566,7 +584,9 @@ async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcemen
         assert result.user_role == LitellmUserRoles.PROXY_ADMIN
         limiter.is_end_user_within_model_budget.assert_not_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
+        litellm.enforce_end_user_model_max_budget_on_master_key = (
+            flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
+        )
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
@@ -581,7 +601,9 @@ async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcemen
         "/metrics",
     ],
 )
-async def test_master_key_budget_early_return_for_non_llm_routes(route):  # test-quality-ok: structural assertion of mock wiring by design
+async def test_master_key_budget_early_return_for_non_llm_routes(
+    route,
+):  # test-quality-ok: structural assertion of mock wiring by design
     """Branch coverage for ``_maybe_enforce_master_key_end_user_model_max_budget``.
 
     The flag and master-key guards in the helper are exercised by the
@@ -597,7 +619,9 @@ async def test_master_key_budget_early_return_for_non_llm_routes(route):  # test
     )
 
     flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = True  # test-quality-ok: feature-flag toggle required by design (PR description)
+    litellm.enforce_end_user_model_max_budget_on_master_key = (
+        True  # test-quality-ok: feature-flag toggle required by design (PR description)
+    )
 
     try:
         valid_token = UserAPIKeyAuth(
@@ -618,7 +642,9 @@ async def test_master_key_budget_early_return_for_non_llm_routes(route):  # test
             )
             mock_check.assert_not_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
+        litellm.enforce_end_user_model_max_budget_on_master_key = (
+            flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
+        )
 
 
 @pytest.mark.asyncio
@@ -658,6 +684,7 @@ async def test_cached_virtual_key_auth_applies_and_enforces_end_user_model_budge
     finally:
         for k, v in originals.items():
             setattr(proxy_server, k, v)
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(

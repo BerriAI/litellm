@@ -3,9 +3,9 @@ from typing import Any, ClassVar, Final
 
 import httpx
 
+from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -361,7 +361,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,  # mutable-ok: out-param
         optional_params: dict,  # mutable-ok: out-param
-        messages: list[Any],  # mutable-ok: mirrors the validate_anthropic_messages_environment contract
+        messages: list[object],  # mutable-ok: mirrors the validate_anthropic_messages_environment contract
     ) -> dict:  # mutable-ok: out-param
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION

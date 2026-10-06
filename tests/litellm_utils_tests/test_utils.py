@@ -1343,12 +1343,16 @@ def test_is_prompt_caching_enabled_error_handling():
 
 def test_is_prompt_caching_enabled_return_default_image_dimensions():
     """
-    Assert that `is_prompt_caching_valid_prompt` calls token_counter with use_default_image_token_count=True
+    Assert that `is_prompt_caching_valid_prompt` counts tokens with use_default_image_token_count=True
     when processing messages containing images
 
     IMPORTANT: Ensures Get token counter does not make a GET request to the image url
     """
-    with patch("litellm.utils.token_counter") as mock_token_counter:
+    mock_token_counter = MagicMock(return_value=False)
+    with patch(
+        "litellm.utils._get_messages_reach_token_count",
+        return_value=mock_token_counter,
+    ):
         litellm.utils.is_prompt_caching_valid_prompt(
             messages=[
                 {
@@ -1432,7 +1436,7 @@ def test_get_valid_models_openai_proxy(monkeypatch):
 
     litellm._turn_on_debug()
 
-    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-9876")
     monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://litellm-api.up.railway.app/")
     monkeypatch.delenv("FIREWORKS_AI_ACCOUNT_ID", None)
     monkeypatch.delenv("FIREWORKS_AI_API_KEY", None)
@@ -1467,7 +1471,7 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
 
     litellm._turn_on_debug()
 
-    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-9876")
     monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", "1234")
     monkeypatch.setattr(litellm, "provider_list", ["fireworks_ai"])
 
@@ -1553,7 +1557,7 @@ def test_get_valid_models_default(monkeypatch):
     """
     from litellm.utils import get_valid_models
 
-    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-9876")
     valid_models = get_valid_models()
     assert len(valid_models) > 0
 

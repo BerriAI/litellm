@@ -39,6 +39,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     ProxyException,
 )
+from tests._master_key import MASTER_KEY
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -80,7 +81,7 @@ async def test_new_project(prisma_client):
         print("prisma client=", prisma_client)
 
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
         await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -93,7 +94,7 @@ async def test_new_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -115,7 +116,7 @@ async def test_new_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -152,7 +153,7 @@ async def test_update_project(prisma_client):
         print("prisma client=", prisma_client)
 
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
         await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -165,7 +166,7 @@ async def test_update_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -187,7 +188,7 @@ async def test_update_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -215,7 +216,7 @@ async def test_update_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -257,7 +258,7 @@ async def test_delete_project(prisma_client):
         print("prisma client=", prisma_client)
 
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
         await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -270,7 +271,7 @@ async def test_delete_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -288,7 +289,7 @@ async def test_delete_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -304,7 +305,7 @@ async def test_delete_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -322,7 +323,7 @@ async def test_delete_project(prisma_client):
                 project_id=project_id,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key=MASTER_KEY,
                     user_id="1234",
                 ),
             )
@@ -347,7 +348,7 @@ async def test_project_info(prisma_client):
         print("prisma client=", prisma_client)
 
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
         await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -360,7 +361,7 @@ async def test_project_info(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -382,7 +383,7 @@ async def test_project_info(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -395,7 +396,7 @@ async def test_project_info(prisma_client):
             project_id=project_id,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -840,7 +841,7 @@ async def test_list_projects_returns_timestamps():
         response = await list_projects(
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -911,7 +912,7 @@ async def test_update_project_invalidates_cached_project_object(monkeypatch):
         http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key=MASTER_KEY,
             user_id="1234",
         ),
     )
@@ -961,7 +962,7 @@ async def test_delete_project_invalidates_cached_project_object(monkeypatch):
         http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key=MASTER_KEY,
             user_id="1234",
         ),
     )
@@ -1005,7 +1006,7 @@ async def test_update_project_succeeds_when_cache_eviction_fails(monkeypatch):
         http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key=MASTER_KEY,
             user_id="1234",
         ),
     )
@@ -1206,7 +1207,7 @@ async def _run_new_project(data: NewProjectRequest) -> None:
     await new_project(
         data=data,
         http_request=Request(scope={"type": "http"}),
-        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="1234"),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY, user_id="1234"),
     )
 
 
@@ -1243,7 +1244,7 @@ async def _run_project_update(project_id: str, **fields) -> None:
         http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key=MASTER_KEY,
             user_id="1234",
         ),
     )

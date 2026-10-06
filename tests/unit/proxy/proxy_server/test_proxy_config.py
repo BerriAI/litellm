@@ -43,6 +43,7 @@ from litellm.proxy.proxy_server import (
 from litellm.tracing.config import trace_storage_config
 
 from .conftest import normalize
+from tests._master_key import MASTER_KEY
 
 
 @pytest.mark.asyncio
@@ -1564,7 +1565,7 @@ async def test_ProxyConfig_get_config_from_a_bucket_merges_includes(monkeypatch)
     objects = {
         "lit6982/config.yaml": {
             "include": ["model_config.yaml"],
-            "general_settings": {"master_key": "sk-1234"},
+            "general_settings": {"master_key": MASTER_KEY},
         },
         "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
     }
@@ -3221,7 +3222,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_on_arbitrary_field(monkey
     ["true", "os.environ/DROP_PARAMS_FLAG"],
 )
 def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(monkeypatch, stored_drop_params):
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
     monkeypatch.setenv("DROP_PARAMS_FLAG", "true")
     fake_router = MagicMock()
     fake_router.upsert_deployment = MagicMock(return_value=True)
@@ -3246,7 +3247,7 @@ def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(m
 
 
 def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_params(monkeypatch):
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
     fake_router = MagicMock()
     fake_router.upsert_deployment = MagicMock(return_value=True)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
@@ -4665,7 +4666,8 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch):
+@pytest.mark.parametrize("ui_settings_already_synced", [False, True])
+async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch, ui_settings_already_synced):
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
@@ -4677,14 +4679,18 @@ async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endp
         "get_config_param",
         AsyncMock(return_value=SimpleNamespace(param_value={"pass_through_endpoints": None})),
     )
-    monkeypatch.setattr(proxy_server, "sync_ui_settings_to_general_settings", AsyncMock())
+    settings_refresh = AsyncMock()
+    monkeypatch.setattr(proxy_server, "sync_ui_settings_to_general_settings", settings_refresh)
     monkeypatch.setattr(pc, "_should_load_db_object", lambda *, object_type: False)
     monkeypatch.setattr(pc, "get_credentials", AsyncMock())
     monkeypatch.setattr(pc, "_init_non_llm_objects_in_db", non_llm_initialization)
 
-    await pc.add_deployment(prisma_client=MagicMock(), proxy_logging_obj=MagicMock())
+    await pc.add_deployment(
+        prisma_client=MagicMock(), proxy_logging_obj=MagicMock(), ui_settings_already_synced=ui_settings_already_synced
+    )
 
     non_llm_initialization.assert_awaited_once()
+    assert settings_refresh.await_count == (0 if ui_settings_already_synced else 1)
 
 
 # ---------------------------------------------------------------------------

@@ -426,7 +426,7 @@ async def parse_rag_ingest_request(
     file_data: tuple[str, bytes, str] | None = None
     file_url: str | None = None
     file_id: str | None = None
-    ingest_options: dict[str, Any] = {}
+    ingest_options: dict[str, object] = {}
 
     if "multipart/form-data" in content_type:
         # Form upload
@@ -550,7 +550,7 @@ async def rag_ingest(
     ## Form upload (for files):
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/ingest" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -F file="@document.pdf" \\
         -F 'ingest_options={"vector_store": {"custom_llm_provider": "openai"}}'
     ```
@@ -558,7 +558,7 @@ async def rag_ingest(
     ## JSON body (for URLs):
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/ingest" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -H "Content-Type: application/json" \\
         -d '{
             "file_url": "https://example.com/document.pdf",
@@ -569,7 +569,7 @@ async def rag_ingest(
     ## Bedrock:
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/ingest" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -F file="@document.pdf" \\
         -F 'ingest_options={"vector_store": {"custom_llm_provider": "bedrock"}}'
     ```
@@ -725,7 +725,7 @@ async def rag_query(
     ## Example Request:
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/query" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -H "Content-Type: application/json" \\
         -d '{
             "model": "gpt-4o-mini",
@@ -741,7 +741,7 @@ async def rag_query(
     ## With Reranking:
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/query" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -H "Content-Type: application/json" \\
         -d '{
             "model": "gpt-4o-mini",

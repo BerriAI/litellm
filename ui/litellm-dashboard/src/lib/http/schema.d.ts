@@ -469,7 +469,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X GET 'http://localhost:4000/access_group/list' \
-         *       -H 'Authorization: Bearer sk-1234'
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Returns:
@@ -503,7 +503,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X POST 'http://localhost:4000/access_group/new' \
-         *       -H 'Authorization: Bearer sk-1234' \
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "access_group": "production-models",
@@ -543,7 +543,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X GET 'http://localhost:4000/access_group/production-models/budget' \
-         *       -H 'Authorization: Bearer sk-1234'
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Parameters:
@@ -565,7 +565,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X PUT 'http://localhost:4000/access_group/production-models/budget' \
-         *       -H 'Authorization: Bearer sk-1234' \
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "max_budget": 100.0,
@@ -596,7 +596,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \
-         *       -H 'Authorization: Bearer sk-1234'
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Parameters:
@@ -633,7 +633,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \
-         *       -H 'Authorization: Bearer sk-1234'
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Parameters:
@@ -665,7 +665,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X GET 'http://localhost:4000/access_group/production-models/info' \
-         *       -H 'Authorization: Bearer sk-1234'
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Parameters:
@@ -705,7 +705,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X PUT 'http://localhost:4000/access_group/production-models/update' \
-         *       -H 'Authorization: Bearer sk-1234' \
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "model_names": ["gpt-4", "claude-3-sonnet"]
@@ -1807,7 +1807,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer sk-1234"     -H "Content-Type: application/json"
+         *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
          */
         get: operations["list_batches_batches_get"];
@@ -1820,7 +1820,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl http://localhost:4000/v1/batches         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "input_file_id": "file-abc123",
          *             "endpoint": "/v1/chat/completions",
          *             "completion_window": "24h"
@@ -1849,7 +1849,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer sk-1234"     -H "Content-Type: application/json"
+         *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
          */
         get: operations["retrieve_batch_batches__batch_id__get"];
@@ -1879,7 +1879,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -X POST
+         *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -X POST
          *
          *     ```
          */
@@ -2125,7 +2125,7 @@ export interface paths {
          *     - **keys**: *Optional[List[str]]* - A list of keys to delete from the cache. Example {"keys": ["key1", "key2"]}
          *
          *     ```shell
-         *     curl -X POST "http://0.0.0.0:4000/cache/delete"     -H "Authorization: Bearer sk-1234"     -d '{"keys": ["key1", "key2"]}'
+         *     curl -X POST "http://0.0.0.0:4000/cache/delete"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{"keys": ["key1", "key2"]}'
          *     ```
          */
         post: operations["cache_delete_cache_delete_post"];
@@ -2152,7 +2152,7 @@ export interface paths {
          *
          *     Usage:
          *     ```
-         *     curl -X POST http://0.0.0.0:4000/cache/flushall -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://0.0.0.0:4000/cache/flushall -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         post: operations["cache_flushall_cache_flushall_post"];
@@ -2273,7 +2273,9 @@ export interface paths {
          *
          *     - A successful authorization response (``code`` + ``state``), which is
          *       forwarded back to the validated client ``redirect_uri`` with the
-         *       original (un-wrapped) ``state``.
+         *       original (un-wrapped) ``state``, once the RFC 9207 ``iss`` (when the
+         *       authorization server sent one) matches the issuer /authorize sealed
+         *       into the state.
          *     - An error response (``error``[+``error_description``/``error_uri``]), per
          *       RFC 6749 §4.1.2.1. When ``state`` is present and decodes to a trusted
          *       ``redirect_uri``, the error params are propagated back to the client so
@@ -2348,7 +2350,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/chat/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-4o",
          *         "messages": [
@@ -2805,7 +2807,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-3.5-turbo-instruct",
          *         "prompt": "Once upon a time",
@@ -3369,12 +3371,12 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers?limit=20&order=desc"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/containers?limit=20&order=desc"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Or specify provider via header or query param:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers?custom_llm_provider=azure"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/containers?custom_llm_provider=azure"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_containers_containers_get"];
@@ -3388,7 +3390,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "name": "My Container",
          *             "expires_after": {
          *                 "anchor": "last_active_at",
@@ -3399,7 +3401,7 @@ export interface paths {
          *
          *     Or specify provider via header:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer sk-1234"         -H "custom-llm-provider: azure"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "custom-llm-provider: azure"         -H "Content-Type: application/json"         -d '{
          *             "name": "My Container"
          *         }'
          *     ```
@@ -3427,12 +3429,12 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Or specify provider via header:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"         -H "custom-llm-provider: azure"
+         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "custom-llm-provider: azure"
          *     ```
          */
         get: operations["retrieve_container_containers__container_id__get"];
@@ -3447,12 +3449,12 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Or specify provider via header:
          *     ```bash
-         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"         -H "custom-llm-provider: azure"
+         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "custom-llm-provider: azure"
          *     ```
          */
         delete: operations["delete_container_containers__container_id__delete"];
@@ -3857,7 +3859,7 @@ export interface paths {
          *     Cursor already sent pre-nested.
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/cursor/chat/completions     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/cursor/chat/completions     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": [{"role": "user", "content": "Hello"}]
          *     }'
@@ -4074,7 +4076,7 @@ export interface paths {
          *
          *         ```
          *         curl -X POST "http://0.0.0.0:8000/user/block"
-         *         -H "Authorization: Bearer sk-1234"
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *         -d '{
          *         "user_ids": [<user_id>, ...]
          *         }'
@@ -4210,7 +4212,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/delete'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_ids" :["ishaan-jaff-5"]
          *     }'
          *
@@ -4240,7 +4242,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4'         -H 'Authorization: Bearer sk-1234'
+         *     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["end_user_info_customer_info_get"];
@@ -4265,7 +4267,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/customer/list'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --request GET 'http://0.0.0.0:4000/customer/list'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_end_user_customer_list_get"];
@@ -4299,6 +4301,7 @@ export interface paths {
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
+         *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
          *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
@@ -4326,15 +4329,16 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/new'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/new'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_id" : "ishaan-jaff-3",
          *             "allowed_region": "eu",
          *             "budget_id": "free_tier",
+         *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
          *         }'
          *
          *     # With object permissions
-         *     curl -L -X POST 'http://localhost:4000/customer/new'         -H 'Authorization: Bearer sk-1234'         -H 'Content-Type: application/json'         -d '{
+         *     curl -L -X POST 'http://localhost:4000/customer/new'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H 'Content-Type: application/json'         -d '{
          *             "user_id": "user_1",
          *             "object_permission": {
          *               "mcp_servers": ["server_1"],
@@ -4371,7 +4375,7 @@ export interface paths {
          *     Example
          *     ```
          *     curl -X POST "http://0.0.0.0:8000/user/unblock"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *     "user_ids": [<user_id>, ...]
          *     }'
@@ -4409,6 +4413,7 @@ export interface paths {
          *     - default_model: Optional[str] = (
          *         None  # if no equivalent model in allowed region - default all requests to this model
          *     )
+         *     - models: Optional[list[str]] = None  # omitted or null leaves the allowlist unchanged; an empty list clears it
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
          *         Supported fields:
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
@@ -4422,13 +4427,14 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "test-litellm-user-4",
-         *         "budget_id": "paid_tier"
+         *         "budget_id": "paid_tier",
+         *         "models": ["gpt-4o-mini"]
          *     }'
          *
          *     # Updating object permissions
-         *     curl -L -X POST 'http://localhost:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl -L -X POST 'http://localhost:4000/customer/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "user_1",
          *         "object_permission": {
          *           "mcp_servers": ["server_3"],
@@ -4493,7 +4499,7 @@ export interface paths {
          *     - include_process_info: Include process-level memory info using psutil (default: true)
          *
          *     Example usage:
-         *     curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer sk-1234"
+         *     curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     All memory sizes are reported in both bytes and MB.
          */
@@ -4535,10 +4541,10 @@ export interface paths {
          *     - generation_2: Number of gen-1 collections before gen-2 collection (default: 10)
          *
          *     Example for more aggressive collection:
-         *     curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500" -H "Authorization: Bearer sk-1234"
+         *     curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     Example for less aggressive collection:
-         *     curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000" -H "Authorization: Bearer sk-1234"
+         *     curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     Monitor memory usage with GET /debug/memory/summary after changes.
          */
@@ -4569,7 +4575,7 @@ export interface paths {
          *     - garbage_collector: GC status and pending object counts
          *
          *     Example usage:
-         *     curl http://localhost:4000/debug/memory/summary -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/debug/memory/summary -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     For detailed analysis, call GET /debug/memory/details
          *     For cache management, use the cache management endpoints
@@ -4597,7 +4603,7 @@ export interface paths {
          *     Nothing from the operator's config values, request data, or errors
          *
          *     Example usage:
-         *     curl http://localhost:4000/debug/report -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/debug/report -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          */
         get: operations["get_debug_report_debug_report_get"];
         put?: never;
@@ -4702,7 +4708,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/embeddings
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "text-embedding-ada-002",
          *         "input": "The quick brown fox jumps over the lazy dog"
@@ -4736,7 +4742,7 @@ export interface paths {
          *
          *         ```
          *         curl -X POST "http://0.0.0.0:8000/user/block"
-         *         -H "Authorization: Bearer sk-1234"
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *         -d '{
          *         "user_ids": [<user_id>, ...]
          *         }'
@@ -4872,7 +4878,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/delete'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_ids" :["ishaan-jaff-5"]
          *     }'
          *
@@ -4902,7 +4908,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4'         -H 'Authorization: Bearer sk-1234'
+         *     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["end_user_info_end_user_info_get"];
@@ -4927,7 +4933,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/customer/list'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --request GET 'http://0.0.0.0:4000/customer/list'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_end_user_end_user_list_get"];
@@ -4961,6 +4967,7 @@ export interface paths {
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
+         *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
          *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
@@ -4988,15 +4995,16 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/new'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/new'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_id" : "ishaan-jaff-3",
          *             "allowed_region": "eu",
          *             "budget_id": "free_tier",
+         *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
          *         }'
          *
          *     # With object permissions
-         *     curl -L -X POST 'http://localhost:4000/customer/new'         -H 'Authorization: Bearer sk-1234'         -H 'Content-Type: application/json'         -d '{
+         *     curl -L -X POST 'http://localhost:4000/customer/new'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H 'Content-Type: application/json'         -d '{
          *             "user_id": "user_1",
          *             "object_permission": {
          *               "mcp_servers": ["server_1"],
@@ -5033,7 +5041,7 @@ export interface paths {
          *     Example
          *     ```
          *     curl -X POST "http://0.0.0.0:8000/user/unblock"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *     "user_ids": [<user_id>, ...]
          *     }'
@@ -5071,6 +5079,7 @@ export interface paths {
          *     - default_model: Optional[str] = (
          *         None  # if no equivalent model in allowed region - default all requests to this model
          *     )
+         *     - models: Optional[list[str]] = None  # omitted or null leaves the allowlist unchanged; an empty list clears it
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
          *         Supported fields:
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
@@ -5084,13 +5093,14 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "test-litellm-user-4",
-         *         "budget_id": "paid_tier"
+         *         "budget_id": "paid_tier",
+         *         "models": ["gpt-4o-mini"]
          *     }'
          *
          *     # Updating object permissions
-         *     curl -L -X POST 'http://localhost:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl -L -X POST 'http://localhost:4000/customer/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "user_1",
          *         "object_permission": {
          *           "mcp_servers": ["server_3"],
@@ -5124,7 +5134,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/chat/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-4o",
          *         "messages": [
@@ -5159,7 +5169,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-3.5-turbo-instruct",
          *         "prompt": "Once upon a time",
@@ -5191,7 +5201,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/embeddings
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "text-embedding-ada-002",
          *         "input": "The quick brown fox jumps over the lazy dog"
@@ -5364,7 +5374,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -5379,7 +5389,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files         -H "Authorization: Bearer sk-1234"         -F purpose="batch"         -F file="@mydata.jsonl"
+         *     curl http://localhost:4000/v1/files         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F purpose="batch"         -F file="@mydata.jsonl"
          *         -F expires_after[anchor]="created_at"         -F expires_after[seconds]=2592000
          *     ```
          */
@@ -5406,7 +5416,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -5448,7 +5458,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -5489,7 +5499,7 @@ export interface paths {
          *
          *     Example Curl:
          *     ```
-         *     curl http://localhost:4000/v1/fine_tuning/jobs       -H "Content-Type: application/json"       -H "Authorization: Bearer sk-1234"       -d '{
+         *     curl http://localhost:4000/v1/fine_tuning/jobs       -H "Content-Type: application/json"       -H "Authorization: Bearer $LITELLM_MASTER_KEY"       -d '{
          *         "model": "gpt-3.5-turbo",
          *         "training_file": "file-abc123",
          *         "hyperparameters": {
@@ -6473,12 +6483,12 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/spend/tags" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:4000/spend/tags" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Spend with Start Date and End Date
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:4000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["global_view_spend_tags_global_spend_tags_get"];
@@ -7603,7 +7613,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog'     -H 'Authorization: Bearer sk-1234'
+         *     curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog'     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["health_services_endpoint_health_services_get"];
@@ -7657,7 +7667,7 @@ export interface paths {
          *     ```bash
          *     # If model is configured in proxy_config.yaml, you only need to specify the model name:
          *     curl -X POST 'http://localhost:4000/health/test_connection' \
-         *       -H 'Authorization: Bearer sk-1234' \
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "litellm_params": {
@@ -7670,7 +7680,7 @@ export interface paths {
          *
          *     # You can also override specific params or test with custom credentials:
          *     curl -X POST 'http://localhost:4000/health/test_connection' \
-         *       -H 'Authorization: Bearer sk-1234' \
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "litellm_params": {
@@ -7717,7 +7727,7 @@ export interface paths {
          * @description Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create
          *
          *     ```bash
-         *     curl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST "http://localhost:4000/v1/images/edits"     -H "Authorization: Bearer sk-1234"         -F "model=gpt-image-1"         -F "image[]=@soap.png"         -F 'prompt=Create a studio ghibli image of this'
+         *     curl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST "http://localhost:4000/v1/images/edits"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=gpt-image-1"         -F "image[]=@soap.png"         -F 'prompt=Create a studio ghibli image of this'
          *     ```
          */
         post: operations["image_edit_api_images_edits_post"];
@@ -7765,7 +7775,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1beta/interactions"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1beta/interactions"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "model": "gemini/gemini-2.5-flash",
          *             "input": "Hello, how are you?"
          *         }'
@@ -8092,7 +8102,7 @@ export interface paths {
          *
          *      Example:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/block'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/block'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
          *     }'
          *     ```
@@ -8141,10 +8151,10 @@ export interface paths {
          *
          *     Example request:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/bulk_update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/bulk_update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "keys": [
          *             {
-         *                 "key": "sk-1234",
+         *                 "key": "sk-<your-virtual-key>",
          *                 "max_budget": 100.0,
          *                 "team_id": "team-123",
          *                 "tags": ["production", "api"]
@@ -8187,7 +8197,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/delete'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/delete'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "keys": ["sk-QWrxEynunsNpV1zT48HIrw"]
          *     }'
          *     ```
@@ -8280,7 +8290,7 @@ export interface paths {
          *     1. Allow users to turn on/off pii masking
          *
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/generate'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/generate'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "permissions": {"allow_pii_controls": true}
          *     }'
          *     ```
@@ -8318,7 +8328,7 @@ export interface paths {
          *     Pass the key in the request header
          *
          *     ```bash
-         *     curl -X POST "http://localhost:4000/key/health"      -H "Authorization: Bearer sk-1234"      -H "Content-Type: application/json"
+         *     curl -X POST "http://localhost:4000/key/health"      -H "Authorization: Bearer $LITELLM_MASTER_KEY"      -H "Content-Type: application/json"
          *     ```
          *
          *     Response when logging callbacks are setup correctly:
@@ -8407,7 +8417,7 @@ export interface paths {
          *
          *     Example Curl:
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/key/info?key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:4000/key/info?key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
@@ -8510,7 +8520,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location --request POST 'http://localhost:4000/key/sk-1234/regenerate'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location --request POST "http://localhost:4000/key/$LITELLM_API_KEY/regenerate"     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "max_budget": 100,
          *         "metadata": {"team": "core-infra"},
          *         "models": ["gpt-4", "gpt-3.5-turbo"]
@@ -8590,7 +8600,7 @@ export interface paths {
          *     1. Allow users to turn on/off pii masking
          *
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/generate'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/generate'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "permissions": {"allow_pii_controls": true}
          *     }'
          *     ```
@@ -8649,7 +8659,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/unblock'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/unblock'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
          *     }'
          *     ```
@@ -8742,8 +8752,8 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
-         *         "key": "sk-1234",
+         *     curl --location 'http://0.0.0.0:4000/key/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
+         *         "key": "sk-<your-virtual-key>",
          *         "key_alias": "my-key",
          *         "user_id": "user-1234",
          *         "team_id": "team-1234",
@@ -8808,7 +8818,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location --request POST 'http://localhost:4000/key/sk-1234/regenerate'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location --request POST "http://localhost:4000/key/$LITELLM_API_KEY/regenerate"     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "max_budget": 100,
          *         "metadata": {"team": "core-infra"},
          *         "models": ["gpt-4", "gpt-3.5-turbo"]
@@ -8984,6 +8994,23 @@ export interface paths {
         put?: never;
         /** Preview Sample */
         post: operations["preview_sample_lens_preview_sample_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/traces/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Trace Findings */
+        post: operations["trace_findings_lens_traces_findings_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9281,6 +9308,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/{lens_id}/runs/{job_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Reviews */
+        get: operations["read_reviews_lens__lens_id__runs__job_id__reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/liteadmin/slack/connect/{token}": {
         parameters: {
             query?: never;
@@ -9359,7 +9403,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/budgets?sort=-max_budget&filter[budget_duration][in]=7d,30d&page_size=25'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/budgets?sort=-max_budget&filter[budget_duration][in]=7d,30d&page_size=25'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_budgets_management_v1_budgets_get"];
@@ -9393,7 +9437,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_spend_log_end_users_management_v1_spend_logs_end_users_get"];
@@ -9448,7 +9492,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"members": [{"user_id": "user-1"}, {"user_email": "user-2@example.com"}]}'
+         *     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_delete'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{"members": [{"user_id": "user-1"}, {"user_email": "user-2@example.com"}]}'
          *     ```
          */
         post: operations["bulk_delete_team_members_action_management_v1_teams__team_id__members_bulk_delete_post"];
@@ -9487,7 +9531,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_update'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"members": [{"user_id": "user-1", "max_budget_in_team": 10}, {"user_email": "user-2@example.com", "max_budget_in_team": 10, "budget_duration": "30d"}]}'
+         *     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_update'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{"members": [{"user_id": "user-1", "max_budget_in_team": 10}, {"user_email": "user-2@example.com", "max_budget_in_team": 10, "budget_duration": "30d"}]}'
          *     ```
          */
         post: operations["bulk_update_team_member_budgets_action_management_v1_teams__team_id__members_bulk_update_post"];
@@ -9526,7 +9570,7 @@ export interface paths {
          *     ```
          *     curl -X POST "http://localhost:4000/management/v1/users/bulk" \
          *     -H "Content-Type: application/json" \
-         *     -H "Authorization: Bearer sk-1234" \
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *     -d '{
          *         "users": [
          *             {"user_email": "a@example.com", "user_role": "internal_user", "teams": ["team-1"]},
@@ -9567,7 +9611,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/management/v1/users/bulk_delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"user_ids": ["user-1", "user-2"]}'
+         *     curl --location 'http://0.0.0.0:4000/management/v1/users/bulk_delete'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{"user_ids": ["user-1", "user-2"]}'
          *     ```
          */
         post: operations["bulk_delete_users_action_management_v1_users_bulk_delete_post"];
@@ -10035,7 +10079,7 @@ export interface paths {
          *     Example:
          *     ```shell
          *     curl -X GET 'http://localhost:4000/model/deprecations' \
-         *         -H 'Authorization: Bearer sk-1234'
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["model_deprecations_model_deprecations_get"];
@@ -10325,18 +10369,18 @@ export interface paths {
          *
          *     Example Request (All Models):
          *     ```shell
-         *     curl -X 'GET'     'http://localhost:4000/model_group/info'     -H 'accept: application/json'     -H 'x-api-key: sk-1234'
+         *     curl -X 'GET'     'http://localhost:4000/model_group/info'     -H 'accept: application/json'     -H "x-api-key: $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Request (Specific Model Group):
          *     ```shell
-         *     curl -X 'GET'     'http://localhost:4000/model_group/info?model_group=rerank-english-v3.0'     -H 'accept: application/json'     -H 'Authorization: Bearer sk-1234'
+         *     curl -X 'GET'     'http://localhost:4000/model_group/info?model_group=rerank-english-v3.0'     -H 'accept: application/json'     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml)
          *     ```shell
          *     curl -X 'GET'     'http://localhost:4000/model_group/info?model_group=openai/tts-1'
-         *     -H 'accept: application/json'     -H 'Authorization: Bearersk-1234'
+         *     -H 'accept: application/json'     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Learn how to use and set wildcard models [here](https://docs.litellm.ai/docs/wildcard_routing)
@@ -10663,7 +10707,7 @@ export interface paths {
          * @description The moderations endpoint is a tool you can use to check whether content complies with an LLM Providers policies.
          *     Quick Start
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/moderations'     --header 'Content-Type: application/json'     --header 'Authorization: Bearer sk-1234'     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
+         *     curl --location 'http://0.0.0.0:4000/moderations'     --header 'Content-Type: application/json'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
          *     ```
          */
         post: operations["moderations_moderations_post"];
@@ -10746,7 +10790,7 @@ export interface paths {
          *
          *     **1. JSON body** (Mistral OCR API compatible):
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "model": "mistral-ocr",
          *             "document": {
          *                 "type": "document_url",
@@ -10757,7 +10801,7 @@ export interface paths {
          *
          *     **2. Multipart form file upload**:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
+         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
          *
          *     Response format is normalized to the LiteLLM OCR schema by default. Providers
@@ -10840,7 +10884,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/chat/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-4o",
          *         "messages": [
@@ -10875,7 +10919,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-3.5-turbo-instruct",
          *         "prompt": "Once upon a time",
@@ -10907,7 +10951,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/embeddings
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "text-embedding-ada-002",
          *         "input": "The quick brown fox jumps over the lazy dog"
@@ -10935,7 +10979,7 @@ export interface paths {
          * @description Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create
          *
          *     ```bash
-         *     curl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST "http://localhost:4000/v1/images/edits"     -H "Authorization: Bearer sk-1234"         -F "model=gpt-image-1"         -F "image[]=@soap.png"         -F 'prompt=Create a studio ghibli image of this'
+         *     curl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST "http://localhost:4000/v1/images/edits"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=gpt-image-1"         -F "image[]=@soap.png"         -F 'prompt=Create a studio ghibli image of this'
          *     ```
          */
         post: operations["image_edit_api_openai_deployments__model__images_edits_post"];
@@ -11059,13 +11103,13 @@ export interface paths {
          *
          *     ```bash
          *     # Normal request
-         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Tell me about AI"
          *     }'
          *
          *     # Background request with polling
-         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Tell me about AI",
          *         "background": true
@@ -11097,7 +11141,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/v1/responses/compact     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses/compact     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": [{"role": "user", "content": "Hello"}]
          *     }'
@@ -11126,7 +11170,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Hello, how are you?"
          *     }'
@@ -11160,10 +11204,10 @@ export interface paths {
          *
          *     ```bash
          *     # Get polling response
-         *     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     # Get provider response
-         *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["get_response_openai_v1_responses__response_id__get"];
@@ -11180,7 +11224,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete
          *
          *     ```bash
-         *     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         delete: operations["delete_response_openai_v1_responses__response_id__delete"];
@@ -11210,10 +11254,10 @@ export interface paths {
          *
          *     ```bash
          *     # Cancel polling response
-         *     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     # Cancel provider response
-         *     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         post: operations["cancel_response_openai_v1_responses__response_id__cancel_post"];
@@ -11648,12 +11692,12 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_alias=my-org'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_alias=my-org'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example with org_id:
          *     ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_id=123e4567-e89b-12d3-a456-426614174000'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_id=123e4567-e89b-12d3-a456-426614174000'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_organization_organization_list_get"];
@@ -11696,7 +11740,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl -X POST 'http://0.0.0.0:4000/organization/member_add'     -H 'Authorization: Bearer sk-1234'     -H 'Content-Type: application/json'     -d '{
+         *     curl -X POST 'http://0.0.0.0:4000/organization/member_add'     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H 'Content-Type: application/json'     -d '{
          *         "organization_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
          *         "member": {
          *             "role": "internal_user",
@@ -11805,7 +11849,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/organization/new'
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     --header 'Content-Type: application/json'
          *     --data '{
          *         "organization_alias": "my-secret-org",
@@ -11820,7 +11864,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/organization/new'
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     --header 'Content-Type: application/json'
          *     --data '{
          *         "organization_alias": "my-secret-org",
@@ -12846,7 +12890,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location --request DELETE 'http://0.0.0.0:4000/project/delete' \
-         *     --header 'Authorization: Bearer sk-1234' \
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_ids": ["project-123", "project-456"]
@@ -12876,7 +12920,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/info?project_id=project-123' \
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["project_info_project_info_get"];
@@ -12902,7 +12946,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/list' \
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_projects_project_list_get"];
@@ -12955,7 +12999,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/new' \
-         *     --header 'Authorization: Bearer sk-1234' \
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_alias": "flight-search-assistant",
@@ -12982,7 +13026,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/new' \
-         *     --header 'Authorization: Bearer sk-1234' \
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_alias": "hotel-recommendations",
@@ -13036,7 +13080,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/update' \
-         *     --header 'Authorization: Bearer sk-1234' \
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_id": "project-123",
@@ -13415,7 +13459,7 @@ export interface paths {
          *     Example Request
          *
          *     ```bash
-         *     curl -X GET http://localhost:4000/provider/budgets     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/provider/budgets     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Response
@@ -13835,7 +13879,7 @@ export interface paths {
          *     ## Form upload (for files):
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/ingest" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -F file="@document.pdf" \
          *         -F 'ingest_options={"vector_store": {"custom_llm_provider": "openai"}}'
          *     ```
@@ -13843,7 +13887,7 @@ export interface paths {
          *     ## JSON body (for URLs):
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/ingest" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -H "Content-Type: application/json" \
          *         -d '{
          *             "file_url": "https://example.com/document.pdf",
@@ -13854,7 +13898,7 @@ export interface paths {
          *     ## Bedrock:
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/ingest" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -F file="@document.pdf" \
          *         -F 'ingest_options={"vector_store": {"custom_llm_provider": "bedrock"}}'
          *     ```
@@ -13888,7 +13932,7 @@ export interface paths {
          *     ## Example Request:
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/query" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -H "Content-Type: application/json" \
          *         -d '{
          *             "model": "gpt-4o-mini",
@@ -13904,7 +13948,7 @@ export interface paths {
          *     ## With Reranking:
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/query" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -H "Content-Type: application/json" \
          *         -d '{
          *             "model": "gpt-4o-mini",
@@ -14110,13 +14154,13 @@ export interface paths {
          *
          *     ```bash
          *     # Normal request
-         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Tell me about AI"
          *     }'
          *
          *     # Background request with polling
-         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Tell me about AI",
          *         "background": true
@@ -14148,7 +14192,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/v1/responses/compact     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses/compact     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": [{"role": "user", "content": "Hello"}]
          *     }'
@@ -14177,7 +14221,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Hello, how are you?"
          *     }'
@@ -14211,10 +14255,10 @@ export interface paths {
          *
          *     ```bash
          *     # Get polling response
-         *     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     # Get provider response
-         *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["get_response_responses__response_id__get"];
@@ -14231,7 +14275,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete
          *
          *     ```bash
-         *     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         delete: operations["delete_response_responses__response_id__delete"];
@@ -14261,10 +14305,10 @@ export interface paths {
          *
          *     ```bash
          *     # Cancel polling response
-         *     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     # Cancel provider response
-         *     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         post: operations["cancel_response_responses__response_id__cancel_post"];
@@ -14332,251 +14376,6 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/connections/test": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Test Roi Calculator Connections */
-        post: operations["test_roi_calculator_connections_roi_calculator_connections_test_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/identity-map": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Update Roi Calculator Identity Map */
-        put: operations["update_roi_calculator_identity_map_roi_calculator_identity_map_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/observed/apps": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Observed Apps */
-        get: operations["observed_apps_roi_calculator_observed_apps_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/observed/identities": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Observed Identities */
-        get: operations["get_observed_identities_roi_calculator_observed_identities_get"];
-        /** Save Observed Identities */
-        put: operations["save_observed_identities_roi_calculator_observed_identities_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/observed/oauth/{provider}/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Start Observed Authorization */
-        post: operations["start_observed_authorization_roi_calculator_observed_oauth__provider__start_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/observed/report": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Observed Report */
-        get: operations["get_observed_report_roi_calculator_observed_report_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/observed/repositories": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Observed Repositories */
-        get: operations["observed_repositories_roi_calculator_observed_repositories_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/observed/settings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Observed Settings */
-        get: operations["get_observed_settings_roi_calculator_observed_settings_get"];
-        /** Save Observed Settings */
-        put: operations["save_observed_settings_roi_calculator_observed_settings_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/observed/sync": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Observed Sync */
-        get: operations["get_observed_sync_roi_calculator_observed_sync_get"];
-        put?: never;
-        /** Start Observed Sync */
-        post: operations["start_observed_sync_roi_calculator_observed_sync_post"];
-        /** Cancel Observed Sync */
-        delete: operations["cancel_observed_sync_roi_calculator_observed_sync_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/report": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Roi Calculator Report */
-        get: operations["get_roi_calculator_report_roi_calculator_report_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/repositories": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Roi Calculator Repositories */
-        get: operations["get_roi_calculator_repositories_roi_calculator_repositories_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/settings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Roi Calculator Settings */
-        get: operations["get_roi_calculator_settings_roi_calculator_settings_get"];
-        /** Update Roi Calculator Settings */
-        put: operations["update_roi_calculator_settings_roi_calculator_settings_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/setup/reset": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Reset Roi Calculator Setup */
-        post: operations["reset_roi_calculator_setup_roi_calculator_setup_reset_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/sync": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Roi Calculator Sync Status */
-        get: operations["get_roi_calculator_sync_status_roi_calculator_sync_get"];
-        put?: never;
-        /** Start Roi Calculator Sync */
-        post: operations["start_roi_calculator_sync_roi_calculator_sync_post"];
-        /** Cancel Roi Calculator Sync */
-        delete: operations["cancel_roi_calculator_sync_roi_calculator_sync_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -15072,7 +14871,7 @@ export interface paths {
          *
          *     Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
          *             "search_domain_filter": ["arxiv.org", "nature.com"],
@@ -15082,7 +14881,7 @@ export interface paths {
          *
          *     Example with search_tool_name in body:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "search_tool_name": "litellm-search",
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
@@ -15145,7 +14944,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/search/tools"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/search/tools"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Response:
@@ -15193,7 +14992,7 @@ export interface paths {
          *
          *     Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
          *             "search_domain_filter": ["arxiv.org", "nature.com"],
@@ -15203,7 +15002,7 @@ export interface paths {
          *
          *     Example with search_tool_name in body:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "search_tool_name": "litellm-search",
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
@@ -15645,7 +15444,7 @@ export interface paths {
          *
          *     ```
          *     curl --location 'http://localhost:4000/spend/calculate'
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     --header 'Content-Type: application/json'
          *     --data '{
          *         "model": "anthropic.claude-v2",
@@ -15657,7 +15456,7 @@ export interface paths {
          *
          *     ```
          *     curl --location 'http://localhost:4000/spend/calculate'
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     --header 'Content-Type: application/json'
          *     --data '{
          *         "completion_response": {
@@ -15707,7 +15506,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl -H "Authorization: Bearer sk-1234"       "http://localhost:4000/spend/capture_rate?provider=openai&start_date=2026-09-17&end_date=2026-09-23"
+         *     curl -H "Authorization: Bearer $LITELLM_MASTER_KEY"       "http://localhost:4000/spend/capture_rate?provider=openai&start_date=2026-09-17&end_date=2026-09-23"
          *     ```
          */
         get: operations["get_spend_capture_rate_spend_capture_rate_get"];
@@ -15739,7 +15538,7 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/keys" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/keys" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["spend_key_fn_spend_keys_get"];
@@ -15773,27 +15572,27 @@ export interface paths {
          *
          *     Example Request for all logs
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Request for specific request_id
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs?request_id=chatcmpl-6dcb2540-d3d7-4e49-bb27-291f863f112e" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs?request_id=chatcmpl-6dcb2540-d3d7-4e49-bb27-291f863f112e" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Request for specific api_key
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Request for specific user_id
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Request for date range with individual logs (unsummarized)
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["view_spend_logs_spend_logs_get"];
@@ -15850,7 +15649,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["ui_view_spend_logs_spend_logs_ui_get"];
@@ -15901,7 +15700,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["ui_view_spend_logs_spend_logs_v2_get"];
@@ -15926,12 +15725,12 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/tags" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/tags" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Spend with Start Date and End Date
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["view_spend_tags_spend_tags_get"];
@@ -15965,12 +15764,12 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/users" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/users" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     View User Table row for user_id
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/users?user_id=1234" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/users?user_id=1234" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["spend_user_fn_spend_users_get"];
@@ -16699,7 +16498,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/block'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/block'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234"
          *     }'
          *     ```
@@ -16744,7 +16543,7 @@ export interface paths {
          *
          *     Example request:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/team/bulk_member_add'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/bulk_member_add'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234",
          *         "members": [
          *             {
@@ -16919,7 +16718,7 @@ export interface paths {
          *     - team_ids: List[str] - Required. List of team IDs to delete. Example: ["team-1234", "team-5678"]
          *
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/delete'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location 'http://0.0.0.0:4000/team/delete'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "team_ids": ["8d916b1c-510d-4894-a334-1c16a93344f5"]
          *     }'
          *     ```
@@ -17024,7 +16823,7 @@ export interface paths {
         /**
          * List Team
          * @description ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/team/list'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --request GET 'http://0.0.0.0:4000/team/list'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Parameters:
@@ -17058,7 +16857,7 @@ export interface paths {
          *     Only proxy_admin or admin of team, allowed to access this endpoint.
          *     ```
          *
-         *     curl -X POST 'http://0.0.0.0:4000/team/member_add'     -H 'Authorization: Bearer sk-1234'     -H 'Content-Type: application/json'     -d '{"team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849", "member": {"role": "user", "user_id": "krrish247652@berri.ai"}}'
+         *     curl -X POST 'http://0.0.0.0:4000/team/member_add'     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H 'Content-Type: application/json'     -d '{"team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849", "member": {"role": "user", "user_id": "krrish247652@berri.ai"}}'
          *
          *     ```
          */
@@ -17087,7 +16886,7 @@ export interface paths {
          *     If user doesn't exist, an exception will be raised
          *     ```
          *     curl -X POST 'http://0.0.0.0:8000/team/member_delete'
-         *     -H 'Authorization: Bearer sk-1234'
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -H 'Content-Type: application/json'
          *     -d '{
          *         "team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
@@ -17168,7 +16967,7 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/model/add'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/model/add'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234",
          *         "models": ["gpt-4", "claude-2"]
          *     }'
@@ -17200,7 +16999,7 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/model/delete'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/model/delete'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234",
          *         "models": ["gpt-4"]
          *     }'
@@ -17284,7 +17083,7 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/new'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/new'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *       "team_alias": "my-new-team_2",
          *       "members_with_roles": [{"role": "admin", "user_id": "user-1234"},
          *         {"role": "user", "user_id": "user-2434"}]
@@ -17293,7 +17092,7 @@ export interface paths {
          *     ```
          *
          *      ```
-         *     curl --location 'http://0.0.0.0:4000/team/new'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/new'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *                 "team_alias": "QA Prod Bot",
          *                 "max_budget": 0.000000001,
          *                 "budget_duration": "1d"
@@ -17438,7 +17237,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/unblock'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/unblock'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234"
          *     }'
          *     ```
@@ -17509,7 +17308,7 @@ export interface paths {
          *     - default_team_member_models: Optional[List[str]] - Default models assigned to new team members when they join this team. Must be a subset of the team's models.
          *
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location 'http://0.0.0.0:4000/team/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
          *         "tpm_limit": 100
          *     }'
@@ -17517,7 +17316,7 @@ export interface paths {
          *
          *     Example - Update Team `max_budget` budget
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location 'http://0.0.0.0:4000/team/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
          *         "max_budget": 10
          *     }'
@@ -17555,7 +17354,7 @@ export interface paths {
          *     updated team.
          *
          *     ```
-         *     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "metadata": {"cost_center": "1234", "deprecated_key": null}
          *     }'
          *     ```
@@ -17579,7 +17378,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback'         -H 'Authorization: Bearer sk-1234'
+         *     curl -X GET 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     This will return the callback settings for the team with id dbe2f686-a686-4896-864a-4c3924458709
@@ -17631,7 +17430,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback'         -H 'Content-Type: application/json'         -H 'Authorization: Bearer sk-1234'         -d '{
+         *     curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback'         -H 'Content-Type: application/json'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -d '{
          *         "callback_name": "langfuse",
          *         "callback_type": "success",
          *         "callback_vars": {"langfuse_public_key": "pk-lf-xxxx1", "langfuse_secret_key": "sk-xxxxx"}
@@ -17675,7 +17474,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith'         -H 'Authorization: Bearer sk-1234'
+         *     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Covers callbacks registered through POST /team/{team_id}/callback and the Admin UI. Teams still
@@ -17711,7 +17510,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X POST 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/disable_logging'         -H 'Authorization: Bearer sk-1234'
+         *     curl -X POST 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/disable_logging'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         post: operations["disable_team_logging_team__team_id__disable_logging_post"];
@@ -18485,7 +18284,7 @@ export interface paths {
          *
          *     Example request for specific users:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/user/bulk_update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/user/bulk_update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "users": [
          *             {
          *                 "user_id": "user1",
@@ -18503,7 +18302,7 @@ export interface paths {
          *
          *     Example request for all users:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/user/bulk_update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/user/bulk_update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "all_users": true,
          *         "user_updates": {
          *             "user_role": "internal_user",
@@ -18683,7 +18482,7 @@ export interface paths {
          *
          *     ```
          *     curl --location 'http://0.0.0.0:4000/user/delete'
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     --header 'Content-Type: application/json'
          *     --data-raw '{
          *         "user_ids": ["45e3e396-ee08-4a61-a88e-16b3ce7e0849"]
@@ -18747,7 +18546,7 @@ export interface paths {
          *
          *     Example request
          *     ```
-         *     curl -X GET 'http://localhost:4000/user/info?user_id=krrish7%40berri.ai'     --header 'Authorization: Bearer sk-1234'
+         *     curl -X GET 'http://localhost:4000/user/info?user_id=krrish7%40berri.ai'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["user_info_user_info_get"];
@@ -18870,7 +18669,7 @@ export interface paths {
          *     Usage Example
          *
          *     ```shell
-         *      curl -X POST "http://localhost:4000/user/new"      -H "Content-Type: application/json"      -H "Authorization: Bearer sk-1234"      -d '{
+         *      curl -X POST "http://localhost:4000/user/new"      -H "Content-Type: application/json"      -H "Authorization: Bearer $LITELLM_MASTER_KEY"      -d '{
          *          "username": "new_user",
          *          "email": "new_user@example.com"
          *      }'
@@ -18954,7 +18753,7 @@ export interface paths {
          * @description Example curl
          *
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/user/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/user/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "test-litellm-user-4",
          *         "user_role": "proxy_admin_viewer"
          *     }'
@@ -19046,7 +18845,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET --location 'http://localhost:4000/utils/model_info?model=gpt-4o&custom_llm_provider=openai'         --header 'Authorization: Bearer sk-1234'
+         *     curl -X GET --location 'http://localhost:4000/utils/model_info?model=gpt-4o&custom_llm_provider=openai'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["model_info_lookup_utils_model_info_get"];
@@ -19073,7 +18872,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k'         --header 'Authorization: Bearer sk-1234'
+         *     curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["supported_openai_params_utils_supported_openai_params_get"];
@@ -19681,7 +19480,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer sk-1234"     -H "Content-Type: application/json"
+         *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
          */
         get: operations["list_batches_v1_batches_get"];
@@ -19694,7 +19493,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl http://localhost:4000/v1/batches         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "input_file_id": "file-abc123",
          *             "endpoint": "/v1/chat/completions",
          *             "completion_window": "24h"
@@ -19723,7 +19522,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer sk-1234"     -H "Content-Type: application/json"
+         *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
          */
         get: operations["retrieve_batch_v1_batches__batch_id__get"];
@@ -19753,7 +19552,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -X POST
+         *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -X POST
          *
          *     ```
          */
@@ -19780,7 +19579,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/chat/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-4o",
          *         "messages": [
@@ -19815,7 +19614,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-3.5-turbo-instruct",
          *         "prompt": "Once upon a time",
@@ -19847,12 +19646,12 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers?limit=20&order=desc"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/containers?limit=20&order=desc"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Or specify provider via header or query param:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers?custom_llm_provider=azure"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/containers?custom_llm_provider=azure"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_containers_v1_containers_get"];
@@ -19866,7 +19665,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "name": "My Container",
          *             "expires_after": {
          *                 "anchor": "last_active_at",
@@ -19877,7 +19676,7 @@ export interface paths {
          *
          *     Or specify provider via header:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer sk-1234"         -H "custom-llm-provider: azure"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "custom-llm-provider: azure"         -H "Content-Type: application/json"         -d '{
          *             "name": "My Container"
          *         }'
          *     ```
@@ -19905,12 +19704,12 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Or specify provider via header:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"         -H "custom-llm-provider: azure"
+         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "custom-llm-provider: azure"
          *     ```
          */
         get: operations["retrieve_container_v1_containers__container_id__get"];
@@ -19925,12 +19724,12 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Or specify provider via header:
          *     ```bash
-         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"         -H "custom-llm-provider: azure"
+         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "custom-llm-provider: azure"
          *     ```
          */
         delete: operations["delete_container_v1_containers__container_id__delete"];
@@ -20025,7 +19824,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/embeddings
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "text-embedding-ada-002",
          *         "input": "The quick brown fox jumps over the lazy dog"
@@ -20315,7 +20114,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -20330,7 +20129,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files         -H "Authorization: Bearer sk-1234"         -F purpose="batch"         -F file="@mydata.jsonl"
+         *     curl http://localhost:4000/v1/files         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F purpose="batch"         -F file="@mydata.jsonl"
          *         -F expires_after[anchor]="created_at"         -F expires_after[seconds]=2592000
          *     ```
          */
@@ -20357,7 +20156,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -20399,7 +20198,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -20440,7 +20239,7 @@ export interface paths {
          *
          *     Example Curl:
          *     ```
-         *     curl http://localhost:4000/v1/fine_tuning/jobs       -H "Content-Type: application/json"       -H "Authorization: Bearer sk-1234"       -d '{
+         *     curl http://localhost:4000/v1/fine_tuning/jobs       -H "Content-Type: application/json"       -H "Authorization: Bearer $LITELLM_MASTER_KEY"       -d '{
          *         "model": "gpt-3.5-turbo",
          *         "training_file": "file-abc123",
          *         "hyperparameters": {
@@ -20521,7 +20320,7 @@ export interface paths {
          * @description Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create
          *
          *     ```bash
-         *     curl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST "http://localhost:4000/v1/images/edits"     -H "Authorization: Bearer sk-1234"         -F "model=gpt-image-1"         -F "image[]=@soap.png"         -F 'prompt=Create a studio ghibli image of this'
+         *     curl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST "http://localhost:4000/v1/images/edits"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=gpt-image-1"         -F "image[]=@soap.png"         -F 'prompt=Create a studio ghibli image of this'
          *     ```
          */
         post: operations["image_edit_api_v1_images_edits_post"];
@@ -20560,7 +20359,7 @@ export interface paths {
          * @description List all vector store indexes. Proxy admin only.
          *
          *     ```bash
-         *     curl -L -X GET 'http://0.0.0.0:4000/v1/indexes'         -H 'Authorization: Bearer sk-1234'
+         *     curl -L -X GET 'http://0.0.0.0:4000/v1/indexes'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["index_list_v1_indexes_get"];
@@ -20570,7 +20369,7 @@ export interface paths {
          * @description Create an index. Just writes the index to the database.
          *
          *     ```bash
-         *     curl -L -X POST 'http://0.0.0.0:4000/v1/indexes'         -H 'Content-Type: application/json'         -H 'Authorization: Bearer sk-1234'         -d '{
+         *     curl -L -X POST 'http://0.0.0.0:4000/v1/indexes'         -H 'Content-Type: application/json'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -d '{
          *             "index_name": "dall-e-3",
          *             "litellm_params": {
          *                 "vector_store_index": "real-index-name",
@@ -20580,6 +20379,23 @@ export interface paths {
          *     ```
          */
         post: operations["index_create_v1_indexes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest Otlp Traces */
+        post: operations["ingest_otlp_traces_v1_logs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -21315,7 +21131,7 @@ export interface paths {
          *     Example:
          *     ```shell
          *     curl -X GET 'http://localhost:4000/model/deprecations' \
-         *         -H 'Authorization: Bearer sk-1234'
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["model_deprecations_v1_model_deprecations_get"];
@@ -21482,7 +21298,7 @@ export interface paths {
          * @description The moderations endpoint is a tool you can use to check whether content complies with an LLM Providers policies.
          *     Quick Start
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/moderations'     --header 'Content-Type: application/json'     --header 'Authorization: Bearer sk-1234'     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
+         *     curl --location 'http://0.0.0.0:4000/moderations'     --header 'Content-Type: application/json'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
          *     ```
          */
         post: operations["moderations_v1_moderations_post"];
@@ -21509,7 +21325,7 @@ export interface paths {
          *
          *     **1. JSON body** (Mistral OCR API compatible):
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "model": "mistral-ocr",
          *             "document": {
          *                 "type": "document_url",
@@ -21520,7 +21336,7 @@ export interface paths {
          *
          *     **2. Multipart form file upload**:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
+         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
          *
          *     Response format is normalized to the LiteLLM OCR schema by default. Providers
@@ -21553,7 +21369,7 @@ export interface paths {
          *     ## Form upload (for files):
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/ingest" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -F file="@document.pdf" \
          *         -F 'ingest_options={"vector_store": {"custom_llm_provider": "openai"}}'
          *     ```
@@ -21561,7 +21377,7 @@ export interface paths {
          *     ## JSON body (for URLs):
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/ingest" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -H "Content-Type: application/json" \
          *         -d '{
          *             "file_url": "https://example.com/document.pdf",
@@ -21572,7 +21388,7 @@ export interface paths {
          *     ## Bedrock:
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/ingest" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -F file="@document.pdf" \
          *         -F 'ingest_options={"vector_store": {"custom_llm_provider": "bedrock"}}'
          *     ```
@@ -21606,7 +21422,7 @@ export interface paths {
          *     ## Example Request:
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/query" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -H "Content-Type: application/json" \
          *         -d '{
          *             "model": "gpt-4o-mini",
@@ -21622,7 +21438,7 @@ export interface paths {
          *     ## With Reranking:
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/query" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -H "Content-Type: application/json" \
          *         -d '{
          *             "model": "gpt-4o-mini",
@@ -21765,13 +21581,13 @@ export interface paths {
          *
          *     ```bash
          *     # Normal request
-         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Tell me about AI"
          *     }'
          *
          *     # Background request with polling
-         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Tell me about AI",
          *         "background": true
@@ -21803,7 +21619,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/v1/responses/compact     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses/compact     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": [{"role": "user", "content": "Hello"}]
          *     }'
@@ -21832,7 +21648,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Hello, how are you?"
          *     }'
@@ -21866,10 +21682,10 @@ export interface paths {
          *
          *     ```bash
          *     # Get polling response
-         *     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     # Get provider response
-         *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["get_response_v1_responses__response_id__get"];
@@ -21886,7 +21702,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete
          *
          *     ```bash
-         *     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         delete: operations["delete_response_v1_responses__response_id__delete"];
@@ -21916,10 +21732,10 @@ export interface paths {
          *
          *     ```bash
          *     # Cancel polling response
-         *     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     # Cancel provider response
-         *     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         post: operations["cancel_response_v1_responses__response_id__cancel_post"];
@@ -21994,7 +21810,7 @@ export interface paths {
          *
          *     Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
          *             "search_domain_filter": ["arxiv.org", "nature.com"],
@@ -22004,7 +21820,7 @@ export interface paths {
          *
          *     Example with search_tool_name in body:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "search_tool_name": "litellm-search",
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
@@ -22067,7 +21883,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/search/tools"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/search/tools"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Response:
@@ -22115,7 +21931,7 @@ export interface paths {
          *
          *     Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
          *             "search_domain_filter": ["arxiv.org", "nature.com"],
@@ -22125,7 +21941,7 @@ export interface paths {
          *
          *     Example with search_tool_name in body:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "search_tool_name": "litellm-search",
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
@@ -22934,7 +22750,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/videos"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["video_list_v1_videos_get"];
@@ -22948,7 +22764,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/videos"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "model": "sora-2",
          *             "prompt": "A beautiful sunset over the ocean"
          *         }'
@@ -22979,7 +22795,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/characters"         -H "Authorization: Bearer sk-1234"         -F "video=@character_video.mp4"         -F "name=my_character"
+         *     curl -X POST "http://localhost:4000/v1/videos/characters"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "video=@character_video.mp4"         -F "name=my_character"
          *     ```
          */
         post: operations["video_create_character_v1_videos_characters_post"];
@@ -23005,7 +22821,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos/characters/char_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/videos/characters/char_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["video_get_character_v1_videos_characters__character_id__get"];
@@ -23035,7 +22851,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/edits"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{"prompt": "Make it brighter", "video": {"id": "video_123"}}'
+         *     curl -X POST "http://localhost:4000/v1/videos/edits"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{"prompt": "Make it brighter", "video": {"id": "video_123"}}'
          *     ```
          */
         post: operations["video_edit_v1_videos_edits_post"];
@@ -23063,7 +22879,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/extensions"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{"prompt": "Continue the scene", "seconds": "5", "video": {"id": "video_123"}}'
+         *     curl -X POST "http://localhost:4000/v1/videos/extensions"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{"prompt": "Continue the scene", "seconds": "5", "video": {"id": "video_123"}}'
          *     ```
          */
         post: operations["video_extension_v1_videos_extensions_post"];
@@ -23089,7 +22905,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos/video_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/videos/video_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["video_status_v1_videos__video_id__get"];
@@ -23117,7 +22933,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos/{video_id}/content"         -H "Authorization: Bearer sk-1234"         --output video.mp4
+         *     curl -X GET "http://localhost:4000/v1/videos/{video_id}/content"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         --output video.mp4
          *     ```
          */
         get: operations["video_content_v1_videos__video_id__content_get"];
@@ -23147,7 +22963,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/video_123/remix"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/videos/video_123/remix"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "prompt": "A new version with different colors"
          *         }'
          *     ```
@@ -23414,7 +23230,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1beta/interactions"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1beta/interactions"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "model": "gemini/gemini-2.5-flash",
          *             "input": "Hello, how are you?"
          *         }'
@@ -23613,7 +23429,7 @@ export interface paths {
          *
          *     Example Curl:
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/key/info"     -H "Authorization: Bearer sk-1234"     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
+         *     curl -X GET "http://0.0.0.0:4000/key/info"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
          *     ```
          */
         post: operations["info_key_fn_v2_v2_key_info_post"];
@@ -23670,7 +23486,7 @@ export interface paths {
          *     Example request:
          *     ```
          *     curl -X GET 'http://localhost:4000/v2/model/info?include_team_models=true&page=1&size=50' \
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example response:
@@ -23819,7 +23635,7 @@ export interface paths {
          *     Example request:
          *     ```
          *     curl -X GET 'http://localhost:4000/v2/user/info?user_id=user123' \
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["user_info_v2_v2_user_info_get"];
@@ -24409,7 +24225,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/videos"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["video_list_videos_get"];
@@ -24423,7 +24239,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/videos"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "model": "sora-2",
          *             "prompt": "A beautiful sunset over the ocean"
          *         }'
@@ -24454,7 +24270,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/characters"         -H "Authorization: Bearer sk-1234"         -F "video=@character_video.mp4"         -F "name=my_character"
+         *     curl -X POST "http://localhost:4000/v1/videos/characters"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "video=@character_video.mp4"         -F "name=my_character"
          *     ```
          */
         post: operations["video_create_character_videos_characters_post"];
@@ -24480,7 +24296,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos/characters/char_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/videos/characters/char_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["video_get_character_videos_characters__character_id__get"];
@@ -24510,7 +24326,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/edits"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{"prompt": "Make it brighter", "video": {"id": "video_123"}}'
+         *     curl -X POST "http://localhost:4000/v1/videos/edits"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{"prompt": "Make it brighter", "video": {"id": "video_123"}}'
          *     ```
          */
         post: operations["video_edit_videos_edits_post"];
@@ -24538,7 +24354,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/extensions"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{"prompt": "Continue the scene", "seconds": "5", "video": {"id": "video_123"}}'
+         *     curl -X POST "http://localhost:4000/v1/videos/extensions"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{"prompt": "Continue the scene", "seconds": "5", "video": {"id": "video_123"}}'
          *     ```
          */
         post: operations["video_extension_videos_extensions_post"];
@@ -24564,7 +24380,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos/video_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/videos/video_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["video_status_videos__video_id__get"];
@@ -24592,7 +24408,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos/{video_id}/content"         -H "Authorization: Bearer sk-1234"         --output video.mp4
+         *     curl -X GET "http://localhost:4000/v1/videos/{video_id}/content"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         --output video.mp4
          *     ```
          */
         get: operations["video_content_videos__video_id__content_get"];
@@ -24622,7 +24438,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/video_123/remix"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/videos/video_123/remix"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "prompt": "A new version with different colors"
          *         }'
          *     ```
@@ -24892,7 +24708,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer sk-1234"     -H "Content-Type: application/json"
+         *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
          */
         get: operations["list_batches__provider__v1_batches_get"];
@@ -24905,7 +24721,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl http://localhost:4000/v1/batches         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "input_file_id": "file-abc123",
          *             "endpoint": "/v1/chat/completions",
          *             "completion_window": "24h"
@@ -24934,7 +24750,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer sk-1234"     -H "Content-Type: application/json"
+         *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
          */
         get: operations["retrieve_batch__provider__v1_batches__batch_id__get"];
@@ -24964,7 +24780,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -X POST
+         *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -X POST
          *
          *     ```
          */
@@ -24991,7 +24807,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -25006,7 +24822,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files         -H "Authorization: Bearer sk-1234"         -F purpose="batch"         -F file="@mydata.jsonl"
+         *     curl http://localhost:4000/v1/files         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F purpose="batch"         -F file="@mydata.jsonl"
          *         -F expires_after[anchor]="created_at"         -F expires_after[seconds]=2592000
          *     ```
          */
@@ -25033,7 +24849,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -25075,7 +24891,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -25528,6 +25344,43 @@ export interface components {
             /** Results */
             results: components["schemas"]["TagActiveUsersResponse"][];
         };
+        /** Activity */
+        Activity: {
+            /**
+             * Execution Ids
+             * @default []
+             */
+            execution_ids: string[];
+            /**
+             * Finished
+             * @default false
+             */
+            finished: boolean;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Operations
+             * @default []
+             */
+            operations: ("model" | "read" | "search" | "python" | "catalog" | "review_catalog" | "read_reviews" | "search_reviews" | "history" | "checkpoint")[];
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "load" | "review" | "group" | "reconcile" | "investigate";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["ToolCount"][];
+        };
         /** ActivityAvailability */
         ActivityAvailability: {
             /**
@@ -25540,6 +25393,47 @@ export interface components {
              * @default false
              */
             traces: boolean;
+        };
+        /** ActivitySelection */
+        ActivitySelection: {
+            /**
+             * Agent Name
+             * @default
+             */
+            agent_name: string;
+            /**
+             * Execution Ids
+             * @default []
+             */
+            execution_ids: string[];
+            /**
+             * Filters
+             * @default []
+             */
+            filters: components["schemas"]["MetadataFilter"][];
+            /**
+             * Sample Percent
+             * @default 100
+             */
+            sample_percent: number;
+            /** Sample Size */
+            sample_size?: number | null;
+            /**
+             * Service
+             * @default
+             */
+            service: string;
+            /**
+             * Source
+             * @default traces
+             * @enum {string}
+             */
+            source: "traces" | "requests" | "both";
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
         };
         /** AdaptiveRouterWeights */
         AdaptiveRouterWeights: {
@@ -29873,10 +29767,20 @@ export interface components {
              */
             master_key?: string | null;
             /**
+             * Max Batch File Records
+             * @description max records (non-blank lines) per batch input file for /v1/files uploads with purpose=batch, applied per key. A key's metadata can override it and a team's metadata adds a team cap on top, both set by a proxy admin; the lower of the key's value and the team's value wins. Unset means no limit
+             */
+            max_batch_file_records?: number | null;
+            /**
              * Max Batch File Size Mb
              * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
              */
             max_batch_file_size_mb?: number | null;
+            /**
+             * Max Batch File Uploads Per Day
+             * @description max /v1/files uploads with purpose=batch per key (per user for JWT callers) per UTC day. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit
+             */
+            max_batch_file_uploads_per_day?: number | null;
             /**
              * Max Failed Login Attempts Per Source
              * @description Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Half this value, rounded down but at least 1, is the allowance for one username from that address; one more blocks that address for that username only, and its further failures stop counting toward the address limit, so a script stuck on one account does not block everyone behind a shared address. The per-address limit is only enforced when `trusted_proxy_ranges` is set: to the proxies in front of LiteLLM, or to an empty list when clients connect directly. Left unset, the peer address may be a shared ingress and only the per-username half runs. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10
@@ -29889,6 +29793,11 @@ export interface components {
             max_failed_login_attempts_per_source_overrides?: {
                 [key: string]: number;
             } | null;
+            /**
+             * Max File Downloads Per Minute
+             * @description max GET /v1/files/{file_id}/content calls per key (per user for JWT callers) per file per minute. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit
+             */
+            max_file_downloads_per_minute?: number | null;
             /**
              * Max File Size Mb
              * @description max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider
@@ -30885,6 +30794,11 @@ export interface components {
              */
             eligible: number;
             /**
+             * Failed Tasks
+             * @default 0
+             */
+            failed_tasks: number;
+            /**
              * Grouped Batches
              * @default 0
              */
@@ -31091,6 +31005,8 @@ export interface components {
             /** Default Model */
             default_model?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | null;
+            /** Models */
+            models?: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -33208,6 +33124,20 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** InFlight */
+        InFlight: {
+            /** Agent */
+            agent: string;
+            /** Execution Id */
+            execution_id: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Trace Id */
+            trace_id: string;
+        };
         /**
          * IncompleteDetails
          * @description Details about why the response is incomplete.
@@ -33464,6 +33394,11 @@ export interface components {
         /** Job */
         Job: {
             /**
+             * Activities
+             * @default []
+             */
+            activities: components["schemas"]["Activity"][];
+            /**
              * Assessments
              * @default []
              */
@@ -33482,6 +33417,7 @@ export interface components {
              * @default {
              *       "candidates": 0,
              *       "eligible": 0,
+             *       "failed_tasks": 0,
              *       "grouped_batches": 0,
              *       "grouping_batches": 0,
              *       "inconclusive": 0,
@@ -33516,6 +33452,21 @@ export interface components {
             id: string;
             /** Lease Until */
             lease_until?: string | null;
+            /**
+             * Reading
+             * @default []
+             */
+            reading: components["schemas"]["InFlight"][];
+            /**
+             * Reviewed
+             * @default 0
+             */
+            reviewed: number;
+            /**
+             * Reviews
+             * @default []
+             */
+            reviews: components["schemas"]["Review"][];
             /** Revision */
             revision: number;
             sample?: components["schemas"]["Sample"] | null;
@@ -34520,6 +34471,8 @@ export interface components {
             /** Default Model */
             default_model?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Models */
+            models?: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -37351,6 +37304,10 @@ export interface components {
             client_private_key_id?: string | null;
             /** Client Secret */
             client_secret?: string | null;
+            /** Dcr Issuer */
+            dcr_issuer?: string | null;
+            /** Dcr Server Url */
+            dcr_server_url?: string | null;
             /** Id Jag Resource */
             id_jag_resource?: string | null;
             /** Id Jag Resource Token Endpoint */
@@ -38364,6 +38321,16 @@ export interface components {
             /** Top Models */
             top_models: components["schemas"]["ModelInsightMetric"][];
         };
+        /** ModelMessage */
+        ModelMessage: {
+            /** Content */
+            content: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "system" | "user" | "assistant";
+        };
         /** ModelParams */
         ModelParams: {
             /** Litellm Params */
@@ -38376,6 +38343,11 @@ export interface components {
         };
         /** ModelRequest */
         ModelRequest: {
+            /**
+             * Messages
+             * @default []
+             */
+            messages: components["schemas"]["ModelMessage"][];
             /** Prompt */
             prompt: string;
             /**
@@ -38405,6 +38377,11 @@ export interface components {
         ModelResult: {
             /** Content */
             content: string;
+            /**
+             * Context Exceeded
+             * @default false
+             */
+            context_exceeded: boolean;
             /** Cost */
             cost: number;
         };
@@ -38530,6 +38507,8 @@ export interface components {
             model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            /** Models */
+            models?: string[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /**
              * Rpm Limit
@@ -39442,373 +39421,6 @@ export interface components {
             password?: {
                 [key: string]: unknown;
             } | null;
-        };
-        /** ObservedAccount */
-        ObservedAccount: {
-            /** Connection Id */
-            connection_id: string;
-            /** Login */
-            login: string;
-        };
-        /** ObservedApp */
-        ObservedApp: {
-            /** Api Url */
-            api_url?: string | null;
-            /** Callback Url */
-            callback_url?: string | null;
-            /**
-             * Can Install
-             * @default false
-             */
-            can_install: boolean;
-            /** Configured */
-            configured: boolean;
-        };
-        /** ObservedApps */
-        ObservedApps: {
-            github: components["schemas"]["ObservedApp"];
-            gitlab: components["schemas"]["ObservedApp"];
-        };
-        /** ObservedAuthorization */
-        ObservedAuthorization: {
-            /** Url */
-            url: string;
-        };
-        /** ObservedConnection */
-        ObservedConnection: {
-            /** Api Url */
-            api_url: string;
-            /**
-             * Connection Type
-             * @enum {string}
-             */
-            connection_type: "token" | "app";
-            /** Has Token */
-            has_token: boolean;
-            /**
-             * Id
-             * @default
-             */
-            id: string;
-            /** Ready */
-            ready: boolean;
-            /** Repos */
-            repos: string[];
-            /**
-             * Source Provider
-             * @enum {string}
-             */
-            source_provider: "github" | "gitlab";
-            /** Update Interval Minutes */
-            update_interval_minutes: number;
-        };
-        /** ObservedConnectionIdentities */
-        ObservedConnectionIdentities: {
-            /** Api Url */
-            api_url: string;
-            /** Id */
-            id: string;
-            /** Identity Map */
-            identity_map: {
-                [key: string]: string;
-            };
-            /** Repos */
-            repos: string[];
-            /**
-             * Source Provider
-             * @enum {string}
-             */
-            source_provider: "github" | "gitlab";
-            /** Unmatched Logins */
-            unmatched_logins: string[];
-        };
-        /** ObservedHumanSummary */
-        ObservedHumanSummary: {
-            /** Median Merge Hours */
-            median_merge_hours: number | null;
-        };
-        /** ObservedIdentities */
-        ObservedIdentities: {
-            /**
-             * Connections
-             * @default []
-             */
-            connections: components["schemas"]["ObservedConnectionIdentities"][];
-            /** Gateway Emails */
-            gateway_emails: string[];
-            /** Identity Map */
-            identity_map: {
-                [key: string]: string;
-            };
-            /** Unmatched Logins */
-            unmatched_logins: string[];
-        };
-        /** ObservedIdentityUpdate */
-        ObservedIdentityUpdate: {
-            /** Accounts */
-            accounts?: components["schemas"]["ObservedAccount"][] | null;
-            /** Email */
-            email: string;
-            /**
-             * Logins
-             * @default []
-             */
-            logins: string[];
-        };
-        /** ObservedPeriod */
-        ObservedPeriod: {
-            /** Agent Authored */
-            agent_authored: number;
-            /** Agents Without Requester */
-            agents_without_requester: number;
-            /** Explicitly Titled Revert Prs */
-            explicitly_titled_revert_prs: number;
-            /** Human Authored */
-            human_authored: number;
-            human_summary: components["schemas"]["ObservedHumanSummary"];
-            /** Matched Internal Prs */
-            matched_internal_prs: number;
-            /** Matched Users Recorded Spend */
-            matched_users_recorded_spend: number;
-            /** Median Merge Hours */
-            median_merge_hours: number | null;
-            /** Merged Prs */
-            merged_prs: number;
-            /** Missing Author */
-            missing_author: number;
-            /** New Bug Labeled Issues */
-            new_bug_labeled_issues: number | null;
-            /** New Regression Labeled Issues */
-            new_regression_labeled_issues: number | null;
-            /**
-             * Spend Observation
-             * @enum {string}
-             */
-            spend_observation: "records_present" | "no_records";
-            window: components["schemas"]["ObservedWindow"];
-        };
-        /** ObservedPeriods */
-        ObservedPeriods: {
-            current: components["schemas"]["ObservedPeriod"];
-            last_year: components["schemas"]["ObservedPeriod"];
-            previous: components["schemas"]["ObservedPeriod"];
-        };
-        /** ObservedPerson */
-        ObservedPerson: {
-            /**
-             * Accounts
-             * @default []
-             */
-            accounts: components["schemas"]["ObservedAccount"][];
-            /** Email */
-            email: string;
-            /** Logins */
-            logins: string[];
-            /** Name */
-            name: string;
-            periods: components["schemas"]["ObservedPersonPeriods"];
-        };
-        /** ObservedPersonPeriod */
-        ObservedPersonPeriod: {
-            /** Declared Agent Owned */
-            declared_agent_owned: number;
-            /** Direct Authored */
-            direct_authored: number;
-            /** Gateway Recorded Spend */
-            gateway_recorded_spend: number;
-            /** Median Merge Hours */
-            median_merge_hours: number | null;
-            /** Merged Prs */
-            merged_prs: number;
-            /** Pr Urls */
-            pr_urls: string[];
-            /** Prs Per Week */
-            prs_per_week: number;
-            /** Recorded Spend Per Attributed Pr */
-            recorded_spend_per_attributed_pr: number | null;
-            /**
-             * Spend Observation
-             * @enum {string}
-             */
-            spend_observation: "records_present" | "no_records";
-        };
-        /** ObservedPersonPeriods */
-        ObservedPersonPeriods: {
-            current: components["schemas"]["ObservedPersonPeriod"];
-            last_year: components["schemas"]["ObservedPersonPeriod"];
-            previous: components["schemas"]["ObservedPersonPeriod"];
-        };
-        /** ObservedPullPeriods */
-        ObservedPullPeriods: {
-            /** Current */
-            current: components["schemas"]["ObservedPullResponse"][];
-            /** Last Year */
-            last_year: components["schemas"]["ObservedPullResponse"][];
-            /** Previous */
-            previous: components["schemas"]["ObservedPullResponse"][];
-        };
-        /** ObservedPullResponse */
-        ObservedPullResponse: {
-            /**
-             * Agent
-             * @default false
-             */
-            agent: boolean;
-            /** Author */
-            author: string;
-            branch_cost: components["schemas"]["ROIBranchAttribution"];
-            /**
-             * Connection Id
-             * @default
-             */
-            connection_id: string;
-            /** Created At */
-            created_at?: string | null;
-            /** Merge Hours */
-            merge_hours: number | null;
-            /**
-             * Merged At
-             * Format: date-time
-             */
-            merged_at: string;
-            /** Number */
-            number: number;
-            /**
-             * Profile Email
-             * @default
-             */
-            profile_email: string;
-            /** Repo */
-            repo: string;
-            /**
-             * Requester
-             * @default
-             */
-            requester: string;
-            /**
-             * Source Branch
-             * @default
-             */
-            source_branch: string;
-            /**
-             * Source Repo
-             * @default
-             */
-            source_repo: string;
-            /** Title */
-            title: string;
-            /** Url */
-            url: string;
-        };
-        /** ObservedReport */
-        ObservedReport: {
-            /**
-             * Captured At
-             * Format: date-time
-             */
-            captured_at: string;
-            /**
-             * Connections
-             * @default []
-             */
-            connections: components["schemas"]["ObservedSource"][];
-            /** People */
-            people: components["schemas"]["ObservedPerson"][];
-            periods: components["schemas"]["ObservedPeriods"];
-            pulls: components["schemas"]["ObservedPullPeriods"];
-            /** Repos */
-            repos: string[];
-            /**
-             * Source Provider
-             * @enum {string}
-             */
-            source_provider: "github" | "gitlab" | "mixed";
-            /** Unlinked Branches */
-            unlinked_branches: components["schemas"]["ROIBranchSpend"][];
-            /** Unmatched Logins */
-            unmatched_logins: string[];
-        };
-        /** ObservedReportResponse */
-        ObservedReportResponse: {
-            report: components["schemas"]["ObservedReport"] | null;
-        };
-        /** ObservedSettings */
-        ObservedSettings: {
-            /** Api Url */
-            api_url: string;
-            /**
-             * Connection Type
-             * @enum {string}
-             */
-            connection_type: "token" | "app";
-            /**
-             * Connections
-             * @default []
-             */
-            connections: components["schemas"]["ObservedConnection"][];
-            /** Has Token */
-            has_token: boolean;
-            /**
-             * Id
-             * @default
-             */
-            id: string;
-            /** Ready */
-            ready: boolean;
-            /** Repos */
-            repos: string[];
-            /**
-             * Source Provider
-             * @enum {string}
-             */
-            source_provider: "github" | "gitlab";
-            /** Update Interval Minutes */
-            update_interval_minutes: number;
-        };
-        /** ObservedSettingsUpdate */
-        ObservedSettingsUpdate: {
-            /** Api Url */
-            api_url: string;
-            /** Connection Id */
-            connection_id?: string | null;
-            /** Repos */
-            repos: string[];
-            /**
-             * Source Provider
-             * @enum {string}
-             */
-            source_provider: "github" | "gitlab";
-            /** Token */
-            token?: string | null;
-            /** Update Interval Minutes */
-            update_interval_minutes?: number | null;
-        };
-        /** ObservedSource */
-        ObservedSource: {
-            /** Api Url */
-            api_url: string;
-            /** Id */
-            id: string;
-            /** Repos */
-            repos: string[];
-            /**
-             * Source Provider
-             * @enum {string}
-             */
-            source_provider: "github" | "gitlab";
-        };
-        /** ObservedWindow */
-        ObservedWindow: {
-            /**
-             * End
-             * Format: date
-             */
-            end: string;
-            /**
-             * Start
-             * Format: date
-             */
-            start: string;
         };
         /**
          * OpenIdConnectSecurityScheme
@@ -41454,27 +41066,17 @@ export interface components {
              * @default 0
              */
             offset: number;
-            settings: components["schemas"]["LensSettings"];
+            selection: components["schemas"]["ActivitySelection"];
         };
         /** Progress */
         Progress: {
-            /**
-             * @default {
-             *       "candidates": 0,
-             *       "eligible": 0,
-             *       "grouped_batches": 0,
-             *       "grouping_batches": 0,
-             *       "inconclusive": 0,
-             *       "investigated": 0,
-             *       "partial": 0,
-             *       "screened": 0,
-             *       "selected": 0,
-             *       "unassessable": 0
-             *     }
-             */
-            coverage: components["schemas"]["Coverage"];
+            activity?: components["schemas"]["Activity"] | null;
+            coverage?: components["schemas"]["Coverage"] | null;
+            /** Reading */
+            reading?: components["schemas"]["InFlight"][] | null;
+            review?: components["schemas"]["Review"] | null;
             /** Stage */
-            stage: string;
+            stage?: string | null;
         };
         /** Prompt */
         Prompt: {
@@ -41892,412 +41494,6 @@ export interface components {
                     [key: string]: unknown;
                 };
             } | null;
-        };
-        /** ROIBranchAttribution */
-        ROIBranchAttribution: {
-            /** Branch */
-            branch: string;
-            /** Repo */
-            repo: string;
-            /**
-             * Requests
-             * @default 0
-             */
-            requests: number;
-            /** Spend */
-            spend?: number | null;
-            /**
-             * Status
-             * @default unattributed
-             * @enum {string}
-             */
-            status: "matched" | "unattributed" | "ambiguous" | "unavailable";
-        };
-        /** ROIBranchMetrics */
-        ROIBranchMetrics: {
-            /** Cost Per Hour */
-            cost_per_hour?: number | null;
-            /**
-             * Hours
-             * @default 0
-             */
-            hours: number;
-            /**
-             * Matched Pulls
-             * @default 0
-             */
-            matched_pulls: number;
-            /**
-             * Spend
-             * @default 0
-             */
-            spend: number;
-            /**
-             * Total Tagged Spend
-             * @default 0
-             */
-            total_tagged_spend: number;
-            /**
-             * Unlinked Spend
-             * @default 0
-             */
-            unlinked_spend: number;
-        };
-        /** ROIBranchSpend */
-        ROIBranchSpend: {
-            /** Branch */
-            branch: string;
-            /** Repo */
-            repo: string;
-            /** Requests */
-            requests: number;
-            /** Spend */
-            spend: number;
-        };
-        /** ROIEstimateResponse */
-        ROIEstimateResponse: {
-            /**
-             * Cached
-             * @default false
-             */
-            cached: boolean;
-            /** Effort Basis */
-            effort_basis?: string | null;
-            /** Evidence Source */
-            evidence_source?: string | null;
-            /** Hours */
-            hours: number | null;
-            /** Model */
-            model?: string | null;
-            /** Reasoning */
-            reasoning: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "estimated" | "needs_review" | "error";
-        };
-        /** ROIEstimatorModel */
-        ROIEstimatorModel: {
-            /** Model Name */
-            model_name: string;
-            /** Provider Models */
-            provider_models: string[];
-        };
-        /** ROIIdentityMapResponse */
-        ROIIdentityMapResponse: {
-            /** Identity Map */
-            identity_map: {
-                [key: string]: string;
-            };
-            report: components["schemas"]["ROISummaryResponse"] | null;
-        };
-        /** ROIIdentityMapUpdate */
-        ROIIdentityMapUpdate: {
-            /** Email */
-            email: string | null;
-            /** Github Login */
-            github_login: string;
-        };
-        /** ROIMetricsResponse */
-        ROIMetricsResponse: {
-            /** Cohort People */
-            cohort_people: number;
-            /** Cost Per Hour */
-            cost_per_hour: number | null;
-            /** Estimated Prs */
-            estimated_prs: number;
-            /** Excluded Spend */
-            excluded_spend: number;
-            /** Hours Per Dollar */
-            hours_per_dollar: number | null;
-            /** Matched Prs */
-            matched_prs: number;
-            /** Matched Spend */
-            matched_spend: number;
-            /** Merged Prs */
-            merged_prs: number;
-            /** Output Hours */
-            output_hours: number;
-            /** Pending Prs */
-            pending_prs: number;
-            /** People With Prs */
-            people_with_prs: number;
-            /** Total Output Hours */
-            total_output_hours: number;
-            /** Total Spend */
-            total_spend: number;
-        };
-        /** ROIPersonResponse */
-        ROIPersonResponse: {
-            /** Cost Per Hour */
-            cost_per_hour: number | null;
-            /** Eligible */
-            eligible: boolean;
-            /** Email */
-            email: string;
-            /** Estimated Prs */
-            estimated_prs: number;
-            /** Hours */
-            hours: number;
-            /** Id */
-            id: string;
-            /** Logins */
-            logins: string[];
-            /** Match Methods */
-            match_methods: string[];
-            /** Pending Prs */
-            pending_prs: number;
-            /** Prs */
-            prs: number;
-            /** Spend */
-            spend: number | null;
-        };
-        /** ROIPullResponse */
-        ROIPullResponse: {
-            /** Additions */
-            additions: number;
-            branch_cost?: components["schemas"]["ROIBranchAttribution"];
-            /** Cache Key */
-            cache_key?: string | null;
-            /** Changed Files */
-            changed_files: number;
-            /** Commit Count */
-            commit_count: number;
-            /** Deletions */
-            deletions: number;
-            /** Email */
-            email: string;
-            /** Emails */
-            emails: string[];
-            estimate: components["schemas"]["ROIEstimateResponse"];
-            /** Head Sha */
-            head_sha: string;
-            /** Incomplete Metadata */
-            incomplete_metadata: boolean;
-            /** Login */
-            login: string;
-            /** Match Method */
-            match_method: string;
-            /** Matched */
-            matched: boolean;
-            /** Merged At */
-            merged_at: string;
-            /** Number */
-            number: number;
-            /** Profile Email */
-            profile_email: string;
-            /** Repo */
-            repo: string;
-            /**
-             * Source Branch
-             * @default
-             */
-            source_branch: string;
-            /**
-             * Source Repo
-             * @default
-             */
-            source_repo: string;
-            /** Title */
-            title: string;
-            /** Url */
-            url: string;
-        };
-        /** ROIReportResponse */
-        ROIReportResponse: {
-            report: components["schemas"]["ROISummaryResponse"] | null;
-        };
-        /** ROIRepositoriesResponse */
-        ROIRepositoriesResponse: {
-            /** Has More */
-            has_more: boolean;
-            /** Page */
-            page: number;
-            /** Repositories */
-            repositories: components["schemas"]["ROIRepository"][];
-        };
-        /** ROIRepository */
-        ROIRepository: {
-            /** Archived */
-            archived: boolean;
-            /** Name */
-            name: string;
-            /** Visibility */
-            visibility: string;
-        };
-        /** ROISettingsResponse */
-        ROISettingsResponse: {
-            /** Available Models */
-            available_models: string[];
-            /** Backfill Days */
-            backfill_days: number;
-            /** Default Prompt */
-            default_prompt: string;
-            /** Estimator Model */
-            estimator_model: string;
-            /**
-             * Estimator Models
-             * @default []
-             */
-            estimator_models: components["schemas"]["ROIEstimatorModel"][];
-            /** Estimator Prompt */
-            estimator_prompt: string;
-            /** Github Api Url */
-            github_api_url: string;
-            /**
-             * Gitlab Api Url
-             * @default https://gitlab.com/api/v4
-             */
-            gitlab_api_url: string;
-            /** Has Estimator Key */
-            has_estimator_key: boolean;
-            /** Has Github Token */
-            has_github_token: boolean;
-            /**
-             * Has Gitlab Token
-             * @default false
-             */
-            has_gitlab_token: boolean;
-            /** Identity Map */
-            identity_map: {
-                [key: string]: string;
-            };
-            /** Ready */
-            ready: boolean;
-            /**
-             * Report Mode
-             * @default legacy
-             * @enum {string}
-             */
-            report_mode: "legacy" | "observed";
-            /** Repos */
-            repos: string[];
-            /**
-             * Source Provider
-             * @default github
-             * @enum {string}
-             */
-            source_provider: "github" | "gitlab";
-            /** Update Interval Minutes */
-            update_interval_minutes: number;
-        };
-        /** ROISettingsUpdate */
-        ROISettingsUpdate: {
-            /** Backfill Days */
-            backfill_days?: number | null;
-            /** Estimator Key */
-            estimator_key?: string | null;
-            /** Estimator Model */
-            estimator_model?: string | null;
-            /** Estimator Prompt */
-            estimator_prompt?: string | null;
-            /** Github Api Url */
-            github_api_url?: string | null;
-            /** Github Token */
-            github_token?: string | null;
-            /** Gitlab Api Url */
-            gitlab_api_url?: string | null;
-            /** Gitlab Token */
-            gitlab_token?: string | null;
-            /** Report Mode */
-            report_mode?: ("legacy" | "observed") | null;
-            /** Repos */
-            repos?: string[] | null;
-            /** Source Provider */
-            source_provider?: ("github" | "gitlab") | null;
-            /** Update Interval Minutes */
-            update_interval_minutes?: number | null;
-        };
-        /** ROISummaryResponse */
-        ROISummaryResponse: {
-            branch_metrics?: components["schemas"]["ROIBranchMetrics"];
-            /** Effort Basis */
-            effort_basis: string | null;
-            /** End */
-            end: string;
-            /** Estimator Model */
-            estimator_model: string;
-            /** Estimator Prompt */
-            estimator_prompt: string;
-            /** Id */
-            id: string | null;
-            metrics: components["schemas"]["ROIMetricsResponse"];
-            /** Mode */
-            mode: string;
-            /** People */
-            people: components["schemas"]["ROIPersonResponse"][];
-            /** Pulls */
-            pulls: components["schemas"]["ROIPullResponse"][];
-            /** Repos */
-            repos: string[];
-            /**
-             * Source Provider
-             * @default github
-             * @enum {string}
-             */
-            source_provider: "github" | "gitlab";
-            /** Start */
-            start: string;
-            /** Synced At */
-            synced_at: string;
-            /** Trend */
-            trend: components["schemas"]["ROITrendResponse"][];
-            /**
-             * Unlinked Branches
-             * @default []
-             */
-            unlinked_branches: components["schemas"]["ROIBranchSpend"][];
-            /** Warnings */
-            warnings: string[];
-        };
-        /** ROISyncStatus */
-        ROISyncStatus: {
-            /** Done */
-            done: number;
-            /**
-             * Elapsed Seconds
-             * @default 0
-             */
-            elapsed_seconds: number;
-            /** Error */
-            error: string | null;
-            /** Estimated */
-            estimated: number;
-            /** Finished At */
-            finished_at?: string | null;
-            /** Needs Attention */
-            needs_attention: number;
-            /** Next Update */
-            next_update?: string | null;
-            /**
-             * Phase
-             * @enum {string}
-             */
-            phase: "idle" | "spend" | "repositories" | "estimates" | "complete" | "cancelled" | "error";
-            /** Remaining Seconds */
-            remaining_seconds?: number | null;
-            /** Reused */
-            reused: number;
-            /** Running */
-            running: boolean;
-            /** Stage */
-            stage: string;
-            /** Started At */
-            started_at?: string | null;
-            /** Total */
-            total: number;
-        };
-        /** ROITrendResponse */
-        ROITrendResponse: {
-            /** Date */
-            date: string;
-            /** Hours */
-            hours: number;
-            /** Prs */
-            prs: number;
-            /** Spend */
-            spend: number;
         };
         /**
          * RankingOptions
@@ -44641,6 +43837,86 @@ export interface components {
             ServiceUnavailableErrorRetries?: number | null;
             /** Timeouterrorretries */
             TimeoutErrorRetries?: number | null;
+        };
+        /** Review */
+        Review: {
+            /** Agent */
+            agent: string;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Cannot Assess
+             * @default false
+             */
+            cannot_assess: boolean;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Execution Id */
+            execution_id: string;
+            /** Model */
+            model: string;
+            /** Name */
+            name: string;
+            /**
+             * Reasoning
+             * @default
+             */
+            reasoning: string;
+            /**
+             * Spans
+             * @default []
+             */
+            spans: components["schemas"]["ReviewSpan"][];
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["ToolCount"][];
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Verdicts
+             * @default []
+             */
+            verdicts: components["schemas"]["ReviewVerdict"][];
+        };
+        /** ReviewPage */
+        ReviewPage: {
+            /** Reviewed */
+            reviewed: number;
+            /** Reviews */
+            reviews: components["schemas"]["Review"][];
+        };
+        /** ReviewSpan */
+        ReviewSpan: {
+            /**
+             * Cited
+             * @default false
+             */
+            cited: boolean;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Preview */
+            preview: string;
+            /** Span Id */
+            span_id: string;
+        };
+        /** ReviewVerdict */
+        ReviewVerdict: {
+            /** Check Id */
+            check_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "issue" | "pattern";
+            /** Summary */
+            summary: string;
         };
         /**
          * RoleMappings
@@ -47409,6 +46685,16 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** ToolCount */
+        ToolCount: {
+            /** Calls */
+            calls: number;
+            /**
+             * Name
+             * @enum {string}
+             */
+            name: "model" | "read" | "search" | "python" | "catalog" | "review_catalog" | "read_reviews" | "search_reviews" | "history" | "checkpoint";
+        };
         /** ToolDetailResponse */
         ToolDetailResponse: {
             /** Overrides */
@@ -47719,6 +47005,33 @@ export interface components {
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
         };
+        /** TraceFindingCount */
+        TraceFindingCount: {
+            /** Finding Count */
+            finding_count: number | null;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
+        /** TraceFindingsRequest */
+        TraceFindingsRequest: {
+            /** Traces */
+            traces: components["schemas"]["TraceIdentity"][];
+        };
+        /** TraceIdentity */
+        TraceIdentity: {
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
         /** TracePage */
         TracePage: {
             /** Data */
@@ -47730,6 +47043,11 @@ export interface components {
         TracePart: {
             /** Content */
             content: string;
+            /**
+             * End Time
+             * @default
+             */
+            end_time: string;
             /** Execution Id */
             execution_id: string;
             /** Kind */
@@ -47743,6 +47061,11 @@ export interface components {
             parent_span_id: string;
             /** Span Id */
             span_id: string;
+            /**
+             * Start Time
+             * @default
+             */
+            start_time: string;
             /**
              * Truncated
              * @default false
@@ -47886,17 +47209,6 @@ export interface components {
             /** Sql */
             sql: string;
         };
-        /** TraceQueryStatistics */
-        TraceQueryStatistics: {
-            /** Bytes Read */
-            bytes_read: number | string;
-            /** Elapsed */
-            elapsed: number;
-            /** Rows Read */
-            rows_read: number | string;
-        } & {
-            [key: string]: unknown;
-        };
         /** TraceQueryTable */
         TraceQueryTable: {
             /** Columns */
@@ -47913,13 +47225,6 @@ export interface components {
             data: {
                 [key: string]: components["schemas"]["JsonValue"];
             }[];
-            /** Meta */
-            meta: components["schemas"]["TraceQueryColumn"][];
-            /** Rows */
-            rows: number | string;
-            statistics: components["schemas"]["TraceQueryStatistics"];
-        } & {
-            [key: string]: unknown;
         };
         /** TraceSummary */
         TraceSummary: {
@@ -48232,6 +47537,8 @@ export interface components {
             default_model?: string | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Models */
+            models?: string[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** User Id */
             user_id: string;
@@ -54331,6 +53638,7 @@ export interface operations {
             query?: {
                 code?: string | null;
                 state?: string | null;
+                iss?: string | null;
                 error?: string | null;
                 error_description?: string | null;
                 error_uri?: string | null;
@@ -63037,6 +62345,39 @@ export interface operations {
             };
         };
     };
+    trace_findings_lens_traces_findings_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TraceFindingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceFindingCount"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     watch_all_lens_watch_all_post: {
         parameters: {
             query?: never;
@@ -63651,6 +62992,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_reviews_lens__lens_id__runs__job_id__reviews_get: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewPage"];
                 };
             };
             /** @description Validation Error */
@@ -70118,538 +69493,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-        };
-    };
-    test_roi_calculator_connections_roi_calculator_connections_test_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISettingsResponse"];
-                };
-            };
-        };
-    };
-    update_roi_calculator_identity_map_roi_calculator_identity_map_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ROIIdentityMapUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROIIdentityMapResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    observed_apps_roi_calculator_observed_apps_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObservedApps"];
-                };
-            };
-        };
-    };
-    get_observed_identities_roi_calculator_observed_identities_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObservedIdentities"];
-                };
-            };
-        };
-    };
-    save_observed_identities_roi_calculator_observed_identities_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ObservedIdentityUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObservedReportResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_observed_authorization_roi_calculator_observed_oauth__provider__start_post: {
-        parameters: {
-            query?: {
-                install?: boolean;
-            };
-            header?: never;
-            path: {
-                provider: "github" | "gitlab";
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObservedAuthorization"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_observed_report_roi_calculator_observed_report_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObservedReportResponse"];
-                };
-            };
-        };
-    };
-    observed_repositories_roi_calculator_observed_repositories_get: {
-        parameters: {
-            query?: {
-                connection?: string | null;
-                query?: string;
-                page?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROIRepositoriesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_observed_settings_roi_calculator_observed_settings_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObservedSettings"];
-                };
-            };
-        };
-    };
-    save_observed_settings_roi_calculator_observed_settings_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ObservedSettingsUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObservedSettings"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_observed_sync_roi_calculator_observed_sync_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISyncStatus"];
-                };
-            };
-        };
-    };
-    start_observed_sync_roi_calculator_observed_sync_post: {
-        parameters: {
-            query?: {
-                days?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISyncStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cancel_observed_sync_roi_calculator_observed_sync_delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISyncStatus"];
-                };
-            };
-        };
-    };
-    get_roi_calculator_report_roi_calculator_report_get: {
-        parameters: {
-            query?: {
-                mode?: "live" | "demo";
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROIReportResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_roi_calculator_repositories_roi_calculator_repositories_get: {
-        parameters: {
-            query?: {
-                query?: string;
-                page?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROIRepositoriesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_roi_calculator_settings_roi_calculator_settings_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISettingsResponse"];
-                };
-            };
-        };
-    };
-    update_roi_calculator_settings_roi_calculator_settings_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ROISettingsUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISettingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reset_roi_calculator_setup_roi_calculator_setup_reset_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISettingsResponse"];
-                };
-            };
-        };
-    };
-    get_roi_calculator_sync_status_roi_calculator_sync_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISyncStatus"];
-                };
-            };
-        };
-    };
-    start_roi_calculator_sync_roi_calculator_sync_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISyncStatus"];
-                };
-            };
-        };
-    };
-    cancel_roi_calculator_sync_roi_calculator_sync_delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISyncStatus"];
                 };
             };
         };
@@ -78613,6 +77456,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_otlp_traces_v1_logs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

@@ -7,11 +7,13 @@ import socket
 import threading
 import time
 from pathlib import Path
-from typing import Iterator, Tuple
+from typing import Final, Iterator, Tuple
 
 import pytest
 import uvicorn
 from dotenv import load_dotenv
+
+from tests._master_key import MASTER_KEY
 
 load_dotenv()
 
@@ -34,7 +36,7 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
 _verbose_state = VerboseReporterState()
 
 PROXY_CONFIG_PATH = Path(__file__).parent / "google_genai_proxy_test_config.yaml"
-PROXY_MASTER_KEY = "sk-unified-google-tests-4f9b2c7d8e1a"
+PROXY_MASTER_KEY: Final = MASTER_KEY
 PROXY_START_TIMEOUT_S = 30.0
 
 

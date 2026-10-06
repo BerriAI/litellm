@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, Field
 
 from litellm.litellm_core_utils.secret_redaction import redact_internal_details
 from litellm.proxy._types import LitellmUserRoles, ModelAccessDeniedProxyException, ProxyException, UserAPIKeyAuth
@@ -20,7 +20,9 @@ from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.lens.billing import validate_key
 from litellm.proxy.lens.inference import Deployment, deployment_prices
 from litellm.proxy.lens.models import (
+    ActivitySelection,
     Claim,
+    Coverage,
     Execution,
     ExecutionContent,
     FindingDraft,
@@ -34,10 +36,12 @@ from litellm.proxy.lens.models import (
     ModelResult,
     Progress,
     Result,
+    ReviewPage,
     RunRequest,
     Sample,
     Scope,
-    Step,
+    TraceFindingCount,
+    TraceFindingsRequest,
     WatchAllResult,
     WatchSkipped,
     Worker,
@@ -47,18 +51,24 @@ from litellm.proxy.lens.release import PROTOCOL_VERSION, release_tag, worker_ima
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
 from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
-    add_step,
+    apply_progress,
     can_access,
+    cancel_job,
     claim_job,
     current_job,
+    end_job,
     merge_finding,
     next_scan_start,
     queue_job,
     replace_job,
+    result_status,
+    reviews_after,
     scheduled_window,
     snapshot_finding,
+    summarized,
 )
 from litellm.proxy.tracing_runtime import provide_storage
+from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"])
 _bearer: Final = HTTPBearer()
@@ -129,7 +139,7 @@ def required(lens: Lens | None) -> Lens:
     return lens
 
 
-def validate_selection(settings: LensSettings) -> None:
+def validate_selection(settings: ActivitySelection) -> None:
     for identity in settings.execution_ids:
         try:
             source, _, _, _ = parse_execution(identity)
@@ -199,7 +209,7 @@ async def validate_workers(settings: LensSettings, scope: Scope) -> None:
 async def list_lenses(auth: Auth, storage: StorageDep) -> LensList:
     scope: Final = user_scope(auth)
     return LensList(
-        lenses=tuple(e for e in await repository().lenses() if can_access(scope, e.scope)),
+        lenses=tuple(summarized(e) for e in await repository().lenses() if can_access(scope, e.scope)),
         workers=tuple(w for w in await repository().workers() if can_access(scope, w.scope)),
         tracing_enabled=storage is not None,
     )
@@ -232,6 +242,12 @@ async def activity_available(auth: Auth, storage: StorageDep) -> ActivityAvailab
 async def list_agents(auth: Auth, storage: StorageDep) -> tuple[str, ...]:
     scope: Final = user_scope(auth)
     return await source_reader(storage).agents(scope) if storage is not None else ()
+
+
+@router.post("/traces/findings", response_model=tuple[TraceFindingCount, ...])
+async def trace_findings(body: TraceFindingsRequest, auth: Auth) -> tuple[TraceFindingCount, ...]:
+    user_scope(auth)
+    return await repository().trace_findings(body.traces)
 
 
 def watching(lens: Lens) -> Lens:
@@ -329,7 +345,7 @@ async def run_lens(lens_id: str, body: RunRequest, auth: Auth) -> Lens:
 
 @router.get("/{lens_id}", response_model=Lens)
 async def read_lens(lens_id: str, auth: Auth) -> Lens:
-    return await get_lens(lens_id, user_scope(auth))
+    return summarized(await get_lens(lens_id, user_scope(auth)))
 
 
 @router.get("/{lens_id}/runs", response_model=tuple[Job, ...])
@@ -350,23 +366,17 @@ async def read_run(lens_id: str, job_id: str, auth: Auth) -> Job:
     return job
 
 
+@router.get("/{lens_id}/runs/{job_id}/reviews", response_model=ReviewPage)
+async def read_reviews(lens_id: str, job_id: str, auth: Auth, after: int = Query(default=0, ge=0)) -> ReviewPage:
+    return reviews_after(await read_run(lens_id, job_id, auth), after)
+
+
 @router.post("/{lens_id}/cancel", response_model=Lens)
 async def cancel_lens(lens_id: str, auth: Auth) -> Lens:
     await get_lens(lens_id, user_scope(auth, write=True))
     now: Final = datetime.now(timezone.utc)
 
-    def cancel(e: Lens) -> Lens:
-        job: Final = current_job(e)
-        if job is None:
-            return e
-        cancelled: Final = job.model_copy(
-            update=MappingProxyType({"status": "cancelled", "stage": "Cancelled", "finished_at": now})
-        )
-        return replace_job(e, cancelled).model_copy(
-            update=MappingProxyType({"next_run_at": now + timedelta(minutes=e.settings.interval_minutes)})
-        )
-
-    return required(await repository().update(lens_id, cancel))
+    return required(await repository().update(lens_id, lambda e: cancel_job(e, now)))
 
 
 @router.patch("/{lens_id}/findings/{finding_id}", response_model=Lens)
@@ -388,16 +398,16 @@ async def update_finding(lens_id: str, finding_id: str, body: FindingUpdate, aut
     )
 
 
-class Preview(BaseModel):
+class Preview(LiteLLMBaseModel):
     as_of: AwareDatetime | None = None
     offset: int = Field(default=0, ge=0)
-    settings: LensSettings
+    selection: ActivitySelection
     lookback_hours: LookbackHours = 24
 
 
 @router.post("/preview/sample", response_model=Sample)
 async def preview_sample(body: Preview, auth: Auth, storage: StorageDep) -> Sample:
-    validate_selection(body.settings)
+    validate_selection(body.selection)
     now: Final = min(body.as_of or datetime.now(timezone.utc), datetime.now(timezone.utc))
     try:
         start: Final = int((now - timedelta(hours=body.lookback_hours)).timestamp() * 1000)
@@ -406,7 +416,7 @@ async def preview_sample(body: Preview, auth: Auth, storage: StorageDep) -> Samp
         raise HTTPException(422, "Preview window exceeds the supported calendar range") from error
     return await source_reader(storage).sample(
         user_scope(auth),
-        body.settings,
+        body.selection,
         start,
         end,
         offset=body.offset,
@@ -414,7 +424,7 @@ async def preview_sample(body: Preview, auth: Auth, storage: StorageDep) -> Samp
     )
 
 
-class WorkerBilling(BaseModel):
+class WorkerBilling(LiteLLMBaseModel):
     analysis_key_id: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
@@ -504,15 +514,7 @@ async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth
         job: Final = current_job(e)
         if job is None or job.id != job_id or job.worker_id != worker.id:
             return e
-        renewed: Final = job.model_copy(
-            update=MappingProxyType(
-                {"stage": body.stage, "coverage": body.coverage, "lease_until": now + timedelta(minutes=5)}
-            )
-        )
-        return replace_job(
-            e,
-            renewed if body.stage == job.stage else add_step(renewed, Step(at=now, kind="stage", label=body.stage)),
-        )
+        return replace_job(e, apply_progress(job, body, now))
 
     required(await repository().update(lens_id, renew))
     await repository().heartbeat(worker.id, now.isoformat())
@@ -638,13 +640,10 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
         merged_ids: Final = frozenset(f.id for f in merged)
         return replace_job(
             e,
-            active.model_copy(
+            end_job(active, result_status(body), now).model_copy(
                 update=MappingProxyType(
                     {
-                        "status": "failed" if body.error else "completed",
-                        "stage": "Failed" if body.error else "Complete",
-                        "finished_at": now,
-                        "coverage": active.coverage if body.error else body.coverage,
+                        "coverage": active.coverage if body.error and body.coverage == Coverage() else body.coverage,
                         "error": body.error,
                         "assessments": body.assessments,
                         "findings": tuple(snapshot_finding(e, f, job.revision, now) for f in body.findings),
@@ -676,8 +675,7 @@ def merge_results(lens: Lens, result: Result, revision: int, now: datetime) -> L
 
 @router.post("/worker/{lens_id}/{job_id}/heartbeat", response_model=bool)
 async def heartbeat(lens_id: str, job_id: str, worker: WorkerAuth) -> bool:
-    _, job = await assigned(lens_id, job_id, worker)
-    return await progress(lens_id, job_id, Progress(stage=job.stage, coverage=job.coverage), worker)
+    return await progress(lens_id, job_id, Progress(), worker)
 
 
 async def claim_candidate(candidate: Lens, worker: Worker, now: datetime) -> Claim | None:

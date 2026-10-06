@@ -34,7 +34,7 @@ from typing import Final, get_args
 import litellm
 from litellm.types.llms.openai import REASONING_EFFORT
 
-REASONING_EFFORT_ADVERTISEMENT_ORDER: Final = get_args(REASONING_EFFORT)
+REASONING_EFFORT_ADVERTISEMENT_ORDER: Final[tuple[str, ...]] = get_args(REASONING_EFFORT)
 _EMPTY_ENTRY: Final[Mapping[str, object]] = MappingProxyType({})
 
 _EFFORT_FLAGS: Final = (
