@@ -6,7 +6,7 @@ This folder owns how Rust inference reaches the selected cache: global cache sel
 
 `python/` delegates operations to the selected Python cache without discovering configuration. `native/` owns native backend construction, configuration projection, facade validation, embedding and storage bindings, including experimental V2 handles. Neither adapter depends on shared selection or the other adapter. Shared composition depends on the adapters, and routes use only the parent module's exports
 
-Keys follow the selected storage; follow `.agents/skills/response-cache/SKILL.md` at the workspace root. `python/` asks the Python cache for its key and does not project one in Rust
+Keys follow the selected storage; see the Keys section of `crates/cache-response/AGENTS.md`. `python/` asks the Python cache for its key and does not project one in Rust
 
 `SemanticExecution` belongs here because its steps select cache operations and invoke the Python embedder. Use the shared `Execution` handle and inline lifecycle driver; do not duplicate coroutine state validation, runtime waiting or GIL machinery. Python embedding awaits stay in the caller's task, and cancellation must prevent later backend or batch operations from starting
 

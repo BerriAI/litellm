@@ -18,8 +18,6 @@ Keep cache misses and storage failures distinguishable in return values. Core ow
 
 Define lookup placement explicitly relative to authorization, deployment and credential resolution, and request-transforming callbacks. Cache identity must account for every input that affects reuse, including API surface and caller scope, while preserving intentional Python caching groups. Preserve existing keys and response formats unless changing them is an explicit migration decision
 
-Key construction is coupled to storage; follow `.agents/skills/response-cache/SKILL.md` at the workspace root
-
 Cache normalized provider results before caller-specific response transformations. Hits must still run the applicable response processing, success callbacks, and cache-hit accounting. Keep callback execution in the host. Python cache implementations and semantic embedders that require the caller's task must use the existing host-operation mechanism rather than Python calls from a Rust worker. Preserve legacy fallback until that contract is supported
 
 Keep unary caching independent of stream-only methods. Store streams only after successful exhaustion and protocol completion. Errors, incomplete streams, cancellation, and oversized entries must not populate the cache. Embedding batches need ordered partial results and reconstruction around the uncached inputs
@@ -37,3 +35,32 @@ Response storage is not the source of budget or rate-limit coordination dependen
 - Python wire shapes stay out: decoding the legacy key flags (`api_parameter`, `internal_parameter`) and the legacy activation flags (`supported_call_type`, `configured`, `default_on`, `use_cache`) is configuration translation owned by `python-bridge/src/cache/native`
 - A request carries one resolved read/write policy. The gateway and the Python bridge each translate their inputs into it; don't add parallel control types alongside `CachePolicy`
 - The gateway's keying layout stays in `scope.rs`; changing it is a key migration, not a refactor
+
+## Keys
+
+Key construction is coupled to storage. The storage that holds an entry is the only thing that derives its key. Python-backed storage gets its key from the Python cache's `get_cache_key(**kwargs)`. Native storage gets its key from `litellm-cache-response`. Never derive a key in Rust for Python-backed storage, and never ask Python for a native backend's key
+
+The two paths do not need byte-identical keys. A native key may hash typed JSON, the API surface, and the caller scope under a versioned namespace, while Python hashes formatted kwargs. Both paths must go through the same mechanism: the same participation sets (API parameters, litellm-owned parameters, the internal kwarg prefix, and the provider opt-in flag) and the same precedence for presets, model and caching groups, files, namespaces, and semantic tenant scope. A parameter that changes one path's key must change the other's
+
+### Structure
+
+Make the wrong path impossible to write rather than documented
+
+- `ResponseCacheService::key` is a required method with no default implementation. Each storage adapter chooses its derivation explicitly
+- `ResponseCacheRequest` carries key material (typed fields, transport, rewritten request, surface) and never a key. Nothing upstream of the service fills in a key or a precomputed key input
+- Native derivation (`build`, the hash function, `KeyRules`, and the keying layout in `scope.rs`) is private to `litellm-cache-response`. Adapters outside the crate cannot call it
+- `KeyRules` are injected when a native `ResponseCache<B>` is constructed: from config on the gateway, from Python's parameter lists once on the bridge. Never import Python modules per request to decide participation
+- The resolved key travels as a `CacheKey` value passed to `lookup` and `store`. `preset` means only the caller's `preset_cache_key`; do not write a resolved key back into the request
+- Python-backed storage accepts only `CacheScope::Shared`, because Python's key cannot carry a caller scope. Reject `Isolated` at construction instead of silently dropping it
+- `litellm-cache-response` has no pyo3 dependency. The Python adapter in `python-bridge/src/cache/python` asks Python for the key and does not project kwargs into Rust key input
+
+Do not reintroduce side channels such as a precomputed key input or key context on `CacheOptions` or `ScopedCache`. If a route needs a new input to affect the key, add it to the key material and teach both derivations about it
+
+### Tests
+
+Types catch the accidental mistakes. Tests catch drift and deliberate workarounds
+
+- Delegation: a Python cache subclass whose `get_cache_key` returns a fixed key must be the key used for lookup, store, and the cache-key response header on native inference
+- Participation parity: for each parameter class and both provider opt-in values, varying one parameter changes both the Python key and the native key, or neither. Assert that agreement, not byte equality
+- Table source: the native participation table equals `ModelParamHelper._get_all_llm_api_params()`, `all_litellm_params`, and `INTERNAL_KWARG_PREFIX` as loaded from the installed `litellm`
+- Native `build` precedence rules get named `rstest` cases in `cache-response/tests` built from plain key material, with no Python involved
