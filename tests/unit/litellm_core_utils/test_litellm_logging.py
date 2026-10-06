@@ -9439,28 +9439,44 @@ def test_enterprise_alerting_loggers_falls_back_without_disabling_callback_contr
         logging_module._enterprise_alerting_loggers.cache_clear()
 
 
-def test_init_smtp_email_logger_reuses_instance():
-    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
+@pytest.mark.parametrize("integration", ("smtp_email", "resend_email", "sendgrid_email"))
+def test_init_email_alerting_logger_reuses_instance(
+    integration: Literal["smtp_email", "resend_email", "sendgrid_email"],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.litellm_core_utils import litellm_logging as logging_module
+    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import SendGridEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
 
+    logger_class: Final = (
+        SMTPEmailLogger
+        if integration == "smtp_email"
+        else ResendEmailLogger
+        if integration == "resend_email"
+        else SendGridEmailLogger
+    )
+    monkeypatch.setenv("RESEND_API_KEY", "test-resend-key")
+    monkeypatch.setenv("SENDGRID_API_KEY", "test-sendgrid-key")
     logging_module._in_memory_loggers.clear()
     try:
         logger = logging_module._init_custom_logger_compatible_class(
-            logging_integration="smtp_email",
+            logging_integration=integration,
             internal_usage_cache=None,
             llm_router=None,
             custom_logger_init_args={},
         )
-        assert isinstance(logger, SMTPEmailLogger)
+        assert isinstance(logger, logger_class)
         assert (
             logging_module._init_custom_logger_compatible_class(
-                logging_integration="smtp_email",
+                logging_integration=integration,
                 internal_usage_cache=None,
                 llm_router=None,
                 custom_logger_init_args={},
             )
             is logger
         )
+        assert logging_module.get_custom_logger_compatible_class(integration) is logger
     finally:
         logging_module._in_memory_loggers.clear()
 
@@ -9499,14 +9515,15 @@ def test_init_pagerduty_logger_reuses_instance(monkeypatch):
             )
             is logger
         )
+        assert logging_module.get_custom_logger_compatible_class("pagerduty") is logger
     finally:
         logging_module._in_memory_loggers.clear()
 
 
-@pytest.mark.parametrize("integration", ("smtp_email", "pagerduty"))
+@pytest.mark.parametrize("integration", ("smtp_email", "pagerduty", "resend_email", "sendgrid_email"))
 def test_get_custom_logger_compatible_class_does_not_match_generic_api_logger(
-    integration: Literal["smtp_email", "pagerduty"],
-    monkeypatch,
+    integration: Literal["smtp_email", "pagerduty", "resend_email", "sendgrid_email"],
+    monkeypatch: pytest.MonkeyPatch,
 ):
     from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
     from litellm.litellm_core_utils import litellm_logging as logging_module

@@ -5,9 +5,6 @@ from dataclasses import dataclass
 import argparse
 import re
 
-import litellm
-
-
 @dataclass
 class FunctionInfo:
     """Store function information."""
@@ -98,6 +95,8 @@ def extract_docstring_params(docstring: Optional[str]) -> Set[str]:
 def analyze_function(func_info: FunctionInfo) -> Dict:
     """Analyze function documentation and return validation results."""
 
+    from litellm.proxy import _types as proxy_types
+
     docstring_params = extract_docstring_params(func_info.docstring)
 
     print(f"func_info.parameters: {func_info.parameters}")
@@ -105,7 +104,7 @@ def analyze_function(func_info: FunctionInfo) -> Dict:
 
     for name, type_name in func_info.parameters:
         if type_name.endswith("Request") or type_name.endswith("Response"):
-            pydantic_model = getattr(litellm.proxy._types, type_name, None)
+            pydantic_model = getattr(proxy_types, type_name, None)
             if pydantic_model is not None:
                 for param in pydantic_model.model_fields.keys():
                     pydantic_params.add(param)
