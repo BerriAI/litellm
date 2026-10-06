@@ -4,6 +4,7 @@ import { type ClientIndex, filterItems } from "@/components/shared/search/evalua
 import { ALL_OPERATORS, type FieldSpec, type QueryLanguage } from "@/components/shared/search/language";
 import { scopeLabel } from "../model/format";
 import type { Lens } from "../model/types";
+import { runStatus } from "../model/status";
 
 const INVESTIGATION_FIELDS = {
   name: { group: "Investigation", icon: SquareChevronRight, suggestValues: true },
@@ -23,7 +24,7 @@ export const INVESTIGATION_INDEX: ClientIndex<Lens, InvestigationField> = {
   read: {
     name: (lens) => [lens.settings.name],
     agent: (lens) => [lens.settings.agent_name, lens.settings.service].filter(Boolean),
-    status: (lens) => [lens.jobs[0]?.status ?? "never"],
+    status: (lens) => [lens.jobs[0] ? runStatus(lens.jobs[0]).toLowerCase() : "never"],
     schedule: (lens) => [lens.settings.enabled ? "watching" : "paused"],
   },
   freeText: (lens) => [lens.settings.name, scopeLabel(lens.settings)],

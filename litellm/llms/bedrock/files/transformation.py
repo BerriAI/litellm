@@ -16,7 +16,7 @@ from urllib.parse import quote, unquote, urlencode
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
@@ -47,6 +47,7 @@ from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsAuthParams, BedrockBatchRecordKind
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -75,7 +76,7 @@ LIST_FILES_PURPOSE_PARAM: Final = "_s3_list_files_purpose"
 LIST_FILES_LOCATION_PARAM: Final = "_s3_list_files_location"
 
 
-class _S3DeleteContext(BaseModel):
+class _S3DeleteContext(LiteLLMBaseModel):
     file_id: str = Field(min_length=1)
 
 
@@ -154,7 +155,7 @@ class _S3RequestTarget:
     request_params: _BedrockS3RequestParams
 
 
-class _TrustedS3ModelCredentials(BaseModel):
+class _TrustedS3ModelCredentials(LiteLLMBaseModel):
     """The S3 buckets the server trusts file ids against, from the deployment snapshot."""
 
     model_config = ConfigDict(extra="ignore")
