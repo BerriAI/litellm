@@ -303,19 +303,22 @@ def check_prompt_rendering() -> str:
     messages: Final = [{"role": "user", "content": "hello"}]
     template: Final = "{{ messages[0].content }}"
     if importlib.util.find_spec("jinja2") is None:
-        previous: Final = litellm.known_tokenizer_config
-        litellm.known_tokenizer_config = {**previous, "unknown/template-model": {"status": "success", "tokenizer": {"chat_template": template}}, "openai/gpt-oss-120b": {"status": "success", "tokenizer": {"chat_template": template}}}
-        for action in (
-            PromptManager,
-            partial(hf_chat_template, "test", messages, template),
-            lambda: asyncio.run(ahf_chat_template("test", messages, template)),
-            partial(prompt_factory, model="unknown/template-model", messages=messages),
-            partial(IBMWatsonXChatConfig.apply_prompt_template, "openai/gpt-oss-120b", messages),
-            lambda: asyncio.run(IBMWatsonXChatConfig.aapply_prompt_template("openai/gpt-oss-120b", messages)),
-            partial(DotpromptManager(prompt_data={"hello": {"content": "hi"}}).should_run_prompt_management, "hello", None, {}),
-        ):
-            _expect_extra("prompts", action)
-        litellm.known_tokenizer_config = previous
+        tokenizer_configs: Final = {
+            **litellm.known_tokenizer_config,
+            "unknown/template-model": {"status": "success", "tokenizer": {"chat_template": template}},
+            "openai/gpt-oss-120b": {"status": "success", "tokenizer": {"chat_template": template}},
+        }
+        with patch.object(litellm, "known_tokenizer_config", tokenizer_configs):
+            for action in (
+                PromptManager,
+                partial(hf_chat_template, "test", messages, template),
+                lambda: asyncio.run(ahf_chat_template("test", messages, template)),
+                partial(prompt_factory, model="unknown/template-model", messages=messages),
+                partial(IBMWatsonXChatConfig.apply_prompt_template, "openai/gpt-oss-120b", messages),
+                lambda: asyncio.run(IBMWatsonXChatConfig.aapply_prompt_template("openai/gpt-oss-120b", messages)),
+                partial(DotpromptManager(prompt_data={"hello": {"content": "hi"}}).should_run_prompt_management, "hello", None, {}),
+            ):
+                _expect_extra("prompts", action)
         return "sync/async templates and prompt selection explain the extra without fallback"
     _require(hf_chat_template("test", messages, template) == "hello", "sync rendering changed")
     _require(asyncio.run(ahf_chat_template("test", messages, template)) == "hello", "async rendering changed")
@@ -372,13 +375,10 @@ def check_integration_configuration() -> str:
     _require(is_otel_v2_enabled() is False, "disabled telemetry must work in core")
     from litellm.litellm_core_utils import litellm_logging
 
-    previous_loggers: Final = tuple(litellm_logging._in_memory_loggers)
-    try:
+    with patch.object(litellm_logging, "_in_memory_loggers", []):
         legacy: Final = litellm_logging._init_custom_logger_compatible_class("newrelic", None, None)
         _require(legacy is not None, "legacy New Relic initialization failed without V2 dependencies")
         _require(litellm_logging.get_custom_logger_compatible_class("newrelic") is legacy, "legacy New Relic lookup requires unselected V2 dependencies")
-    finally:
-        litellm_logging._in_memory_loggers[:] = previous_loggers
     if importlib.util.find_spec("packaging") is None:
         _expect_extra("integrations", partial(raise_if_unsupported_langfuse_version, "4.7.0"))
         _expect_extra("integrations", LunaryLogger)
