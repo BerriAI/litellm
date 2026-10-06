@@ -2,9 +2,14 @@
 Unit tests for OpenAI Evals API transformation
 """
 
+import json
+from typing import Final
+
 import httpx
 import pytest
 
+from litellm.evals.main import create_eval, create_run, update_eval
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -74,6 +79,105 @@ def test_get_complete_url_with_v1_api_base(config: OpenAIEvalsConfig, api_base: 
     url = config.get_complete_url(api_base=api_base, endpoint="evals")
 
     assert url == "https://api.openai.com/v1/evals"
+
+
+def test_eval_run_transformations_normalize_v1_api_base(config: OpenAIEvalsConfig) -> None:
+    for api_base in ("https://api.openai.com/v1", "https://api.openai.com/v1/"):
+        url, request_body = config.transform_create_run_request(
+            eval_id="eval_123",
+            create_request={"data_source": {"type": "completions"}},
+            litellm_params=GenericLiteLLMParams(api_base=api_base),
+            headers={},
+        )
+        get_run_url, headers = config.transform_get_run_request(
+            eval_id="eval_123",
+            run_id="run_123",
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(api_base=api_base),
+            headers={},
+        )
+
+        assert url == "https://api.openai.com/v1/evals/eval_123/runs"
+        assert request_body == {"data_source": {"type": "completions"}}
+        assert get_run_url == "https://api.openai.com/v1/evals/eval_123/runs/run_123"
+        assert headers == {}
+
+
+def test_eval_api_methods_forward_client_metadata() -> None:
+    requests: Final[list[tuple[str, dict[str, object]]]] = []
+    eval_response: Final = {
+        "id": "eval_123",
+        "object": "eval",
+        "created_at": 1234567890,
+        "name": "Test Eval",
+        "data_source_config": {"type": "stored_completions"},
+        "testing_criteria": [],
+    }
+    run_response: Final = _run_json()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append((request.url.path, json.loads(request.content)))
+        response_body: Final = run_response if request.url.path.endswith("/runs") else eval_response
+        return httpx.Response(status_code=200, json=response_body, request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+        client: Final = HTTPHandler(client=transport)
+        create_eval(
+            data_source_config={
+                "type": "custom",
+                "item_schema": {"type": "object", "properties": {"a": {"type": "string"}}},
+            },
+            testing_criteria=[],
+            name="nightly",
+            metadata={"suite": "nightly"},
+            custom_llm_provider="openai",
+            api_key="test-key",
+            api_base="https://api.openai.com",
+            client=client,
+        )
+        update_eval(
+            eval_id="eval_123",
+            name="renamed",
+            metadata={"team": "search"},
+            custom_llm_provider="openai",
+            api_key="test-key",
+            api_base="https://api.openai.com",
+            client=client,
+        )
+        create_run(
+            eval_id="eval_123",
+            data_source={"type": "jsonl", "source": {"type": "file_id", "id": "file-abc"}},
+            name="run-1",
+            metadata={"suite": "nightly"},
+            custom_llm_provider="openai",
+            api_key="test-key",
+            api_base="https://api.openai.com",
+            client=client,
+        )
+
+    assert requests == [
+        (
+            "/v1/evals",
+            {
+                "data_source_config": {
+                    "type": "custom",
+                    "item_schema": {"type": "object", "properties": {"a": {"type": "string"}}},
+                },
+                "testing_criteria": [],
+                "name": "nightly",
+                "metadata": {"suite": "nightly"},
+            },
+        ),
+        ("/v1/evals/eval_123", {"name": "renamed", "metadata": {"team": "search"}}),
+        (
+            "/v1/evals/eval_123/runs",
+            {
+                "data_source": {"type": "jsonl", "source": {"type": "file_id", "id": "file-abc"}},
+                "name": "run-1",
+                "metadata": {"suite": "nightly"},
+            },
+        ),
+    ]
 
 
 def test_transform_create_eval_request(config: OpenAIEvalsConfig):

@@ -1399,6 +1399,125 @@ async def test_route_request_eval_read_through_uses_deployment_credentials(monke
 
 
 @pytest.mark.asyncio
+async def test_route_request_eval_uses_router_deployment_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    import litellm
+    from litellm.llms.custom_httpx.llm_http_handler import AsyncHTTPHandler
+    from litellm.proxy import proxy_server
+
+    model_name: Final = "eval-router-credential-model"
+    api_key: Final = "eval-router-key"
+    api_base: Final = "https://eval-provider.example/v1"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": api_key, "api_base": api_base},
+                "model_info": {"id": model_name},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    requests: Final[list[tuple[str, str]]] = []
+    eval_response: Final = {
+        "id": "eval_123",
+        "object": "eval",
+        "created_at": 1234567890,
+        "name": "Test Eval",
+        "data_source_config": {"type": "stored_completions"},
+        "testing_criteria": [],
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append((request.url.path, request.headers.get("authorization", "")))
+        return httpx.Response(status_code=200, json=eval_response, request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as upstream:
+        client: Final = AsyncHTTPHandler()
+        client.client = upstream
+        eval_result: Final = await route_request(
+            {
+                "model": model_name,
+                "data_source_config": {"type": "custom"},
+                "testing_criteria": [],
+                "client": client,
+            },
+            router,
+            None,
+            "acreate_eval",
+        )
+        response: Final = await eval_result
+
+    assert response.id == "eval_123"
+    assert requests == [("/v1/evals", f"Bearer {api_key}")]
+
+
+@pytest.mark.asyncio
+async def test_route_request_eval_keeps_caller_credentials_when_router_lookup_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    import litellm
+    from litellm.llms.custom_httpx.llm_http_handler import AsyncHTTPHandler
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "caller-provided-key")
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    requests: Final[list[tuple[str, str]]] = []
+    eval_response: Final = {
+        "id": "eval_123",
+        "object": "eval",
+        "created_at": 1234567890,
+        "name": "Test Eval",
+        "data_source_config": {"type": "stored_completions"},
+        "testing_criteria": [],
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append((request.url.path, request.headers.get("authorization", "")))
+        return httpx.Response(status_code=200, json=eval_response, request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as upstream:
+        client: Final = AsyncHTTPHandler()
+        client.client = upstream
+        eval_result: Final = await route_request(
+            {
+                "model": "unknown-eval-model",
+                "api_base": "https://fallback-provider.example/v1",
+                "data_source_config": {"type": "custom"},
+                "testing_criteria": [],
+                "client": client,
+            },
+            None,
+            None,
+            "acreate_eval",
+        )
+        response: Final = await eval_result
+
+    assert response.id == "eval_123"
+    assert requests == [("/v1/evals", "Bearer caller-provided-key")]
+
+
+def test_get_eval_deployment_credentials_returns_none_when_router_lookup_raises() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from litellm.proxy.route_llm_request import _get_eval_deployment_credentials
+
+    router: Final = SimpleNamespace(get_deployment_credentials=Mock(side_effect=RuntimeError("router unavailable")))
+
+    assert _get_eval_deployment_credentials(router, "unknown-eval-model") is None
+
+
+@pytest.mark.asyncio
 async def test_route_request_unknown_model_raises_and_hits_db_once_within_ttl(monkeypatch):
     import litellm
     import litellm.proxy.proxy_server as proxy_server
