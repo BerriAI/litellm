@@ -6,7 +6,7 @@ from typing import Final
 
 import httpx
 import pytest
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from pydantic import BaseModel
 
@@ -101,9 +101,13 @@ def test_scoped_spend_reports_match_sql_and_enforce_caller_scope(gateway: Gatewa
         team2: Final = scenario.team(organization_id=org2)
         user1: Final = scenario.member(team1, role="user")
         user2: Final = scenario.member(team2, role="user")
+        org_admin: Final = scenario.org_member(org1, "org_admin")
         k1: Final = scenario.key(user_id=user1, team_id=team1, models=[model])
         k2: Final = scenario.key(user_id=user2, team_id=team2, models=[model])
         direct_org_key: Final = scenario.key(organization_id=org2, models=[model])
+        org_admin_key: Final = scenario.key(user_id=org_admin, organization_id=org1, models=[model])
+        org_admin_info: Final = object_value(gateway.get("/key/info", {"key": org_admin_key})["info"])
+        assert org_admin_info["organization_id"] == org1, org_admin_info
         _chat(gateway, model, k1)
         _chat(gateway, model, k2)
         _chat(gateway, model, direct_org_key)
@@ -135,6 +139,17 @@ def test_scoped_spend_reports_match_sql_and_enforce_caller_scope(gateway: Gatewa
         _assert_report_matches_db(
             _rows(gateway, "/team/spend/report", key=k1, params=window), _logged("team_id", team1, start, end)
         )
+        org1_report: Final = _rows(gateway, "/organization/spend/report", key=org_admin_key, params=window)
+        _assert_report_matches_db(org1_report, _logged_keys((k1_hash,), start, end))
+        refused_org2: Final = _report(
+            gateway,
+            "/organization/spend/report",
+            key=org_admin_key,
+            params={**window, "organization_id": org2},
+        )
+        assert refused_org2.status_code == 403, refused_org2.text
+        assert refused_org2.json() == {"detail": "You do not have access to this organization"}, refused_org2.text
+
         own_org: Final = _report(gateway, "/organization/spend/report", key=k1, params=window)
         assert own_org.status_code == 403, own_org.text
         assert own_org.json() == {"detail": "You do not have access to this organization"}, own_org.text
