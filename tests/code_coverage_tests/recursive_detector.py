@@ -23,7 +23,8 @@ IGNORE_FUNCTIONS = [
     "_can_object_call_model",  # max depth set.
     "encode_unserializable_types",  # max depth set.
     "filter_value_from_dict",  # max depth set.
-    "_responses_text_lines",  # walks only the nesting a Responses `input` carries.
+    "_responses_text",  # walks only the nesting a Responses `input` carries.
+    "_messages_api_blocks_text",  # walks only the nesting a `tool_result` block carries.
     "_plain",  # walks only the nesting a request `messages` or `input` carries.
     "normalize_json_schema_types",  # max depth set.
     "_extract_fields_recursive",  # max depth set.
