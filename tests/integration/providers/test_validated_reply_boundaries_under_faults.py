@@ -50,6 +50,7 @@ _SERVER_TOOL_USAGE: Final[dict[str, JsonValue]] = {"web_search_calls": 2, "x_sea
 _PROMPT_TOKENS: Final = 1000
 _COMPLETION_TOKENS: Final = 500
 _BURST_ROUNDS: Final = 8
+_GATE_SECONDS: Final = 60
 _PNG: Final = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
@@ -425,7 +426,7 @@ def test_a_worker_killed_mid_burst_leaves_the_sibling_validating_provider_payloa
     def gated(request: Request) -> Reply:
         if _path(request) != _OPENAI_MODEL_LISTING:
             held.put(request.target)
-            assert release.wait(timeout=60), "The burst was never released"
+            assert release.wait(timeout=_GATE_SECONDS), "The burst was never released"
         return _peer(request)
 
     calls: Final = (_ENRICHED, _IMAGE, _BETA) * _BURST_ROUNDS
@@ -437,9 +438,15 @@ def test_a_worker_killed_mid_burst_leaves_the_sibling_validating_provider_payloa
                 lambda pids: len(pids) == 2,
                 seconds=30,
             )
-            with ThreadPoolExecutor(max_workers=len(calls)) as pool:
-                futures: Final = tuple(pool.submit(_attempt, call, owned.gateway) for call in calls)
-                eventually(held.qsize, lambda size: size == len(calls), seconds=60)
+            with (
+                httpx.Client(
+                    base_url=owned.gateway.client.base_url, timeout=2 * _GATE_SECONDS, trust_env=False
+                ) as outlasting_the_gate,
+                ThreadPoolExecutor(max_workers=len(calls)) as pool,
+            ):
+                patient: Final = Gateway(outlasting_the_gate, owned.gateway.key, owned.gateway.upstream_url)
+                futures: Final = tuple(pool.submit(_attempt, call, patient) for call in calls)
+                eventually(held.qsize, lambda size: size == len(calls), seconds=_GATE_SECONDS)
                 held_by: Final = {pid: _open_upstream_connections(pid, wire.url) for pid in workers}
                 victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
                 victim: Final = psutil.Process(victim_pid)
