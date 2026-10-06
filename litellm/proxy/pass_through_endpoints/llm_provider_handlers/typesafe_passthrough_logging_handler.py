@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -11,23 +11,24 @@ from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,  # pyright: ignore[reportUnknownVariableType]  # legacy helper has an untyped signature
 )
 from litellm.llms.laya.common_utils import laya_response_model
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelResponse, StandardPassThroughResponseObject, Usage
 
 if TYPE_CHECKING:
     from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 
 
-class _TypeSafeUsage(BaseModel):
+class _TypeSafeUsage(LiteLLMBaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
 
 
-class _TypeSafeResponse(BaseModel):
+class _TypeSafeResponse(LiteLLMBaseModel):
     model: str | None = None
     usage: _TypeSafeUsage | None = None
 
 
-class _RegistryPricing(BaseModel):
+class _RegistryPricing(LiteLLMBaseModel):
     input_cost_per_token: float = 0.0
     output_cost_per_token: float = 0.0
 

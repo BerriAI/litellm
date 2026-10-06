@@ -1,3 +1,4 @@
+import hashlib
 import json
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field, replace
@@ -100,6 +101,33 @@ class EvidenceWorkspace:
     def with_reviews(self, records: tuple[ReviewRecord, ...]) -> "EvidenceWorkspace":
         return replace(self, reviews=records)
 
+    async def fingerprint(self, execution_id: str) -> str:
+        session: Final = next(session for session in self.sessions if session.execution.id == execution_id)
+        digest: Final = hashlib.sha256()
+        digest.update(session.execution.model_dump_json(exclude={"id", "metadata"}).encode())
+        digest.update(json.dumps(sorted((item.key, item.value) for item in session.execution.metadata)).encode())
+
+        async def part_fingerprint(source: SourcePart) -> bytes:
+            content: Final = hashlib.sha256()
+            async for chunk in self._chunks(source):
+                content.update(chunk.content.encode())
+            return json.dumps(
+                (
+                    source.part.span_id,
+                    source.part.parent_span_id,
+                    source.part.name,
+                    source.part.kind,
+                    source.part.start_time,
+                    source.part.end_time,
+                    content.hexdigest(),
+                )
+            ).encode()
+
+        async for source in self._sources(session):
+            digest.update(await part_fingerprint(source))
+        digest.update(str((session.partial, execution_id in self.partial_sessions)).encode())
+        return digest.hexdigest()
+
     def _content_error(self, execution: Execution, message: str) -> EvidenceReadError:
         detail: Final = f"{message} (execution {execution.id}, trace {execution.trace_id})"
         self.partial_sessions.add(execution.id)
@@ -165,7 +193,7 @@ class EvidenceWorkspace:
             )
         yield first
         pending = first.truncated  # rebind-ok: follow complete character pages for this span
-        offset = start + 8001  # rebind-ok: gateway character offsets are one-based
+        offset = start + 8001  # rebind-ok: offset zero requests an excerpt; complete content is one-based
         while pending:
             page: ExecutionContent = await self._page(source.execution, source.cursor, offset)
             if (

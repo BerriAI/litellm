@@ -53,6 +53,7 @@ interface Facts {
   readonly runs: string;
   readonly found: string;
   readonly openIssues: number;
+  readonly reused: number;
 }
 
 type Tone = "info" | "success" | "warning" | "destructive" | "muted";
@@ -64,8 +65,11 @@ interface SituationView {
   readonly body: "progress" | "error" | "partial" | null;
 }
 
-const completed = ({ found, runs }: Facts) =>
-  found ? `Found ${found} across ${runs}` : `Nothing found across ${runs}`;
+const completed = ({ found, runs, reused }: Facts) => {
+  if (found) return `Found ${found} across ${runs}`;
+  if (reused) return `Reused ${plural(reused, "review")} with no new findings`;
+  return `Nothing found across ${runs}`;
+};
 
 const SITUATIONS: Record<RunSituation, SituationView> = {
   never: { status: "Not run yet", tone: "muted", headline: () => "Run it to get the first report", body: null },
@@ -77,9 +81,9 @@ const SITUATIONS: Record<RunSituation, SituationView> = {
   },
   running: { status: "Running", tone: "info", headline: () => "Investigating now", body: "progress" },
   budget: {
-    status: "Failed",
+    status: "Stopped",
     tone: "destructive",
-    headline: () => "Stopped: the monthly budget is used up",
+    headline: () => "Stopped: more investigation budget is needed",
     body: "error",
   },
   offline: {
@@ -95,7 +99,12 @@ const SITUATIONS: Record<RunSituation, SituationView> = {
     headline: ({ runs }) => `Cancelled after reviewing ${runs}`,
     body: "error",
   },
-  partial: { status: "Partial results", tone: "warning", headline: completed, body: "partial" },
+  partial: {
+    status: "Partial results",
+    tone: "warning",
+    headline: (known) => (known.found ? completed(known) : `Stopped after reviewing ${known.runs}`),
+    body: "partial",
+  },
   unknown: { status: "Completed", tone: "success", headline: ({ runs }) => `Reviewed ${runs}`, body: null },
   issues: { status: "Completed", tone: "success", headline: completed, body: null },
   watching: { status: "Completed", tone: "success", headline: completed, body: null },
@@ -143,6 +152,7 @@ function facts(job: Job | undefined, findings: readonly Finding[] | null | undef
     runs: plural(job?.coverage?.screened ?? 0, "run"),
     found: [count("issue", "issue"), count("pattern", "pattern")].filter(Boolean).join(" and "),
     openIssues: openIssues(findings),
+    reused: job?.coverage?.reused ?? 0,
   };
 }
 
@@ -157,8 +167,9 @@ function Stat({ label, value, note }: { label: string; value: string; note?: str
 }
 
 function coverageNote(job: Job): string | undefined {
-  const { partial = 0, unassessable = 0, inconclusive = 0 } = job.coverage ?? {};
+  const { partial = 0, unassessable = 0, inconclusive = 0, reused = 0 } = job.coverage ?? {};
   const notes = [
+    reused && `${reused} reused`,
     partial && `${partial} partial`,
     unassessable && `${unassessable} unreadable`,
     inconclusive && `${inconclusive} inconclusive`,

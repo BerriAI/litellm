@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -139,6 +139,7 @@ from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -218,14 +219,14 @@ def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
 _SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
-class _TeamRowGrants(BaseModel):
+class _TeamRowGrants(LiteLLMBaseModel):
     team_id: str
     team_alias: str | None = None
     models: tuple[str, ...] = ()
     litellm_model_table: TeamModelAliasTable | None = None
 
 
-class CliSsoTeamDetail(BaseModel):
+class CliSsoTeamDetail(LiteLLMBaseModel):
     """The per-team snapshot cached in the CLI SSO flow and echoed to the CLI on poll."""
 
     team_id: str | None = None

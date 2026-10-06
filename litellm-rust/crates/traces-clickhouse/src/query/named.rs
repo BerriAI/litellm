@@ -82,6 +82,8 @@ pub use contracts::TraceSpansParams;
 struct TraceSpansRowEncoding {
     #[serde(default)]
     pub trace_id: String,
+    #[serde(default)]
+    pub original_trace_id: String,
     pub span_id: String,
     pub parent_span_id: String,
     pub name: String,
@@ -181,6 +183,7 @@ struct SpendByResponseIdsParamsEncoding {
     #[serde(flatten)]
     pub access: contracts::ReadAccessParams,
     pub response_ids: Vec<String>,
+    pub provider_request_ids: Vec<String>,
     pub request_ids: Vec<String>,
     pub trace_ids: Vec<String>,
     #[serde(deserialize_with = "super::number::deserialize")]
@@ -207,6 +210,8 @@ struct SpendByResponseIdsRowEncoding {
     pub litellm_call_id: String,
     pub response_id: String,
     pub upstream_response_id: String,
+    #[serde(default)]
+    pub provider_request_id: String,
     pub trace_id: String,
     pub span_id: String,
     pub team_id: String,
@@ -344,7 +349,7 @@ mod tests {
             quoted,
         );
         round_trip::<TraceSpansRow>(
-            json!({"trace_id": "trace", "span_id": "span", "parent_span_id": "parent", "name": "agent", "type": "agent", "wrapper_candidate": 1, "agent": "agent", "framework": "claude-agent-sdk", "status": "STATUS_CODE_ERROR", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "call_keys": ["provider_response:request"], "call_evidence": "complete", "tool_call_id": "call", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
+            json!({"trace_id": "trace", "original_trace_id": "original", "span_id": "span", "parent_span_id": "parent", "name": "agent", "type": "agent", "wrapper_candidate": 1, "agent": "agent", "framework": "claude-agent-sdk", "status": "STATUS_CODE_ERROR", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "call_keys": ["provider_response:request"], "call_evidence": "complete", "tool_call_id": "call", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
             quoted,
         );
         round_trip::<SpanDetailRow>(
@@ -356,7 +361,7 @@ mod tests {
             quoted,
         );
         round_trip::<SpendByResponseIdsRow>(
-            json!({"request_id": "request", "litellm_call_id": "gateway", "response_id": "response", "upstream_response_id": "upstream", "trace_id": "trace", "span_id": "span", "team_id": "team", "api_key": "key", "user": "user", "spend": 0.125, "start_ms": -1}),
+            json!({"request_id": "request", "litellm_call_id": "gateway", "response_id": "response", "upstream_response_id": "upstream", "provider_request_id": "req_provider", "trace_id": "trace", "span_id": "span", "team_id": "team", "api_key": "key", "user": "user", "spend": 0.125, "start_ms": -1}),
             quoted,
         );
     }
@@ -374,7 +379,7 @@ mod tests {
             quoted,
         );
         round_trip::<SpendByResponseIdsParams>(
-            json!({"all_teams": 0, "user_id": "user", "team_ids": ["team-a", "team-b"], "response_ids": ["response"], "request_ids": ["request"], "trace_ids": ["trace"], "start_ms": -1, "end_ms": 10}),
+            json!({"all_teams": 0, "user_id": "user", "team_ids": ["team-a", "team-b"], "response_ids": ["response"], "provider_request_ids": [], "request_ids": ["request"], "trace_ids": ["trace"], "start_ms": -1, "end_ms": 10}),
             quoted,
         );
     }

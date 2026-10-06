@@ -64,6 +64,7 @@ from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
     LiteLLM_Params,
+    ModelGroupInfo,
     ModelInfo,
     PreRoutingHookResponse,
     RetryPolicy,
@@ -1594,7 +1595,7 @@ def test_arouter_responses_api_bridge():
                 "litellm_params": {
                     "model": "azure/responses/o_series/webinterface-o3-pro",
                     "api_base": "https://webhook.site/fba79dae-220a-4bb7-9a3a-8caa49604e55",
-                    "api_key": "sk-1234567890",
+                    "api_key": "sk-9876567890",
                     "api_version": "preview",
                     "stream": True,
                 },
@@ -2331,6 +2332,116 @@ def test_update_settings_model_group_alias_drops_cached_group_info():
     after: Final = router.cached_model_group_info("visible")
     assert after is not None
     assert after.input_cost_per_token is not None and after.input_cost_per_token > 0
+
+
+_PAID_INPUT_COST_PER_TOKEN: Final = 3e-06
+_PAID_OUTPUT_COST_PER_TOKEN: Final = 1.5e-05
+
+
+def _free_ollama_deployment(model_name: str) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "ollama/qwen3:0.6b",
+            "api_base": "http://localhost:11434",
+            "input_cost_per_token": 0,
+            "output_cost_per_token": 0,
+        },
+    }
+
+
+def _paid_openai_deployment(model_name: str, model: str) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": model,
+            "api_key": "fake",
+            "input_cost_per_token": _PAID_INPUT_COST_PER_TOKEN,
+            "output_cost_per_token": _PAID_OUTPUT_COST_PER_TOKEN,
+        },
+    }
+
+
+def _assert_priced(info: ModelGroupInfo | None, provider: str) -> None:
+    assert info is not None
+    assert info.providers == [provider]
+    assert info.input_cost_per_token == _PAID_INPUT_COST_PER_TOKEN
+    assert info.output_cost_per_token == _PAID_OUTPUT_COST_PER_TOKEN
+
+
+def _assert_free(info: ModelGroupInfo | None, provider: str) -> None:
+    assert info is not None
+    assert info.providers == [provider]
+    assert info.input_cost_per_token == 0
+    assert info.output_cost_per_token == 0
+
+
+def test_get_model_group_info_prices_an_alias_chain_from_the_group_it_routes_to():
+    """chain-entry resolves one hop to local-free and is served by local-free's own
+    deployment, so its price is that deployment's; local-free's own alias to gpt-priced
+    is a hop the router takes only for a request to local-free by name."""
+    router = Router(
+        model_list=[
+            _free_ollama_deployment("local-free"),
+            _paid_openai_deployment("gpt-priced", "gpt-4o"),
+        ],
+        model_group_alias={"chain-entry": "local-free", "local-free": "gpt-priced"},
+    )
+
+    _assert_free(router.get_model_group_info(model_group="chain-entry"), "ollama")
+    _assert_priced(router.get_model_group_info(model_group="local-free"), "openai")
+
+
+def test_get_model_group_info_prices_an_alias_chain_from_the_wildcard_route_serving_it():
+    """When the routed group has no deployment of its own, the wildcard route matching it
+    serves the request, so the price is the wildcard's and never the routed group's own alias
+    target's."""
+    router = Router(
+        model_list=[
+            _paid_openai_deployment("openai/*", "openai/*"),
+            _free_ollama_deployment("local-free"),
+        ],
+        model_group_alias={"wildcard-entry": "openai/gpt-4o", "openai/gpt-4o": "local-free"},
+    )
+
+    _assert_priced(router.get_model_group_info(model_group="wildcard-entry"), "openai")
+    _assert_free(router.get_model_group_info(model_group="openai/gpt-4o"), "ollama")
+
+
+def _served_models(deployments: list[DeploymentTypedDict] | None) -> list[str]:
+    return [deployment["litellm_params"]["model"] for deployment in deployments or ()]
+
+
+def test_get_model_list_of_routed_group_reads_the_groups_own_deployments_only():
+    """The router resolves an alias once, so a group reached as an alias target is served by
+    its own deployments. get_model_list composes the group's own alias target too, the hop a
+    request to that group by name takes."""
+    router = Router(
+        model_list=[
+            _free_ollama_deployment("local-free"),
+            _paid_openai_deployment("gpt-priced", "gpt-4o"),
+        ],
+        model_group_alias={"local-free": "gpt-priced"},
+    )
+
+    assert _served_models(router.get_model_list_of_routed_group("local-free")) == ["ollama/qwen3:0.6b"]
+    assert _served_models(router.get_model_list(model_name="local-free")) == ["ollama/qwen3:0.6b", "gpt-4o"]
+
+
+def test_get_model_list_of_routed_group_falls_back_to_the_wildcard_route_serving_it():
+    router = Router(
+        model_list=[
+            _paid_openai_deployment("openai/*", "openai/*"),
+            _free_ollama_deployment("local-free"),
+        ],
+        model_group_alias={"openai/gpt-4o": "local-free"},
+    )
+
+    routed = router.get_model_list_of_routed_group("openai/gpt-4o")
+
+    assert [deployment["model_name"] for deployment in routed] == ["openai/gpt-4o"]
+    assert _served_models(routed) == ["openai/gpt-4o"]
+    assert _served_models(router.get_model_list(model_name="openai/gpt-4o")) == ["ollama/qwen3:0.6b"]
 
 
 def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selector():
@@ -18857,6 +18968,8 @@ async def test_router_embedding_path_rejects_past_max_parallel_requests_without_
             },
         )
 
+    # Reap earlier tests' garbage first so only this test's coroutines are recorded
+    gc.collect()
     with respx.mock() as respx_mock, warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         route: Final = respx_mock.post("https://max-parallel-embed.local/v1/embeddings").mock(side_effect=upstream)

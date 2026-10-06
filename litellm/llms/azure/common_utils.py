@@ -5,7 +5,7 @@ import os
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Final, Literal, NamedTuple, cast
+from typing import Final, Literal, NamedTuple, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -549,7 +549,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             # on every request (via `_refresh_api_key`), so passing
             # `azure_ad_token_provider` directly preserves Azure AD token refresh
             # behavior that the regular AzureOpenAI client provides.
-            v1_api_key: str | Callable[[], Any] | None = (
+            v1_api_key: str | Callable[[], object] | None = (
                 azure_client_params.get("api_key")
                 or azure_client_params.get("azure_ad_token_provider")
                 or azure_client_params.get("azure_ad_token")

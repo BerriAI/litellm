@@ -1,9 +1,9 @@
 use litellm_auth::SecretValue;
-use litellm_core::ocr::{
+use litellm_host_python::from_py;
+use litellm_inference_ocr::{
     types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
 };
-use litellm_host_python::from_py;
 use litellm_llms::base_llm::ocr::error::Error;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde_json::{Map, Value};
