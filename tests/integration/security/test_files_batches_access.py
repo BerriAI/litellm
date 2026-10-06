@@ -10,6 +10,8 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -23,15 +25,26 @@ MANAGED_FILE_ROW: Final = 'SELECT model_mappings, flat_model_file_ids, created_b
 INPUT_FILENAME: Final = "in.jsonl"
 MANAGED_PREFIX: Final = "litellm_proxy:"
 BUCKET: Final = "integration-delete-bucket"
+VERTEX_PROJECT: Final = "files-batches-delete-project"
+VERTEX_LOCATION: Final = "us-central1"
+VERTEX_MODEL: Final = "vertex_ai/gemini-2.5-flash"
 _ForbiddenSurface = Literal[
     "upload_form",
     "upload_query",
     "upload_header",
     "batch_encoded_input",
     "batch_body_model",
+    "batch_query_model",
+    "batch_header_model",
     "file_get_encoded",
+    "file_get_query",
+    "file_get_header",
     "file_content_encoded",
+    "file_content_query",
+    "file_content_header",
     "batch_get_encoded",
+    "batch_get_query",
+    "batch_get_header",
 ]
 
 
@@ -261,8 +274,11 @@ def test_stranger_cannot_retrieve_or_cancel_another_teams_managed_batch(gateway:
 def _forbidden_surface_request(
     gateway: Gateway,
     surface: _ForbiddenSurface,
+    allowed: str,
     forbidden: str,
     caller_key: str,
+    raw_file: str,
+    raw_batch: str,
     encoded_file: str,
     encoded_batch: str,
 ) -> httpx.Response:
@@ -305,19 +321,55 @@ def _forbidden_surface_request(
                 "POST",
                 "/v1/batches",
                 {
-                    "input_file_id": "file-raw-x",
+                    "input_file_id": raw_file,
                     "endpoint": "/v1/chat/completions",
                     "completion_window": "24h",
                     "model": forbidden,
                 },
                 key=caller_key,
             )
+        case "batch_query_model":
+            return gateway.request(
+                "POST",
+                "/v1/batches",
+                {"input_file_id": raw_file, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+                key=caller_key,
+                params={"model": forbidden},
+            )
+        case "batch_header_model":
+            return gateway.request(
+                "POST",
+                "/v1/batches",
+                {"input_file_id": raw_file, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+                key=caller_key,
+                headers={"x-litellm-model": forbidden},
+            )
         case "file_get_encoded":
             return gateway.request("GET", f"/v1/files/{encoded_file}", key=caller_key)
+        case "file_get_query":
+            return gateway.request("GET", f"/v1/files/{raw_file}", key=caller_key, params={"model": forbidden})
+        case "file_get_header":
+            return gateway.request(
+                "GET", f"/v1/files/{raw_file}", key=caller_key, headers={"x-litellm-model": forbidden}
+            )
         case "file_content_encoded":
             return gateway.request("GET", f"/v1/files/{encoded_file}/content", key=caller_key)
+        case "file_content_query":
+            return gateway.request(
+                "GET", f"/v1/files/{raw_file}/content", key=caller_key, params={"model": forbidden}
+            )
+        case "file_content_header":
+            return gateway.request(
+                "GET", f"/v1/files/{raw_file}/content", key=caller_key, headers={"x-litellm-model": forbidden}
+            )
         case "batch_get_encoded":
             return gateway.request("GET", f"/v1/batches/{encoded_batch}", key=caller_key)
+        case "batch_get_query":
+            return gateway.request("GET", f"/v1/batches/{raw_batch}", key=caller_key, params={"model": forbidden})
+        case "batch_get_header":
+            return gateway.request(
+                "GET", f"/v1/batches/{raw_batch}", key=caller_key, headers={"x-litellm-model": forbidden}
+            )
         case _:
             assert_never(surface)
 
@@ -330,9 +382,17 @@ def _forbidden_surface_request(
         "upload_header",
         "batch_encoded_input",
         "batch_body_model",
+        "batch_query_model",
+        "batch_header_model",
         "file_get_encoded",
+        "file_get_query",
+        "file_get_header",
         "file_content_encoded",
+        "file_content_query",
+        "file_content_header",
         "batch_get_encoded",
+        "batch_get_query",
+        "batch_get_header",
     ],
     ids=[
         "upload-form-model",
@@ -340,9 +400,17 @@ def _forbidden_surface_request(
         "upload-header-model",
         "batch-create-encoded-input",
         "batch-create-body-model",
+        "batch-create-query-model",
+        "batch-create-model-header",
         "file-retrieve-encoded-id",
+        "file-retrieve-model-query",
+        "file-retrieve-model-header",
         "file-content-encoded-id",
+        "file-content-model-query",
+        "file-content-model-header",
         "batch-retrieve-encoded-id",
+        "batch-retrieve-model-query",
+        "batch-retrieve-model-header",
     ],
 )
 def test_a_key_granted_one_model_cannot_spend_another_deployments_files_or_batches(
@@ -354,24 +422,57 @@ def test_a_key_granted_one_model_cannot_spend_another_deployments_files_or_batch
         allowed: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key_allowed)
         forbidden: Final = scenario.model(model="openai/gpt-4.1-mini", api_base=wire.url + "/v1", api_key=key_forbidden)
         _wait_until_every_worker_serves(gateway, allowed, forbidden)
-        caller: Final = _member(scenario, allowed)
+        team: Final = scenario.team(models=[allowed, forbidden])
+        user: Final = scenario.member(team)
+        caller_key: Final = scenario.key(team_id=team, user_id=user, models=[allowed])
+        caller: Final = _Member(team, user, caller_key)
+        provider_client: Final = httpx.Client(base_url=wire.url, timeout=15, trust_env=False)
+        with provider_client:
+            seeded_file: Final = provider_client.post(
+                "/v1/files",
+                data={"purpose": "batch"},
+                files={"file": (INPUT_FILENAME, _jsonl(forbidden), "application/jsonl")},
+                headers={"Authorization": f"Bearer {key_forbidden}"},
+            )
+            assert seeded_file.status_code == 200, seeded_file.text
+            raw_file_object: Final = _FileObject.model_validate_json(seeded_file.content)
+            assert raw_file_object.id == f"file-{key_forbidden}", seeded_file.text
+            seeded_batch: Final = provider_client.post(
+                "/v1/batches",
+                json={
+                    "input_file_id": raw_file_object.id,
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                },
+                headers={"Authorization": f"Bearer {key_forbidden}"},
+            )
+            assert seeded_batch.status_code == 200, seeded_batch.text
+            raw_batch_object: Final = _Batch.model_validate_json(seeded_batch.content)
+            assert raw_batch_object.id == f"batch-{key_forbidden}", seeded_batch.text
         wire.drain()
 
-        encoded_forbidden_file: Final = encode_file_id_with_model(file_id="file-raw-x", model=forbidden)
+        encoded_forbidden_file: Final = encode_file_id_with_model(file_id=raw_file_object.id, model=forbidden)
         encoded_forbidden_batch: Final = encode_file_id_with_model(
-            file_id="batch_raw_x", model=forbidden, id_type="batch"
+            file_id=raw_batch_object.id, model=forbidden, id_type="batch"
         )
         response: Final = _forbidden_surface_request(
-            gateway, surface, forbidden, caller.key, encoded_forbidden_file, encoded_forbidden_batch
+            gateway,
+            surface,
+            allowed,
+            forbidden,
+            caller.key,
+            raw_file_object.id,
+            raw_batch_object.id,
+            encoded_forbidden_file,
+            encoded_forbidden_batch,
         )
-        assert response.status_code == 403, response.text
+        provider_requests: Final = _drained_other_than_model_list_probes(wire)
+        assert response.status_code == 403, f"{response.text}; provider requests={provider_requests}"
         assert _error_message(response, 403) == (
             f"The requested model '{forbidden}' is not available for this API key, or the model name is invalid. "
             "Check the models available to you and try again."
         ), response.text
-        assert _drained_other_than_model_list_probes(wire) == (), (
-            f"{surface} reached the provider: {response.status_code}"
-        )
+        assert provider_requests == (), f"{surface} reached the provider: {provider_requests}"
 
         control: Final = gateway.request_multipart(
             "/v1/files",
@@ -382,6 +483,60 @@ def test_a_key_granted_one_model_cannot_spend_another_deployments_files_or_batch
         assert control.status_code == 200, control.text
         (control_request,) = _drained_other_than_model_list_probes(wire)
         assert control_request.headers["authorization"] == f"Bearer {key_allowed}", control_request.headers
+
+
+def test_indexed_target_model_upload_cannot_use_a_forbidden_deployment(gateway: Gateway) -> None:
+    pytest.skip("BUG: target_model_names[0] upload bypasses the key's model restriction and reaches the deployment")
+    key_allowed: Final = "provider-key-allowed-" + uuid.uuid4().hex[:8]
+    key_forbidden: Final = "provider-key-forbidden-" + uuid.uuid4().hex[:8]
+    with wire_server(_openai_backend()) as wire, gateway.scenario() as scenario:
+        allowed: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key_allowed)
+        forbidden: Final = scenario.model(model="openai/gpt-4.1-mini", api_base=wire.url + "/v1", api_key=key_forbidden)
+        _wait_until_every_worker_serves(gateway, allowed, forbidden)
+        team: Final = scenario.team(models=[allowed, forbidden])
+        user: Final = scenario.member(team)
+        caller_key: Final = scenario.key(team_id=team, user_id=user, models=[allowed])
+
+        response: Final = gateway.client.post(
+            "/v1/files",
+            data={"purpose": "batch", "target_model_names[0]": forbidden},
+            files={"file": (INPUT_FILENAME, _jsonl(forbidden), "application/jsonl")},
+            headers={"Authorization": f"Bearer {caller_key}"},
+        )
+        provider_requests: Final = _drained_other_than_model_list_probes(wire)
+        assert response.status_code == 403, f"{response.text}; provider requests={provider_requests}"
+        assert _error_message(response, 403) == (
+            f"The requested model '{forbidden}' is not available for this API key, or the model name is invalid. "
+            "Check the models available to you and try again."
+        ), response.text
+        assert provider_requests == (), f"indexed target-model upload reached the provider: {provider_requests}"
+
+
+def test_repeated_target_model_upload_cannot_use_a_forbidden_deployment(gateway: Gateway) -> None:
+    pytest.skip("BUG: repeated target_model_names[] upload bypasses the key's model restriction and reaches the deployment")
+    key_allowed: Final = "provider-key-allowed-" + uuid.uuid4().hex[:8]
+    key_forbidden: Final = "provider-key-forbidden-" + uuid.uuid4().hex[:8]
+    with wire_server(_openai_backend()) as wire, gateway.scenario() as scenario:
+        allowed: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key_allowed)
+        forbidden: Final = scenario.model(model="openai/gpt-4.1-mini", api_base=wire.url + "/v1", api_key=key_forbidden)
+        _wait_until_every_worker_serves(gateway, allowed, forbidden)
+        team: Final = scenario.team(models=[allowed, forbidden])
+        user: Final = scenario.member(team)
+        caller_key: Final = scenario.key(team_id=team, user_id=user, models=[allowed])
+
+        response: Final = gateway.client.post(
+            "/v1/files",
+            data={"purpose": "batch", "target_model_names[]": [allowed, forbidden]},
+            files={"file": (INPUT_FILENAME, _jsonl(forbidden), "application/jsonl")},
+            headers={"Authorization": f"Bearer {caller_key}"},
+        )
+        provider_requests: Final = _drained_other_than_model_list_probes(wire)
+        assert response.status_code == 403, f"{response.text}; provider requests={provider_requests}"
+        assert _error_message(response, 403) == (
+            f"The requested model '{forbidden}' is not available for this API key, or the model name is invalid. "
+            "Check the models available to you and try again."
+        ), response.text
+        assert provider_requests == (), f"repeated target-model upload reached the provider: {provider_requests}"
 
 
 def _s3_backend() -> Callable[[Request], Reply]:
@@ -406,14 +561,43 @@ def _bedrock_model(scenario: Scenario, wire: Wire) -> str:
     )
 
 
-@pytest.mark.parametrize("scheme", ["s3", "gs"], ids=["s3-uri", "gs-uri"])
-def test_non_admin_cannot_delete_a_raw_cloud_storage_uri(gateway: Gateway, scheme: str) -> None:
+def _vertex_credentials(token_url: str) -> str:
+    private_key: Final = (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        .decode()
+    )
+    return json.dumps(
+        {
+            "type": "service_account",
+            "project_id": VERTEX_PROJECT,
+            "private_key_id": "scripted",
+            "private_key": private_key,
+            "client_email": f"scripted@{VERTEX_PROJECT}.iam.gserviceaccount.com",
+            "client_id": "0",
+            "auth_uri": f"{token_url}/_oauth/authorize",
+            "token_uri": f"{token_url}/_oauth/token",
+        }
+    )
+
+
+def _vertex_token_backend(request: Request) -> Reply:
+    if request.method == "POST" and request.target == "/_oauth/token":
+        return Reply(status=400, body=b'{"error":"invalid_grant"}', content_type="application/json")
+    return _json_reply({"error": {"message": f"unscripted {request.method} {request.target}"}}, 404)
+
+
+def test_non_admin_cannot_delete_a_raw_cloud_storage_uri(gateway: Gateway) -> None:
     with wire_server(_s3_backend()) as wire, gateway.scenario() as scenario:
         model: Final = _bedrock_model(scenario, wire)
         _wait_until_every_worker_serves(gateway, model)
         caller_user: Final = scenario.user(user_role="internal_user")
         caller_key: Final = scenario.key(user_id=caller_user, models=[model])
-        object_uri: Final = f"{scheme}://{BUCKET}/litellm-bedrock-files-obj.jsonl"
+        object_uri: Final = f"s3://{BUCKET}/litellm-bedrock-files-obj.jsonl"
         provider_path: Final = "/bedrock/v1/files/" + quote(object_uri, safe="")
 
         denied: Final = gateway.request("DELETE", provider_path, key=caller_key, params={"model": model})
@@ -425,6 +609,47 @@ def test_non_admin_cannot_delete_a_raw_cloud_storage_uri(gateway: Gateway, schem
         assert _drained_other_than_model_list_probes(wire) == (), (
             "non-admin cloud-storage delete reached the storage backend"
         )
+
+
+def test_non_admin_cannot_delete_a_raw_gcs_uri_before_vertex_auth_or_storage(gateway: Gateway) -> None:
+    with (
+        wire_server(_vertex_token_backend) as token_wire,
+        wire_server(_s3_backend()) as storage_wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model=VERTEX_MODEL,
+            api_key=None,
+            api_base=storage_wire.url,
+            vertex_project=VERTEX_PROJECT,
+            vertex_location=VERTEX_LOCATION,
+            vertex_credentials=_vertex_credentials(token_wire.url),
+            gcs_bucket_name=BUCKET,
+        )
+        _wait_until_every_worker_serves(gateway, model)
+        caller_user: Final = scenario.user(user_role="internal_user")
+        caller_key: Final = scenario.key(user_id=caller_user, models=[model])
+        object_uri: Final = f"gs://{BUCKET}/litellm-vertex-files/litellm-vertex-files-obj.jsonl"
+        token_wire.drain()
+        storage_wire.drain()
+
+        denied: Final = gateway.request(
+            "DELETE",
+            "/vertex_ai/v1/files/" + quote(object_uri, safe=""),
+            key=caller_key,
+            params={"model": model},
+        )
+        token_requests: Final = token_wire.drain()
+        storage_requests: Final = storage_wire.drain()
+        assert denied.status_code == 403, (
+            f"{denied.text}; token requests={token_requests}; storage requests={storage_requests}"
+        )
+        assert _error_message(denied, 403) == (
+            "Raw cloud storage file ids can only be deleted by a proxy admin key. "
+            "Use the LiteLLM managed file id returned when the file was created."
+        ), denied.text
+        assert token_requests == (), "non-admin raw GCS delete reached the Vertex token endpoint"
+        assert storage_requests == (), "non-admin raw GCS delete reached the storage double"
 
 
 def test_proxy_admin_deletes_a_raw_s3_uri_with_one_signed_delete(gateway: Gateway) -> None:

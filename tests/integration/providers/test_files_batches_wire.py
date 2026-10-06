@@ -81,16 +81,27 @@ def _json_reply(body: Mapping[str, JsonValue], status: int = 200) -> Reply:
     return Reply(status=status, body=json.dumps(body).encode())
 
 
-def _file_object(file_id: str, filename: str = INPUT_FILENAME) -> dict[str, JsonValue]:
+def _file_object(file_id: str, byte_count: int, filename: str = INPUT_FILENAME) -> dict[str, JsonValue]:
     return {
         "id": file_id,
         "object": "file",
-        "bytes": 123,
+        "bytes": byte_count,
         "created_at": 1700000000,
         "filename": filename,
         "purpose": "batch",
         "status": "processed",
     }
+
+
+def _expected_file_object(file_id: str, byte_count: int, filename: str = INPUT_FILENAME) -> _FileObject:
+    return _FileObject(
+        id=file_id,
+        object="file",
+        bytes=byte_count,
+        created_at=1700000000,
+        filename=filename,
+        purpose="batch",
+    )
 
 
 def _batch_object(
@@ -124,10 +135,11 @@ def _text_fields(parts: tuple[Message, ...]) -> dict[str, str]:
     }
 
 
-def _file_fields(parts: tuple[Message, ...]) -> dict[str, tuple[str, bytes]]:
+def _file_fields(parts: tuple[Message, ...]) -> dict[str, tuple[str, str, bytes]]:
     return {
-        part.get_param("name", header="content-disposition"): (
+        part.get_param("name", header="content-disposition") or "": (
             part.get_filename() or "",
+            part.get_content_type(),
             part.get_payload(decode=True) or b"",
         )
         for part in parts
@@ -194,7 +206,8 @@ def _multiplexed_openai_backends(
         raw_path: Final = urlsplit(request.target).path
         path: Final = "/v1/" + raw_path.removeprefix("/openai/") if raw_path.startswith("/openai/") else raw_path
         if request.method == "POST" and path == "/v1/files":
-            return _json_reply(_file_object("file-" + _bearer(request)))
+            file_part: Final = _file_fields(_multipart_parts(request))["file"]
+            return _json_reply(_file_object("file-" + _bearer(request), len(file_part[2]), file_part[0]))
         if request.method == "POST" and path == "/v1/batches":
             if created_batch is not None:
                 return _json_reply(created_batch)
@@ -210,7 +223,7 @@ def _multiplexed_openai_backends(
         if request.method == "GET" and path.startswith("/v1/files/") and path.endswith("/content"):
             return Reply(body=OUTPUT_BYTES, content_type="application/octet-stream")
         if request.method == "GET" and path.startswith("/v1/files/"):
-            return _json_reply(_file_object(path.rsplit("/", 1)[1]))
+            return _json_reply(_file_object(path.rsplit("/", 1)[1], len(_jsonl("uploaded-model"))))
         if request.method == "DELETE" and path.startswith("/v1/files/"):
             return _json_reply({"id": path.rsplit("/", 1)[1], "object": "file", "deleted": True})
         return _json_reply({"error": {"message": f"unscripted {request.method} {request.target}"}}, 404)
@@ -218,14 +231,20 @@ def _multiplexed_openai_backends(
     return respond
 
 
-def _managed_upload(gateway: Gateway, spelling: _BatchUploadSpelling, fields: Mapping[str, object]) -> str:
+def _managed_upload(
+    gateway: Gateway, spelling: _BatchUploadSpelling, fields: Mapping[str, object]
+) -> _FileObject:
     key: Final = gateway.key
     match spelling:
         case "sdk_list":
             with OpenAI(base_url=_sdk_base_url(gateway), api_key=key, max_retries=0) as client:
-                return client.files.create(
-                    file=(INPUT_FILENAME, _jsonl("uploaded-model")), purpose="batch", extra_body=fields
-                ).id
+                response: Final = client.files.with_raw_response.create(
+                    file=(INPUT_FILENAME, _jsonl("uploaded-model"), "application/jsonl"),
+                    purpose="batch",
+                    extra_body=fields,
+                )
+            assert response.status_code == 200, response.text
+            return _FileObject.model_validate_json(response.content)
         case "repeated_bracket" | "indexed":
             posted: Final = gateway.client.post(
                 "/v1/files",
@@ -234,7 +253,7 @@ def _managed_upload(gateway: Gateway, spelling: _BatchUploadSpelling, fields: Ma
                 headers={"Authorization": f"Bearer {key}"},
             )
             assert posted.status_code == 200, posted.text
-            return string_value(_json(posted)["id"])
+            return _FileObject.model_validate_json(posted.content)
         case "comma_joined":
             created: Final = gateway.request_multipart(
                 "/v1/files",
@@ -242,7 +261,7 @@ def _managed_upload(gateway: Gateway, spelling: _BatchUploadSpelling, fields: Ma
                 {"file": (INPUT_FILENAME, _jsonl("uploaded-model"), "application/jsonl")},
             )
             assert created.status_code == 200, created.text
-            return string_value(_json(created)["id"])
+            return _FileObject.model_validate_json(created.content)
         case _:
             assert_never(spelling)
 
@@ -267,7 +286,9 @@ def test_batch_upload_to_two_target_models_reaches_each_deployment(
             "indexed": {"target_model_names[0]": model_a, "target_model_names[1]": model_b},
             "comma_joined": {"target_model_names": f"{model_a},{model_b}"},
         }[spelling]
-        managed: Final = _managed_upload(gateway, spelling, fields)
+        managed_file: Final = _managed_upload(gateway, spelling, fields)
+        assert managed_file.created_at > 0, managed_file.model_dump()
+        managed: Final = managed_file.id
 
         requests: Final = _drained_other_than_model_list_probes(wire)
         assert sorted((r.method, r.target, r.headers["authorization"]) for r in requests) == [
@@ -279,7 +300,16 @@ def test_batch_upload_to_two_target_models_reaches_each_deployment(
             parts: Final = _multipart_parts(uploads[f"Bearer {bearer}"])
             assert len(parts) == 2, [part.get_param("name", header="content-disposition") for part in parts]
             assert _text_fields(parts) == {"purpose": "batch"}
-            assert _file_fields(parts) == {"file": ("modified_file.jsonl", _rewritten_jsonl(underlying))}
+            file_part: Final = _file_fields(parts)["file"]
+            assert (file_part[0], file_part[2]) == ("modified_file.jsonl", _rewritten_jsonl(underlying)), file_part
+
+        managed_file_part: Final = _file_fields(_multipart_parts(uploads[f"Bearer {key_a}"]))["file"]
+        expected_file: Final = _expected_file_object(
+            managed_file.id,
+            len(managed_file_part[2]),
+            managed_file_part[0],
+        )
+        assert managed_file == expected_file, managed_file.model_dump()
 
         decoded: Final = _decoded_unified(managed)
         assert f"target_model_names,{model_a},{model_b}" in decoded, decoded
@@ -296,17 +326,53 @@ def test_batch_upload_to_two_target_models_reaches_each_deployment(
 
         readback: Final = gateway.request("GET", f"/v1/files/{managed}")
         assert readback.status_code == 200, readback.text
-        assert string_value(_json(readback)["id"]) == managed, readback.text
+        readback_file: Final = _FileObject.model_validate_json(readback.content)
+        assert readback_file == expected_file, readback.text
         assert _drained_other_than_model_list_probes(wire) == ()
 
 
-def _model_routed_upload(gateway: Gateway, spelling: _ModelRoutedSpelling, alias: str, uploaded: bytes) -> str:
+def test_batch_upload_to_two_target_models_keeps_the_jsonl_content_type(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: managed multi-target upload sends the rewritten batch file as application/octet-stream instead of "
+        "application/jsonl"
+    )
+    key_a: Final = "provider-key-a-" + uuid.uuid4().hex[:8]
+    key_b: Final = "provider-key-b-" + uuid.uuid4().hex[:8]
+    with wire_server(_multiplexed_openai_backends()) as wire, gateway.scenario() as scenario:
+        model_a: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key_a)
+        model_b: Final = scenario.model(model="openai/gpt-4.1-mini", api_base=wire.url + "/v1", api_key=key_b)
+        _wait_until_every_worker_serves(gateway, model_a, model_b)
+        _managed_upload(
+            gateway,
+            "repeated_bracket",
+            {"target_model_names[]": [model_a, model_b]},
+        )
+        uploads: Final = {
+            request.headers["authorization"]: request for request in _drained_other_than_model_list_probes(wire)
+        }
+        content_types: Final = {
+            f"Bearer {key}": _file_fields(_multipart_parts(uploads[f"Bearer {key}"]))["file"][1]
+            for key in (key_a, key_b)
+        }
+        assert content_types == {
+            f"Bearer {key_a}": "application/jsonl",
+            f"Bearer {key_b}": "application/jsonl",
+        }, content_types
+
+
+def _model_routed_upload(
+    gateway: Gateway, spelling: _ModelRoutedSpelling, alias: str, uploaded: bytes
+) -> _FileObject:
     match spelling:
         case "sdk_extra_body":
             with OpenAI(base_url=_sdk_base_url(gateway), api_key=gateway.key, max_retries=0) as client:
-                return client.files.create(
-                    file=(INPUT_FILENAME, uploaded), purpose="batch", extra_body={"model": alias}
-                ).id
+                response: Final = client.files.with_raw_response.create(
+                    file=(INPUT_FILENAME, uploaded, "application/jsonl"),
+                    purpose="batch",
+                    extra_body={"model": alias},
+                )
+            assert response.status_code == 200, response.text
+            return _FileObject.model_validate_json(response.content)
         case "multipart_field":
             created: Final = gateway.request_multipart(
                 "/v1/files",
@@ -314,7 +380,7 @@ def _model_routed_upload(gateway: Gateway, spelling: _ModelRoutedSpelling, alias
                 {"file": (INPUT_FILENAME, uploaded, "application/jsonl")},
             )
             assert created.status_code == 200, created.text
-            return string_value(_json(created)["id"])
+            return _FileObject.model_validate_json(created.content)
         case "query_param":
             queried: Final = gateway.client.post(
                 "/v1/files",
@@ -324,7 +390,7 @@ def _model_routed_upload(gateway: Gateway, spelling: _ModelRoutedSpelling, alias
                 headers={"Authorization": f"Bearer {gateway.key}"},
             )
             assert queried.status_code == 200, queried.text
-            return string_value(_json(queried)["id"])
+            return _FileObject.model_validate_json(queried.content)
         case "model_header":
             headed: Final = gateway.client.post(
                 "/v1/files",
@@ -333,7 +399,7 @@ def _model_routed_upload(gateway: Gateway, spelling: _ModelRoutedSpelling, alias
                 headers={"Authorization": f"Bearer {gateway.key}", "x-litellm-model": alias},
             )
             assert headed.status_code == 200, headed.text
-            return string_value(_json(headed)["id"])
+            return _FileObject.model_validate_json(headed.content)
         case _:
             assert_never(spelling)
 
@@ -351,21 +417,23 @@ def test_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_bac
     with wire_server(_multiplexed_openai_backends()) as wire, gateway.scenario() as scenario:
         alias: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key)
         _wait_until_every_worker_serves(gateway, alias)
-        encoded: Final = _model_routed_upload(gateway, spelling, alias, uploaded)
+        uploaded_file: Final = _model_routed_upload(gateway, spelling, alias, uploaded)
 
         expected_encoded: Final = encode_file_id_with_model(file_id=f"file-{key}", model=alias)
-        assert encoded == expected_encoded, encoded
+        assert uploaded_file == _expected_file_object(expected_encoded, len(uploaded)), uploaded_file.model_dump()
+        encoded: Final = uploaded_file.id
         (upload,) = _drained_other_than_model_list_probes(wire)
         assert (upload.method, upload.target) == ("POST", "/v1/files"), upload.target
         assert upload.headers["authorization"] == f"Bearer {key}", upload.headers
         parts: Final = _multipart_parts(upload)
         assert len(parts) == 2, [part.get_param("name", header="content-disposition") for part in parts]
         assert _text_fields(parts) == {"purpose": "batch"}
-        assert _file_fields(parts) == {"file": (INPUT_FILENAME, uploaded)}
+        assert _file_fields(parts) == {"file": (INPUT_FILENAME, "application/jsonl", uploaded)}
 
         readback: Final = gateway.request("GET", f"/v1/files/{encoded}")
         assert readback.status_code == 200, readback.text
-        assert string_value(_json(readback)["id"]) == encoded, readback.text
+        readback_file: Final = _FileObject.model_validate_json(readback.content)
+        assert readback_file == _expected_file_object(encoded, len(uploaded)), readback.text
         (fetched,) = _drained_other_than_model_list_probes(wire)
         assert (fetched.method, fetched.target) == ("GET", f"/v1/files/file-{key}"), fetched.target
         assert fetched.headers["authorization"] == f"Bearer {key}", fetched.headers
@@ -376,13 +444,17 @@ AZURE_API_VERSION: Final = "2024-10-21"
 
 
 def _encoded_output_file_id(gateway: Gateway, alias: str, bearer_key: str) -> tuple[str, str]:
+    uploaded_bytes: Final = _jsonl("uploaded-model")
     uploaded: Final = gateway.request_multipart(
         "/v1/files",
         {"purpose": "batch", "model": alias},
-        {"file": (INPUT_FILENAME, _jsonl("uploaded-model"), "application/jsonl")},
+        {"file": (INPUT_FILENAME, uploaded_bytes, "application/jsonl")},
     )
     assert uploaded.status_code == 200, uploaded.text
-    encoded_input: Final = string_value(_json(uploaded)["id"])
+    encoded_file: Final = encode_file_id_with_model(file_id=f"file-{bearer_key}", model=alias)
+    uploaded_file: Final = _FileObject.model_validate_json(uploaded.content)
+    assert uploaded_file == _expected_file_object(encoded_file, len(uploaded_bytes)), uploaded.text
+    encoded_input: Final = uploaded_file.id
     created: Final = gateway.request(
         "POST",
         "/v1/batches",
@@ -470,23 +542,42 @@ def test_batch_output_file_content_downloads_through_the_model_encoded_id(
 
 
 def _encoded_batch_input(
-    gateway: Gateway, spelling: _BatchCreateSpelling, alias: str, wire: Wire, raw_input: str
+    gateway: Gateway, spelling: _BatchCreateSpelling, alias: str, wire: Wire, raw_input: str, bearer_key: str
 ) -> str:
     if spelling == "encoded_input":
+        uploaded_bytes: Final = _jsonl("uploaded-model")
         uploaded: Final = gateway.request_multipart(
             "/v1/files",
             {"purpose": "batch", "model": alias},
-            {"file": (INPUT_FILENAME, _jsonl("uploaded-model"), "application/jsonl")},
+            {"file": (INPUT_FILENAME, uploaded_bytes, "application/jsonl")},
         )
         assert uploaded.status_code == 200, uploaded.text
+        encoded_file: Final = encode_file_id_with_model(file_id=f"file-{bearer_key}", model=alias)
+        uploaded_file: Final = _FileObject.model_validate_json(uploaded.content)
+        assert uploaded_file == _expected_file_object(encoded_file, len(uploaded_bytes)), uploaded.text
         wire.drain()
-        return string_value(_json(uploaded)["id"])
+        return uploaded_file.id
     return encode_file_id_with_model(file_id=raw_input, model=alias)
 
 
 def _created_batch(
     gateway: Gateway, spelling: _BatchCreateSpelling, encoded_input: str, raw_input: str, alias: str
 ) -> _Batch:
+    if spelling in {"query_model", "header_model"}:
+        created: Final = gateway.request(
+            "POST",
+            "/v1/batches",
+            {
+                "input_file_id": raw_input,
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "metadata": {"job": "x"},
+            },
+            params={"model": alias} if spelling == "query_model" else None,
+            headers={"x-litellm-model": alias} if spelling == "header_model" else None,
+        )
+        assert created.status_code == 200, created.text
+        return _Batch.model_validate_json(created.content)
     if spelling == "sanitized_metadata":
         created: Final = gateway.request(
             "POST",
@@ -502,15 +593,7 @@ def _created_batch(
         assert created.status_code == 200, created.text
         return _Batch.model_validate_json(created.content)
     with OpenAI(base_url=_sdk_base_url(gateway), api_key=gateway.key, max_retries=0) as client:
-        extra: Final = (
-            {}
-            if spelling == "encoded_input"
-            else {"extra_body": {"model": alias}}
-            if spelling == "body_model"
-            else {"extra_query": {"model": alias}}
-            if spelling == "query_model"
-            else {"extra_headers": {"x-litellm-model": alias}}
-        )
+        extra: Final = {} if spelling == "encoded_input" else {"extra_body": {"model": alias}}
         sdk_batch: Final = client.batches.create(
             input_file_id=encoded_input if spelling == "encoded_input" else raw_input,
             endpoint="/v1/chat/completions",
@@ -538,7 +621,7 @@ def test_create_batch_reaches_one_deployment_and_returns_model_encoded_ids(
     with wire_server(_multiplexed_openai_backends(created_batch)) as wire, gateway.scenario() as scenario:
         alias: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key)
         _wait_until_every_worker_serves(gateway, alias)
-        encoded_input: Final = _encoded_batch_input(gateway, spelling, alias, wire, raw_input)
+        encoded_input: Final = _encoded_batch_input(gateway, spelling, alias, wire, raw_input, key)
         created_batch_payload: Final = _created_batch(gateway, spelling, encoded_input, raw_input, alias)
 
         expected_raw_input: Final = f"file-{key}" if spelling == "encoded_input" else raw_input
