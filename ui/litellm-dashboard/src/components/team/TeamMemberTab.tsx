@@ -27,6 +27,8 @@ const BUDGET_SOURCE_LABELS: Record<Exclude<TeamMemberBudgetSource, "none">, stri
   custom: "Custom",
 };
 
+const positiveOrNull = (value: number | null): number | null => (value !== null && value > 0 ? value : null);
+
 const formatBudget = (value: number | null): string =>
   value === null ? "Unlimited" : `$${formatNumberWithCommas(value, 2)}`;
 
@@ -113,18 +115,20 @@ export default function TeamMemberTab({
     return membership?.total_spend ?? 0;
   };
 
+  const enforcedTeamDefaultBudget = positiveOrNull(teamDefaultBudget);
+
   const getUserBudgetSource = (userId: string | null): TeamMemberBudgetSource => {
     if (!userId) return "none";
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    if (membership === undefined) return "none";
-    if (membership.budget_source !== "custom" || hasCustomMaxBudget(membership)) return membership.budget_source;
-    return teamData.team_info.team_member_budget_table ? "team_default" : "none";
+    if (membership?.budget_source === "team_default") return "team_default";
+    if (membership !== undefined && hasCustomMaxBudget(membership)) return "custom";
+    return enforcedTeamDefaultBudget === null ? "none" : "team_default";
   };
 
   const getUserBudget = (userId: string | null): number | null => {
     if (!userId) return null;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.litellm_budget_table?.max_budget ?? teamDefaultBudget;
+    return membership?.litellm_budget_table?.max_budget ?? enforcedTeamDefaultBudget;
   };
 
   // Helper function to get rate limits for a user

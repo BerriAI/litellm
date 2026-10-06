@@ -788,6 +788,65 @@ describe("TeamMembersComponent", () => {
       expect(screen.queryByTestId("reset-member-budget")).not.toBeInTheDocument();
     });
 
+    const teamWithDefault = (defaultMaxBudget: number | null, memberships: TeamData["team_memberships"]) => {
+      const base = createMockTeamData();
+      return createMockTeamData({
+        team_info: {
+          ...base.team_info,
+          team_member_budget_table: {
+            max_budget: defaultMaxBudget,
+            budget_duration: null,
+            tpm_limit: null,
+            rpm_limit: null,
+          },
+        },
+        team_memberships: memberships,
+      });
+    };
+
+    const ownRowWithOnlyRpm = (): TeamData["team_memberships"][number] => {
+      const base = createMockTeamData().team_memberships[0];
+      return {
+        ...base,
+        litellm_budget_table: { ...base.litellm_budget_table, max_budget: null, tpm_limit: null, rpm_limit: 100 },
+      };
+    };
+
+    it.each([
+      ["$0", 0],
+      ["blank", null],
+    ])("shows Unlimited with no source for a member without their own cap when the team default is %s", (_, value) => {
+      renderTab(teamWithDefault(value, [ownRowWithOnlyRpm()]));
+
+      const row = screen.getByRole("row", { name: /user1@test\.com/ });
+      expect(within(row).queryByTestId("member-budget-source")).not.toBeInTheDocument();
+      expect(row).toHaveTextContent("Unlimited");
+    });
+
+    it("keeps a member on the shared $0 team default row at $0", () => {
+      const base = createMockTeamData().team_memberships[0];
+      const onSharedDefaultRow: TeamData["team_memberships"][number] = {
+        ...base,
+        budget_id: "team-default-budget",
+        budget_source: "team_default",
+        litellm_budget_table: { ...base.litellm_budget_table, budget_id: "team-default-budget", max_budget: 0 },
+      };
+      renderTab(teamWithDefault(0, [onSharedDefaultRow]));
+
+      const row = screen.getByRole("row", { name: /user1@test\.com/ });
+      expect(within(row).getByTestId("member-budget-source")).toHaveTextContent("Team default");
+      expect(row).toHaveTextContent("$0.00");
+      expect(row).not.toHaveTextContent("Unlimited");
+    });
+
+    it("caps a member with no membership budget row at a positive team default", () => {
+      renderTab(teamWithDefault(10, []));
+
+      const row = screen.getByRole("row", { name: /user1@test\.com/ });
+      expect(within(row).getByTestId("member-budget-source")).toHaveTextContent("Team default");
+      expect(row).toHaveTextContent("$10.00");
+    });
+
     it("only offers Use team default on customized members, and only to editors", () => {
       const { unmount } = renderTab(teamDataWithDefault());
 
