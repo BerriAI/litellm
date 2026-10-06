@@ -5,10 +5,9 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import HTTPException
-from prisma import Prisma
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import LiteralString
 
@@ -27,6 +26,9 @@ from litellm.proxy.lens.models import (
 from litellm.proxy.lens.reviews import criteria_key
 from litellm.proxy.lens.state import apply_progress, current_job, replace_job
 from litellm.types.llms.base import LiteLLMBaseModel
+
+if TYPE_CHECKING:
+    from prisma import Prisma
 
 
 class Database(Protocol):
@@ -359,7 +361,7 @@ class LensRepository:
 
 
 class WriterDatabase:
-    def __init__(self, writer: PrismaWrapper | Prisma) -> None:
+    def __init__(self, writer: "PrismaWrapper | Prisma") -> None:
         self.writer: Final = writer
 
     @asynccontextmanager
