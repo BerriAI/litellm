@@ -157,7 +157,11 @@ describe("Lens interactive demo", () => {
     await user.click(within(finding).getByRole("button", { name: "Back to finding" }));
     expect(within(finding).getByText(/The support agent retries/)).toBeVisible();
     await user.click(within(finding).getByRole("button", { name: "Close finding (Esc)" }));
-    expect(await screen.findByRole("table", { name: "Findings" })).toBeVisible();
+    expect(await screen.findByRole("table", { name: "Investigations" })).toBeVisible();
+    const navigation = within(screen.getByRole("tablist", { name: "Lens" }));
+    expect(navigation.queryByRole("tab", { name: "Findings" })).not.toBeInTheDocument();
+    expect(navigation.getByRole("tab", { name: "Investigations" })).toHaveAttribute("aria-selected", "true");
+    expect(navigation.getByRole("tab", { name: "Settings" })).toBeVisible();
     expect(network).not.toHaveBeenCalled();
     await expectUrl(onUrlUpdate, (url) => expect(url.get("demo")).toBe("true"));
     await expectUrl(onUrlUpdate, (url) => expect(url.has("span")).toBe(false));

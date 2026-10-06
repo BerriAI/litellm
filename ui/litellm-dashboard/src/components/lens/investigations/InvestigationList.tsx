@@ -2,15 +2,17 @@
 
 import {
   getCoreRowModel,
+  getExpandedRowModel,
   useReactTable,
   type CellContext,
   type ColumnDef,
   type TableOptions,
 } from "@tanstack/react-table";
 import { createContext, useContext, type ReactNode } from "react";
-import { ChevronRight, Pencil, Play } from "lucide-react";
+import { ChevronRight, CircleDot, Pencil, Play } from "lucide-react";
 
 import { useMediaQuery } from "usehooks-ts";
+import { groupBy } from "es-toolkit";
 import { useNow } from "@/hooks/useNow";
 import { Inspector } from "@/components/shared/Inspector";
 import { InspectorTable } from "@/components/shared/InspectorTable";
@@ -18,14 +20,15 @@ import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import { cn } from "@/lib/cva.config";
 import { agoLabel, scopeLabel } from "../model/format";
 
-import { findingKey, openFindings, scheduleLabel } from "../model/inbox";
+import { filterInbox, findingKey, inboxFinding, openFindings, scheduleLabel, type InboxRow } from "../model/inbox";
 import { lensStatus } from "../model/status";
 import { SearchBox } from "@/components/shared/search/SearchBox";
 import { itemValues } from "@/components/shared/search/valueSource";
 import { type Finding, type Lens } from "../model/types";
-import { useLensRoute, useListSearchRoute } from "../route";
+import { useInboxFilters, useLensRoute, useListSearchRoute } from "../route";
 import { FINDING_PANEL_WIDTH_KEY } from "../storage";
 import { filterInvestigations, INVESTIGATION_INDEX, INVESTIGATION_QUERY } from "./investigationQuery";
+import { InboxFilters } from "./FindingInbox";
 
 const ACTION =
   "inline-flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50";
@@ -34,10 +37,19 @@ const INVESTIGATION_HEIGHT = 36;
 /** One row of the list: an investigation, or an open finding shown under the investigation that owns it. */
 export type InvestigationRow =
   | { readonly kind: "investigation"; readonly lens: Lens }
-  | { readonly kind: "finding"; readonly lens: Lens; readonly finding: Finding };
+  | { readonly kind: "finding"; readonly lens: Lens; readonly finding: Finding; readonly inbox?: InboxRow };
+
+export const findingRow = (inbox: InboxRow): InvestigationRow => ({
+  kind: "finding",
+  lens: inbox.sources[0].lens,
+  finding: inboxFinding(inbox),
+  inbox,
+});
 
 export const investigationRowKey = (row: InvestigationRow): string =>
-  row.kind === "investigation" ? `investigation:${row.lens.id}` : `finding:${findingKey(row.lens, row.finding)}`;
+  row.kind === "investigation"
+    ? `investigation:${row.lens.id}`
+    : `finding:${row.inbox?.key ?? findingKey(row.lens, row.finding)}`;
 
 interface ListContextValue {
   readonly now: number;
@@ -60,21 +72,64 @@ type Cell = CellContext<InvestigationRow, unknown>;
 
 const ROW_LABEL = { investigation: "Investigation details", finding: "Finding details" } as const;
 
-function NameCell({ row: { original: item } }: Cell) {
+function NameCell({ row }: Cell) {
+  const item = row.original;
+  if (item.kind === "finding")
+    return (
+      <span className="flex min-w-0 items-center gap-2" title={item.finding.suggestion || undefined}>
+        <InspectorTable.Indent row={row} className="h-12" />
+        <CircleDot
+          aria-hidden="true"
+          className={cn(
+            "size-3.5 shrink-0",
+            item.finding.priority === "high" ? "text-destructive" : "text-muted-foreground",
+          )}
+        />
+        <span className="min-w-0">
+          <span className="block truncate text-foreground">{item.finding.title}</span>
+          <span className="text-xs text-muted-foreground">
+            {item.finding.priority ?? "medium"} priority · {item.finding.occurrences.length}{" "}
+            {item.finding.occurrences.length === 1 ? "run" : "runs"}
+          </span>
+          <span
+            className="block truncate text-xs text-muted-foreground"
+            title={item.inbox?.sources.map(({ lens }) => lens.settings.name).join(", ")}
+          >
+            {item.inbox?.sources.map(({ lens }) => lens.settings.name).join(", ")}
+          </span>
+        </span>
+      </span>
+    );
   return (
-    <span className="flex min-w-0 flex-col">
-      <span className="truncate font-medium text-foreground">{item.lens.settings.name}</span>
-      <span className="truncate text-xs text-muted-foreground md:hidden">{scopeLabel(item.lens.settings)}</span>
+    <span className="flex min-w-0 items-center gap-2">
+      <InspectorTable.Indent
+        row={row}
+        toggleLabel={(expanded) => `${expanded ? "Hide" : "Show"} findings for ${item.lens.settings.name}`}
+      />
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate font-medium text-foreground">{item.lens.settings.name}</span>
+        <span className="truncate text-xs text-muted-foreground md:hidden">{scopeLabel(item.lens.settings)}</span>
+      </span>
     </span>
   );
 }
 
 function AgentCell({ row: { original: item } }: Cell) {
+  if (item.kind === "finding")
+    return <span className="block truncate text-muted-foreground">{item.inbox?.agents.join(", ")}</span>;
   return <span className="block truncate text-muted-foreground">{scopeLabel(item.lens.settings)}</span>;
 }
 
 function ScheduleCell({ row: { original: item } }: Cell) {
   const { now } = useList();
+  if (item.kind === "finding") {
+    const names = [...new Set(item.inbox?.sources.map(({ lens }) => lens.settings.name))].join(", ");
+    return (
+      <span className="block truncate text-muted-foreground" title={names}>
+        {names}
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-muted-foreground">
       <span
@@ -88,6 +143,13 @@ function ScheduleCell({ row: { original: item } }: Cell) {
 
 function StatusCell({ row: { original: item } }: Cell) {
   const { connected, now } = useList();
+  if (item.kind === "finding")
+    return (
+      <span className="text-muted-foreground" title={formatActivityTimestamp(item.finding.last_seen)}>
+        {item.finding.occurrences.length} {item.finding.occurrences.length === 1 ? "run" : "runs"} ·{" "}
+        {agoLabel(Date.parse(item.finding.last_seen), now)}
+      </span>
+    );
   const latest = item.lens.jobs[0];
   return (
     <span
@@ -171,6 +233,7 @@ const COLUMNS: ColumnDef<InvestigationRow>[] = [
 
 export interface InvestigationListProps {
   readonly lenses: readonly Lens[];
+  readonly inbox: readonly InboxRow[];
   readonly connected: boolean;
   readonly readOnly?: boolean;
   readonly selected: InvestigationRow | null;
@@ -184,6 +247,7 @@ export interface InvestigationListProps {
 
 export function InvestigationList({
   lenses,
+  inbox,
   connected,
   readOnly = false,
   selected,
@@ -195,17 +259,31 @@ export function InvestigationList({
 }: InvestigationListProps) {
   const [search, setSearch] = useListSearchRoute();
   const { demo } = useLensRoute();
+  const filters = useInboxFilters();
   const now = useNow(15000);
   const desktop = useMediaQuery("(min-width: 768px)");
   const shown = filterInvestigations([...lenses], search);
+  const visibleIds = new Set(shown.map(({ id }) => id));
+  const findings = filterInbox(inbox, filters);
+  const shownFindings = findings.filter((finding) => finding.sources.some(({ lens }) => visibleIds.has(lens.id)));
+  const findingsByOwner = groupBy(
+    shownFindings,
+    (finding) => finding.sources.find(({ lens }) => visibleIds.has(lens.id))?.lens.id ?? "",
+  );
+  const filtersActive = filters.agent !== "all" || filters.priority !== "all";
+  const noFindingsMatch = shown.length > 0 && shownFindings.length === 0;
   const tableOptions: TableOptions<InvestigationRow> = {
     data: shown.map((lens): InvestigationRow => ({ kind: "investigation", lens })),
     columns: COLUMNS,
     defaultColumn: { size: undefined },
     state: { columnVisibility: { agent: desktop, schedule: desktop, status: desktop } },
     getRowId: investigationRowKey,
+    getSubRows: (row) =>
+      row.kind === "investigation" ? (findingsByOwner[row.lens.id] ?? []).map(findingRow) : undefined,
+    initialState: { expanded: true },
     autoResetAll: false,
     getCoreRowModel: getCoreRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
   };
   const table = useReactTable(tableOptions);
   const rows = table.getRowModel().rows.map((row) => row.original);
@@ -237,11 +315,14 @@ export function InvestigationList({
           </SearchBox.Root>
           {actions && <div className="flex shrink-0 items-stretch">{actions}</div>}
         </div>
+        <InboxFilters rows={inbox} />
         <ListContext.Provider value={{ now, connected, readOnly, demo, onEdit, onRunNow }}>
           <InspectorTable.Root table={table}>
             <InspectorTable.Grid aria-label="Investigations" className="text-xs md:min-w-[860px]">
               <InspectorTable.Header />
-              <InspectorTable.Body<InvestigationRow> rowHeight={() => (desktop ? INVESTIGATION_HEIGHT : 48)}>
+              <InspectorTable.Body<InvestigationRow>
+                rowHeight={(row) => (desktop && row.original.kind === "investigation" ? INVESTIGATION_HEIGHT : 48)}
+              >
                 {(row) => (
                   <InspectorTable.Row
                     row={row}
@@ -250,7 +331,7 @@ export function InvestigationList({
                     aria-label={
                       row.original.kind === "finding" ? row.original.finding.title : row.original.lens.settings.name
                     }
-                    className="group h-12 md:h-9"
+                    className={cn("group h-12", row.original.kind === "investigation" && "md:h-9")}
                   />
                 )}
               </InspectorTable.Body>
@@ -260,11 +341,16 @@ export function InvestigationList({
                 No investigations match your search.
               </div>
             )}
+            {filtersActive && noFindingsMatch && (
+              <p className="px-4 py-8 text-center text-xs text-muted-foreground">No findings match these filters.</p>
+            )}
           </InspectorTable.Root>
         </ListContext.Provider>
         <footer className="flex h-8 shrink-0 items-center border-t bg-muted/30 px-3 text-xs text-muted-foreground">
           {shown.length} {shown.length === 1 ? "investigation" : "investigations"} ·{" "}
           {shown.filter((lens) => lens.settings.enabled).length} watching
+          {" · "}
+          {shownFindings.length} {shownFindings.length === 1 ? "finding" : "findings"}
         </footer>
       </div>
       <Inspector.Panel label={ROW_LABEL[noun]} testId="investigation-panel">

@@ -15,7 +15,6 @@ import { LensSettings } from "./settings/LensSettings";
 import { createLensDemo } from "./data/demo/createLensDemo";
 import { lensQueries } from "./data/queries";
 import { LensModeSwitch } from "./LensModeSwitch";
-import { FindingsView } from "./investigations/FindingsView";
 import { investigationActivity, listPollInterval } from "./model/status";
 import { cn } from "@/lib/cva.config";
 import { useDialogRoute, useIssueRoute, useLensRoute, type LensDialog, type LensTab } from "./route";
@@ -196,13 +195,6 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                     canMintTracingKey={isAdmin}
                     canViewFindings={canViewInvestigations}
                   />
-                </TabsContent>
-                <TabsContent value="findings" className={PANEL}>
-                  {canViewInvestigations ? (
-                    <FindingsView readOnly={readOnly || !isAdmin} />
-                  ) : (
-                    <p className="py-6 text-sm text-muted-foreground">Findings require proxy administrator access.</p>
-                  )}
                 </TabsContent>
                 <TabsContent value="investigations" className={PANEL}>
                   {canViewInvestigations ? (

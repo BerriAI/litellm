@@ -2,6 +2,7 @@
 
 import { useLensUpdate, useSaveLens, type LensWrite } from "../data/mutations";
 import type { Finding, Lens, RunWindow, Settings } from "../model/types";
+import type { InboxRow } from "../model/inbox";
 
 /** Every write the Investigations screens can ask for, so leaves only ever express intent. */
 export function useInvestigationActions() {
@@ -22,5 +23,13 @@ export function useInvestigationActions() {
     startRun: (lens: Lens, request: RunWindow) => attempt((api) => api.startRun(lens.id, request)),
     review: (lens: Lens, finding: Finding, status: Finding["status"], reason: string) =>
       attempt((api) => api.reviewFinding(lens.id, finding.id, status, reason)),
+    reviewInbox: (row: InboxRow, status: Finding["status"], reason: string) =>
+      attempt(async (api) => {
+        const results = await Promise.allSettled(
+          row.sources.map(({ lens, finding }) => api.reviewFinding(lens.id, finding.id, status, reason)),
+        );
+        const failed = results.find((result) => result.status === "rejected");
+        if (failed) throw failed.reason;
+      }),
   };
 }
