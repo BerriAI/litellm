@@ -1,6 +1,8 @@
 import json
 import uuid
 from collections.abc import Callable
+from email.parser import BytesParser
+from email.policy import HTTP
 from typing import Final
 from urllib.parse import parse_qsl, urlsplit
 
@@ -19,6 +21,7 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 _FILE_ID: Final = "cfile_ownership"
 _FILE_BYTES: Final = b"tenant secret contents"
 _FORBIDDEN: Final = {"detail": "Forbidden"}
+_Part = tuple[str, str | None, str, bytes]
 
 
 class _Deleted(BaseModel):
@@ -54,6 +57,23 @@ def _file(container_id: str) -> dict[str, object]:
     }
 
 
+def _multipart_parts(request: Request) -> tuple[_Part, ...]:
+    content_type: Final = request.headers["content-type"]
+    assert content_type.startswith("multipart/form-data; boundary="), content_type
+    envelope: Final = f"content-type: {content_type}\r\n\r\n".encode() + request.body
+    parsed: Final = BytesParser(policy=HTTP).parsebytes(envelope)
+    assert parsed.is_multipart(), request.body
+    return tuple(
+        (
+            str(part.get_param("name", header="content-disposition")),
+            part.get_filename(),
+            part.get_content_type(),
+            bytes(part.get_payload(decode=True)),
+        )
+        for part in parsed.iter_parts()
+    )
+
+
 def _container_upstream(container_ids: tuple[str, ...]) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         path: Final = urlsplit(request.target).path
@@ -81,7 +101,10 @@ def _container_upstream(container_ids: tuple[str, ...]) -> Callable[[Request], R
                         }
                     ).encode()
                 )
-            case ("POST", ["files"]) | ("GET", ["files", _]):
+            case "POST", ["files"]:
+                assert _multipart_parts(request) == (("file", "notes.txt", "text/plain", _FILE_BYTES),), request.body
+                return Reply(body=json.dumps(_file(container_id)).encode())
+            case "GET", ["files", _]:
                 return Reply(body=json.dumps(_file(container_id)).encode())
             case "GET", ["files", _, "content"]:
                 return Reply(body=_FILE_BYTES, content_type="application/octet-stream")

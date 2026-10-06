@@ -1,8 +1,10 @@
 import json
 import uuid
 from hashlib import sha256
+from pathlib import Path
 from typing import Final
 
+import litellm
 import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
@@ -10,11 +12,17 @@ from integration._support.wire import Reply, Request, wire_server
 from openai import OpenAI
 from openai.types import ContainerCreateResponse
 
-CODE_INTERPRETER_SESSION_COST: Final = 0.03
+# run.py sets LITELLM_LOCAL_MODEL_COST_MAP=True and reads model_prices_and_context_window_backup.json
+CODE_INTERPRETER_SESSION_COST: Final = float(
+    json.loads((Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json").read_text())[
+        "openai/container"
+    ]["code_interpreter_cost_per_session"]
+)
 PROVIDER_KEY: Final = "synthetic-container-key"
 
 
 def test_container_create_charges_one_code_interpreter_session(gateway: Gateway) -> None:
+    assert CODE_INTERPRETER_SESSION_COST > 0
     container_id: Final = f"cntr_spend_{uuid.uuid4().hex}"
     scripted: Final = {"id": container_id, "object": "container", "created_at": 1, "status": "running", "name": "c"}
 

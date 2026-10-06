@@ -1693,6 +1693,33 @@ def test_openai_sdk_multipart_video_edit_forwards_the_uploaded_video_file(gatewa
         assert len(wire.drain()) == 1
 
 
+def test_openai_sdk_multipart_video_extension_forwards_the_uploaded_video_file(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: client.videos.extend(video=<mp4 file>) returns 200 but the upstream receives JSON "
+        '{"prompt":"extend","seconds":"4","video":{"id":""}} instead of a multipart video file part'
+    )
+    seen: Final[list[Request]] = []
+    with wire_server(_video_upstream(seen)) as wire, gateway.scenario() as scenario:
+        model: Final = _video_model(scenario, wire)
+        client: Final = _routable_video_client(gateway, model)
+        video: Final = client.videos.extend(
+            prompt="extend", seconds="4", video=("v.mp4", _MP4, "video/mp4"), extra_body={"model": model}
+        )
+        assert video == _client_video(video.id, model, created=False), video
+        assert _upstream_video_id(video) == ("openai", _VIDEO_UPSTREAM_ID), video.id
+        assert [_video_target(request) for request in seen] == [
+            ("POST", "/v1/videos/extensions", f"Bearer {_VIDEO_PROVIDER_KEY}")
+        ]
+        assert sorted(_multipart_parts(seen[0])) == sorted(
+            (
+                ("prompt", None, "text/plain", b"extend"),
+                ("seconds", None, "text/plain", b"4"),
+                ("video", "v.mp4", "video/mp4", _MP4),
+            )
+        ), seen[0].body
+        assert len(wire.drain()) == 1
+
+
 def test_form_encoded_video_references_reach_upstream_as_decoded_ids(gateway: Gateway) -> None:
     seen: Final[list[Request]] = []
     with wire_server(_video_upstream(seen)) as wire, gateway.scenario() as scenario:
@@ -1721,6 +1748,21 @@ def test_form_encoded_video_references_reach_upstream_as_decoded_ids(gateway: Ga
                 },
                 headers=auth,
             ),
+            gateway.client.post("/v1/videos/edits", data={"prompt": "edit", "video": encoded}, headers=auth),
+            gateway.client.post(
+                "/videos/edits",
+                files={"prompt": (None, "edit"), "video": (None, encoded)},
+                headers=auth,
+            ),
+            gateway.client.post(
+                "/v1/videos/extensions",
+                files={
+                    "prompt": (None, "extend"),
+                    "seconds": (None, "4"),
+                    "video": (None, encoded),
+                },
+                headers=auth,
+            ),
         )
         provider_auth: Final = f"Bearer {_VIDEO_PROVIDER_KEY}"
         assert [_video_target(request) for request in seen] == [
@@ -1728,20 +1770,26 @@ def test_form_encoded_video_references_reach_upstream_as_decoded_ids(gateway: Ga
             ("POST", "/v1/videos/edits", provider_auth),
             ("POST", "/v1/videos/extensions", provider_auth),
             ("POST", "/v1/videos/extensions", provider_auth),
+            ("POST", "/v1/videos/edits", provider_auth),
+            ("POST", "/v1/videos/edits", provider_auth),
+            ("POST", "/v1/videos/extensions", provider_auth),
         ], [response.text for response in responses]
         for response in responses:
             assert response.status_code == 200, response.text
             video = Video.model_validate_json(response.text)
             assert video == _client_video(video.id, model, created=False), response.text
             assert _upstream_video_id(video) == ("openai", _VIDEO_UPSTREAM_ID), response.text
-        assert [request.headers["content-type"] for request in seen] == ["application/json"] * 4
+        assert [request.headers["content-type"] for request in seen] == ["application/json"] * 7
         assert [JSON_OBJECT.validate_json(request.body) for request in seen] == [
             {"prompt": "edit", "video": {"id": "video-source"}},
             {"prompt": "edit", "video": {"id": "video-source"}},
             {"prompt": "extend", "seconds": "4", "video": {"id": "video-source"}},
             {"prompt": "extend", "seconds": "4", "video": {"id": "video-source"}},
+            {"prompt": "edit", "video": {"id": "video-source"}},
+            {"prompt": "edit", "video": {"id": "video-source"}},
+            {"prompt": "extend", "seconds": "4", "video": {"id": "video-source"}},
         ], [request.body for request in seen]
-        assert len(wire.drain()) == 4
+        assert len(wire.drain()) == 7
 
 
 def test_documented_json_video_extension_routes_and_decodes_the_reference(gateway: Gateway) -> None:
