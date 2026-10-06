@@ -559,6 +559,18 @@ def test_boot_load_success_does_not_start_background_retry():
     assert get_model_cost_map_source_info()["source"] == "remote"
 
 
+@pytest.mark.parametrize("packaged_backup", [b"[]", b'"damaged"'])
+def test_boot_load_serves_the_fetched_map_when_the_packaged_backup_is_not_a_json_object(monkeypatch, packaged_backup):
+    monkeypatch.setattr(GetModelCostMap, "read_local_model_cost_map_bytes", staticmethod(lambda: packaged_backup))
+    monkeypatch.setattr(GetModelCostMap, "_backup_model_count", -1)
+    client, _ = _mock_client([httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client)
+
+    cost_map = get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=client)
+
+    assert get_model_cost_map_source_info()["source"] == "remote"
+    assert cost_map.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
+
+
 def test_boot_load_transient_failure_returns_local_then_background_retry_adopts_remote(monkeypatch):
     import litellm
     from litellm import utils as litellm_utils

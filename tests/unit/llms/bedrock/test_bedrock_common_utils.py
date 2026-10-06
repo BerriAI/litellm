@@ -1144,6 +1144,7 @@ def test_build_bedrock_stream_error_resolves_status_from_the_exception_type(
         ),
         (' [" context-1m-2025-08-07 "] ', ["context-1m-2025-08-07"]),
         ("[]", []),
+        ("[1, 2]", ["1", "2"]),
         ("[not-json]", ["[not-json]"]),
     ],
 )
@@ -1151,3 +1152,20 @@ def test_get_anthropic_beta_from_headers_reads_a_json_array_header(header_value:
     from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
 
     assert get_anthropic_beta_from_headers({"anthropic-beta": header_value}) == expected
+
+
+def test_bedrock_response_stream_shape_is_unavailable_when_botocore_describes_the_service_as_a_list():
+    from unittest.mock import patch
+
+    import litellm.llms.bedrock.common_utils as mod
+
+    pytest.importorskip("botocore")
+    with (
+        patch("botocore.loaders.Loader.load_service_model", return_value=["only-in-the-description"]),
+        patch.object(mod.verbose_logger, "warning") as warning,
+    ):
+        shape = mod._load_bedrock_response_stream_shape()
+
+    assert shape is None
+    (logged,) = warning.call_args_list
+    assert "only-in-the-description" not in logged.args[0] % logged.args[1:]

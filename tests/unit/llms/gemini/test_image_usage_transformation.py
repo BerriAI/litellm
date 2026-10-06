@@ -1,6 +1,7 @@
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
 
@@ -45,3 +46,11 @@ def test_transform_gemini_image_usage_reports_image_and_chat_style_counts(
         "completion_tokens_details": expected_output_details,
         "output_tokens_details": expected_output_details,
     }
+
+
+@pytest.mark.parametrize("count_field", ["promptTokenCount", "totalTokenCount"])
+def test_transform_gemini_image_usage_rejects_a_count_that_is_not_a_number(count_field: str):
+    with pytest.raises(ValidationError):
+        transform_gemini_image_usage(
+            {"promptTokenCount": 35, "candidatesTokenCount": 4, "totalTokenCount": 39, count_field: "many"}
+        )

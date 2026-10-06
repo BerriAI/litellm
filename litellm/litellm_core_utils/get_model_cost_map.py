@@ -26,7 +26,7 @@ from types import MappingProxyType
 from typing import Final, Protocol
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm import verbose_logger
@@ -40,7 +40,6 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
-_BUNDLED_CATALOG_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 
 
@@ -84,7 +83,7 @@ class GetModelCostMap:
     @staticmethod
     def load_local_model_cost_map_with_revision() -> "ModelCostMapReloaded":
         body: Final = GetModelCostMap.read_local_model_cost_map_bytes()
-        content: Final = _BUNDLED_CATALOG_ADAPTER.validate_python(json.loads(body))
+        content: Final = json.loads(body)
         return ModelCostMapReloaded(model_cost_map=content, revision=git_blob_id(body))
 
     @staticmethod

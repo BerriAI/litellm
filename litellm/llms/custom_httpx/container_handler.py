@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -54,9 +53,6 @@ class EndpointsConfig(TypedDict):
     endpoints: ReadOnly[Sequence[EndpointConfig]]
 
 
-_ENDPOINTS_CONFIG: Final = TypeAdapter(EndpointsConfig)
-
-
 class ContainerErrorDetail(TypedDict, total=False):
     """The ``error`` object of a container API error body."""
 
@@ -85,7 +81,7 @@ def _load_endpoints_config() -> EndpointsConfig:
     """Load the endpoints configuration from JSON file."""
     config_path: Final = Path(__file__).parent.parent.parent / "containers" / "endpoints.json"
     with open(config_path) as f:
-        return _ENDPOINTS_CONFIG.validate_python(json.load(f))
+        return json.load(f)
 
 
 def _get_endpoint_config(endpoint_name: str) -> EndpointConfig | None:

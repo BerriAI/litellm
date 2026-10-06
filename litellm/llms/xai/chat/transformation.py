@@ -3,7 +3,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -31,7 +31,7 @@ from ...openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
 
-_RESPONSE_BODY: Final = TypeAdapter(dict[object, object], config=ConfigDict(hide_input_in_errors=True))
+_RESPONSE_BODY: Final = TypeAdapter(dict[object, object])
 
 
 def _usage_restated_from_xai_ticks(usage: Usage | None) -> Usage | None:
