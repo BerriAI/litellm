@@ -14,12 +14,12 @@ import openai
 import pytest
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
+from integration._support.responses_vendor import response_identities
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai.types.responses import ResponseCompletedEvent
 from pydantic import JsonValue, TypeAdapter
 
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 
 _BACKEND: Final = "gemini-3.1-flash-image"
 _PROJECT: Final = "scripted-project"
@@ -29,7 +29,6 @@ _STREAM: Final = f"{_MODEL_PATH}:streamGenerateContent?alt=sse"
 _PROMPT_TOKENS: Final = 7
 _IMAGE_TOKENS: Final = 1120
 _CACHED_TOKENS: Final = 4
-_SALT: Final = "sk-integration-salt"
 _UPLIFT: Final = 1.1
 _UPLIFT_SOURCE: Final = (
     "Non-global column of https://cloud.google.com/vertex-ai/generative-ai/pricing for Gemini 3.1 Flash Image, "
@@ -180,11 +179,7 @@ def _spend(row: dict[str, JsonValue]) -> float:
 
 
 def _responses_identities(client_id: str) -> tuple[str, ...]:
-    decrypted: Final = decrypt_if_encrypted_with(client_id.removeprefix("resp_"), _SALT)
-    assert decrypted is not None, client_id
-    issued: Final = decrypted.split(";")[0].split("response_id:")[-1]
-    inner: Final = base64.b64decode(issued.removeprefix("resp_")).decode().split(";")[-1].removeprefix("response_id:")
-    return (client_id, issued, inner)
+    return (client_id, *response_identities(client_id))
 
 
 def _only_generate_calls(wire: Wire, count: int, *, target: str = _GENERATE) -> tuple[Request, ...]:
