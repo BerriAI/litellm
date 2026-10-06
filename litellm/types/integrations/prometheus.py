@@ -410,6 +410,7 @@ def _resolve_deployment_and_latency_caller_identity_labels(
 
 class PrometheusMetricLabels:
     litellm_llm_api_latency_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -424,6 +425,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_llm_api_time_to_first_token_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -438,6 +440,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_request_total_latency_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -510,6 +513,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_deployment_latency_per_output_token = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_BASE.value,
