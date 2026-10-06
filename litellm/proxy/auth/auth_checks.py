@@ -14,6 +14,7 @@ import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
@@ -312,6 +313,9 @@ def _user_table(repo: _PrismaTableHolder[_PrismaUserRow]) -> _PrismaAuthTable[_P
     return _DeadlineBoundedTable(repo.table, "user")
 
 
+GrantLayer = Literal["key", "team", "user"]
+
+
 class _VectorStorePermissionsRow(Protocol):
     @property
     def vector_stores(self) -> Sequence[str] | None: ...
@@ -384,6 +388,9 @@ def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
 
 def _typed_request_body(request_body: dict) -> Mapping[str, object]:
     return request_body
+
+
+typed_general_settings: Final = _typed_request_body
 
 
 class _JsonLoadsObj(Protocol):
@@ -5481,10 +5488,10 @@ def _search_tool_names_from_object_permission(
 def _can_object_call_search_tool(
     search_tool_name: str,
     allowed_search_tools: list[str],
-    object_type: Literal["key", "team", "project"],
+    object_type: Literal["key", "team", "project", "user"],
 ) -> Literal[True]:
     """
-    Check if an object (key/team/project) can access a specific search tool.
+    Check if an object (key/team/project/user) can access a specific search tool.
 
     Similar to _can_object_call_model but for search tools.
 
@@ -5517,82 +5524,186 @@ def _can_object_call_search_tool(
     )
 
 
-async def can_key_call_search_tool(
-    search_tool_name: str,
-    valid_token: UserAPIKeyAuth,
-) -> Literal[True]:
+TeamObjectLoader: TypeAlias = Callable[[], Awaitable[LiteLLM_TeamTable | None]]
+
+
+@dataclass(frozen=True)
+class SearchToolGrants:
     """
-    Check if a key can access a specific search tool.
-
-    Similar to can_key_call_model but for search tools.
-
-    Args:
-        search_tool_name: The search tool being requested
-        valid_token: The authenticated key
-
-    Returns:
-        True if access is allowed
-
-    Raises:
-        ProxyException if access is denied
+    The key, team and user grants that scope one caller's search tools. Every layer in `strict_layers`
+    must list the tool, and any other loaded grant only narrows when its list is nonempty
     """
-    return _can_object_call_search_tool(
-        search_tool_name=search_tool_name,
-        allowed_search_tools=_search_tool_names_from_object_permission(valid_token.object_permission),
-        object_type="key",
-    )
+
+    grants: Mapping[GrantLayer, LiteLLM_ObjectPermissionTable | None]
+    strict_layers: frozenset[GrantLayer]
 
 
-async def can_team_call_search_tool(
-    search_tool_name: str,
-    team_object: LiteLLM_TeamTable | None,
-) -> Literal[True]:
+def _search_tool_deny_by_default(general_settings: Mapping[str, object]) -> bool:
     """
-    Check if a team can access a specific search tool.
-
-    Similar to can_team_access_model but for search tools.
-
-    Args:
-        search_tool_name: The search tool being requested
-        team_object: The team object
-
-    Returns:
-        True if access is allowed
-
-    Raises:
-        ProxyException if access is denied
-    """
-    if team_object is None:
-        return True
-
-    return _can_object_call_search_tool(
-        search_tool_name=search_tool_name,
-        allowed_search_tools=_search_tool_names_from_object_permission(team_object.object_permission),
-        object_type="team",
-    )
-
-
-async def can_user_view_search_tool(
-    search_tool_name: str,
-    valid_token: UserAPIKeyAuth,
-    team_object: LiteLLM_TeamTable | None,
-) -> bool:
-    """
-    Boolean variant of the key + team authorization enforced on /search, used to
-    scope /search_tools/list so a non-admin caller only sees tools it may invoke.
+    Startup rejects a non-boolean value from the config file. A non-boolean value that reaches
+    general_settings another way enables the policy, so only search tool requests are denied.
     """
     try:
-        await can_key_call_search_tool(
-            search_tool_name=search_tool_name,
-            valid_token=valid_token,
+        return ConfigGeneralSettings.model_validate(
+            MappingProxyType(
+                {"search_tool_deny_by_default": general_settings.get("search_tool_deny_by_default", False)}
+            )
+        ).search_tool_deny_by_default
+    except ValidationError:
+        return True
+
+
+def is_search_tool_deny_by_default_applied(valid_token: UserAPIKeyAuth, general_settings: Mapping[str, object]) -> bool:
+    return _search_tool_deny_by_default(general_settings) and _is_strict_grant_identity(valid_token)
+
+
+def _search_tool_denied(object_type: GrantLayer, message: str) -> ProxyException:
+    return ProxyException(
+        message=message,
+        type=ProxyErrorTypes.get_search_tool_access_error_type_for_object(object_type),
+        param="search_tool_name",
+        code=status.HTTP_403_FORBIDDEN,
+    )
+
+
+async def _strict_team_object(load_team_object: TeamObjectLoader) -> LiteLLM_TeamTable | None:
+    try:
+        return await load_team_object()
+    except Exception as e:  # noqa: BLE001  # an unresolved team grants nothing under deny-by-default
+        verbose_proxy_logger.debug("Team lookup failed under search_tool_deny_by_default: %s", e)
+        return None
+
+
+async def _strict_user_object(
+    valid_token: UserAPIKeyAuth, prisma_client: PrismaClient, user_api_key_cache: UserApiKeyCache
+) -> LiteLLM_UserTable | None:
+    if valid_token.user_id is None:
+        return None
+    try:
+        return await get_user_object(
+            user_id=valid_token.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=valid_token.parent_otel_span,
         )
-        await can_team_call_search_tool(
-            search_tool_name=search_tool_name,
-            team_object=team_object,
+    except Exception as e:  # noqa: BLE001  # an unresolved user grants nothing under deny-by-default
+        verbose_proxy_logger.debug("User lookup failed under search_tool_deny_by_default: %s", e)
+        return None
+
+
+async def resolve_search_tool_grants(
+    valid_token: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+    load_team_object: TeamObjectLoader,
+) -> SearchToolGrants:
+    """
+    Without `general_settings.search_tool_deny_by_default`, or for the master key and dashboard sessions,
+    the key and team lists only restrict when nonempty. With it, the identities `_strict_grant_layers` names
+    must each list the tool, and a missing record, `null`, `[]`, or a team or user that fails to load grants nothing
+    """
+    if not is_search_tool_deny_by_default_applied(valid_token, general_settings):
+        team_object: Final = await load_team_object()
+        return SearchToolGrants(
+            grants=MappingProxyType(
+                {"key": valid_token.object_permission, "team": team_object.object_permission if team_object else None}
+            ),
+            strict_layers=frozenset(),
         )
+
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    strict_team_object: Final = await _strict_team_object(load_team_object)
+    strict_layers: Final = _strict_grant_layers(True, valid_token, strict_team_object)
+    if prisma_client is None:
+        return SearchToolGrants(grants=MappingProxyType({}), strict_layers=strict_layers)
+    user_object: Final = (
+        await _strict_user_object(valid_token, prisma_client, user_api_key_cache) if "user" in strict_layers else None
+    )
+    return SearchToolGrants(
+        grants=MappingProxyType(
+            dict(
+                await _identity_grants(valid_token, strict_team_object, user_object, prisma_client, user_api_key_cache)
+            )
+        ),
+        strict_layers=strict_layers,
+    )
+
+
+def check_search_tool_grants(search_tool_name: str, grants: SearchToolGrants) -> Literal[True]:
+    """Raises a 403 ProxyException naming the first key, team or user layer that does not grant the tool"""
+    for layer in ("key", "team", "user"):
+        grant = grants.grants.get(layer)
+        if layer in grants.strict_layers:
+            if grant is None or search_tool_name not in (grant.search_tools or ()):
+                raise _search_tool_denied(
+                    layer,
+                    f"{layer.capitalize()} not allowed to access search tool: {search_tool_name}. "
+                    f"search_tool_deny_by_default is enabled and the {layer} does not grant it",
+                )
+        elif grant is not None:
+            _can_object_call_search_tool(
+                search_tool_name=search_tool_name,
+                allowed_search_tools=_search_tool_names_from_object_permission(grant),
+                object_type=layer,
+            )
+    return True
+
+
+async def can_caller_call_search_tool(
+    search_tool_name: str,
+    valid_token: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+    load_team_object: TeamObjectLoader,
+) -> Literal[True]:
+    """Key, team and user search tool authorization shared by /search, web search interception and discovery"""
+    return check_search_tool_grants(
+        search_tool_name, await resolve_search_tool_grants(valid_token, general_settings, load_team_object)
+    )
+
+
+async def can_token_call_search_tool(search_tool_name: str, valid_token: UserAPIKeyAuth) -> Literal[True]:
+    """`can_caller_call_search_tool` against the proxy's own settings, team cache and database"""
+    from litellm.proxy.proxy_server import general_settings, prisma_client, proxy_logging_obj, user_api_key_cache
+
+    async def _load_team_object() -> LiteLLM_TeamTable | None:
+        if not valid_token.team_id:
+            return None
+        return await get_team_object(
+            team_id=valid_token.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=valid_token.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    return await can_caller_call_search_tool(
+        search_tool_name=search_tool_name,
+        valid_token=valid_token,
+        general_settings=typed_general_settings(general_settings),
+        load_team_object=_load_team_object,
+    )
+
+
+def can_grants_view_search_tool(search_tool_name: str, grants: SearchToolGrants) -> bool:
+    try:
+        check_search_tool_grants(search_tool_name, grants)
     except ProxyException:
         return False
     return True
+
+
+def check_unregistered_search_fallback(
+    valid_token: UserAPIKeyAuth, general_settings: Mapping[str, object]
+) -> Literal[True]:
+    """The unregistered provider fallback names no search tool that a grant could list, so deny-by-default denies it"""
+    if not is_search_tool_deny_by_default_applied(valid_token, general_settings):
+        return True
+    layer: Final = min(_strict_grant_layers(True, valid_token, None), key=("key", "team", "user").index)
+    raise _search_tool_denied(
+        layer,
+        "No registered search tool is available and search_tool_deny_by_default is enabled",
+    )
 
 
 async def is_valid_fallback_model(
@@ -6790,9 +6901,6 @@ def _get_rag_query_vector_store_id(request_body: Mapping[str, object]) -> str | 
 
     vector_store_id: Final = retrieval_config.get("vector_store_id")
     return vector_store_id if isinstance(vector_store_id, str) and vector_store_id else None
-
-
-GrantLayer = Literal["key", "team", "user"]
 
 
 def _is_strict_grant_identity(valid_token: UserAPIKeyAuth | None) -> bool:
