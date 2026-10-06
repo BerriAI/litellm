@@ -1580,8 +1580,10 @@ async def test_add_spend_log_transaction_to_daily_end_user_transaction_skips_whe
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("billing_agent", [None, "caller-agent"])
-async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agent_id_and_queues_update(billing_agent):
+@pytest.mark.parametrize("billing_agent_id", [None, "caller"])
+async def test_add_spend_log_transaction_to_daily_agent_transaction_uses_invoked_agent_id(
+    billing_agent_id: str | None,
+) -> None:
     """
     Ensure agent_id is injected and queued for daily aggregation.
     """
@@ -1589,11 +1591,11 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agen
     mock_prisma = MagicMock()
     mock_prisma.get_request_status = MagicMock(return_value="success")
 
-    agent_id = "agent-123"
-    payload = {
+    agent_id: Final = "target"
+    payload: Final = {
         "request_id": "req-123",
         "agent_id": agent_id,
-        "billing_agent_id": billing_agent,
+        "billing_agent_id": billing_agent_id,
         "user": "test-user",
         "startTime": "2024-01-01T12:00:00",
         "api_key": "test-key",
@@ -1613,18 +1615,14 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agen
         prisma_client=mock_prisma,
     )
 
-    if billing_agent is None:
-        writer.daily_agent_spend_update_queue.add_update.assert_not_awaited()
-        return
     writer.daily_agent_spend_update_queue.add_update.assert_called_once()
 
     call_args = writer.daily_agent_spend_update_queue.add_update.call_args[1]
     update_dict = call_args["update"]
     assert len(update_dict) == 1
-    charged_agent: Final = billing_agent or agent_id
     for key, transaction in update_dict.items():
-        assert key == f"{charged_agent}_2024-01-01_test-key_gpt-4_openai_"
-        assert transaction["agent_id"] == charged_agent
+        assert key == f"{agent_id}_2024-01-01_test-key_gpt-4_openai_"
+        assert transaction["agent_id"] == agent_id
         assert transaction["spend"] == 0.3
         assert transaction["date"] == "2024-01-01"
         assert transaction["api_key"] == "test-key"

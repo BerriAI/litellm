@@ -3031,14 +3031,13 @@ class DBSpendUpdateWriter:
         if prisma_client is None:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
             return
-        charged_agent_id: Final = payload.get("billing_agent_id", payload["agent_id"])
-        if charged_agent_id is None:
+        if payload["agent_id"] is None:
             return
         payload_with_agent_id: Final = cast(
             SpendLogsPayload,
             {
                 **payload,
-                "agent_id": charged_agent_id,
+                "agent_id": payload["agent_id"],
             },
         )
         base_daily_transaction: Final = await self._common_add_spend_log_transaction_to_daily_transaction(
@@ -3047,8 +3046,8 @@ class DBSpendUpdateWriter:
         if base_daily_transaction is None:
             return
         endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
-        daily_transaction_key = f"{charged_agent_id}_{base_daily_transaction['date']}_{payload_with_agent_id['api_key']}_{payload_with_agent_id['model']}_{payload_with_agent_id['custom_llm_provider']}_{endpoint_str}"
-        daily_transaction: Final = DailyAgentSpendTransaction(agent_id=charged_agent_id, **base_daily_transaction)
+        daily_transaction_key = f"{payload['agent_id']}_{base_daily_transaction['date']}_{payload_with_agent_id['api_key']}_{payload_with_agent_id['model']}_{payload_with_agent_id['custom_llm_provider']}_{endpoint_str}"
+        daily_transaction: Final = DailyAgentSpendTransaction(agent_id=payload["agent_id"], **base_daily_transaction)
         await self.daily_agent_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
 
     async def add_spend_log_transaction_to_daily_tag_transaction(
