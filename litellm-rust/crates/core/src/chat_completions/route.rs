@@ -1,10 +1,11 @@
+use litellm_host::observation::ObservationSender;
 use std::convert::Infallible;
 
 use litellm_host::{
     call::{CallOutput, HostedMachine, hosted_call},
     protocol::Protocol,
 };
-use litellm_types::utils::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 
 use super::{
     ChatCompletionsRoute, Error,
@@ -23,22 +24,59 @@ impl Protocol for ChatCompletions {
 }
 
 impl ChatCompletionsRoute {
-    pub fn machine(self, call: ChatCompletionsCall) -> HostedMachine<ChatCompletions> {
+    pub fn machine(
+        self,
+        call: ChatCompletionsCall,
+        options: impl Into<crate::CallOptions>,
+    ) -> HostedMachine<ChatCompletions> {
+        let crate::CallOptions {
+            cache: cache_options,
+            observers,
+        } = options.into();
         hosted_call(
             call,
-            move |call: ChatCompletionsCall, _, hooks| async move {
-                let request = ChatCompletionsRequest {
-                    model: &call.model,
-                    messages: call.messages,
-                    optional_params: call.optional_params,
-                    api_key: call.api_key.as_deref(),
-                    api_base: call.api_base.as_deref(),
-                    custom_llm_provider: call.custom_llm_provider.as_deref(),
-                    extra_headers: call.extra_headers,
-                    timeout: call.timeout,
-                };
-                self.run(request, &hooks).await.map(CallOutput::Complete)
+            observers,
+            move |call, _, interceptors, observers| async move {
+                self.run_call(call, cache_options, &interceptors, observers.as_ref())
+                    .await
+                    .map(CallOutput::Complete)
             },
         )
     }
+
+    #[tracing::instrument(name = "litellm.route", skip_all, fields(
+        route = "chat_completions",
+        model = %call.model,
+        provider,
+        resolved_model,
+        stream = false,
+        outcome
+    ))]
+    pub(super) async fn run_call(
+        &self,
+        call: ChatCompletionsCall,
+        cache_options: Option<litellm_cache_response::CachePolicy>,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<&ObservationSender>,
+    ) -> Result<ChatCompletionsResponse, Error> {
+        crate::diagnostic::unary(async {
+            let request = ChatCompletionsRequest {
+                model: &call.model,
+                messages: call.messages,
+                optional_params: call.optional_params,
+                api_key: call.api_key.as_deref(),
+                api_base: call.api_base.as_deref(),
+                custom_llm_provider: call.custom_llm_provider.as_deref(),
+                extra_headers: call.extra_headers,
+                timeout: call.timeout,
+            };
+            self.run(request, cache_options, interceptors, observers)
+                .await
+        })
+        .await
+    }
+}
+
+impl crate::caching::Cachable for ChatCompletions {
+    const SURFACE: &'static str = "chat_completions";
 }

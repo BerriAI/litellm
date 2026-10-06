@@ -1,4 +1,3 @@
-import "openai/shims/web";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,10 +6,10 @@ import { setGlobalLitellmHeaderName, switchToWorkerUrl } from "@/components/netw
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "@/lib/toast";
 import userEvent from "@testing-library/user-event";
-import type { ComponentType } from "react";
+import { useEffect, type ComponentType } from "react";
 import SidebarAccountMenu from "@/components/SidebarAccountMenu/SidebarAccountMenu";
 import UserDropdown from "@/components/Navbar/UserDropdown/UserDropdown";
-import LiteAdmin from "./LiteAdmin";
+import LiteAdmin, { LiteAdminFrame } from "./LiteAdmin";
 import { MAX_INPUT_LENGTH } from "./agent";
 
 const { transport } = vi.hoisted(() => {
@@ -64,13 +63,18 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function session(role = "proxy_admin", user = "first-admin") {
+function session(
+  role = "proxy_admin",
+  user = "first-admin",
+  license: { premium_user?: boolean | null | string } = { premium_user: true },
+) {
   const encode = (value: object) =>
     btoa(JSON.stringify(value)).replaceAll("=", "").replaceAll("+", "-").replaceAll("/", "_");
   const claims = {
     key: `sk-session-${user}`,
     user_id: user,
     user_role: role,
+    ...license,
     auth_header_name: "X-Gateway-Session",
     exp: Date.now() / 1000 + 3600,
   };
@@ -84,6 +88,15 @@ function SessionReady() {
   return <output>{authLoading ? "Session loading" : "Session ready"}</output>;
 }
 
+let pageMounts = 0;
+
+function Page() {
+  useEffect(() => {
+    pageMounts += 1;
+  }, []);
+  return null;
+}
+
 function renderWidget(Menu?: ComponentType<{ onLogout: () => void }>) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const tree = () => (
@@ -92,7 +105,10 @@ function renderWidget(Menu?: ComponentType<{ onLogout: () => void }>) {
       <AuthProvider>
         <SessionReady />
         {Menu && <Menu onLogout={() => undefined} />}
-        <LiteAdmin />
+        <LiteAdminFrame>
+          <Page />
+          <LiteAdmin />
+        </LiteAdminFrame>
       </AuthProvider>
     </QueryClientProvider>
   );
@@ -168,6 +184,7 @@ function send(text: string) {
 }
 
 beforeEach(() => {
+  pageMounts = 0;
   transport.mockReset();
   localStorage.clear();
   sessionStorage.clear();
@@ -185,7 +202,7 @@ describe("LiteAdmin in the gateway", () => {
   it.each([
     ["sidebar", SidebarAccountMenu],
     ["navbar", UserDropdown],
-  ] as const)("persists Hide LiteAdmin from the %s account menu", async (_name, Menu) => {
+  ] as const)("persists Hide LiteAdmin only for enterprise users in the %s account menu", async (_name, Menu) => {
     gateway([]);
     const user = userEvent.setup();
     const view = renderWidget(Menu);
@@ -207,6 +224,57 @@ describe("LiteAdmin in the gateway", () => {
     expect(savedToggle).toBeChecked();
     await user.click(savedToggle);
     expect(await screen.findByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
+
+    for (const premiumUser of [false, null, undefined, "true"]) {
+      session("proxy_admin", "first-admin", { premium_user: premiumUser });
+      restored.refresh();
+      expect(screen.getByRole("switch", { name: "Toggle hide all prompts" })).toBeInTheDocument();
+      expect(screen.queryByRole("switch", { name: "Toggle hide LiteAdmin" })).not.toBeInTheDocument();
+    }
+  });
+
+  it.each([false, null, undefined, "true"])(
+    "does not expose LiteAdmin when premium_user is %s",
+    async (premiumUser) => {
+      session("proxy_admin", "first-admin", { premium_user: premiumUser });
+      const requests = gateway([]);
+      const { client } = renderWidget();
+      await screen.findByText("Session ready");
+      await waitFor(() => expect(client.isFetching()).toBe(0));
+      expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
+      for (const modifiers of [{ metaKey: true }, { ctrlKey: true }]) {
+        expect(fireEvent.keyDown(document, { key: "j", ...modifiers })).toBe(true);
+        expect(screen.queryByRole("complementary", { name: "LiteAdmin" })).not.toBeInTheDocument();
+      }
+      expect(requests.every((request) => request.url.endsWith("/litellm-ui-config"))).toBe(true);
+    },
+  );
+
+  it("removes an open panel and shortcuts when enterprise access is lost and restores it closed", async () => {
+    const requests = gateway([]);
+    const view = renderWidget();
+    await openWidget();
+    fireEvent.change(screen.getByPlaceholderText("Ask LiteAdmin…"), { target: { value: "Previous enterprise draft" } });
+    await waitFor(() => expect(view.client.isFetching()).toBe(0));
+    const requestCount = requests.length;
+
+    session("proxy_admin", "first-admin", { premium_user: false });
+    view.refresh();
+    expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "LiteAdmin" })).not.toBeInTheDocument();
+    for (const modifiers of [{ metaKey: true }, { ctrlKey: true }]) {
+      expect(fireEvent.keyDown(document, { key: "j", ...modifiers })).toBe(true);
+      expect(screen.queryByRole("complementary", { name: "LiteAdmin" })).not.toBeInTheDocument();
+    }
+    expect(requests).toHaveLength(requestCount);
+
+    session();
+    view.refresh();
+    expect(await screen.findByRole("button", { name: "LiteAdmin" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("complementary", { name: "LiteAdmin" })).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "j", ctrlKey: true });
+    expect(await screen.findByRole("complementary", { name: "LiteAdmin" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Ask LiteAdmin…")).toHaveValue("");
   });
 
   it("isolates Hide LiteAdmin by admin and gateway and reacts to another tab clearing it", async () => {
@@ -253,6 +321,62 @@ describe("LiteAdmin in the gateway", () => {
     await user.click(screen.getByRole("button", { name: /account menu/i }));
     expect(await screen.findByRole("switch", { name: "Toggle hide all prompts" })).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Toggle hide LiteAdmin" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the page mounted and comes back closed after Hide LiteAdmin is turned off", async () => {
+    gateway([]);
+    pageMounts = 0;
+    const user = userEvent.setup();
+    renderWidget(SidebarAccountMenu);
+    await screen.findByRole("button", { name: "LiteAdmin" });
+    await user.click(screen.getByRole("button", { name: /account menu/i }));
+    const toggle = await screen.findByRole("switch", { name: "Toggle hide LiteAdmin" });
+    fireEvent.keyDown(document, { key: "j", metaKey: true });
+    expect(await screen.findByRole("complementary", { name: "LiteAdmin" })).toBeInTheDocument();
+    await user.click(toggle);
+    expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
+    await user.click(toggle);
+    expect(await screen.findByRole("button", { name: "LiteAdmin" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("complementary", { name: "LiteAdmin" })).not.toBeInTheDocument();
+    expect(pageMounts).toBe(1);
+  });
+
+  it("moves focus into the panel on open: the panel while loading, the message box, then a pending review", async () => {
+    gateway([toolReply("key_create", keyArguments)]);
+    renderWidget();
+    fireEvent.click(await screen.findByRole("button", { name: "LiteAdmin" }));
+    expect(screen.getByRole("complementary", { name: "LiteAdmin" })).toHaveFocus();
+    await selectModel();
+    const reopen = () => {
+      fireEvent.click(screen.getByRole("button", { name: "Close LiteAdmin" }));
+      fireEvent.click(screen.getByRole("button", { name: "LiteAdmin" }));
+    };
+    reopen();
+    expect(await screen.findByPlaceholderText("Ask LiteAdmin…")).toHaveFocus();
+    send("Create a key for the team");
+    const review = await screen.findByRole("region", { name: "Create a virtual key" });
+    reopen();
+    await waitFor(() => expect(review).toHaveFocus());
+  });
+
+  it("toggles with Cmd+J or Ctrl+J and ignores the shortcut while hidden", async () => {
+    gateway([]);
+    const user = userEvent.setup();
+    renderWidget(SidebarAccountMenu);
+    await screen.findByRole("button", { name: "LiteAdmin" });
+    fireEvent.keyDown(document, { key: "j", metaKey: true, shiftKey: true });
+    expect(screen.queryByRole("complementary", { name: "LiteAdmin" })).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "j", metaKey: true });
+    expect(await screen.findByRole("complementary", { name: "LiteAdmin" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "LiteAdmin" })).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(document, { key: "j", ctrlKey: true });
+    expect(screen.queryByRole("complementary", { name: "LiteAdmin" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /account menu/i }));
+    await user.click(await screen.findByRole("switch", { name: "Toggle hide LiteAdmin" }));
+    expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "j", metaKey: true });
+    expect(screen.queryByPlaceholderText("Ask LiteAdmin…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "LiteAdmin" })).not.toBeInTheDocument();
   });
 
   it.each(["proxy_admin_viewer", "internal_user", "internal_user_viewer", "org_admin"])(
@@ -306,7 +430,7 @@ describe("LiteAdmin in the gateway", () => {
     await openWidget();
     send("Create a key for the team");
     const review = await screen.findByRole("region", { name: "Create a virtual key" });
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getAllByRole("complementary", { name: "LiteAdmin" })).toHaveLength(1);
     expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(0);
     expect(within(review).getByText("Widget key")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close LiteAdmin" }));

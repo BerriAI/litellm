@@ -2,6 +2,7 @@ import asyncio
 import copy
 import functools
 import gc
+import itertools
 import json
 import logging
 import os
@@ -19,10 +20,12 @@ import openai
 import pytest
 import respx
 from fastapi import HTTPException
+from opentelemetry import trace
 
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -45,9 +48,10 @@ from litellm.router import (
     _anthropic_stream_forwards_ping_live,
     _anthropic_stream_raised_error_status,
     _anthropic_stream_should_decline_fallback,
-    _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
+    _without_line_breaks,
+    Span,
 )
 from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
@@ -55,7 +59,16 @@ from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deploymen
 from litellm.router_utils.fallback_event_handlers import DISABLE_FALLBACKS_METADATA_KEY
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.llms.openai import ChatCompletionRequest
-from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
+from litellm.types.router import (
+    CustomRoutingStrategyBase,
+    Deployment,
+    DeploymentTypedDict,
+    LiteLLM_Params,
+    ModelGroupInfo,
+    ModelInfo,
+    PreRoutingHookResponse,
+    RetryPolicy,
+)
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -2275,6 +2288,183 @@ def test_model_group_info_cost_none_for_unpriced_deployment_but_zero_when_declar
     assert priced.output_cost_per_token is not None and priced.output_cost_per_token > 0
 
 
+def _alias_cost_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "vllm-free",
+                "litellm_params": {
+                    "model": "openai/my-vllm-free",
+                    "api_key": "fake",
+                    "api_base": "http://localhost:8000/v1",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                },
+            },
+            {
+                "model_name": "gpt-priced",
+                "litellm_params": {"model": "gpt-4o", "api_key": "fake"},
+            },
+        ],
+        model_group_alias={"hidden-free": {"model": "vllm-free", "hidden": True}, "visible": "vllm-free"},
+    )
+
+
+def test_get_model_group_info_include_hidden_resolves_a_hidden_alias():
+    router = _alias_cost_router()
+
+    assert router.get_model_group_info(model_group="hidden-free") is None
+
+    hidden: Final = router.get_model_group_info(model_group="hidden-free", include_hidden=True)
+    assert hidden is not None
+    assert hidden.model_group == "hidden-free"
+    assert hidden.input_cost_per_token == 0
+    assert hidden.output_cost_per_token == 0
+
+
+def test_update_settings_model_group_alias_drops_cached_group_info():
+    router = _alias_cost_router()
+    before: Final = router.cached_model_group_info("visible")
+    assert before is not None and before.input_cost_per_token == 0
+
+    router.update_settings(model_group_alias={"visible": "gpt-priced"})
+
+    after: Final = router.cached_model_group_info("visible")
+    assert after is not None
+    assert after.input_cost_per_token is not None and after.input_cost_per_token > 0
+
+
+_PAID_INPUT_COST_PER_TOKEN: Final = 3e-06
+_PAID_OUTPUT_COST_PER_TOKEN: Final = 1.5e-05
+
+
+def _free_ollama_deployment(model_name: str) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "ollama/qwen3:0.6b",
+            "api_base": "http://localhost:11434",
+            "input_cost_per_token": 0,
+            "output_cost_per_token": 0,
+        },
+    }
+
+
+def _paid_openai_deployment(model_name: str, model: str) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": model,
+            "api_key": "fake",
+            "input_cost_per_token": _PAID_INPUT_COST_PER_TOKEN,
+            "output_cost_per_token": _PAID_OUTPUT_COST_PER_TOKEN,
+        },
+    }
+
+
+def _assert_priced(info: ModelGroupInfo | None, provider: str) -> None:
+    assert info is not None
+    assert info.providers == [provider]
+    assert info.input_cost_per_token == _PAID_INPUT_COST_PER_TOKEN
+    assert info.output_cost_per_token == _PAID_OUTPUT_COST_PER_TOKEN
+
+
+def _assert_free(info: ModelGroupInfo | None, provider: str) -> None:
+    assert info is not None
+    assert info.providers == [provider]
+    assert info.input_cost_per_token == 0
+    assert info.output_cost_per_token == 0
+
+
+def test_get_model_group_info_prices_an_alias_chain_from_the_group_it_routes_to():
+    """chain-entry resolves one hop to local-free and is served by local-free's own
+    deployment, so its price is that deployment's; local-free's own alias to gpt-priced
+    is a hop the router takes only for a request to local-free by name."""
+    router = Router(
+        model_list=[
+            _free_ollama_deployment("local-free"),
+            _paid_openai_deployment("gpt-priced", "gpt-4o"),
+        ],
+        model_group_alias={"chain-entry": "local-free", "local-free": "gpt-priced"},
+    )
+
+    _assert_free(router.get_model_group_info(model_group="chain-entry"), "ollama")
+    _assert_priced(router.get_model_group_info(model_group="local-free"), "openai")
+
+
+def test_get_model_group_info_prices_an_alias_chain_from_the_wildcard_route_serving_it():
+    """When the routed group has no deployment of its own, the wildcard route matching it
+    serves the request, so the price is the wildcard's and never the routed group's own alias
+    target's."""
+    router = Router(
+        model_list=[
+            _paid_openai_deployment("openai/*", "openai/*"),
+            _free_ollama_deployment("local-free"),
+        ],
+        model_group_alias={"wildcard-entry": "openai/gpt-4o", "openai/gpt-4o": "local-free"},
+    )
+
+    _assert_priced(router.get_model_group_info(model_group="wildcard-entry"), "openai")
+    _assert_free(router.get_model_group_info(model_group="openai/gpt-4o"), "ollama")
+
+
+def _served_models(deployments: list[DeploymentTypedDict] | None) -> list[str]:
+    return [deployment["litellm_params"]["model"] for deployment in deployments or ()]
+
+
+def test_get_model_list_of_routed_group_reads_the_groups_own_deployments_only():
+    """The router resolves an alias once, so a group reached as an alias target is served by
+    its own deployments. get_model_list composes the group's own alias target too, the hop a
+    request to that group by name takes."""
+    router = Router(
+        model_list=[
+            _free_ollama_deployment("local-free"),
+            _paid_openai_deployment("gpt-priced", "gpt-4o"),
+        ],
+        model_group_alias={"local-free": "gpt-priced"},
+    )
+
+    assert _served_models(router.get_model_list_of_routed_group("local-free")) == ["ollama/qwen3:0.6b"]
+    assert _served_models(router.get_model_list(model_name="local-free")) == ["ollama/qwen3:0.6b", "gpt-4o"]
+
+
+def test_get_model_list_of_routed_group_falls_back_to_the_wildcard_route_serving_it():
+    router = Router(
+        model_list=[
+            _paid_openai_deployment("openai/*", "openai/*"),
+            _free_ollama_deployment("local-free"),
+        ],
+        model_group_alias={"openai/gpt-4o": "local-free"},
+    )
+
+    routed = router.get_model_list_of_routed_group("openai/gpt-4o")
+
+    assert [deployment["model_name"] for deployment in routed] == ["openai/gpt-4o"]
+    assert _served_models(routed) == ["openai/gpt-4o"]
+    assert _served_models(router.get_model_list(model_name="openai/gpt-4o")) == ["ollama/qwen3:0.6b"]
+
+
+def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selector():
+    router = _alias_cost_router()
+
+    router._switch_routing_strategy(
+        "lar1",
+        {
+            "routing_strategy_args": {
+                "confidence_threshold_low": 0.1,
+                "confidence_threshold_medium": 0.3,
+                "confidence_threshold_high": 0.9,
+            }
+        },
+    )
+    assert router.routing_strategy == "lar1"
+    assert "async_get_available_deployment" in router.__dict__
+
+    router._switch_routing_strategy("usage-based-routing-v2", {})
+    assert router.lowesttpm_logger_v2 is not None
+    assert "async_get_available_deployment" not in router.__dict__
+
+
 @pytest.mark.parametrize(
     "value,expected",
     [
@@ -4170,7 +4360,7 @@ def _make_router_with_fallback(primary="gpt-4", secondary="gpt-3.5-turbo"):
 
 class _InjectedFallbackRouter(Router):
     def __init__(self, fallback_response: object) -> None:
-        super().__init__(model_list=[])
+        super().__init__(model_list=[], fallbacks=[{"primary": ["fallback"]}])
         self._fallback_response: Final = fallback_response
 
     async def async_function_with_fallbacks_common_utils(
@@ -10273,6 +10463,200 @@ def test_get_configured_display_name_skips_wildcard_pattern_matching():
         )
 
 
+@pytest.mark.parametrize(
+    "configured",
+    [["ultrafast"], ["priority", {"id": "ultrafast", "name": "Ultrafast", "description": "Fastest"}], [], "not-a-list"],
+)
+def test_get_configured_service_tiers_returns_the_deployment_model_info_value_as_set(configured):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": configured},
+            }
+        ]
+    )
+
+    assert router.get_configured_service_tiers("gpt-6-astra") == (configured,)
+
+
+def test_get_configured_service_tiers_returns_one_value_per_deployment_in_model_list_order():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            },
+            {"model_name": "gpt-6-astra", "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://a.example"}},
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://b.example"},
+                "model_info": {"service_tiers": ["priority", "ultrafast"]},
+            },
+        ]
+    )
+
+    assert router.get_configured_service_tiers("gpt-6-astra") == (["ultrafast"], None, ["priority", "ultrafast"])
+
+
+def test_get_configured_service_tiers_returns_none_for_an_unset_deployment_and_nothing_for_an_unknown_name():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-tiers-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_service_tiers("no-tiers-model") == (None,)
+    assert router.get_configured_service_tiers("not-a-real-model") == ()
+
+
+def test_get_configured_service_tiers_does_not_apply_a_wildcard_deployment_to_matched_names():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            }
+        ]
+    )
+
+    assert router.get_configured_service_tiers("openai/gpt-6-astra") == ()
+
+
+def test_get_configured_service_tiers_reads_only_the_deployments_a_request_can_route_to():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://paused.example"},
+                "model_info": {"blocked": True},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://team-2.example"},
+                "model_info": {"team_id": "team-2"},
+            },
+        ]
+    )
+
+    assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-1") == (["ultrafast"],)
+    assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-2") == (["ultrafast"], None)
+    assert router.get_configured_service_tiers("gpt-6-astra") == (["ultrafast"],)
+
+
+@pytest.mark.parametrize(
+    "alias_value, expected_group",
+    [
+        ("gpt-6-astra", "gpt-6-astra"),
+        ({"model": "gpt-6-astra", "hidden": True}, "gpt-6-astra"),
+        ({"model": "", "hidden": False}, "gpt-6"),
+    ],
+    ids=["string-alias", "item-alias", "malformed-alias-is-itself"],
+)
+def test_routable_model_group_is_the_alias_target_else_the_name_itself(alias_value, expected_group):
+    router = litellm.Router(
+        model_list=[{"model_name": "gpt-6-astra", "litellm_params": {"model": "openai/gpt-6-astra"}}],
+        model_group_alias={"gpt-6": alias_value},
+    )
+
+    assert router.routable_model_group("gpt-6") == expected_group
+    assert router.routable_model_group("gpt-6-astra") == "gpt-6-astra"
+    assert router.routable_model_group("not-a-real-model") == "not-a-real-model"
+
+
+def test_get_configured_service_tiers_reads_an_alias_off_its_target_deployments():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://team-2.example"},
+                "model_info": {"team_id": "team-2", "service_tiers": ["priority"]},
+            },
+        ],
+        model_group_alias={"gpt-6": "gpt-6-astra", "gpt-6-quiet": {"model": "gpt-6-astra", "hidden": True}},
+    )
+
+    assert router.get_configured_service_tiers("gpt-6") == router.get_configured_service_tiers("gpt-6-astra")
+    assert router.get_configured_service_tiers("gpt-6", team_id="team-1") == (["ultrafast"],)
+    assert router.get_configured_service_tiers("gpt-6", team_id="team-2") == (["ultrafast"], ["priority"])
+    assert router.get_configured_service_tiers("gpt-6-quiet", team_id="team-1") == (["ultrafast"],)
+
+
+def _router_with_team_owned_deployments():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "owned-by-teams",
+                "litellm_params": {"model": "openai/gpt-5.5"},
+                "model_info": {"team_id": "team-1", "service_tiers": ["priority"]},
+            },
+            {
+                "model_name": "owned-by-teams",
+                "litellm_params": {"model": "openai/paused-model"},
+                "model_info": {"team_id": "team-2", "blocked": True, "service_tiers": ["paused"]},
+            },
+            {
+                "model_name": "owned-by-teams",
+                "litellm_params": {"model": "openai/team-2-model"},
+                "model_info": {"team_id": "team-2", "service_tiers": ["flex"]},
+            },
+            {
+                "model_name": "owned-and-shared",
+                "litellm_params": {"model": "openai/team-1-model"},
+                "model_info": {"team_id": "team-1", "service_tiers": ["priority"]},
+            },
+            {
+                "model_name": "owned-and-shared",
+                "litellm_params": {"model": "openai/shared-model"},
+                "model_info": {"service_tiers": ["flex"]},
+            },
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
+        ],
+        model_group_alias={"nickname": "owned-by-teams"},
+    )
+
+
+@pytest.mark.parametrize(
+    "model_name, team_id, upstream_model, service_tiers",
+    [
+        ("owned-by-teams", "team-1", "openai/gpt-5.5", (["priority"],)),
+        ("owned-by-teams", "team-2", "openai/team-2-model", (["flex"],)),
+        ("nickname", "team-1", "openai/gpt-5.5", (["priority"],)),
+        ("nickname", "team-2", "openai/team-2-model", (["flex"],)),
+        ("owned-by-teams", "team-3", None, ()),
+        ("owned-by-teams", None, "openai/gpt-5.5", (["priority"], ["flex"])),
+        ("owned-and-shared", "team-1", "openai/team-1-model", (["priority"], ["flex"])),
+        ("owned-and-shared", "team-2", "openai/shared-model", (["flex"],)),
+        ("owned-and-shared", None, "openai/shared-model", (["flex"],)),
+        ("openai/gpt-5.5", "team-1", None, ()),
+        ("not-a-real-model", None, None, ()),
+    ],
+)
+def test_upstream_model_and_service_tiers_are_read_off_the_deployments_the_team_can_route_to(
+    model_name, team_id, upstream_model, service_tiers
+):
+    router = _router_with_team_owned_deployments()
+
+    assert router.get_routable_upstream_model(model_name, team_id) == upstream_model
+    assert router.get_configured_service_tiers(model_name, team_id) == service_tiers
+
+
 def test_get_configured_display_name_treats_malformed_values_as_absent():
     malformed = ["", "   ", 12345, ["Kimi K3"], {"name": "Kimi K3"}, True]
     router = litellm.Router(
@@ -11516,15 +11900,16 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         }
 
     @pytest.mark.asyncio
-    async def test_subagent_concrete_model_uses_the_main_sessions_router(self):
+    @pytest.mark.parametrize("app", ["cli", "cli-bg"])
+    async def test_subagent_concrete_model_uses_the_main_sessions_router(self, app):
         router = self._router()
 
         await router.acompletion(
             model="smart-router",
             messages=[{"role": "user", "content": "main turn"}],
-            **self._request_kwargs(),
+            **self._request_kwargs(app=app),
         )
-        subagent_kwargs = self._request_kwargs(agent_id="agent-1234")
+        subagent_kwargs = self._request_kwargs(app=app, agent_id="agent-1234")
 
         response = await router.acompletion(
             model="expensive-model",
@@ -13696,7 +14081,10 @@ def _anthropic_messages_make_wrapper() -> FallbackAwareAnthropicMessagesStream:
     return FallbackAwareAnthropicMessagesStream(_anthropic_messages_empty_generator(), object())
 
 
-def _anthropic_messages_make_router() -> Router:
+def _anthropic_messages_make_router(**router_kwargs) -> Router:
+    """A fallback-only router: no same-group retries unless a test asks for them."""
+    router_kwargs.setdefault("fallbacks", [{"primary": ["fallback"]}])
+    router_kwargs.setdefault("num_retries", 0)
     return Router(
         model_list=[
             {
@@ -13712,7 +14100,8 @@ def _anthropic_messages_make_router() -> Router:
                     "model": "bedrock/anthropic.claude-sonnet-4-5",
                 },
             },
-        ]
+        ],
+        **router_kwargs,
     )
 
 
@@ -13900,24 +14289,286 @@ async def test_anthropic_messages_content_coalesced_with_error_in_one_physical_c
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_ping_behind_buffered_lifecycle_frame_is_dropped():
-    """Bugbot regression: a `ping` keepalive behind buffered lifecycle frames
-    carries no content and is dropped outright rather than buffered -
-    otherwise a slow-starting connection sending many pings could grow the
-    pre-content buffer without bound."""
-    router = _anthropic_messages_make_router()
+async def test_anthropic_messages_ping_behind_buffered_lifecycle_frame_is_forwarded_live():
+    """A `ping` behind buffered lifecycle frames still reaches the client
+    live: it carries no lifecycle, so it cannot create overlapping
+    lifecycles, and it keeps the connection alive while a fallback-able
+    stream holds message_start back through a long thinking pass."""
+    router = _anthropic_messages_make_router(fallbacks=[{"primary": ["fallback"]}])
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        yield _anthropic_messages_ping_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+
+    assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_ping_chunk()
+    content_released.set()
+    assert [chunk async for chunk in wrapped] == [
+        _anthropic_messages_message_start_chunk(),
+        _anthropic_messages_content_chunk("hi"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_split_ping_stays_in_order_behind_buffered_lifecycle_frame():
+    """A ping the transport splits across two reads is not a whole frame, so
+    neither fragment may jump ahead of the buffered message_start: yielding
+    the head live and flushing the tail behind message_start would splice a
+    lifecycle frame into the middle of the ping on the wire."""
+    router = _anthropic_messages_make_router(fallbacks=[{"primary": ["fallback"]}])
+    ping_head, ping_tail = b'event: ping\ndata: {"ty', b'pe": "ping"}\n\n'
     source = _AnthropicMessagesFakeByteStream(
-        [
-            _anthropic_messages_message_start_chunk(),
-            _anthropic_messages_ping_chunk(),
-            _anthropic_messages_content_chunk("hi"),
-        ]
+        [_anthropic_messages_message_start_chunk(), ping_head, ping_tail, _anthropic_messages_content_chunk("hi")]
     )
 
     wrapped = await router._aanthropic_messages_streaming_iterator(response=source, initial_kwargs={"model": "primary"})
-    collected = [chunk async for chunk in wrapped]
 
-    assert collected == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("hi")]
+    assert [chunk async for chunk in wrapped] == [
+        _anthropic_messages_message_start_chunk(),
+        ping_head,
+        ping_tail,
+        _anthropic_messages_content_chunk("hi"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_no_fallback_message_start_reaches_client_before_content():
+    """With no fallback able to take over, the stream is committed from the
+    first frame: message_start reaches the client live instead of waiting
+    behind the buffer for content that may be a whole thinking pass away."""
+    router = _anthropic_messages_make_router(fallbacks=None)
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+
+    assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_message_start_chunk()
+    content_released.set()
+    assert [chunk async for chunk in wrapped] == [_anthropic_messages_content_chunk("hi")]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_disabled_fallbacks_message_start_reaches_client_before_content():
+    """A router with fallbacks configured cannot take over a request that
+    opted out with disable_fallbacks=True, so its lifecycle frames reach
+    the client live exactly like a no-fallback router's."""
+    router = _anthropic_messages_make_router(fallbacks=[{"primary": ["fallback"]}])
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source(), initial_kwargs={"model": "primary", "disable_fallbacks": True}
+    )
+
+    assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_message_start_chunk()
+    content_released.set()
+    assert [chunk async for chunk in wrapped] == [_anthropic_messages_content_chunk("hi")]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_no_fallback_error_frame_reaches_client_verbatim():
+    """With no fallback able to take over, a retriable provider error frame
+    is forwarded verbatim instead of triggering a fallback that does not
+    exist, and the frames already received stay in order ahead of it."""
+    router = _anthropic_messages_make_router(fallbacks=None)
+    source = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+    )
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=_AnthropicMessagesFallbackByteStream([])),
+    ) as mock_fallback:
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=source, initial_kwargs={"model": "primary"}
+        )
+        collected = [chunk async for chunk in wrapped]
+
+    assert collected == [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+    mock_fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_default_wildcard_fallback_still_buffers_lifecycle_frames():
+    """A "*" default fallback can take over for any group, so lifecycle
+    frames are still held back until real content commits the primary."""
+    router = _anthropic_messages_make_router(fallbacks=[{"*": ["fallback"]}])
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+
+    pending = asyncio.ensure_future(wrapped.__anext__())
+    await asyncio.sleep(0.2)
+    assert not pending.done()
+    content_released.set()
+    assert await asyncio.wait_for(pending, timeout=1) == _anthropic_messages_message_start_chunk()
+    assert [chunk async for chunk in wrapped] == [_anthropic_messages_content_chunk("hi")]
+
+
+def _anthropic_messages_two_order_primary_model_list() -> list:
+    return [
+        {
+            "model_name": "primary",
+            "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test", "order": 1},
+        },
+        {
+            "model_name": "primary",
+            "litellm_params": {"model": "bedrock/anthropic.claude-sonnet-4-5", "order": 2},
+        },
+        {
+            "model_name": "fallback",
+            "litellm_params": {"model": "bedrock/anthropic.claude-sonnet-4-5"},
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "router_kwargs,request_kwargs,expected",
+    [
+        pytest.param({"fallbacks": None}, {"model": "primary"}, False, id="no-fallbacks"),
+        pytest.param({"fallbacks": [{"primary": ["fallback"]}]}, {"model": "primary"}, True, id="group-fallback"),
+        pytest.param({"fallbacks": [{"other": ["fallback"]}]}, {"model": "primary"}, False, id="unrelated-group"),
+        pytest.param(
+            {"fallbacks": [{"*": ["fallback"]}]},
+            {"model": "primary", "fallbacks": None},
+            False,
+            id="wildcard-overridden-by-request-none",
+        ),
+        pytest.param({"fallbacks": [{"*": ["fallback"]}]}, {"model": "primary"}, True, id="wildcard"),
+        pytest.param({"fallbacks": None}, {"model": "primary", "fallbacks": [{"model": "fallback"}]}, True, id="request-dict-fallback"),
+        pytest.param({"fallbacks": None}, {"model": "primary", "fallbacks": ["fallback"]}, True, id="request-list-fallback"),
+        pytest.param(
+            {"fallbacks": [{"primary": ["fallback"]}]},
+            {"model": "primary", "disable_fallbacks": True},
+            False,
+            id="disable-fallbacks",
+        ),
+        pytest.param(
+            {"fallbacks": None, "content_policy_fallbacks": [{"primary": ["fallback"]}]},
+            {"model": "primary"},
+            True,
+            id="content-policy-fallback",
+        ),
+        pytest.param({"fallbacks": None, "enable_weighted_failover": True}, {"model": "primary"}, True, id="weighted-failover"),
+    ],
+)
+def test_anthropic_messages_stream_can_fall_back_direct_call(router_kwargs, request_kwargs, expected):
+    router = _anthropic_messages_make_router(**router_kwargs)
+    assert router._anthropic_messages_stream_can_fall_back("primary", request_kwargs) is expected
+
+
+@pytest.mark.parametrize(
+    "orders,expected",
+    [
+        pytest.param([1, 2], True, id="distinct-orders-can-fall-back"),
+        pytest.param([1, 1], False, id="same-order-cannot-fall-back"),
+    ],
+)
+def test_anthropic_messages_stream_can_fall_back_order_levels(orders, expected):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test", "order": order},
+            }
+            for order in orders
+        ],
+        fallbacks=None,
+    )
+    assert router._anthropic_messages_stream_can_fall_back("primary", {"model": "primary"}) is expected
+
+
+@pytest.mark.parametrize(
+    "request_kwargs,expected",
+    [
+        pytest.param({"model": "primary"}, True, id="no-target-order"),
+        pytest.param({"model": "primary", "_target_order": 1}, True, id="higher-order-remains"),
+        pytest.param({"model": "primary", "_target_order": 2}, False, id="top-order-no-order-fallback"),
+        pytest.param(
+            {"model": "primary", "_target_order": 2, "fallbacks": [{"primary": ["fallback"]}]},
+            True,
+            id="top-order-external-fallback",
+        ),
+    ],
+)
+def test_anthropic_messages_stream_can_fall_back_order_target(request_kwargs, expected):
+    router = Router(model_list=_anthropic_messages_two_order_primary_model_list(), fallbacks=None)
+    assert router._anthropic_messages_stream_can_fall_back("primary", request_kwargs) is expected
+
+
+def test_anthropic_messages_order_levels_direct_call():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test", "order": order},
+            }
+            for order in (2, 1, None)
+        ],
+        fallbacks=None,
+    )
+    assert router._anthropic_messages_order_levels("primary", {"model": "primary"}) == (1, 2)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_order_fallback_still_buffers_lifecycle_frames():
+    """Two order levels in one group are a real fallback target for the
+    dispatcher, so lifecycle frames stay buffered until content commits."""
+    router = Router(model_list=_anthropic_messages_two_order_primary_model_list(), fallbacks=None)
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+
+    pending = asyncio.ensure_future(wrapped.__anext__())
+    await asyncio.sleep(0.2)
+    assert not pending.done()
+    content_released.set()
+    assert await asyncio.wait_for(pending, timeout=1) == _anthropic_messages_message_start_chunk()
+    assert [chunk async for chunk in wrapped] == [_anthropic_messages_content_chunk("hi")]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_request_fallbacks_none_forwards_message_start_live():
+    """A per-request fallbacks=None override disables the router's wildcard
+    fallback, so lifecycle frames reach the client live before content."""
+    router = _anthropic_messages_make_router(fallbacks=[{"*": ["fallback"]}])
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source(), initial_kwargs={"model": "primary", "fallbacks": None}
+    )
+
+    assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_message_start_chunk()
+    content_released.set()
+    assert [chunk async for chunk in wrapped] == [_anthropic_messages_content_chunk("hi")]
 
 
 @pytest.mark.asyncio
@@ -14247,7 +14898,8 @@ async def test_anthropic_messages_fallback_on_pre_first_chunk_error_event():
     """Regression for #24004: a retriable SSE `event: error` frame
     (overloaded_error/internal_server_error) that arrives before any real
     content must trigger the router's fallback chain instead of passing
-    through to the client silently."""
+    through to the client silently. The frame carries the error a 529 answer maps to, an InternalServerError,
+    so a failed fallback answers the status every other litellm path gives an overload."""
     router = _anthropic_messages_make_router()
     source = _AnthropicMessagesFakeByteStream([_anthropic_messages_overloaded_error_chunk()])
     fallback_stream = _AnthropicMessagesFallbackByteStream([_anthropic_messages_content_chunk("fallback answer")])
@@ -14267,7 +14919,8 @@ async def test_anthropic_messages_fallback_on_pre_first_chunk_error_event():
     mock_fallback.assert_awaited_once()
     raised = mock_fallback.await_args.kwargs["e"]
     assert isinstance(raised, MidStreamFallbackError)
-    assert raised.status_code == 503
+    assert isinstance(raised.original_exception, litellm.InternalServerError)
+    assert raised.status_code == 500
     assert raised.is_pre_first_chunk is True
     assert source.closed is True
 
@@ -14320,21 +14973,12 @@ def test_merge_fallback_hidden_params_direct_call():
     }
 
 
-def test_anthropic_stream_should_drop_pre_content_ping_direct_call():
-    ping = _anthropic_messages_ping_chunk()
-    content = _anthropic_messages_content_chunk("hi")
-    assert _anthropic_stream_should_drop_pre_content_ping(ping, has_generated_content=False) is True
-    assert _anthropic_stream_should_drop_pre_content_ping(ping, has_generated_content=True) is False
-    assert _anthropic_stream_should_drop_pre_content_ping(content, has_generated_content=False) is False
-
-
 def test_anthropic_stream_forwards_ping_live_direct_call():
     ping = _anthropic_messages_ping_chunk()
     content = _anthropic_messages_content_chunk("hi")
-    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=False, buffered_chunk_count=0) is True
-    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=False, buffered_chunk_count=1) is False
-    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=True, buffered_chunk_count=0) is False
-    assert _anthropic_stream_forwards_ping_live(content, has_generated_content=False, buffered_chunk_count=0) is False
+    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=False) is True
+    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=True) is False
+    assert _anthropic_stream_forwards_ping_live(content, has_generated_content=False) is False
 
 
 def test_anthropic_stream_error_is_gateway_verdict_direct_call():
@@ -14600,6 +15244,707 @@ async def test_anthropic_messages_hop_stream_failure_reaches_second_fallback_ent
     assert b"overloaded_error" not in body
 
 
+_ANTHROPIC_MESSAGES_RETRY_GROUP: Final = ("anthropic/glm-a", "anthropic/glm-b")
+
+
+def _anthropic_messages_retry_router(
+    num_retries: int,
+    deployment_params: Mapping[str, object] | None = None,
+    fallbacks: list[dict[str, list[str]]] | None = None,
+    context_window_fallbacks: list[dict[str, list[str]]] | None = None,
+    retry_policy: RetryPolicy | None = None,
+) -> Router:
+    """Two deployments in the group, so a same-group retry waits for no backoff; no fallbacks unless asked."""
+    group_deployments = [
+        {"model_name": "glm", "litellm_params": {"model": model, "api_key": "sk-test", **(deployment_params or {})}}
+        for model in _ANTHROPIC_MESSAGES_RETRY_GROUP
+    ]
+    return Router(
+        model_list=[
+            *group_deployments,
+            {"model_name": "fb", "litellm_params": {"model": "anthropic/fb-model", "api_key": "sk-test"}},
+            {"model_name": "cw", "litellm_params": {"model": "anthropic/cw-model", "api_key": "sk-test"}},
+        ],
+        num_retries=num_retries,
+        fallbacks=fallbacks or [],
+        context_window_fallbacks=context_window_fallbacks or [],
+        retry_policy=retry_policy,
+    )
+
+
+class _AnthropicMessagesScriptedProvider:
+    """Stands in for litellm.anthropic_messages: answers each call with the next scripted stream and records
+    the deployment it was routed to plus the retry counters the router stamped for that attempt."""
+
+    def __init__(self, *streams) -> None:
+        self._streams = list(streams)
+        self.calls: list[tuple[str, object, object]] = []
+
+    async def __call__(self, **kwargs):
+        litellm_metadata = kwargs.get("litellm_metadata") or {}
+        self.calls.append((kwargs["model"], litellm_metadata.get("attempted_retries"), litellm_metadata.get("max_retries")))
+        assert self._streams, "provider called more times than scripted"
+        return self._streams.pop(0)()
+
+
+def _anthropic_messages_transport_drop(original_exception: Exception | None = None) -> MidStreamFallbackError:
+    """What the completion bridge raises when the upstream closes the connection before any content."""
+    return MidStreamFallbackError(
+        message="Connection closed",
+        model="glm",
+        llm_provider="databricks",
+        original_exception=original_exception
+        or litellm.APIConnectionError(message="Connection closed", llm_provider="databricks", model="glm"),
+        is_pre_first_chunk=True,
+    )
+
+
+def _anthropic_messages_dropped_before_content():
+    return _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], _anthropic_messages_transport_drop())
+
+
+def _anthropic_messages_bridge_error_chunk() -> bytes:
+    from litellm.anthropic_interface.exceptions.exception_mapping_utils import anthropic_error_sse_frame
+
+    return anthropic_error_sse_frame(status_code=500, raw_message="Connection closed").encode()
+
+
+def _anthropic_messages_retried_stream():
+    return _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    )
+
+
+async def _anthropic_messages_drain_into(stream, received: list) -> None:
+    async for chunk in stream:
+        received.append(chunk)
+
+
+async def _anthropic_messages_stream_through_router(router: Router, provider, **request_kwargs):
+    return await router._aanthropic_messages_with_streaming_fallbacks(
+        original_function=provider,
+        model="glm",
+        stream=True,
+        messages=[{"role": "user", "content": "ping"}],
+        max_tokens=16,
+        **request_kwargs,
+    )
+
+
+_ANTHROPIC_MESSAGES_PRE_CONTENT_DROPS: Final = (
+    pytest.param(_anthropic_messages_dropped_before_content, id="bridge-raises-before-content"),
+    pytest.param(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_bridge_error_chunk()]
+        ),
+        id="bridge-error-frame",
+    ),
+    pytest.param(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+        ),
+        id="provider-overloaded-frame",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dropped_stream", _ANTHROPIC_MESSAGES_PRE_CONTENT_DROPS)
+async def test_anthropic_messages_stream_dropped_before_content_is_retried_within_the_group(dropped_stream):
+    """Issue #44238: a /v1/messages stream the provider dropped before any content was answered after a
+    single upstream attempt, num_retries never applied. The drop is retried within the model group, with
+    the retry counters continuing the request's count, and the client sees one message lifecycle."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    provider = _AnthropicMessagesScriptedProvider(dropped_stream, _anthropic_messages_retried_stream)
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert all(model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls)
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_stream_dropped_after_content_keeps_the_error_and_is_not_retried():
+    """A drop once content reached the client cannot be retried without a second overlapping message
+    lifecycle, so it keeps surfacing the provider's error after a single attempt."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    drop = _anthropic_messages_transport_drop()
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesRaisingByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("par")], drop
+        )
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    received = []
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        await _anthropic_messages_drain_into(stream, received)
+
+    assert raised.value is drop.original_exception
+    assert received == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("par")]
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retries_stop_at_num_retries_and_raise_the_last_drop():
+    """Every retry's own stream continues the same count, so a group that keeps dropping is tried
+    exactly 1 + num_retries times before the provider's error reaches the client."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_dropped_before_content,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    with pytest.raises(litellm.APIConnectionError):
+        [chunk async for chunk in stream]
+
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2), (2, 2)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retries_run_out_before_the_fallback_chain_is_consulted():
+    """Same-group retries come first; the fallback group is reached only once num_retries is spent."""
+    router = _anthropic_messages_retry_router(num_retries=1, fallbacks=[{"glm": ["fb"]}])
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_dropped_before_content,
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, True, False]
+    assert provider.calls[-1][0] == "anthropic/fb-model"
+
+
+def _anthropic_messages_fb_deployment_hidden_params() -> dict:
+    return {"model_id": "fb-deployment", "additional_headers": {"x-litellm-model-group": "fb"}}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_fallback_after_exhausted_retries_attributes_the_response_to_the_fallback_deployment():
+    """The retry's stream carries a wrapper of its own, so a fallback it makes before its first byte must reach
+    the wrapper the proxy reads headers off: the response names the deployment that served it, not the primary."""
+    router = _anthropic_messages_retry_router(num_retries=1, fallbacks=[{"glm": ["fb"]}])
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_dropped_before_content,
+        lambda: _AnthropicMessagesFallbackByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")],
+            hidden_params=_anthropic_messages_fb_deployment_hidden_params(),
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert stream._hidden_params["model_id"] == "fb-deployment"
+    assert stream._hidden_params["additional_headers"]["x-litellm-model-group"] == "fb"
+    assert stream._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
+
+
+def test_anthropic_messages_wrapper_follows_the_attribution_of_a_source_that_fell_back():
+    inner = FallbackAwareAnthropicMessagesStream(_anthropic_messages_empty_generator(), object())
+    outer = FallbackAwareAnthropicMessagesStream(_anthropic_messages_empty_generator(), inner)
+    fallback = _AnthropicMessagesFallbackByteStream([], hidden_params=_anthropic_messages_fb_deployment_hidden_params())
+
+    outer.follow_source_attribution()
+    assert "model_id" not in outer._hidden_params
+
+    inner.merge_fallback_hidden_params(*Router._prepare_fallback_hidden_params(fallback))
+    inner.adopt_fallback_source(fallback)
+    outer.follow_source_attribution()
+    assert outer._hidden_params["model_id"] == "fb-deployment"
+    assert outer._hidden_params["additional_headers"]["x-litellm-model-group"] == "fb"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drops", [1, 2])
+async def test_anthropic_messages_mid_stream_retries_are_counted_in_the_response_retry_headers(drops: int):
+    """A retry made after the stream opened never passes through async_function_with_retries, so the wrapper
+    stamps the retry headers that path would have and the client reads them along with the first byte."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    provider = _AnthropicMessagesScriptedProvider(
+        *([_anthropic_messages_dropped_before_content] * drops), _anthropic_messages_retried_stream
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    first = await stream.__anext__()
+    headers = stream._hidden_params["additional_headers"]
+
+    assert first == _anthropic_messages_message_start_chunk()
+    assert (headers["x-litellm-attempted-retries"], headers["x-litellm-max-retries"]) == (drops, 2)
+    assert [chunk async for chunk in stream] == [_anthropic_messages_content_chunk("pong")]
+
+
+def _anthropic_messages_raise_authentication_error():
+    raise litellm.AuthenticationError(message="invalid api key", llm_provider="anthropic", model="glm")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_raising_a_non_retriable_error_is_handed_to_the_fallback_chain():
+    """A retry that fails before its stream opens with an error no retry covers ends the retries and reaches
+    the fallback group the way a pre-stream failure does, instead of surfacing as the client's error."""
+    router = _anthropic_messages_retry_router(num_retries=2, fallbacks=[{"glm": ["fb"]}])
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_raise_authentication_error,
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, True, False]
+
+
+def _anthropic_messages_raise_timeout():
+    raise litellm.Timeout(message="upstream timed out", model="glm", llm_provider="databricks")
+
+
+def _anthropic_messages_raise_internal_server_error():
+    raise litellm.InternalServerError(message="upstream reset", llm_provider="databricks", model="glm")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_raising_a_timeout_is_retried_like_a_pre_stream_timeout():
+    """A 408 raised by a retry attempt before its stream opens is retried the way the pre-stream path retries
+    a 408, instead of ending the retries on the error-frame gate that only knows 429 and 5xx."""
+    router = _anthropic_messages_retry_router(num_retries=3)
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_raise_timeout,
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, True, True]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_deployment_num_retries_also_governs_a_failure_before_the_stream_opens():
+    """The deployment's num_retries litellm_param sets the budget for a failure raised before the stream opened
+    on this route, as it does for a mid-stream drop and for chat completions."""
+    router = _anthropic_messages_retry_router(num_retries=0, deployment_params={"num_retries": 2})
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_raise_internal_server_error,
+        _anthropic_messages_raise_internal_server_error,
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert len(provider.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_raising_a_non_retriable_error_reaches_the_client_without_fallbacks():
+    router = _anthropic_messages_retry_router(num_retries=2)
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_raise_authentication_error,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    with pytest.raises(litellm.AuthenticationError):
+        [chunk async for chunk in stream]
+
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
+
+
+def _anthropic_messages_raise_context_window_error():
+    raise litellm.ContextWindowExceededError(message="prompt too long", llm_provider="anthropic", model="glm")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_raising_a_context_window_error_takes_the_context_window_fallback():
+    """The fallback chain sees the retry's own error type, so a context window overflow on the retried
+    deployment reaches context_window_fallbacks rather than the regular fallbacks."""
+    router = _anthropic_messages_retry_router(
+        num_retries=2, fallbacks=[{"glm": ["fb"]}], context_window_fallbacks=[{"glm": ["cw"]}]
+    )
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_raise_context_window_error,
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from cw")]
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from cw")]
+    assert [model for model, _, _ in provider.calls][-1] == "anthropic/cw-model"
+
+
+def test_anthropic_messages_retry_budget_precedence_direct_call():
+    """A retry policy naming the error class outranks the request's num_retries, which outranks the routed
+    deployment's, which outranks the router's; num_retries=0 on the request turns a policy off too."""
+    router = _anthropic_messages_retry_router(num_retries=3, deployment_params={"num_retries": 2})
+    deployment_id = router.get_model_list(model_name="glm")[0]["model_info"]["id"]
+    routed = {"model": "glm", "litellm_metadata": {"model_info": {"id": deployment_id}}}
+    drop = litellm.APIConnectionError(message="closed", llm_provider="databricks", model="glm")
+    reset = litellm.InternalServerError(message="reset", llm_provider="databricks", model="glm")
+    policy_router = _anthropic_messages_retry_router(
+        num_retries=3, retry_policy=RetryPolicy(InternalServerErrorRetries=4)
+    )
+
+    assert router._anthropic_messages_retry_budget(drop, {"model": "glm"}) == (3, False)
+    assert router._anthropic_messages_retry_budget(drop, routed) == (2, False)
+    assert router._anthropic_messages_retry_budget(drop, {**routed, "num_retries": 1}) == (1, False)
+    assert policy_router._anthropic_messages_retry_budget(reset, {"model": "glm", "num_retries": 1}) == (4, True)
+    assert policy_router._anthropic_messages_retry_budget(drop, {"model": "glm", "num_retries": 1}) == (1, False)
+    assert policy_router._anthropic_messages_retry_budget(reset, {"model": "glm", "num_retries": 0}) == (0, False)
+    committed = {**routed, "litellm_metadata": {**routed["litellm_metadata"], "attempted_retries": 1, "max_retries": 5}}
+    assert router._anthropic_messages_retry_budget(drop, committed) == (5, False)
+    assert policy_router._anthropic_messages_retry_budget(reset, committed) == (5, True)
+
+
+def test_anthropic_messages_stream_can_retry_direct_call():
+    router = _anthropic_messages_retry_router(num_retries=1)
+    policy_router = _anthropic_messages_retry_router(
+        num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1)
+    )
+
+    assert router._anthropic_messages_stream_can_retry({"model": "glm"}) is True
+    spent = {"model": "glm", "litellm_metadata": {"attempted_retries": 1}}
+    assert router._anthropic_messages_stream_can_retry(spent) is False
+    assert router._anthropic_messages_stream_can_retry({"model": "glm", "num_retries": 0}) is False
+    assert policy_router._anthropic_messages_stream_can_retry({"model": "glm"}) is True
+    assert policy_router._anthropic_messages_stream_can_retry(spent) is False
+    assert policy_router._anthropic_messages_stream_can_retry({"model": "glm", "num_retries": 0}) is False
+    assert policy_router._anthropic_messages_resolved_retry_policy({"model": "glm"}) is not None
+    assert policy_router._anthropic_messages_resolved_retry_policy({"model": "glm", "num_retries": 0}) is None
+
+
+def test_retry_policy_ceiling_is_the_largest_budget_any_error_class_is_granted():
+    from litellm.router import _retry_policy_ceiling
+
+    assert _retry_policy_ceiling(RetryPolicy(InternalServerErrorRetries=1, RateLimitErrorRetries=3)) == 3
+    assert _retry_policy_ceiling(RetryPolicy()) == 0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_last_attempt_under_a_retry_policy_forwards_lifecycle_frames_live():
+    """A retry policy bounds the hold the way a plain budget does: once the attempts reach the most retries the
+    policy grants, the stream is the last one, so its frames reach the client as they arrive and a drop after
+    them is the provider's error in-band rather than an error raised before any byte."""
+    router = _anthropic_messages_retry_router(num_retries=0, retry_policy=RetryPolicy(DefaultRetries=1))
+    drop = _anthropic_messages_transport_drop()
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        lambda: _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], drop),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    received: list = []
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        await _anthropic_messages_drain_into(stream, received)
+
+    assert raised.value is drop.original_exception
+    assert received == [_anthropic_messages_message_start_chunk()]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 0), (1, 1)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_request_num_retries_zero_opts_out_of_the_mid_stream_retry():
+    router = _anthropic_messages_retry_router(num_retries=2)
+    drop = _anthropic_messages_transport_drop()
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], drop)
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider, num_retries=0)
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        [chunk async for chunk in stream]
+
+    assert raised.value is drop.original_exception
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured", [1, "1"], ids=["int", "config-string"])
+async def test_anthropic_messages_deployment_num_retries_sets_the_mid_stream_retry_budget(configured):
+    """A deployment's own num_retries litellm_param outranks the router's, as it does for a failure
+    raised before the stream opened."""
+    router = _anthropic_messages_retry_router(num_retries=0, deployment_params={"num_retries": configured})
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content, _anthropic_messages_retried_stream
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 0), (1, 1)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_policy_sets_the_mid_stream_retry_budget_per_error_class():
+    router = _anthropic_messages_retry_router(num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1))
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesRaisingByteStream(
+            [_anthropic_messages_message_start_chunk()],
+            _anthropic_messages_transport_drop(
+                litellm.InternalServerError(message="upstream reset", llm_provider="databricks", model="glm")
+            ),
+        ),
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 0), (1, 1)]
+
+
+def _anthropic_messages_error_frame(error_type: str) -> bytes:
+    return f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'type': error_type, 'message': error_type}})}\n\n".encode()
+
+
+_ANTHROPIC_MESSAGES_ERROR_FRAME_POLICIES: Final = (
+    pytest.param("api_error", RetryPolicy(InternalServerErrorRetries=1), id="api_error-500-internal-server"),
+    pytest.param("overloaded_error", RetryPolicy(InternalServerErrorRetries=1), id="overloaded-internal-server"),
+    pytest.param("rate_limit_error", RetryPolicy(RateLimitErrorRetries=1), id="rate-limit-429"),
+    pytest.param("timeout_error", RetryPolicy(TimeoutErrorRetries=1), id="timeout-504"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type,policy", _ANTHROPIC_MESSAGES_ERROR_FRAME_POLICIES)
+async def test_anthropic_messages_error_frame_is_retried_under_the_class_the_pre_stream_mapping_gives_it(
+    error_type, policy
+):
+    """An `event: error` frame before content carried a generic error, so a policy naming only error classes
+    granted it no retry while the hold still counted the policy: one attempt, then an HTTP error with no
+    bytes out. The frame now takes the class the pre-stream mapping raises for an answer carrying its body, so
+    an overloaded frame counts as the InternalServerError a 529 answer is, not a ServiceUnavailableError."""
+    router = _anthropic_messages_retry_router(num_retries=0, retry_policy=policy)
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_error_frame(error_type)]
+        ),
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 0), (1, 1)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_error_frame_of_a_class_granted_no_retry_reaches_the_client_as_sent():
+    """A rate limit frame is the RateLimitError a 429 answer is, so a policy granting only InternalServerError
+    retries leaves it unretried. With no fallback to take over either, the frame reaches the client as the
+    provider sent it, behind the lifecycle frames held back for a retry that never opened, the way the last
+    exhausted attempt's frames do; raising it instead turned a provider error frame into an HTTP error only
+    on the first attempt."""
+    router = _anthropic_messages_retry_router(num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1))
+    frame = _anthropic_messages_error_frame("rate_limit_error")
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesFakeByteStream([_anthropic_messages_message_start_chunk(), frame])
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), frame]
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_error_frame_of_a_class_granted_no_retry_still_reaches_a_configured_fallback():
+    """The same unretried rate limit frame goes to the fallback group when one is configured, since a
+    fallback can still take over before any byte reached the client."""
+    router = _anthropic_messages_retry_router(
+        num_retries=0, fallbacks=[{"glm": ["fb"]}], retry_policy=RetryPolicy(InternalServerErrorRetries=1)
+    )
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_error_frame("rate_limit_error")]
+        ),
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, False]
+    assert provider.calls[-1][0] == "anthropic/fb-model"
+
+
+def test_anthropic_messages_recoverable_frame_error_direct_call():
+    """Which `event: error` frames are intercepted for a retry or a fallback, and which reach the client as sent."""
+    policy_router = _anthropic_messages_retry_router(
+        num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1)
+    )
+    fallback_router = _anthropic_messages_retry_router(num_retries=0, fallbacks=[{"glm": ["fb"]}])
+    api_error = ("api_error", "reset", 500)
+    rate_limit = ("rate_limit_error", "slow down", 429)
+    kwargs = {"model": "glm"}
+
+    recovered = policy_router._anthropic_messages_recoverable_frame_error(api_error, b"", False, "glm", kwargs)
+    assert isinstance(recovered, litellm.InternalServerError)
+    assert policy_router._anthropic_messages_recoverable_frame_error(rate_limit, b"", False, "glm", kwargs) is None
+    assert policy_router._anthropic_messages_recoverable_frame_error(api_error, b"", True, "glm", kwargs) is None
+    assert policy_router._anthropic_messages_recoverable_frame_error(None, b"", False, "glm", kwargs) is None
+    assert (
+        policy_router._anthropic_messages_recoverable_frame_error(
+            ("invalid_request_error", "bad", 400), b"", False, "glm", kwargs
+        )
+        is None
+    )
+    spent = {"model": "glm", "litellm_metadata": {"attempted_retries": 1, "max_retries": 1}}
+    assert policy_router._anthropic_messages_recoverable_frame_error(api_error, b"", False, "glm", spent) is None
+    assert isinstance(
+        fallback_router._anthropic_messages_recoverable_frame_error(rate_limit, b"", False, "glm", kwargs),
+        litellm.RateLimitError,
+    )
+
+
+_ANTHROPIC_MESSAGES_MALFORMED_POLICIES: Final = (
+    pytest.param({"glm": {"RateLimitErrorRetries": "many"}}, id="string-budget"),
+    pytest.param({"glm": 5}, id="group-policy-is-an-int"),
+    pytest.param(5, id="policy-map-is-an-int"),
+    pytest.param({"glm": [1]}, id="group-policy-is-a-list"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", _ANTHROPIC_MESSAGES_MALFORMED_POLICIES)
+@pytest.mark.parametrize("where", ["request", "router"])
+async def test_anthropic_messages_malformed_retry_policy_leaves_a_healthy_stream_alone(policy, where):
+    """The hold decision resolves the group's retry policy before the first byte, so a policy that does not
+    parse used to fail every stream of that group with a 500 before any attempt. It now governs nothing."""
+    router = _anthropic_messages_retry_router(num_retries=0)
+    request_kwargs = {"model_group_retry_policy": policy} if where == "request" else {}
+    if where == "router":
+        router.model_group_retry_policy = policy
+    provider = _AnthropicMessagesScriptedProvider(_anthropic_messages_retried_stream)
+
+    stream = await _anthropic_messages_stream_through_router(router, provider, **request_kwargs)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", _ANTHROPIC_MESSAGES_MALFORMED_POLICIES)
+async def test_anthropic_messages_malformed_retry_policy_falls_back_to_the_plain_budget(policy):
+    router = _anthropic_messages_retry_router(num_retries=1)
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_error_frame("overloaded_error")]
+        ),
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider, model_group_retry_policy=policy)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 1), (1, 1)]
+
+
+class _AnthropicMessagesAlternatingDeployments(CustomRoutingStrategyBase):
+    """Routes each attempt to the group's next deployment in turn, so which sibling a retry lands on is known."""
+
+    def __init__(self, router: Router, model_group: str) -> None:
+        self._deployments = itertools.cycle(router.get_model_list(model_name=model_group) or ())
+
+    async def async_get_available_deployment(
+        self, model, messages=None, input=None, specific_deployment=False, request_kwargs=None
+    ):
+        return next(self._deployments)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first_num_retries,sibling_num_retries,expected_counters",
+    [
+        pytest.param(3, 1, [(0, 0), (1, 3), (2, 3), (3, 3)], id="sibling-grants-fewer"),
+        pytest.param(1, 3, [(0, 0), (1, 1)], id="sibling-grants-more"),
+    ],
+)
+async def test_anthropic_messages_retries_keep_the_budget_the_first_drop_committed_to_across_deployments(
+    first_num_retries, sibling_num_retries, expected_counters
+):
+    """A retry's stream recomputed its budget from the sibling deployment it landed on, so a group whose
+    deployments grant different num_retries stopped early or overshot the budget the first drop stamped
+    into the retry headers; later attempts now keep that budget, as the pre-stream retry loop does."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "glm",
+                "litellm_params": {"model": "anthropic/glm-a", "api_key": "sk-test", "num_retries": first_num_retries},
+            },
+            {
+                "model_name": "glm",
+                "litellm_params": {"model": "anthropic/glm-b", "api_key": "sk-test", "num_retries": sibling_num_retries},
+            },
+        ],
+        num_retries=0,
+        fallbacks=None,
+    )
+    router.set_custom_routing_strategy(_AnthropicMessagesAlternatingDeployments(router, "glm"))
+    provider = _AnthropicMessagesScriptedProvider(*[_anthropic_messages_dropped_before_content] * len(expected_counters))
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    with pytest.raises(litellm.APIConnectionError):
+        [chunk async for chunk in stream]
+
+    assert [model for model, _, _ in provider.calls] == (["anthropic/glm-a", "anthropic/glm-b"] * 2)[: len(expected_counters)]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == expected_counters
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_lifecycle_frames_wait_for_content_while_a_retry_remains():
+    """A retry can only restart cleanly while nothing reached the client, so with retries left a
+    fallback-less group holds message_start back until the first content frame, as a fallback does."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    content_released = asyncio.Event()
+
+    async def held_stream():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    provider = _AnthropicMessagesScriptedProvider(held_stream)
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+
+    pending = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.2)
+    assert not pending.done()
+    content_released.set()
+    assert await asyncio.wait_for(pending, timeout=1) == _anthropic_messages_message_start_chunk()
+    assert [chunk async for chunk in stream] == [_anthropic_messages_content_chunk("hi")]
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_attempt_strips_the_controls_carrier_and_wraps_every_hop_stream():
     """Each attempt of the chain, not only the primary's, comes back wrapped for mid-stream
@@ -14779,6 +16124,7 @@ def _mid_stream_opt_out_router() -> Router:
             {"model_name": "fallback", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "k2"}},
         ],
         fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
     )
 
 
@@ -17622,6 +18968,8 @@ async def test_router_embedding_path_rejects_past_max_parallel_requests_without_
             },
         )
 
+    # Reap earlier tests' garbage first so only this test's coroutines are recorded
+    gc.collect()
     with respx.mock() as respx_mock, warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         route: Final = respx_mock.post("https://max-parallel-embed.local/v1/embeddings").mock(side_effect=upstream)
@@ -18548,3 +19896,374 @@ async def test_a_guardrail_verdict_is_neither_retried_nor_fallen_back(verdict: E
             await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
 
     assert [c.kwargs["metadata"]["model_group"] for c in mock_acompletion.call_args_list] == ["primary"]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("gpt-4\r\nERROR forged entry\n", "gpt-4ERROR forged entry"),
+        (RuntimeError("no deployments\r\nfor gpt-4"), "no deploymentsfor gpt-4"),
+        ("gpt-4", "gpt-4"),
+    ],
+)
+def test_without_line_breaks_drops_every_cr_and_lf_from_the_logged_value(value: object, expected: str) -> None:
+    assert _without_line_breaks(value) == expected
+
+
+def test_a_failed_routing_read_prefetch_logs_the_request_model_without_its_line_breaks(monkeypatch, caplog) -> None:
+    router = litellm.Router(
+        model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4", "api_key": "k"}}]
+    )
+    forged_model: Final = "gpt-4\r\nERROR forged entry\n"
+
+    def fail_lookup(model_name: str | None = None, team_id: str | None = None) -> None:
+        raise RuntimeError(f"no deployments for {model_name}")
+
+    monkeypatch.setattr(router, "get_model_list", fail_lookup)
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
+        router.arm_routing_read_prefetch(forged_model, {})
+
+    messages: Final = [r.getMessage() for r in caplog.records if "routing read prefetch not armed" in r.getMessage()]
+    assert messages == [
+        "routing read prefetch not armed for gpt-4ERROR forged entry: no deployments for gpt-4ERROR forged entry"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "routing_strategy",
+    ["simple-shuffle", "usage-based-routing-v2", "least-busy", "latency-based-routing"],
+)
+async def test_router_subclass_overriding_async_get_healthy_deployments_with_the_old_signature_still_routes(
+    routing_strategy: str,
+) -> None:
+    class OldSignatureRouter(litellm.Router):
+        async def async_get_healthy_deployments(
+            self,
+            model: str,
+            request_kwargs: dict,
+            messages: list[dict[str, str]] | None = None,
+            input: str | list | None = None,
+            specific_deployment: bool | None = False,
+            parent_otel_span: Span | None = None,
+            health_check_probe: bool = False,
+        ):
+            return await super().async_get_healthy_deployments(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+                parent_otel_span=parent_otel_span,
+                health_check_probe=health_check_probe,
+            )
+
+    router: Final = OldSignatureRouter(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "x", "mock_response": "hi"},
+            }
+        ],
+        routing_strategy=routing_strategy,
+    )
+
+    response: Final = await router.acompletion(model="m", messages=[{"role": "user", "content": "x"}])
+
+    assert response.choices[0].message.content == "hi"
+
+
+def test_get_deployment_credentials_with_provider_preserves_anthropic_wif_params():
+    """
+    Test that get_deployment_credentials_with_provider preserves a litellm_params-configured
+    Anthropic workload identity federation setup (both the legacy token_file fields and the
+    Phase 1 internal_issuer/keycloak identity-source fields) so files/batches/passthrough
+    deployments using WIF do not silently fall back to a missing credential.
+    """
+    wif_params = {
+        "anthropic_federation_rule_id": "fdrl_deployment",
+        "anthropic_organization_id": "org-deployment",
+        "anthropic_identity_source": "keycloak",
+        "anthropic_keycloak_token_url": "https://keycloak.internal.example/realms/r/protocol/openid-connect/token",
+        "anthropic_keycloak_client_id": "litellm",
+        "anthropic_keycloak_client_secret_ref": "oidc/env/KEYCLOAK_CLIENT_SECRET",
+    }
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic-wif-model",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    **wif_params,
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="anthropic-wif-model")
+
+    assert credentials is not None
+    for key, value in wif_params.items():
+        assert credentials.get(key) == value, key
+
+
+def test_router_keeps_wif_secret_pointers_unresolved(monkeypatch):
+    monkeypatch.setenv("WIF_TEST_KC_SECRET", "kc-secret")
+    monkeypatch.setenv("WIF_TEST_FDRL", "fdrl_from_env")
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-wif",
+                "litellm_params": {
+                    "model": "anthropic/claude-haiku-4-5",
+                    "anthropic_federation_rule_id": "os.environ/WIF_TEST_FDRL",
+                    "anthropic_identity_source": "keycloak",
+                    "anthropic_keycloak_token_url": "https://keycloak.example/token",
+                    "anthropic_keycloak_client_id": "litellm",
+                    "anthropic_keycloak_client_secret_ref": "os.environ/WIF_TEST_KC_SECRET",
+                },
+            }
+        ]
+    )
+
+    litellm_params = router.get_model_list()[0]["litellm_params"]
+
+    assert litellm_params["anthropic_federation_rule_id"] == "fdrl_from_env"
+    assert litellm_params["anthropic_keycloak_client_secret_ref"] == "os.environ/WIF_TEST_KC_SECRET"
+
+
+@pytest.mark.asyncio
+async def test_failure_rpm_increment_declares_the_router_usage_key_family():
+    """The RPM bump a failed call still earns is router usage bookkeeping, so its Redis span
+    reads ``redis.incr router_usage`` rather than a bare ``redis.incr``."""
+    from unittest.mock import AsyncMock
+
+    from litellm._internal_context import current_service_target
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+                "model_info": {"id": "dep-1"},
+            }
+        ]
+    )
+    seen: list[str | None] = []
+
+    async def _increment(**_kwargs):
+        seen.append(current_service_target())
+
+    with patch.object(router.cache, "async_increment_cache", new=AsyncMock(side_effect=_increment)):
+        await router.async_deployment_callback_on_failure(
+            kwargs={
+                "call_type": "acompletion",
+                "litellm_params": {
+                    "metadata": {"deployment": "openai/gpt-4o", "model_group": "gpt-group"},
+                    "model_info": {"id": "dep-1"},
+                },
+            },
+            completion_response=None,
+            start_time=None,
+            end_time=None,
+        )
+
+    assert seen == ["router_usage"]
+    assert current_service_target() is None
+
+class _SpanRecordingInMemoryCache(InMemoryCache):
+    """Records the live OTel span each read runs under, so the test sees what a Redis span would nest in."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_span_names: list[str] = []
+
+    async def async_batch_get_cache(self, keys, **kwargs):
+        self.active_span_names.append(trace.get_current_span().name)
+        return await super().async_batch_get_cache(keys, **kwargs)
+
+    async def async_get_cache(self, key, **kwargs):
+        self.active_span_names.append(trace.get_current_span().name)
+        return await super().async_get_cache(key, **kwargs)
+
+
+@pytest.fixture
+def v2_span_exporter(monkeypatch):
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.otel import OpenTelemetryV2Config
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.plumbing import providers
+    from litellm.proxy import proxy_server
+
+    config = OpenTelemetryV2Config(exporter="in_memory")
+    exporter = InMemorySpanExporter()
+    logger = OpenTelemetryV2(config=config, tracer_provider=providers.build_tracer_provider(config, exporter=exporter))
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    return exporter
+
+
+@pytest.mark.asyncio
+async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_model_group(v2_span_exporter):
+    """Picking a deployment opens ``route {model_group}`` (the requested group, not the deployment
+    it picks) under the server span, and the cooldown reads it issues run inside it, so their Redis
+    spans nest there instead of lying flat under the request."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "a"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-5.4", "api_key": "fake", "mock_response": "b"},
+                "model_info": {"id": "dep-b"},
+            },
+        ]
+    )
+    recording_cache = _SpanRecordingInMemoryCache()
+    router.cache.in_memory_cache = recording_cache
+    router.cooldown_cache.cooldown_store.in_memory_cache = recording_cache
+
+    with TracerProvider().get_tracer("test").start_as_current_span("POST /v1/chat/completions") as server_span:
+        deployment = await router.async_get_available_deployment(model="gpt-group", request_kwargs={})
+
+    assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
+    (route_span,) = v2_span_exporter.get_finished_spans()
+    assert route_span.name == "route gpt-group"
+    assert route_span.parent is not None and route_span.parent.span_id == server_span.get_span_context().span_id
+    assert route_span.end_time is not None
+    assert recording_cache.active_span_names and set(recording_cache.active_span_names) == {"route gpt-group"}
+
+
+def _record_phase_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, str | int]]]:
+    events: list[tuple[str, dict[str, str | int]]] = []  # mutable-ok: recorder for the injected phase_event double
+
+    def record(name: str, attributes: dict[str, str | int]) -> None:
+        events.append((name, dict(attributes)))
+
+    monkeypatch.setattr(litellm.router, "phase_event", record)
+    return events
+
+
+def _pick(model_group: str, reason: str, attempt: int) -> tuple[str, dict[str, str | int]]:
+    return (
+        "litellm.request.deployment_selected",
+        {
+            "litellm.deployment.attempt": attempt,
+            "litellm.deployment.reason": reason,
+            "litellm.deployment.model_group": model_group,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "request_kwargs, expected_reason, expected_attempt",
+    [
+        (None, "initial", 1),
+        ({"metadata": {"attempted_retries": 0}, "fallback_depth": 0}, "initial", 1),
+        ({"metadata": {"attempted_retries": 2}}, "retry", 3),
+        ({"litellm_metadata": {"attempted_retries": 1}, "metadata": {"attempted_retries": 4}}, "retry", 2),
+        ({"metadata": {}, "fallback_depth": 1}, "fallback", 1),
+        ({"metadata": {"attempted_retries": 1}, "fallback_depth": 1}, "retry", 2),
+    ],
+)
+def test_deployment_pick_attributes_derive_attempt_and_reason(
+    request_kwargs: dict[str, object] | None, expected_reason: str, expected_attempt: int
+):
+    attributes: Final = litellm.router._deployment_pick_attributes("gpt-4o", request_kwargs)
+
+    assert dict(attributes) == {
+        "litellm.deployment.attempt": expected_attempt,
+        "litellm.deployment.reason": expected_reason,
+        "litellm.deployment.model_group": "gpt-4o",
+    }
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marks_deployment_selected_once(monkeypatch: pytest.MonkeyPatch):
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+            }
+        ]
+    )
+
+    await router.acompletion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
+
+    assert events == [_pick("gpt-4o", "initial", 1)]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marks_every_retry_pick(monkeypatch: pytest.MonkeyPatch):
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "flaky",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": Exception("boom")},
+            }
+        ],
+        num_retries=2,
+        retry_after=0,
+    )
+
+    with pytest.raises(Exception, match="boom"):
+        await router.acompletion(model="flaky", messages=[{"role": "user", "content": "hi"}])
+
+    assert events == [_pick("flaky", "initial", 1), _pick("flaky", "retry", 2), _pick("flaky", "retry", 3)]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marks_fallback_pick_with_its_model_group(monkeypatch: pytest.MonkeyPatch):
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": Exception("boom")},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake", "mock_response": "hi"},
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+
+    response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "hi"
+    assert events == [_pick("primary", "initial", 1), _pick("backup", "fallback", 1)]
+
+
+@pytest.mark.asyncio
+async def test_non_chat_surfaces_mark_their_deployment_pick(monkeypatch: pytest.MonkeyPatch):
+    """The event is emitted where the router picks, so embeddings and the sync path report it too."""
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "fake", "mock_response": [0.1]},
+            },
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+            },
+        ]
+    )
+
+    await router.aembedding(model="embed", input="hi")
+    router.completion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
+
+    assert events == [_pick("embed", "initial", 1), _pick("gpt-4o", "initial", 1)]

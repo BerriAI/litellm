@@ -157,6 +157,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "smtp_email",
     "deepeval",
     "s3_v2",
+    "clickhouse",
     "pointfive",
     "zerobus",
     "aws_sqs",
@@ -210,6 +211,7 @@ standard_logging_payload_excluded_fields: Optional[List[str]] = (
 )
 log_raw_request_response: bool = False
 log_client_error_tracebacks: bool = False
+log_auth_failure_key_identity: bool = False
 request_correlation_in_logs: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
@@ -499,6 +501,9 @@ prometheus_user_budget_label_include_email_alias: bool = False
 prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
 prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
 prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
+prometheus_metrics_max_series_per_metric: Optional[int] = None
+prometheus_metrics_ttl_seconds: Optional[float] = None
+prometheus_metrics_cleanup_interval_seconds: Optional[float] = 60.0
 disable_add_prefix_to_prompt: bool = False  # used by anthropic, to disable adding prefix to prompt
 disable_copilot_system_to_assistant: bool = False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 public_mcp_servers: Optional[List[str]] = None
@@ -661,7 +666,7 @@ azure_anthropic_models: Set = set()
 azure_text_models: Set = set()
 anyscale_models: Set = set()
 cerebras_models: Set = set()
-nadir_models: Set = set()  # mutable-ok: provider registry, filled from model_cost at import like every sibling provider
+nadir_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
@@ -695,7 +700,7 @@ recraft_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
-edenai_models: Set = set()  # mutable-ok: filled from the price map at import, like the sibling provider sets
+edenai_models: Set = set()
 volcengine_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
@@ -1471,6 +1476,8 @@ from .embeddings.dispatch import *
 from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *
+from .decisions.main import *
+from .tool_loop import ToolLoopMaxRoundsExceeded, arun_tool_loop, run_tool_loop
 from .search.main import *
 from .realtime_api.main import (
     _arealtime,
@@ -1535,20 +1542,20 @@ from .passthrough import allm_passthrough_route, llm_passthrough_route
 from .google_genai import agenerate_content
 
 ### GLOBAL CONFIG ###
-global_bitbucket_config: Optional[Dict[str, Any]] = None
+global_bitbucket_config: Optional[Mapping[str, object]] = None
 
 
-def set_global_bitbucket_config(config: Dict[str, Any]) -> None:
+def set_global_bitbucket_config(config: Mapping[str, object]) -> None:
     """Set global BitBucket configuration for prompt management."""
     global global_bitbucket_config
     global_bitbucket_config = config
 
 
 ### GLOBAL CONFIG ###
-global_gitlab_config: Optional[Dict[str, Any]] = None
+global_gitlab_config: Optional[Mapping[str, object]] = None
 
 
-def set_global_gitlab_config(config: Dict[str, Any]) -> None:
+def set_global_gitlab_config(config: Mapping[str, object]) -> None:
     """Set global BitBucket configuration for prompt management."""
     global global_gitlab_config
     global_gitlab_config = config
@@ -1644,6 +1651,9 @@ if TYPE_CHECKING:
     )
     from .llms.jina_ai.rerank.transformation import (
         JinaAIRerankConfig as JinaAIRerankConfig,
+    )
+    from .llms.scaleway.rerank.transformation import (
+        ScalewayRerankConfig as ScalewayRerankConfig,
     )
     from .llms.deepinfra.rerank.transformation import (
         DeepinfraRerankConfig as DeepinfraRerankConfig,
@@ -1777,6 +1787,9 @@ if TYPE_CHECKING:
     )
     from .llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
         AmazonBedrockOpenAIConfig as AmazonBedrockOpenAIConfig,
+    )
+    from .llms.bedrock.chat.chat_completions.transformation import (
+        AmazonBedrockRuntimeChatCompletionsConfig as AmazonBedrockRuntimeChatCompletionsConfig,
     )
     from .llms.bedrock.image_generation.amazon_stability1_transformation import (
         AmazonStabilityConfig as AmazonStabilityConfig,
@@ -2197,12 +2210,13 @@ if TYPE_CHECKING:
         DefaultTeamSSOParams,
         LiteLLM_UpperboundKeyGenerateParams,
     )
+    from litellm.utils import ModelResponseListIterator as _ModelResponseListIterator
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
     completion_cost: Callable[..., float]
-    response_cost_calculator: Any
-    modify_integration: Any
+    response_cost_calculator: Callable[..., float]
+    modify_integration: Callable[..., None]
 
     # Utils functions - type stubs for truly lazy loaded functions only
     # (functions NOT imported via "from .main import *")
@@ -2236,7 +2250,7 @@ if TYPE_CHECKING:
     remove_index_from_tool_calls: Callable[..., None]
 
     # Response types - truly lazy loaded only (not in main.py or elsewhere)
-    ModelResponseListIterator: Type[Any]
+    ModelResponseListIterator: Type[_ModelResponseListIterator]
 
     # HTTP handler singletons (created lazily via __getattr__ at runtime)
     module_level_aclient: AsyncHTTPHandler
@@ -2280,6 +2294,24 @@ if TYPE_CHECKING:
 # Track if async client cleanup has been registered (for lazy loading)
 _async_client_cleanup_registered = False
 
+_AGENT_EXPORTS: Final = frozenset(
+    {
+        "agent",
+        "aagent",
+        "agent_session",
+        "aagent_session",
+        "agent_resume",
+        "aagent_resume",
+        "agent_capabilities",
+        "Harness",
+        "ClaudeCodeOptions",
+        "CodexOptions",
+        "OpenCodeOptions",
+        "DeepAgentsOptions",
+        "ToolLoopOptions",
+    }
+)
+
 # Eager loading for backwards compatibility with VCR and other HTTP recording tools
 # When LITELLM_DISABLE_LAZY_LOADING is set, lazy-loaded attributes are loaded at import time
 # For now, this only affects encoding (tiktoken) as it was the only reported issue
@@ -2312,6 +2344,12 @@ def __getattr__(name: str) -> Any:
     if name in registry:
         handler_func: Final = registry[name]
         return handler_func(name)
+
+    if name == "harness" or name in _AGENT_EXPORTS:
+        import importlib
+
+        harness_module = importlib.import_module("litellm.harness")
+        return harness_module if name == "harness" else getattr(harness_module, name)
 
     # Lazy load encoding from main.py to avoid heavy tiktoken import
     if name == "encoding":

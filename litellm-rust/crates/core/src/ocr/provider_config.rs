@@ -14,8 +14,7 @@ use litellm_llms::{
         error::Error,
         handler::{self, CallHooks, OcrClient},
         transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument, OcrResponseFormat,
-            PreparedOcrRequest, ResolvedOcrCredentials,
+            BaseOcrConfig, OcrCredentialInputs, PreparedOcrRequest, ResolvedOcrCredentials,
         },
     },
     cohere::ocr::transformation::CohereParseConfig,
@@ -25,6 +24,7 @@ use litellm_llms::{
         deepseek_transformation::VertexAIDeepSeekOCRConfig, transformation::VertexAiOcrConfig,
     },
 };
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 macro_rules! with_config {
     ($kind:expr, $config:ident => $body:expr) => {
@@ -133,9 +133,9 @@ impl OcrConfigKind {
         self,
         client: &OcrClient,
         request: &PreparedOcrRequest,
-        hooks: &dyn CallHooks<Error>,
+        interceptors: &dyn CallHooks<Error>,
     ) -> Result<LiteLLMOcrResponse, Error> {
-        with_config!(self, config => handler::ocr(&config, client, request, hooks).await)
+        with_config!(self, config => handler::ocr(&config, client, request, interceptors).await)
     }
 }
 
