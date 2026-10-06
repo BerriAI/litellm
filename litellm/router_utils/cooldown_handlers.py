@@ -8,10 +8,10 @@ Router cooldown handlers
 
 import asyncio
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # narrows a model_info mapping
 
 import litellm
 from litellm._internal_context import service_target
@@ -491,16 +491,31 @@ def _set_cooldown_deployments(
     return False
 
 
+def _as_str_mapping(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return cast("Mapping[str, object]", value)  # cast-ok: model_info is a str-keyed mapping
+
+
+def deployment_ids(deployments: Iterable[Mapping[str, object]]) -> tuple[str, ...]:
+    """Ids of the given deployments, so a cooldown lookup reads only those keys."""
+    infos: Final = [_as_str_mapping(deployment.get("model_info")) for deployment in deployments]
+    return tuple(str(info["id"]) for info in infos if info is not None and info.get("id") is not None)
+
+
 async def _async_get_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
     parent_otel_span: Span | None,
+    model_ids: Sequence[str] | None = None,
 ) -> list[str]:
     """
-    Async implementation of '_get_cooldown_deployments'
+    Async implementation of '_get_cooldown_deployments'.
+
+    `model_ids` limits the cooldown read to those deployments; None reads every router deployment.
     """
-    model_ids: Final = litellm_router_instance.get_model_ids()
+    read_ids: Final = litellm_router_instance.get_model_ids() if model_ids is None else model_ids
     cooldown_models: Final = await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
-        model_ids=model_ids,
+        model_ids=read_ids,
         parent_otel_span=parent_otel_span,
     )
 
@@ -533,19 +548,25 @@ async def _async_get_cooldown_deployments_with_debug_info(
     return cooldown_models
 
 
-def _get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel_span: Span | None) -> list[str]:
+def _get_cooldown_deployments(
+    litellm_router_instance: LitellmRouter,
+    parent_otel_span: Span | None,
+    model_ids: Sequence[str] | None = None,
+) -> list[str]:  # mutable-ok: callers pass this to _filter_cooldown_deployments(list[str])
     """
-    Get the list of models being cooled down for this minute
+    Get the list of models being cooled down for this minute.
+
+    `model_ids` limits the cooldown read to those deployments; None reads every router deployment.
     """
     # get the current cooldown list for that minute
 
     # ----------------------
     # Return cooldown models
     # ----------------------
-    model_ids: Final = litellm_router_instance.get_model_ids()
+    read_ids: Final = litellm_router_instance.get_model_ids() if model_ids is None else model_ids
 
     cooldown_models: Final = litellm_router_instance.cooldown_cache.get_active_cooldowns(
-        model_ids=model_ids, parent_otel_span=parent_otel_span
+        model_ids=read_ids, parent_otel_span=parent_otel_span
     )
 
     cached_value_deployment_ids = []

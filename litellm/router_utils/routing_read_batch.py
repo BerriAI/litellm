@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # deployments arrive untyped
 
 from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
@@ -23,6 +23,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import BatchResult, active_request_redis_batches
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
+from litellm.router_utils.cooldown_handlers import deployment_ids
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -103,7 +104,12 @@ class RoutingPrefetch:
         if request is None or redis_cache is None or _PREFETCH_SLOT in request.prefetched:
             return
         cooldown_keys: Final = tuple(
-            CooldownCache.get_cooldown_cache_key(model_id) for model_id in litellm_router_instance.get_model_ids()
+            CooldownCache.get_cooldown_cache_key(model_id)
+            for model_id in deployment_ids(
+                cast(  # cast-ok: router deployments are dicts carrying model_info
+                    "list[dict[str, object]]", deployments
+                )
+            )
         )
         usage_keys: Final = (
             () if usage_selector is None else tuple(itertools.chain(*usage_selector.usage_counter_keys(deployments)))
@@ -194,7 +200,11 @@ class RoutingReadBatch:
         `_async_get_cooldown_deployments`, with the strategy's tpm/rpm counters for
         `healthy_deployments` fetched in the same MGET and kept as `prefetched_usage`.
         """
-        model_ids: Final = litellm_router_instance.get_model_ids()
+        model_ids: Final = deployment_ids(
+            cast(  # cast-ok: router deployments are dicts carrying model_info
+                "list[dict[str, object]]", healthy_deployments
+            )
+        )
         cooldown_keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
         selector: Final = self.usage_selector
         usage_keys: Final = (
