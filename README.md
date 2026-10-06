@@ -94,9 +94,11 @@ Install `litellm[cli]` for the `lite` and `litellm-proxy` client commands, or `l
 
 For a lean SDK installation, create a fresh environment and install `litellm-core`. It uses the same `import litellm` API and implementation, with optional capabilities supplied by its extras, such as `litellm-core[cli]` and `litellm-core[proxy]`. Ordinary `litellm` installs and upgrades retain legacy dependencies
 
+Legacy wheels retain bundled dashboard assets so upgrading an existing proxy with `pip install --upgrade litellm` preserves its UI, even when an older proxy companion remains installed. Core excludes the dashboard from its SDK wheel; `litellm-core[proxy]` installs the pinned UI companion
+
 Install exactly one of `litellm` or `litellm-core` in an environment. They own the same import package and commands, and neither depends on the other. Pip does not prevent co-installation; uninstalling either can break the other. Check downstream requirements before adopting core: a dependency on `litellm` can reinstall the legacy distribution. The `semantic-router` extra remains available only on `litellm` because that integration depends on the legacy distribution
 
-To build core from source, use an isolated checkout, run `python3 scripts/prepare_core_distribution.py pyproject.toml` with Python 3.11 or newer, copy `uv.core.lock` to `uv.lock`, and run `uv build`. The normal checkout and `uv build` produce `litellm`; metadata staging never changes Python source
+To build core from source, use an isolated checkout, run `python3 scripts/prepare_core_distribution.py pyproject.toml` with Python 3.11 or newer, copy `uv.core.lock` to `uv.lock`, and run `uv build`. The normal checkout produces `litellm`; build its dashboard first with `ui/litellm-dashboard/build_ui.sh` from that script's directory, then run `uv build`. Metadata staging never changes Python source
 
 
 ```python

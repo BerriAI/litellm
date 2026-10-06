@@ -14,24 +14,26 @@ from litellm._version import get_distribution
 
 
 def check_ui_packaging(profile: str) -> str:
-    sdk_files: Final = get_distribution().files or ()
+    installed: Final = get_distribution()
+    sdk_files: Final = installed.files or ()
     bundled_ui: Final = tuple(
         str(path) for path in sdk_files if str(path).startswith("litellm/proxy/_experimental/out/")
     )
-    _require(not bundled_ui, "core SDK still bundles dashboard assets")
+    _require(bool(bundled_ui) == (installed.metadata["Name"] == "litellm"), "unexpected bundled dashboard ownership")
     has_proxy_extras: Final = importlib.util.find_spec("litellm_proxy_extras") is not None
     _require(has_proxy_extras == (profile == "proxy"), f"unexpected proxy extras installation for {profile}")
     if profile == "proxy":
         ui: Final = files("litellm_proxy_extras").joinpath("ui")
         _require(ui.joinpath("index.html").is_file(), "proxy wheel is missing the dashboard entrypoint")
         _require(ui.joinpath("_next").is_dir(), "proxy wheel is missing Next.js assets")
-    return "dashboard assets are installed only with the proxy extra"
+    return "dashboard assets match the selected distribution and proxy profile"
 
 
 def check_proxy_ui() -> str:
     from fastapi.testclient import TestClient
 
     from litellm.proxy.proxy_server import app, ui_path
+    from litellm.proxy.common_utils.static_asset_utils import get_packaged_ui_directory
 
     root: Final = Path(ui_path)
     configured_path: Final = os.getenv("LITELLM_UI_PATH")
@@ -40,7 +42,9 @@ def check_proxy_ui() -> str:
     client: Final = TestClient(app)
     favicon: Final = client.get("/get_favicon")
     _require(favicon.status_code == 200, "default favicon is unavailable")
-    _require(favicon.content == files("litellm_proxy_extras").joinpath("ui/favicon.ico").read_bytes(), "wrong favicon")
+    packaged_ui: Final = get_packaged_ui_directory()
+    _require(packaged_ui is not None, "installed proxy has no packaged dashboard")
+    _require(favicon.content == Path(str(packaged_ui)).joinpath("favicon.ico").read_bytes(), "wrong favicon")
     for route in ("", "login/"):
         response: Final = client.get(f"/ui/{route}")
         _require(response.status_code == 200, f"dashboard route {route!r} returned {response.status_code}")
@@ -57,17 +61,27 @@ def check_proxy_ui() -> str:
             )
             _require(asset_response.content == asset.read_bytes(), f"wrong dashboard asset content for {relative}")
     registry: Final = json.loads(files("litellm").joinpath("proxy/mcp_registry.json").read_text())
-    icons: Final = [server["icon_url"] for server in registry["servers"] if server.get("icon_url", "").startswith("/ui/assets/logos/")]
+    icons: Final = [
+        server["icon_url"]
+        for server in registry["servers"]
+        if server.get("icon_url", "").startswith("/ui/assets/logos/")
+    ]
     _require(bool(icons), "MCP registry has no bundled icons to verify")
     for icon in icons:
-        packaged_icon: Final = files("litellm_proxy_extras").joinpath("ui", icon.removeprefix("/ui/"))
+        packaged_icon: Final = Path(str(packaged_ui)).joinpath(icon.removeprefix("/ui/"))
         _require(packaged_icon.is_file(), f"MCP icon missing from proxy wheel: {icon}")
         icon_response: Final = client.get(icon)
         _require(icon_response.status_code == 200, f"MCP icon is not served: {icon}")
-        _require(bool(icon_response.content) and icon_response.content == packaged_icon.read_bytes(), f"wrong MCP icon: {icon}")
+        _require(
+            bool(icon_response.content) and icon_response.content == packaged_icon.read_bytes(),
+            f"wrong MCP icon: {icon}",
+        )
     callback: Final = client.get("/ui/mcp/oauth/callback?code=abc&state=xyz", follow_redirects=False)
     _require(callback.status_code == 307, "nested callback route did not redirect")
-    _require(callback.headers["location"].endswith("/ui/mcp/oauth/callback/?code=abc&state=xyz"), "callback redirect lost query")
+    _require(
+        callback.headers["location"].endswith("/ui/mcp/oauth/callback/?code=abc&state=xyz"),
+        "callback redirect lost query",
+    )
     landed: Final = client.get("/ui/mcp/oauth/callback?code=abc&state=xyz")
     _require(landed.status_code == 200 and "<html" in landed.text.lower(), "nested callback page failed")
     for case in ("ready", "unstructured", "empty", "unset"):

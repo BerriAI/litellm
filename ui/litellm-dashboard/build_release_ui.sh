@@ -2,4 +2,4 @@
 set -e
 
 bash ./build_ui.sh
-echo "UI artifacts staged in the proxy-extras package; generated files are not committed."
+echo "UI artifacts staged for legacy and proxy-extras packages; generated files are not committed."

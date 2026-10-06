@@ -10,6 +10,9 @@ LOCAL_IMAGE_HEADER_BYTES: Final = 512
 
 
 def get_packaged_ui_directory() -> str | None:
+    bundled: Final = package_files("litellm").joinpath("proxy/_experimental/out")
+    if bundled.is_dir():
+        return str(bundled)
     try:
         return str(package_files("litellm_proxy_extras").joinpath("ui"))
     except ModuleNotFoundError as error:

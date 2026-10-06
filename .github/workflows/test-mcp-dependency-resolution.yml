@@ -97,6 +97,8 @@ jobs:
           npm run build
           mkdir -p ../../litellm-proxy-extras/litellm_proxy_extras/ui
           cp -R out/. ../../litellm-proxy-extras/litellm_proxy_extras/ui/
+          mkdir -p ../../litellm/proxy/_experimental/out
+          cp -R out/. ../../litellm/proxy/_experimental/out/
 
       - name: Build the legacy distribution before selecting core metadata
         if: steps.changes.outputs.decision != 'skip'
@@ -114,12 +116,37 @@ jobs:
               "$python" -m pip install --upgrade "$wheel"
               "$python" -m pip check
             else
-              uv pip install --python "$python" 'litellm==1.104.0'
-              uv pip install --python "$python" --upgrade "$wheel"
-              uv pip check --python "$python"
+              (cd "$RUNNER_TEMP" && uv pip install --python "$python" 'litellm==1.104.0')
+              (cd "$RUNNER_TEMP" && uv pip install --python "$python" --upgrade "$wheel")
+              (cd "$RUNNER_TEMP" && uv pip check --python "$python")
             fi
             (cd "$RUNNER_TEMP" && "$python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_distribution_install.py" litellm)
             (cd "$RUNNER_TEMP" && "$python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_cli_install.py" --profile core)
+          done
+
+      - name: Verify plain upgrades preserve an existing proxy dashboard
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          wheel=$(realpath dist/legacy-check/litellm-[0-9]*.whl)
+          checker="$GITHUB_WORKSPACE/tests/base_sdk_tests/check_legacy_proxy_upgrade.py"
+          for installer in pip uv; do
+            uv venv --seed --python ${{ matrix.python-version }} ".venv-proxy-upgrade-$installer"
+            python="$GITHUB_WORKSPACE/.venv-proxy-upgrade-$installer/bin/python"
+            (
+              cd "$RUNNER_TEMP"
+              if [ "$installer" = pip ]; then
+                "$python" -m pip install 'litellm[proxy]==1.104.0'
+                "$python" -I "$checker"
+                "$python" -m pip install --upgrade "$wheel"
+                "$python" -m pip check
+              else
+                uv pip install --python "$python" 'litellm[proxy]==1.104.0'
+                "$python" -I "$checker"
+                uv pip install --python "$python" --upgrade "$wheel"
+                uv pip check --python "$python"
+              fi
+              "$python" -I "$checker"
+            )
           done
 
       - name: Select the independent core dependency profile

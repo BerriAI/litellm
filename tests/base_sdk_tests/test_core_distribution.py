@@ -59,6 +59,21 @@ def test_preparing_core_twice_is_rejected() -> None:
         core_metadata(core_metadata(METADATA))
 
 
+def test_core_artifacts_exclude_the_legacy_dashboard() -> None:
+    source: Final = (
+        METADATA
+        + 'include = ["litellm/proxy/_experimental/out/**", "litellm/data.json"]\nexclude = ["**/__pycache__"]\n'
+    )
+    selected: Final = tomllib.loads(core_metadata(source))["tool"]["maturin"]
+    assert selected["include"] == ["litellm/data.json"]
+    assert selected["exclude"] == [
+        "**/__pycache__",
+        "litellm/proxy/_experimental/out",
+        "litellm/proxy/_experimental/out/**",
+    ]
+    assert tomllib.loads(source)["tool"]["maturin"]["include"][0] == "litellm/proxy/_experimental/out/**"
+
+
 def test_core_build_command_stages_a_buildable_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import runpy
     import sys

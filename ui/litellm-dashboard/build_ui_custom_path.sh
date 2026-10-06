@@ -64,6 +64,11 @@ if [ $? -eq 0 ]; then
     # Copy the contents of the output directory to the specified destination
     cp -r ./out/. "$destination_dir"
 
+    legacy_destination="../../litellm/proxy/_experimental/out"
+    rm -rf "$legacy_destination"
+    mkdir -p "$legacy_destination"
+    cp -r ./out/. "$legacy_destination"
+
     echo "Deployment completed."
 else
     echo "Build failed. Deployment aborted."

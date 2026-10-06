@@ -34,7 +34,10 @@ def check_distribution_pair(directory: Path) -> None:
                             name.startswith("litellm/rust_bridge/_native.") and name.endswith((".so", ".pyd"))
                             for name in names
                         ), "Each SDK retains the native extension"
-                        assert not any(name.startswith("litellm/proxy/_experimental/out/") for name in names)
+                        has_ui: Final = "litellm/proxy/_experimental/out/index.html" in names
+                        assert has_ui == (metadata["Name"] == "litellm"), "Only legacy bundles its dashboard"
+                        if metadata["Name"] == "litellm-core":
+                            assert not any(name.startswith("litellm/proxy/_experimental/out/") for name in names)
                         assert not any(
                             value.lower().startswith((other + "[", other + " ", other + "="))
                             for value in metadata.get_all("Requires-Dist", ())

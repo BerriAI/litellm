@@ -7,7 +7,7 @@ arbitrary local image paths working while refusing non-image files like
 """
 
 import os
-import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -19,17 +19,38 @@ from litellm.proxy.common_utils.static_asset_utils import (
 )
 
 
-def test_dashboard_package_is_optional(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(sys.modules, "litellm_proxy_extras", None)
-    assert get_packaged_ui_directory() is None
+def test_dashboard_package_is_optional(tmp_path: Path) -> None:
+    missing = ModuleNotFoundError("No companion installed", name="litellm_proxy_extras")
+    with patch("litellm.proxy.common_utils.static_asset_utils.package_files", side_effect=[tmp_path, missing]):
+        assert get_packaged_ui_directory() is None
 
 
-def test_dashboard_lookup_preserves_unrelated_import_failures() -> None:
+@pytest.mark.parametrize("package", ("sdk", "companion"))
+def test_dashboard_lookup_preserves_unrelated_import_failures(tmp_path: Path, package: str) -> None:
     error = ModuleNotFoundError("unrelated import failed", name="unrelated_dependency")
-    with patch("litellm.proxy.common_utils.static_asset_utils.package_files", side_effect=error):
+    with patch(
+        "litellm.proxy.common_utils.static_asset_utils.package_files",
+        side_effect=[tmp_path, error] if package == "companion" else error,
+    ):
         with pytest.raises(ModuleNotFoundError) as raised:
             get_packaged_ui_directory()
     assert raised.value is error
+
+
+@pytest.mark.parametrize("bundled", (True, False))
+def test_dashboard_lookup_preserves_legacy_assets_with_an_old_companion(tmp_path: Path, bundled: bool) -> None:
+    sdk = tmp_path / "litellm"
+    companion = tmp_path / "litellm_proxy_extras"
+    legacy_ui = sdk / "proxy/_experimental/out"
+    if bundled:
+        legacy_ui.mkdir(parents=True)
+        (legacy_ui / "index.html").write_text("<html>legacy dashboard</html>")
+    companion.mkdir()
+    with patch(
+        "litellm.proxy.common_utils.static_asset_utils.package_files",
+        side_effect={"litellm": sdk, "litellm_proxy_extras": companion}.__getitem__,
+    ):
+        assert get_packaged_ui_directory() == str(legacy_ui if bundled else companion / "ui")
 
 
 @pytest.mark.parametrize(

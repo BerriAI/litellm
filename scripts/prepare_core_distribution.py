@@ -40,7 +40,15 @@ def core_metadata(text: str) -> str:
         + "\n"
     )
     independent: Final = re.sub(r"(?ms)^\[project.optional-dependencies\]\n.*?(?=^\[|\Z)", lambda _: extras, selected)
-    return independent.replace('"litellm[', '"litellm-core[')
+    ui_path: Final = "litellm/proxy/_experimental/out"
+    maturin: Final = dict(metadata["tool"]["maturin"])
+    maturin["include"] = [path for path in maturin.get("include", ()) if path != f"{ui_path}/**"]
+    maturin["exclude"] = list(dict.fromkeys([*maturin.get("exclude", ()), ui_path, f"{ui_path}/**"]))
+    build_metadata: Final = (
+        "[tool.maturin]\n" + "".join(f"{key} = {json.dumps(value)}\n" for key, value in maturin.items()) + "\n"
+    )
+    core_artifacts: Final = re.sub(r"(?ms)^\[tool.maturin\]\n.*?(?=^\[|\Z)", lambda _: build_metadata, independent)
+    return core_artifacts.replace('"litellm[', '"litellm-core[')
 
 
 def prepare_core_distribution(path: Path) -> None:
