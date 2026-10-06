@@ -6329,7 +6329,7 @@ class StandardLoggingPayloadSetup:
             return None
         user_agent_tags: list[str] | None = None
         headers: Final = proxy_server_request.get("headers", {})
-        if headers is not None and isinstance(headers, dict):
+        if headers is not None and isinstance(headers, Mapping):
             if "user-agent" in headers:
                 user_agent: Final = headers["user-agent"]
                 if user_agent is not None:
@@ -6354,7 +6354,7 @@ class StandardLoggingPayloadSetup:
             return None
 
         headers: Final = proxy_server_request.get("headers", {})
-        if not isinstance(headers, dict):
+        if not isinstance(headers, Mapping):
             return None
 
         header_tags: Final = []
