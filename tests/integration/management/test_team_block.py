@@ -99,6 +99,11 @@ def test_team_block_and_unblock_update_endpoint_info_and_db_state(
 
         unblocked_response: Final = gateway.request("POST", "/team/unblock", {"team_id": team})
         assert unblocked_response.status_code == 200, unblocked_response.text
+        restored_key: Final = scenario.key(team_id=team)
+        restored: Final = _chat(gateway, model, restored_key, "new team key after unblock")
+        assert restored.status_code == 200, restored.text
+        after_unblock: Final = _models(upstream)
+        assert after_unblock == (provider_model,), repr(after_unblock)
         unblocked: Final = _TeamState.model_validate_json(unblocked_response.text)
         assert unblocked.blocked is False, unblocked_response.text
         unblocked_info_response: Final = gateway.request("GET", "/team/info", params={"team_id": team})
@@ -110,10 +115,11 @@ def test_team_block_and_unblock_update_endpoint_info_and_db_state(
             (team,),
         ) == [{"blocked": False}], unblocked_info_response.text
 
-        assert observed_before_block + after_cold_denied == (
+        assert observed_before_block + after_cold_denied + after_unblock == (
             provider_model,
             provider_model,
-        ), repr((observed_before_block, after_cold_denied))
+            provider_model,
+        ), repr((observed_before_block, after_cold_denied, after_unblock))
 
 
 def test_unblocking_a_team_restores_warmed_keys_on_both_proxies(
@@ -187,3 +193,34 @@ def test_warmed_team_keys_are_refused_on_both_proxies_after_block(
         assert observed_before_block + after_block == (provider_model, provider_model), repr(
             (observed_before_block, after_block)
         )
+
+
+def test_a_new_team_key_is_refused_on_a_peer_that_cached_the_team_before_block(
+    gateway: Gateway, peer: Gateway, upstream: httpx.Client
+) -> None:
+    pytest.skip("BUG: a peer proxy that cached the team before /team/block admits a never-seen team key")
+
+    with gateway.scenario() as scenario:
+        provider_model: Final = f"team-block-{uuid.uuid4().hex}"
+        model: Final = scenario.model(model=f"openai/{provider_model}")
+        team: Final = scenario.team(models=[model])
+        warm_key: Final = scenario.key(team_id=team)
+
+        peer_before: Final = _chat(peer, model, warm_key, "team block peer warm")
+        assert peer_before.status_code == 200, peer_before.text
+        observed_before_block: Final = _models(upstream)
+        assert observed_before_block == (provider_model,), repr(observed_before_block)
+
+        blocked_response: Final = gateway.request("POST", "/team/block", {"team_id": team})
+        assert blocked_response.status_code == 200, blocked_response.text
+        assert read_rows(
+            'SELECT blocked FROM "LiteLLM_TeamTable" WHERE team_id = %s',
+            (team,),
+        ) == [{"blocked": True}], blocked_response.text
+
+        cold_key: Final = scenario.key(team_id=team)
+        peer_denied: Final = _chat(peer, model, cold_key, "new team key on peer after block")
+        after_block: Final = _models(upstream)
+        assert peer_denied.status_code == 401, peer_denied.text
+        assert _ErrorResponse.model_validate_json(peer_denied.text).error.type == "auth_error", peer_denied.text
+        assert after_block == (), repr(after_block)

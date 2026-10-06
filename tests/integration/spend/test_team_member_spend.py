@@ -309,7 +309,7 @@ def test_member_over_budget_is_blocked_when_redis_counter_reads_stale_low(gatewa
 
 
 def test_member_update_lowering_the_budget_below_spend_blocks_the_next_call(
-    gateway: Gateway, upstream: httpx.Client
+    gateway: Gateway, peer: Gateway, upstream: httpx.Client
 ) -> None:
     with gateway.scenario() as scenario:
         model, provider_model = _priced_model(scenario)
@@ -329,14 +329,21 @@ def test_member_update_lowering_the_budget_below_spend_blocks_the_next_call(
 
         first: Final = _chat(gateway, model, key, f"accrued member spend {uuid.uuid4().hex}")
         assert first.status_code == 200, first.text
-        observed_before_update: Final = _observed_models(upstream)
-        assert observed_before_update == (provider_model,), repr(observed_before_update)
-        accrued: Final = eventually(
+        eventually(
             lambda: _budget_state(team, user),
             lambda values: len(values) == 1 and values[0].spend is not None and values[0].spend >= 0.06,
             seconds=70,
         )
-        assert accrued[0].spend == pytest.approx(0.06), accrued
+        peer_first: Final = _chat(peer, model, key, f"accrued member spend on peer {uuid.uuid4().hex}")
+        assert peer_first.status_code == 200, peer_first.text
+        observed_before_update: Final = _observed_models(upstream)
+        assert observed_before_update == (provider_model, provider_model), repr(observed_before_update)
+        accrued: Final = eventually(
+            lambda: _budget_state(team, user),
+            lambda values: len(values) == 1 and values[0].spend is not None and values[0].spend >= 0.12,
+            seconds=70,
+        )
+        assert accrued[0].spend == pytest.approx(0.12), accrued
         cached_membership: Final = _member_me(gateway, team, key)
         assert cached_membership.litellm_budget_table is not None, repr(cached_membership)
         assert cached_membership.litellm_budget_table.max_budget == 1, repr(cached_membership)
@@ -362,15 +369,17 @@ def test_member_update_lowering_the_budget_below_spend_blocks_the_next_call(
         ), repr(updated)
         denied: Final = _chat(gateway, model, key, f"lowered member budget {uuid.uuid4().hex}")
         _budget_refused(denied)
+        peer_denied: Final = _chat(peer, model, key, f"lowered member budget on peer {uuid.uuid4().hex}")
+        _budget_refused(peer_denied)
         observed_after_denial: Final = _observed_models(upstream)
         assert observed_after_denial == (), repr(observed_after_denial)
-        assert observed_before_update + observed_after_denial == (provider_model,), observed_after_denial
+        assert observed_before_update + observed_after_denial == (provider_model, provider_model), observed_after_denial
 
         state: Final = _budget_state(team, user)
         assert len(state) == 1, state
         assert state[0].user_id == user, state
         assert state[0].team_id == team, state
-        assert state[0].spend == pytest.approx(0.06), state
+        assert state[0].spend == pytest.approx(0.12), state
         assert state[0].max_budget == 0.0001, state
         assert state[0].tpm_limit == 1000, state
         assert state[0].rpm_limit == 100, state

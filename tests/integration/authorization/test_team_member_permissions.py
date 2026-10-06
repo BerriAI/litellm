@@ -60,6 +60,14 @@ class _ErrorResponse(BaseModel):
     error: _Error
 
 
+class _HTTPErrorDetail(BaseModel):
+    error: str
+
+
+class _HTTPErrorResponse(BaseModel):
+    detail: _HTTPErrorDetail
+
+
 @pytest.fixture
 def upstream(gateway: Gateway) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as client:
@@ -86,6 +94,15 @@ def _team_key_row(key: str) -> list[dict[str, JsonValue]]:
     return read_rows(
         'SELECT team_id, metadata FROM "LiteLLM_VerificationToken" WHERE token = %s',
         (sha256(key.encode()).hexdigest(),),
+    )
+
+
+def _update_team_key(proxy: Gateway, member: Member, owner: str) -> httpx.Response:
+    return proxy.request(
+        "POST",
+        "/key/update",
+        {"key": member.team_key, "team_id": member.team_id, "metadata": {"owner": owner}},
+        key=member.member_key,
     )
 
 
@@ -211,30 +228,37 @@ def test_permissions_update_grants_and_revokes_key_generate_for_a_warmed_member_
         assert observed == (), repr(observed)
 
 
-def test_permissions_bulk_update_appends_only_to_the_listed_teams(gateway: Gateway, upstream: httpx.Client) -> None:
+def test_permissions_bulk_update_appends_only_to_the_listed_teams(
+    gateway: Gateway, peer: Gateway, upstream: httpx.Client
+) -> None:
     with gateway.scenario() as scenario:
-        team_one: Final = scenario.team(team_member_permissions=["/key/info"])
+        listed: Final = _member(scenario, ["/key/info"])
         team_two: Final = scenario.team(team_member_permissions=["/key/info", "/key/update"])
-        team_three: Final = scenario.team(team_member_permissions=["/key/info"])
-        team_ids: Final = (team_one, team_two, team_three)
+        unlisted: Final = _member(scenario, ["/key/info"])
+        team_ids: Final = (listed.team_id, team_two, unlisted.team_id)
+        for proxy in (gateway, peer):
+            for member in (listed, unlisted):
+                _refused(_update_team_key(proxy, member, "member before bulk"), 401, PERMISSION_ERROR)
         before_non_admin: Final = _team_permission_rows(team_ids)
-        user: Final = scenario.user(user_role="internal_user")
-        user_key: Final = scenario.key(user_id=user)
+        caller: Final = scenario.user(user_role="internal_user")
+        caller_key: Final = scenario.key(user_id=caller, allowed_routes=["/team/permissions_bulk_update"])
         denied: Final = gateway.request(
             "POST",
             "/team/permissions_bulk_update",
-            {"permissions": ["/key/update"], "team_ids": [team_one, team_two]},
-            key=user_key,
+            {"permissions": ["/key/update"], "team_ids": [listed.team_id, team_two]},
+            key=caller_key,
         )
-        assert denied.status_code == 401, denied.text
-        assert _ErrorResponse.model_validate_json(denied.text).error.type == "auth_error", denied.text
+        assert denied.status_code == 403, denied.text
+        assert _HTTPErrorResponse.model_validate_json(denied.text) == _HTTPErrorResponse(
+            detail=_HTTPErrorDetail(error="Only proxy admins can bulk-update team permissions")
+        ), denied.text
         after_denied: Final = _team_permission_rows(team_ids)
         assert after_denied == before_non_admin, repr(after_denied)
 
         selected: Final = gateway.request(
             "POST",
             "/team/permissions_bulk_update",
-            {"permissions": ["/key/update"], "team_ids": [team_one, team_two]},
+            {"permissions": ["/key/update"], "team_ids": [listed.team_id, team_two]},
         )
         assert selected.status_code == 200, selected.text
         selected_response: Final = _BulkPermissionsUpdate.model_validate_json(selected.text)
@@ -247,13 +271,32 @@ def test_permissions_bulk_update_appends_only_to_the_listed_teams(gateway: Gatew
         assert tuple(sorted(selected_rows, key=lambda row: row.team_id)) == tuple(
             sorted(
                 (
-                    _TeamPermissionRow(team_id=team_one, team_member_permissions=["/key/info", "/key/update"]),
+                    _TeamPermissionRow(team_id=listed.team_id, team_member_permissions=["/key/info", "/key/update"]),
                     _TeamPermissionRow(team_id=team_two, team_member_permissions=["/key/info", "/key/update"]),
-                    _TeamPermissionRow(team_id=team_three, team_member_permissions=["/key/info"]),
+                    _TeamPermissionRow(team_id=unlisted.team_id, team_member_permissions=["/key/info"]),
                 ),
                 key=lambda row: row.team_id,
             )
         ), repr(selected_rows)
+        listed_readback: Final = _permissions(gateway, listed.team_id)
+        assert listed_readback.team_member_permissions == ["/key/info", "/key/update"], repr(listed_readback)
+        unlisted_readback: Final = _permissions(gateway, unlisted.team_id)
+        assert unlisted_readback.team_member_permissions == ["/key/info"], repr(unlisted_readback)
+
+        gateway_update: Final = _update_team_key(gateway, listed, "member via gateway")
+        assert gateway_update.status_code == 200, gateway_update.text
+        assert _team_key_row(listed.team_key) == [
+            {"team_id": listed.team_id, "metadata": {"owner": "member via gateway"}}
+        ], gateway_update.text
+        peer_update: Final = _update_team_key(peer, listed, "member via peer")
+        assert peer_update.status_code == 200, peer_update.text
+        assert _team_key_row(listed.team_key) == [
+            {"team_id": listed.team_id, "metadata": {"owner": "member via peer"}}
+        ], peer_update.text
+        for proxy in (gateway, peer):
+            _refused(_update_team_key(proxy, unlisted, "unlisted member"), 401, PERMISSION_ERROR)
+        assert _team_key_row(unlisted.team_key) == [{"team_id": unlisted.team_id, "metadata": {"owner": "team"}}]
+
         all_before: Final = tuple(
             _TeamPermissionRow.model_validate(row)
             for row in read_rows(
@@ -288,6 +331,11 @@ def test_permissions_bulk_update_appends_only_to_the_listed_teams(gateway: Gatew
         )
         assert tuple(row.team_id for row in all_after) == tuple(row.team_id for row in all_before), repr(all_after)
         assert all("/key/update" in (row.team_member_permissions or []) for row in all_after), repr(all_after)
+        unlisted_after_all: Final = _update_team_key(peer, unlisted, "unlisted member after all teams")
+        assert unlisted_after_all.status_code == 200, unlisted_after_all.text
+        assert _team_key_row(unlisted.team_key) == [
+            {"team_id": unlisted.team_id, "metadata": {"owner": "unlisted member after all teams"}}
+        ], unlisted_after_all.text
         observed: Final = _observed_models(upstream)
         assert observed == (), repr(observed)
 

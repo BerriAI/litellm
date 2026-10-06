@@ -264,32 +264,62 @@ def test_member_delete_by_email_removes_a_legacy_email_only_roster_entry(
         team: Final = scenario.team(models=[model])
         email: Final = f"legacy-member-{uuid.uuid4().hex}@integration.test"
         user: Final = scenario.user(user_email=email)
+        _remove_default_user(gateway, team)
         stayer: Final = scenario.member(team)
+        added: Final = gateway.request(
+            "POST", "/team/member_add", {"team_id": team, "member": {"role": "user", "user_id": user}}
+        )
+        assert added.status_code == 200, added.text
+        leaver_key: Final = _key(scenario, team_id=team, user_id=user)
+        stayer_key: Final = _key(scenario, team_id=team, user_id=stayer)
+        leaver_warm: Final = _chat(gateway, model, leaver_key, "warm legacy leaver " + uuid.uuid4().hex)
+        assert leaver_warm.status_code == 200, leaver_warm.text
+        observed_before_delete: Final = _models(upstream)
+        assert observed_before_delete == (provider_model,), repr(observed_before_delete)
+
         stayer_roster: Final = _roster_member(stayer, None)
         legacy_roster: Final = {"role": "user", "user_id": None, "user_email": email}
-        seeded_roster: Final = [legacy_roster, stayer_roster]
         write_rows(
             'UPDATE "LiteLLM_TeamTable" SET members_with_roles = %s::jsonb WHERE team_id = %s',
-            (json.dumps(seeded_roster), team),
+            (json.dumps([legacy_roster, stayer_roster]), team),
         )
-        write_rows(
-            'UPDATE "LiteLLM_UserTable" SET teams = array_append(teams, %s) WHERE user_id = %s',
-            (team, user),
+        assert read_rows('SELECT teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,)) == [{"teams": [team]}], (
+            added.text
         )
+        leaver_hash: Final = sha256(leaver_key.encode()).hexdigest()
 
         deleted: Final = gateway.request("POST", "/team/member_delete", {"team_id": team, "user_email": email})
         assert deleted.status_code == 200, deleted.text
         info: Final = _team_info(gateway, team)
-        expected_stayer: Final = [_RosterMember.model_validate(stayer_roster)]
-        assert info.team_info.members_with_roles == expected_stayer, repr(info)
+        assert info.team_info.members_with_roles == [_RosterMember.model_validate(stayer_roster)], repr(info)
         assert read_rows('SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,)) == [
             {"members_with_roles": [stayer_roster]}
         ], deleted.text
-        stayer_key: Final = _key(scenario, team_id=team, user_id=stayer)
+        assert read_rows('SELECT teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,)) == [{"teams": []}], (
+            deleted.text
+        )
+        assert read_rows(
+            'SELECT user_id, team_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s ORDER BY user_id',
+            (team,),
+        ) == [{"user_id": stayer, "team_id": team}], deleted.text
+        assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token = %s', (leaver_hash,)) == [], (
+            deleted.text
+        )
+        assert read_rows(
+            'SELECT token FROM "LiteLLM_DeletedVerificationToken" WHERE token = %s',
+            (leaver_hash,),
+        ) == [{"token": leaver_hash}], deleted.text
+
+        refused: Final = _chat(gateway, model, leaver_key, "deleted legacy leaver " + uuid.uuid4().hex)
+        _refused(refused, 401, "token_not_found_in_db")
+        after_refused: Final = _models(upstream)
+        assert after_refused == (), repr(after_refused)
         served: Final = _chat(gateway, model, stayer_key, "stayer after legacy delete " + uuid.uuid4().hex)
         assert served.status_code == 200, served.text
         observed: Final = _models(upstream)
-        assert observed == (provider_model,), repr(observed)
+        assert observed_before_delete + after_refused + observed == (provider_model, provider_model), repr(
+            (observed_before_delete, after_refused, observed)
+        )
 
 
 def test_member_add_by_email_provisions_a_new_user_and_resolves_an_existing_one(
@@ -458,6 +488,13 @@ def test_bulk_member_add_adds_every_listed_member_and_reports_failures(
             (team,),
         ) == [{"user_id": user_id, "team_id": team} for user_id in sorted((user_one, user_two, user_three))], added.text
         assert read_rows(
+            'SELECT m.user_id, b.max_budget FROM "LiteLLM_TeamMembership" m '
+            'JOIN "LiteLLM_BudgetTable" b ON b.budget_id = m.budget_id WHERE m.team_id = %s ORDER BY m.user_id',
+            (team,),
+        ) == [{"user_id": user_id, "max_budget": 1.0} for user_id in sorted((user_one, user_two, user_three))], (
+            added.text
+        )
+        assert read_rows(
             'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s',
             (team,),
         ) == [
@@ -470,11 +507,16 @@ def test_bulk_member_add_adds_every_listed_member_and_reports_failures(
             }
         ], added.text
 
-        keys: Final = tuple(_key(scenario, team_id=team, user_id=user) for user in (user_one, user_two, user_three))
-        successes: Final = tuple(_chat(gateway, model, key, f"bulk member {index}") for index, key in enumerate(keys))
-        assert tuple(response.status_code for response in successes) == (200, 200, 200), tuple(
-            response.text for response in successes
+        write_rows(
+            'UPDATE "LiteLLM_TeamMembership" SET spend = 2 WHERE team_id = %s AND user_id = %s',
+            (team, user_three),
         )
+        keys: Final = tuple(_key(scenario, team_id=team, user_id=user) for user in (user_one, user_two, user_three))
+        calls: Final = tuple(_chat(gateway, model, key, f"bulk member {index}") for index, key in enumerate(keys))
+        assert tuple(response.status_code for response in calls[:2]) == (200, 200), tuple(
+            response.text for response in calls
+        )
+        _refused(calls[2], 422, "budget_exceeded")
         duplicate: Final = gateway.request(
             "POST",
             "/team/bulk_member_add",
@@ -500,7 +542,64 @@ def test_bulk_member_add_adds_every_listed_member_and_reports_failures(
             }
         ], duplicate.text
         observed: Final = _models(upstream)
-        assert observed == (provider_model, provider_model, provider_model), repr(observed)
+        assert observed == (provider_model, provider_model), repr(observed)
+
+
+def test_bulk_member_add_all_users_is_proxy_admin_only_and_adds_every_user(
+    gateway: Gateway, upstream: httpx.Client
+) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team()
+        _remove_default_user(gateway, team)
+        caller: Final = scenario.user(user_role="internal_user")
+        caller_key: Final = _key(scenario, user_id=caller, allowed_routes=["/team/bulk_member_add"])
+        denied: Final = gateway.request(
+            "POST", "/team/bulk_member_add", {"team_id": team, "all_users": True}, key=caller_key
+        )
+        assert denied.status_code == 403, denied.text
+        assert _HTTPErrorResponse.model_validate_json(denied.text) == _HTTPErrorResponse(
+            detail=_HTTPErrorDetail(
+                error="`all_users=true` is restricted to PROXY_ADMIN. Org/team admins must specify explicit member lists."
+            )
+        ), denied.text
+        assert read_rows('SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,)) == [
+            {"members_with_roles": []}
+        ], denied.text
+        assert read_rows('SELECT user_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s', (team,)) == [], denied.text
+
+        users: Final = tuple(
+            (string_value(row["user_id"]), row["user_email"])
+            for row in read_rows('SELECT user_id, user_email FROM "LiteLLM_UserTable" ORDER BY user_id', ())
+        )
+        assert caller in {user_id for user_id, _ in users}, repr(users)
+        added: Final = gateway.request("POST", "/team/bulk_member_add", {"team_id": team, "all_users": True})
+        assert added.status_code == 200, added.text
+        response: Final = _BulkAddResponse.model_validate_json(added.text)
+        assert response.team_id == team, added.text
+        assert response.total_requested == len(users), added.text
+        assert response.successful_additions == len(users), added.text
+        assert response.failed_additions == 0, added.text
+        assert sorted(
+            ((result.user_id, result.user_email, result.success) for result in response.results),
+            key=lambda result: result[0] or "",
+        ) == [(user_id, user_email, True) for user_id, user_email in users], added.text
+        assert read_rows(
+            'SELECT user_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s ORDER BY user_id',
+            (team,),
+        ) == [{"user_id": user_id} for user_id, _ in users], added.text
+        roster: Final = read_rows('SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,))
+        assert len(roster) == 1, added.text
+        roster_members: Final = roster[0]["members_with_roles"]
+        assert isinstance(roster_members, list), repr(roster)
+        assert sorted(
+            (_RosterMember.model_validate(member) for member in roster_members),
+            key=lambda member: member.user_id or "",
+        ) == [
+            _RosterMember.model_validate(_roster_member(user_id, string_value(user_email) if user_email else None))
+            for user_id, user_email in users
+        ], added.text
+        observed: Final = _models(upstream)
+        assert observed == (), repr(observed)
 
 
 def test_bulk_delete_removes_exactly_the_named_members_and_revokes_their_access(
