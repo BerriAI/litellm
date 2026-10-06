@@ -4,9 +4,9 @@ use litellm_llms::base_llm::ocr::{
     transformation::{OcrConnection, OcrCredentialInputs, PreparedOcrRequest},
 };
 use litellm_secrets::source::Secrets;
+use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
 use crate::ocr::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
-use crate::provider::LlmProviders;
 
 pub(crate) fn prepare_request(
     request: ResolvedOcrRequest,

@@ -7,7 +7,7 @@ use litellm_host::{
 
 use crate::{CallOptions, RouteError};
 
-pub(crate) struct CallContext<'a, I> {
+pub struct CallContext<'a, I> {
     pub interceptors: &'a I,
     pub observers: Option<ObservationSender>,
     pub cache: CachePolicy,

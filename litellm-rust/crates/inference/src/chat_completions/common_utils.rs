@@ -5,10 +5,10 @@ use litellm_llms::{
     bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
     openai_like::chat::transformation::OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG,
 };
+use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use serde_json::{Map, Value};
 
 use super::Error;
-use crate::provider::LlmProviders;
 
 const HEADER_CONTEXT: &str = "chat completions";
 

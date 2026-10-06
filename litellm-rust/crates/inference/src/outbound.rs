@@ -10,7 +10,7 @@ use serde_json::Value;
     skip_all,
     fields(status)
 )]
-pub(crate) async fn send(
+pub async fn send(
     request: OutboundRequest,
     client: &litellm_http::Client,
 ) -> Result<reqwest::Response, reqwest::Error> {
@@ -21,7 +21,7 @@ pub(crate) async fn send(
 
 /// Header credentials are already in `headers`; SigV4 is applied here, over the
 /// bytes that are sent.
-pub(crate) fn outbound_request(
+pub fn outbound_request(
     authenticated: Authenticated,
     url: String,
     body: &Value,

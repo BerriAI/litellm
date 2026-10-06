@@ -41,17 +41,17 @@ impl Drop for Completion {
     }
 }
 
-pub(crate) fn provider(model: &str, provider: &str) {
+pub fn provider(model: &str, provider: &str) {
     let span = Span::current();
     span.record("resolved_model", model);
     span.record("provider", provider);
 }
 
-pub(crate) async fn unary<R, E>(execute: impl Future<Output = Result<R, E>>) -> Result<R, E> {
+pub async fn unary<R, E>(execute: impl Future<Output = Result<R, E>>) -> Result<R, E> {
     operation("litellm.route", execute).await
 }
 
-pub(crate) async fn operation<R, E>(
+pub async fn operation<R, E>(
     name: &str,
     execute: impl Future<Output = Result<R, E>>,
 ) -> Result<R, E> {
@@ -61,7 +61,7 @@ pub(crate) async fn operation<R, E>(
     result
 }
 
-pub(crate) async fn call<R, H, C, E>(
+pub async fn call<R, H, C, E>(
     execute: impl Future<Output = Result<CallOutput<R, H, C, E>, E>>,
 ) -> Result<CallOutput<R, H, C, E>, E>
 where

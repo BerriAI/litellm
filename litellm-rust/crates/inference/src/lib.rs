@@ -1,5 +1,5 @@
-mod context;
-mod diagnostic;
+pub mod context;
+pub mod diagnostic;
 
 pub mod audio_transcription;
 pub mod caching;
@@ -8,8 +8,8 @@ pub mod constants;
 pub mod error;
 pub mod messages;
 pub mod ocr;
-mod outbound;
-mod provider;
+pub mod outbound;
+pub mod provider;
 pub mod resources;
 pub mod responses;
 

@@ -221,13 +221,13 @@ where
     Ok(cache.finish(output, &source).await)
 }
 
-pub(crate) struct CallCache<P> {
+pub struct CallCache<P> {
     session: Option<CacheSession>,
     protocol: PhantomData<P>,
 }
 
 impl<P: StreamCachable> CallCache<P> {
-    pub(crate) fn from_wire(
+    pub fn from_wire(
         cache: Option<&ScopedCache>,
         policy: CachePolicy,
         identity: &ProviderIdentity,
@@ -254,7 +254,7 @@ impl<P: StreamCachable> CallCache<P> {
         }
     }
 
-    pub(crate) async fn lookup(&self) -> Option<(OutputOf<P>, ResultSource)>
+    pub async fn lookup(&self) -> Option<(OutputOf<P>, ResultSource)>
     where
         P::Response: DeserializeOwned,
     {
@@ -271,7 +271,7 @@ impl<P: StreamCachable> CallCache<P> {
         ))
     }
 
-    pub(crate) async fn finish(self, output: OutputOf<P>, source: &ResultSource) -> OutputOf<P>
+    pub async fn finish(self, output: OutputOf<P>, source: &ResultSource) -> OutputOf<P>
     where
         P::Response: Serialize,
     {

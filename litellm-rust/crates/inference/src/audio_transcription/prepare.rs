@@ -8,12 +8,13 @@ use litellm_llms::{
     bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG,
 };
 use litellm_secrets::source::SecretSource;
+use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
 use super::Error;
 use crate::audio_transcription::types::{
     AudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
 };
-use crate::provider::{LlmProviders, resolve_llm_provider};
+use crate::provider::resolve_llm_provider;
 
 fn provider_config(provider: LlmProviders) -> Option<&'static dyn BaseAudioTranscriptionConfig> {
     match provider {

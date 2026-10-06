@@ -6,10 +6,10 @@ use litellm_llms::{
     base_llm::messages::transformation::BaseMessagesConfig,
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
 };
+use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use serde_json::{Map, Value};
 
 use super::Error;
-use crate::provider::LlmProviders;
 
 const HEADER_CONTEXT: &str = "messages";
 
@@ -68,7 +68,7 @@ mod tests {
 
     use super::{MessagesProvider, messages_provider, string_headers, truncate_error_body};
     use crate::messages::Error;
-    use crate::provider::LlmProviders;
+    use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
     #[rstest]
     #[case::anthropic("anthropic", MessagesProvider::Anthropic)]

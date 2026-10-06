@@ -1,15 +1,16 @@
-pub use litellm_core_utils::get_llm_provider_logic::LlmProviders;
-use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
+use litellm_core_utils::get_llm_provider_logic::{
+    CustomLlmProvider, LlmProviders, get_custom_llm_provider,
+};
 
 use crate::error::RouteError as Error;
 
 #[derive(Debug)]
-pub(crate) struct ResolvedProvider<'a> {
-    pub(crate) model: &'a str,
-    pub(crate) provider: LlmProviders,
+pub struct ResolvedProvider<'a> {
+    pub model: &'a str,
+    pub provider: LlmProviders,
 }
 
-pub(crate) fn resolve_llm_provider<'a>(
+pub fn resolve_llm_provider<'a>(
     model: &'a str,
     custom_llm_provider: Option<&'a str>,
     route: &'static str,
