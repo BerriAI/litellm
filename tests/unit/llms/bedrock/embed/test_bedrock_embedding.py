@@ -1336,3 +1336,50 @@ def test_marengo_3_text_image_without_media_source_is_a_bad_request():
             api_key="test-bearer-token-12345",
             input_type="text_image",
         )
+
+
+def test_bedrock_embedding_forwards_request_metadata_header(monkeypatch):
+    """The Invoke embedding path must sign the proxy-owned
+    X-Amzn-Bedrock-Request-Metadata header, the same identity forwarding the chat
+    and messages Invoke paths wire up (issue #44694)."""
+    from litellm.llms.bedrock.request_metadata import BEDROCK_REQUEST_METADATA_HEADER
+
+    monkeypatch.setattr(
+        litellm,
+        "bedrock_request_metadata_fields",
+        ["user_api_key_alias", "user_api_key_team_alias"],
+    )
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(titan_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        litellm.embedding(
+            model="bedrock/amazon.titan-embed-text-v2:0",
+            input=test_input,
+            client=client,
+            aws_region_name="us-east-1",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            metadata={
+                "user_api_key_alias": "prod-key",
+                "user_api_key_team_alias": "platform",
+            },
+        )
+
+        headers = mock_post.call_args.kwargs.get("headers", {})
+        metadata_values = [
+            value
+            for name, value in headers.items()
+            if name.lower() == BEDROCK_REQUEST_METADATA_HEADER.lower()
+        ]
+        assert metadata_values == [
+            json.dumps(
+                {"user_api_key_alias": "prod-key", "user_api_key_team_alias": "platform"},
+                separators=(",", ":"),
+            )
+        ]
