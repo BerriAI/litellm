@@ -2186,12 +2186,6 @@ class ModelResponse(ModelResponseBase):
     choices: list[Choices]
     """The list of completion choices the model generated for the input prompt."""
 
-    @staticmethod
-    def _system_fingerprint_init_values(system_fingerprint: str | None) -> Mapping[str, str]:
-        if system_fingerprint is None:
-            return {}
-        return {"system_fingerprint": system_fingerprint}
-
     def __init__(
         self,
         id=None,
@@ -2242,8 +2236,6 @@ class ModelResponse(ModelResponseBase):
                 usage = Usage(**dump)
             else:
                 usage = usage
-        elif stream is None or stream is False:
-            usage = None  # avoid constructing throwaway Usage; set by convert_to_model_response_object
         if hidden_params:
             self._hidden_params = hidden_params
 
@@ -2258,10 +2250,10 @@ class ModelResponse(ModelResponseBase):
             "object": object,
         }
 
-        init_values.update(ModelResponse._system_fingerprint_init_values(system_fingerprint))
-
         if usage is not None:
             init_values["usage"] = usage
+        if system_fingerprint is not None:
+            init_values["system_fingerprint"] = system_fingerprint
 
         super().__init__(
             **init_values,
