@@ -2569,6 +2569,20 @@ def _batch_rate(
     return fallback if rate is None else rate
 
 
+def _batch_or_half(batch_rate: float | None, standard_rate: float | None, default: float = 0.0) -> float:
+    if batch_rate is not None:
+        return batch_rate
+    if standard_rate is not None:
+        return standard_rate / 2
+    return default
+
+
+def _completion_image_tokens(usage: Usage) -> int:
+    details: Final = usage.completion_tokens_details
+    image_tokens: Final = (details.image_tokens or 0) if details is not None else 0
+    return min(image_tokens, usage.completion_tokens)
+
+
 def batch_cost_calculator(
     usage: Usage,
     model: str,
@@ -2650,27 +2664,15 @@ def batch_cost_calculator(
 
         cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
         total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
-    text_batch_rate: Final = (
-        batch_rates.output
-        if batch_rates.output is not None
-        else output_cost_per_token / 2
-        if output_cost_per_token is not None
-        else 0.0
+    text_rate: Final = _batch_or_half(batch_rates.output, output_cost_per_token)
+    image_rate: Final = _batch_rate(
+        model_info,
+        "output_cost_per_image_token_batches",
+        _batch_or_half(None, model_info.get("output_cost_per_image_token"), default=text_rate),
     )
-    completion_tokens: Final = usage.completion_tokens
-    completion_tokens_details: Final = usage.completion_tokens_details
-    image_tokens: Final = (
-        min(completion_tokens_details.image_tokens or 0, completion_tokens)
-        if completion_tokens_details is not None
-        else 0
-    )
-    text_tokens: Final = completion_tokens - image_tokens
-    output_cost_per_image_token: Final = model_info.get("output_cost_per_image_token")
-    image_batch_rate_fallback: Final = (
-        output_cost_per_image_token / 2 if output_cost_per_image_token is not None else text_batch_rate
-    )
-    image_batch_rate: Final = _batch_rate(model_info, "output_cost_per_image_token_batches", image_batch_rate_fallback)
-    total_completion_cost = text_tokens * text_batch_rate + image_tokens * image_batch_rate
+    image_tokens: Final = _completion_image_tokens(usage)
+    text_tokens: Final = usage.completion_tokens - image_tokens
+    total_completion_cost = text_tokens * text_rate + image_tokens * image_rate
 
     uplift: Final = _get_regional_uplift_multiplier(model_info, data_residency)
     if uplift != 1.0:
