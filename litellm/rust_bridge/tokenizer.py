@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # native class is
 
 import tiktoken
 
-from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
+from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext
@@ -13,6 +13,7 @@ from litellm.rust_bridge.catalog import Route, RouteContext
 if TYPE_CHECKING:
     from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
 
+    from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
     from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
 
 

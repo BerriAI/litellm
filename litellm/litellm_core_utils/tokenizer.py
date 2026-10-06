@@ -14,8 +14,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, Union, runtime_checkable
+from types import MappingProxyType, UnionType
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 import tiktoken
 
@@ -363,8 +363,22 @@ def _batch_input(
 
 
 Encoding: TypeAlias = tiktoken.Encoding | OpenAIEncoding
-HuggingFace: TypeAlias = Union["PythonHuggingFaceTokenizer", HuggingFaceTokenizer]
-Tokenizer: TypeAlias = Encoding | HuggingFace
+if TYPE_CHECKING:
+    HuggingFace: TypeAlias = PythonHuggingFaceTokenizer | HuggingFaceTokenizer
+    Tokenizer: TypeAlias = Encoding | HuggingFace
+
+
+def __getattr__(name: str) -> UnionType | type[HuggingFaceTokenizer]:
+    if name not in {"HuggingFace", "Tokenizer"}:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    available: Final = HuggingFaceTokenizer if name == "HuggingFace" else Encoding | HuggingFaceTokenizer
+    try:
+        from tokenizers import Tokenizer as PythonTokenizer
+    except ModuleNotFoundError as error:
+        if error.name == "tokenizers":
+            return available
+        raise
+    return available | PythonTokenizer
 
 
 class _AddedToken(Protocol):

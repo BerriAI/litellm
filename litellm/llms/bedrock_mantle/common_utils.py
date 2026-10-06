@@ -14,6 +14,7 @@ global state.
 
 import re
 from collections.abc import Mapping
+from functools import partial
 from typing import Final, Literal
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
@@ -80,18 +81,18 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         fake_stream: bool | None = None,
     ) -> tuple[dict, bytes | None]:
         bearer: Final = self._resolve_bearer_token(api_key)
+        sign: Final = partial(
+            self._aws_signer._sign_request,
+            service_name="bedrock",
+            request_data=request_data,
+            api_base=api_base,
+            api_key=bearer,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
         if bearer:
-            return self._aws_signer._sign_request(
-                service_name="bedrock",
-                headers=headers,
-                optional_params=optional_params,
-                request_data=request_data,
-                api_base=api_base,
-                api_key=bearer,
-                model=model,
-                stream=stream,
-                fake_stream=fake_stream,
-            )
+            return sign(headers=headers, optional_params=optional_params)
         try:
             from botocore.exceptions import (
                 CredentialRetrievalError,
@@ -116,17 +117,7 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         }
         headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
         try:
-            return self._aws_signer._sign_request(
-                service_name="bedrock",
-                headers=headers,
-                optional_params=optional_params,
-                request_data=request_data,
-                api_base=api_base,
-                api_key=bearer,
-                model=model,
-                stream=stream,
-                fake_stream=fake_stream,
-            )
+            return sign(headers=headers, optional_params=optional_params)
         except (
             NoCredentialsError,
             PartialCredentialsError,

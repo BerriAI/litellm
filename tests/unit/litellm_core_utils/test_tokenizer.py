@@ -415,3 +415,38 @@ def test_missing_python_tokenizer_warns_before_approximate_count(caplog, monkeyp
     assert result["tokenizer"].encode("hello")
     assert "token counts may be approximate" in caplog.text
     assert "install tokenizers" in caplog.text
+
+
+@pytest.mark.parametrize("python_installed", [False, True])
+def test_runtime_aliases_accept_available_tokenizer_instances(python_installed):
+    from contextlib import nullcontext
+    from unittest.mock import patch
+    from litellm.litellm_core_utils import tokenizer as types
+
+    native = HuggingFaceTokenizer.from_str(TOKENIZER_JSON)
+    python = ReferenceTokenizer.from_str(TOKENIZER_JSON)
+    with nullcontext() if python_installed else patch.dict(sys.modules, {"tokenizers": None}):
+        assert isinstance(native, types.HuggingFace)
+        assert isinstance(native, types.Tokenizer)
+        assert isinstance(tiktoken.get_encoding("cl100k_base"), types.Tokenizer)
+        assert isinstance(OpenAIEncoding.from_tiktoken("cl100k_base"), types.Tokenizer)
+        assert isinstance(python, types.HuggingFace) is python_installed
+        assert isinstance(python, types.Tokenizer) is python_installed
+
+
+def test_runtime_alias_does_not_hide_broken_tokenizer_installation():
+    from unittest.mock import patch
+    from litellm.litellm_core_utils import tokenizer as types
+
+    failure = ModuleNotFoundError("broken installation", name="tokenizer_dependency")
+    with patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ModuleNotFoundError) as error:
+            getattr(types, "Tokenizer")
+    assert error.value is failure
+
+
+def test_unknown_tokenizer_export_raises_attribute_error():
+    from litellm.litellm_core_utils import tokenizer as types
+
+    with pytest.raises(AttributeError, match="unknown_tokenizer"):
+        getattr(types, "unknown_tokenizer")
