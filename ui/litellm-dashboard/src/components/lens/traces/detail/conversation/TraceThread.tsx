@@ -244,6 +244,7 @@ function ReplyMeta({ turn, onOpenStep }: { turn: ThreadTurn; onOpenStep: (id: st
   const tokens = item.span.input_tokens + item.span.output_tokens;
   return (
     <div className="flex items-center gap-3 px-1 text-xs text-muted-foreground tabular-nums">
+      {item.span.actor_unassigned && <span>Unassigned</span>}
       {item.model && <span className="truncate">{item.model}</span>}
       <span>{fmtMs(item.span.duration_ms)}</span>
       {tokens > 0 && <span>{tokens.toLocaleString()} tok</span>}

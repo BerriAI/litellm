@@ -40,6 +40,7 @@ export function ConversationSteps({
 export function ConversationStep({ item, onOpenStep }: { item: ConversationItem; onOpenStep: (id: string) => void }) {
   return (
     <section className="min-w-0 space-y-2" aria-label={`Conversation step ${item.span.name}`}>
+      {item.span.actor_unassigned && <p className="text-xs text-muted-foreground">Unassigned</p>}
       {item.toolResult === undefined && (
         <div className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
           <div className="flex min-w-0 items-center gap-2">
