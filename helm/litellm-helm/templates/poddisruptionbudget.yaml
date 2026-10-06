@@ -22,6 +22,7 @@ spec:
     matchLabels:
       {{- /* Match the Deployment selector to target the same pod set */ -}}
       {{- include "litellm.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: proxy
   {{- if .Values.pdb.minAvailable }}
   minAvailable: {{ .Values.pdb.minAvailable }}
   {{- else if .Values.pdb.maxUnavailable }}

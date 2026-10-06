@@ -34,6 +34,7 @@ spec:
         {{- end }}
       labels:
         {{- include "litellm.labels" . | nindent 8 }}
+        app.kubernetes.io/component: proxy
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

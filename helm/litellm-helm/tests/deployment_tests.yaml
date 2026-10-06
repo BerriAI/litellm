@@ -16,6 +16,9 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].image
           value: ghcr.io/berriai/litellm:test
+      - equal:
+          path: spec.template.metadata.labels['app.kubernetes.io/component']
+          value: proxy
   - it: should work with tolerations
     template: deployment.yaml
     set:

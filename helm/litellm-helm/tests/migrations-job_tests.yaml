@@ -21,6 +21,8 @@ tests:
           content:
             name: ANOTHER_VAR
             value: "another_value"
+      - notExists:
+          path: spec.template.metadata.labels['app.kubernetes.io/component']
 
   - it: should work with extraEnvVars
     template: migrations-job.yaml

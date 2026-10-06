@@ -16,6 +16,7 @@ tests:
           value:
             app.kubernetes.io/name: litellm
             app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: proxy
 
 ---
 suite: "pdb disabled"
