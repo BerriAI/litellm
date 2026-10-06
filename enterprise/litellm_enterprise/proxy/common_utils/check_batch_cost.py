@@ -829,7 +829,7 @@ class CheckBatchCost:
                 team_id=getattr(job, "team_id", None),
             )
             for _file_attr in ["output_file_id", "error_file_id"]:
-                _raw_file_id: Final = cast(str | None, getattr(response, _file_attr, None))
+                _raw_file_id = cast(str | None, getattr(response, _file_attr, None))
                 if _raw_file_id and not _is_base64_encoded_unified_file_id(_raw_file_id):
                     try:
                         _unified_file_id = managed_files_hook.get_unified_output_file_id(

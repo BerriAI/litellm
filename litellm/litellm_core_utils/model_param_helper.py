@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import ClassVar, Final, cast
+from typing import ClassVar, Final
 
 from openai.types.chat.completion_create_params import (
     CompletionCreateParamsNonStreaming,
@@ -23,13 +23,15 @@ from litellm.types.rerank import RerankRequest
 
 
 class _ModelParamHelperMeta(type):
+    relevant_logging_args: frozenset[str]
+
     @property
-    def _relevant_logging_args(cls: type) -> frozenset[str]:
-        return cast(type["ModelParamHelper"], cls).relevant_logging_args
+    def _relevant_logging_args(cls: "_ModelParamHelperMeta") -> frozenset[str]:
+        return cls.relevant_logging_args
 
     @_relevant_logging_args.setter
-    def _relevant_logging_args(cls: type, value: frozenset[str]) -> None:
-        cast(type["ModelParamHelper"], cls).relevant_logging_args = value
+    def _relevant_logging_args(cls: "_ModelParamHelperMeta", value: frozenset[str]) -> None:
+        cls.relevant_logging_args = value
 
 
 class ModelParamHelper(metaclass=_ModelParamHelperMeta):

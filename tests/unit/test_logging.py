@@ -29,7 +29,7 @@ from litellm._logging import (
     LevelRoutingStreamHandler,
     SecretRedactionFilter,
     StdoutLogTruncationFilter,
-    get_uvicorn_json_log_config,
+    _get_uvicorn_json_log_config,
     _initialize_loggers_with_handler,
     _parse_json_logs_env,
     _plain_log_format,
@@ -1615,7 +1615,7 @@ def test_access_redaction_survives_the_uvicorn_json_log_config():
     names = ("uvicorn", "uvicorn.error", "uvicorn.access")
     saved = tuple((logging.getLogger(n), logging.getLogger(n).handlers[:], logging.getLogger(n).level) for n in names)
     try:
-        logging.config.dictConfig(get_uvicorn_json_log_config())
+        logging.config.dictConfig(_get_uvicorn_json_log_config())
         emitted = _emit_access_line(f"/key/info?key={_LEAKED_KEY}")
 
         assert _LEAKED_KEY not in emitted
@@ -1670,7 +1670,7 @@ def test_access_log_path_filter_survives_the_uvicorn_json_log_config(monkeypatch
     names = ("uvicorn", "uvicorn.error", "uvicorn.access")
     saved = tuple((logging.getLogger(n), logging.getLogger(n).handlers[:], logging.getLogger(n).level) for n in names)
     try:
-        logging.config.dictConfig(get_uvicorn_json_log_config())
+        logging.config.dictConfig(_get_uvicorn_json_log_config())
 
         assert _emit_access_line("/health/liveliness?x=1") == ""
         assert '"GET /v1/models HTTP/1.1" 200' in _emit_access_line("/v1/models")

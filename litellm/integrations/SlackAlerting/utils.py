@@ -4,12 +4,13 @@ Utils used for slack alerting
 
 import asyncio
 from collections.abc import Callable, Mapping
-from typing import Final
+from typing import Final, cast
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.secret_managers.main import get_secret
 from litellm.types.integrations.slack_alerting import AlertType
+
 
 def process_slack_alerting_variables(
     alert_to_webhook_url: dict[AlertType, list[str] | str] | None,
@@ -73,10 +74,10 @@ async def add_langfuse_trace_id_to_alert(
         return None
 
     logging_obj: Final = request_data.get("litellm_logging_obj")
-    if not isinstance(logging_obj, Logging):
+    if logging_obj is None:
         return None
 
-    litellm_logging_obj: Final = logging_obj
+    litellm_logging_obj: Final = cast(Logging, logging_obj)
     instance_host: Final = next(
         (callback.langfuse_host for callback in callbacks if isinstance(callback, LangFuseLogger)), None
     )

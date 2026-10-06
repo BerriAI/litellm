@@ -5,6 +5,8 @@ from dataclasses import replace as dataclasses_replace
 from enum import Enum
 from typing import Any, Final, Literal, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
@@ -19,7 +21,6 @@ from litellm.types.llms.openai import Batch
 from litellm.types.utils import ModelInfo, Usage
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
-from pydantic import TypeAdapter
 
 
 @dataclass(frozen=True, slots=True)
@@ -459,7 +460,9 @@ async def _fetch_batch_managed_file_content(
     file_content_kwargs: Final[FileContentRequestKwargs] = {
         "file_id": provider_output_file_id,
         "custom_llm_provider": custom_llm_provider,
-        **cast(FileContentCallOptions, credentials),
+        **cast(  # cast-ok: preserve dynamic provider credentials without validation
+            FileContentCallOptions, credentials
+        ),
     }
 
     _file_content: Final = await afile_content(**file_content_kwargs)

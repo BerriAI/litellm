@@ -271,18 +271,15 @@ def _coerce_redis_kwargs_types(
     return result
 
 
-def redis_kwargs_from_environment() -> dict[str, str]:
+def _redis_kwargs_from_environment():
     mapping: Final = _get_redis_env_kwarg_mapping()
 
-    return_dict: Final[dict[str, str]] = {}
+    return_dict: Final = {}
     for k, v in mapping.items():
         value = get_secret(k, default_value=None)
-        if isinstance(value, str):
+        if value is not None:
             return_dict[v] = value
     return return_dict
-
-
-_redis_kwargs_from_environment = redis_kwargs_from_environment
 
 
 def _coerces_to_true(value: object | None) -> bool:
@@ -522,7 +519,7 @@ def _get_redis_client_logic(**env_overrides):
             value = get_secret(v)
             env_overrides[k] = value
 
-    environment_kwargs: Final = redis_kwargs_from_environment()
+    environment_kwargs: Final = _redis_kwargs_from_environment()
 
     # An explicitly configured connection target outranks REDIS_URL from the
     # environment. Without this, the url branch below strips the caller's

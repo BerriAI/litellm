@@ -1753,7 +1753,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
 
         with patch.object(router, "_update_kwargs_with_deployment") as mock_update_kwargs:
             with patch.object(router, "async_routing_strategy_pre_call_checks") as mock_pre_call_checks:
-                with patch.object(router, "get_client", return_value=None) as mock_get_client:
+                with patch.object(router, "_get_client", return_value=None) as mock_get_client:
                     result = await router._ageneric_api_call_with_fallbacks_helper(
                         model="gpt-3.5-turbo",
                         original_generic_function=mock_generic_function,
@@ -1819,7 +1819,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
         )
 
         with patch.object(router, "_update_kwargs_with_deployment") as mock_update_kwargs:
-            with patch.object(router, "get_client", return_value=mock_semaphore) as mock_get_client:
+            with patch.object(router, "_get_client", return_value=mock_semaphore) as mock_get_client:
                 with patch.object(router, "async_routing_strategy_pre_call_checks") as mock_pre_call_checks:
                     result = await router._ageneric_api_call_with_fallbacks_helper(
                         model="gpt-3.5-turbo",
@@ -1850,7 +1850,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
         }
 
         with patch.object(router, "_update_kwargs_with_deployment") as mock_update_kwargs:
-            with patch.object(router, "get_client", return_value=None) as mock_get_client:
+            with patch.object(router, "_get_client", return_value=None) as mock_get_client:
                 with patch.object(router, "async_routing_strategy_pre_call_checks") as mock_pre_call_checks:
                     with pytest.raises(Exception, match="Mock failure") as exc_info:
                         await router._ageneric_api_call_with_fallbacks_helper(
@@ -1905,7 +1905,7 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
             side_effect=inject_alias_into_kwargs,
         ),
         patch.object(router, "async_routing_strategy_pre_call_checks"),
-        patch.object(router, "get_client", return_value=None),
+        patch.object(router, "_get_client", return_value=None),
     ):
         mock_dep.return_value = {
             "model_name": "not-gemini-2.5-flash",

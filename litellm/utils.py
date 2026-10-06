@@ -2319,7 +2319,7 @@ def _is_async_request(
     """
     Returns True if the call type is an internal async request.
 
-    eg. litellm.acompletion, litellm.aimage_generation, litellm.acreate_batch, litellm.arealtime
+    eg. litellm.acompletion, litellm.aimage_generation, litellm.acreate_batch, litellm._arealtime
 
     Args:
         kwargs (dict): The kwargs passed to the litellm function
@@ -3140,9 +3140,12 @@ def supports_embedding_image_input(model: str, custom_llm_provider: str | None =
 
 ####### HELPER FUNCTIONS ################
 def _string_keyed_object_dict(value: object) -> dict[str, object] | None:
-    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+    if not isinstance(value, dict):
         return None
-    return cast(dict[str, object], value)  # cast-ok: runtime-checked user mapping data
+    dict_value: Final = cast(dict[object, object], value)
+    if not all(isinstance(key, str) for key in dict_value):
+        return None
+    return cast(dict[str, object], dict_value)  # cast-ok: nested model data has string keys
 
 
 def update_dictionary(existing_dict: dict[str, object], new_dict: Mapping[str, object]) -> dict[str, object]:
@@ -8008,9 +8011,7 @@ def get_base_model_from_metadata(model_call_details: Mapping[str, object] | None
         return base_model_from_metadata
 
     litellm_metadata_value: Final = litellm_params_value.get("litellm_metadata")
-    litellm_metadata: Final = (
-        litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else empty_metadata
-    )
+    litellm_metadata: Final = litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else empty_metadata
     litellm_metadata_getter: Final[_BaseModelFromMetadataGetter] = getattr(
         sys.modules[__name__], "get_base_model_from_litellm_call_metadata"
     )

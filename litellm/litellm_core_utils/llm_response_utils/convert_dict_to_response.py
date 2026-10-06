@@ -95,7 +95,8 @@ def safe_convert_created_field(created_value: object) -> int:
             return int(float(created_value))
         except (ValueError, TypeError):
             return int(time.time())
-    return int(time.time())
+    else:
+        return int(time.time())
 
 
 _safe_convert_created_field = safe_convert_created_field

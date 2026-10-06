@@ -8,7 +8,7 @@ surface from silently dropping a field: omitting the auth headers, for instance,
 still executes the tool, just with no credentials.
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from types import MappingProxyType

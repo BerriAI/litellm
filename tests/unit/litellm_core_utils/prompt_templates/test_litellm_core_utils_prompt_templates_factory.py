@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
+    function_call_prompt,
     get_tool_calls_from_response,
     make_valid_bedrock_tool_name,
     ollama_pt,
@@ -29,6 +30,13 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.types.llms.openai import ChatCompletionToolMessage
 from litellm.utils import validate_and_fix_openai_messages
+
+
+def test_function_call_prompt_preserves_append_failure_for_non_string_content() -> None:
+    messages = [{"role": "system", "content": None}]
+
+    with pytest.raises(AttributeError):
+        function_call_prompt(messages, [])
 
 
 def _get_gemini_function_response_inline_data_parts(result):

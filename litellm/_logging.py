@@ -9,7 +9,7 @@ import sys
 from collections.abc import Iterator
 from datetime import datetime
 from logging import Formatter
-from typing import Final, TextIO, cast
+from typing import Final, TextIO
 from urllib.parse import unquote
 
 import litellm
@@ -150,13 +150,15 @@ def _substituted_color_message(record: logging.LogRecord) -> str | None:
 
 
 class _SecretRedactionFilterMeta(type):
+    formatter: logging.Formatter
+
     @property
-    def _formatter(cls: type) -> logging.Formatter:
-        return cast(type["SecretRedactionFilter"], cls).formatter
+    def _formatter(cls: "_SecretRedactionFilterMeta") -> logging.Formatter:
+        return cls.formatter
 
     @_formatter.setter
-    def _formatter(cls: type, value: logging.Formatter) -> None:
-        cast(type["SecretRedactionFilter"], cls).formatter = value
+    def _formatter(cls: "_SecretRedactionFilterMeta", value: logging.Formatter) -> None:
+        cls.formatter = value
 
 
 class SecretRedactionFilter(logging.Filter, metaclass=_SecretRedactionFilterMeta):
@@ -1074,7 +1076,7 @@ def _get_uvicorn_json_log_config():
     return log_config
 
 
-def turn_on_json():
+def turn_on_json() -> None:
     """
     Turn on JSON logging
 
@@ -1091,7 +1093,7 @@ def turn_on_json():
 _turn_on_json = turn_on_json
 
 
-def turn_on_debug():
+def turn_on_debug() -> None:
     verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
     verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
     verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug

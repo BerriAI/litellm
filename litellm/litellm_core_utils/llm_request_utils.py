@@ -118,18 +118,16 @@ def ensure_extra_body_is_safe(extra_body: dict[str, object] | None) -> dict[str,
     if extra_body is None:
         return None
     metadata: Final = extra_body.get("metadata")
-    if isinstance(metadata, dict) and all(isinstance(key, str) for key in metadata):
-        typed_metadata: Final[dict[str, object]] = cast(
-            dict[str, object], metadata
-        )
-        if "prompt" not in typed_metadata:
-            return extra_body
-        _prompt: Final = typed_metadata.get("prompt")
+    if isinstance(metadata, dict):
+        metadata_values: Final = cast(dict[object, object], metadata)
+        if all(isinstance(key, str) for key in metadata_values):
+            typed_metadata: Final = cast(dict[str, object], metadata_values)
+            if "prompt" not in typed_metadata:
+                return extra_body
+            prompt: Final = typed_metadata.get("prompt")
 
-        # users can send Langfuse TextPromptClient objects, so we need to convert them to dicts
-        # Langfuse TextPromptClients have .__dict__ attribute
-        if _prompt is not None and hasattr(_prompt, "__dict__"):
-            typed_metadata["prompt"] = getattr(_prompt, "__dict__")
+            if prompt is not None and hasattr(prompt, "__dict__"):
+                typed_metadata["prompt"] = cast(object, getattr(prompt, "__dict__"))
 
     return extra_body
 

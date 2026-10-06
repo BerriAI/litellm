@@ -1136,9 +1136,7 @@ class LLMCachingHandler:
 
         return
 
-    def should_store_result_in_cache(
-        self, original_function: Callable[..., object], kwargs: dict[str, Any]
-    ) -> bool:
+    def should_store_result_in_cache(self, original_function: Callable[..., object], kwargs: dict[str, Any]) -> bool:
         """
         Helper function to determine if the result should be stored in the cache.
 

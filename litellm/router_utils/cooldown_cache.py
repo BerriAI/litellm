@@ -8,7 +8,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 from opentelemetry.trace import Span
-
 from typing_extensions import TypedDict
 
 from litellm import verbose_logger
@@ -17,6 +16,7 @@ from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
 
 class CooldownCacheValue(TypedDict):
     exception_received: str

@@ -106,7 +106,7 @@ class PROXY_LiteLLMManagedVectorStores(
         self,
         llm_router: Router,
         model: str,
-        request_data: VectorStoreCreateOptionalRequestParams,
+        request_data: dict[str, object] | VectorStoreCreateOptionalRequestParams,
         litellm_parent_otel_span: Span,
     ) -> VectorStoreCreateResponse:
         """

@@ -3,7 +3,7 @@ Helper utilities for tracking the cost of built-in tools.
 """
 
 from collections.abc import Mapping
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -760,7 +760,7 @@ class StandardBuiltInToolCostTracking:
     @staticmethod
     def _get_tools_from_kwargs(kwargs: Mapping[str, object], tool_type: str) -> list[object] | None:
         tools: Final = kwargs.get("tools")
-        return list(tools) if isinstance(tools, list) else None
+        return list(cast(list[object], tools)) if isinstance(tools, list) else None
 
     @staticmethod
     def get_file_search_tool_call(kwargs: Mapping[str, object]) -> FileSearchTool | None:

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 
+
 def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
 
@@ -437,7 +438,7 @@ def get_parent_otel_span_from_kwargs(
                 return cast(Span | None, litellm_metadata_value["litellm_parent_otel_span"])
         return cast(Span | None, kwargs.get("litellm_parent_otel_span"))
     except Exception as e:
-        verbose_logger.exception("Error in get_parent_otel_span_from_kwargs: " + str(e))
+        verbose_logger.exception("Error in _get_parent_otel_span_from_kwargs: " + str(e))
         return None
 
 

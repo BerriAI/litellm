@@ -2041,7 +2041,7 @@ class Router:
         self.acompact_responses = self.factory_function(litellm.acompact_responses, call_type="acompact_responses")
         self.adelete_responses = self.factory_function(litellm.adelete_responses, call_type="adelete_responses")
         self.alist_input_items = self.factory_function(litellm.alist_input_items, call_type="alist_input_items")
-        self._arealtime = self.factory_function(litellm.arealtime, call_type="_arealtime")
+        self._arealtime = self.factory_function(litellm._arealtime, call_type="_arealtime")
         self.acreate_realtime_client_secret = self.factory_function(
             litellm.acreate_realtime_client_secret, call_type="acreate_realtime_client_secret"
         )
@@ -2050,7 +2050,7 @@ class Router:
             litellm.acreate_realtime_transcription_session, call_type="acreate_realtime_transcription_session"
         )
         self._aresponses_websocket = self.factory_function(
-            litellm.aresponses_websocket, call_type="_aresponses_websocket"
+            litellm._aresponses_websocket, call_type="_aresponses_websocket"
         )
         self.acreate_fine_tuning_job = self.factory_function(
             litellm.acreate_fine_tuning_job, call_type="acreate_fine_tuning_job"

@@ -64,7 +64,6 @@ ALIAS_CASES: Final = (
     ("litellm._logging", "", "_turn_on_debug", "turn_on_debug", False),
     ("litellm._logging", "", "_turn_on_json", "turn_on_json", False),
     ("litellm._redis", "", "_generate_gcp_iam_access_token", "generate_gcp_iam_access_token", False),
-    ("litellm._redis", "", "_redis_kwargs_from_environment", "redis_kwargs_from_environment", False),
     (
         "litellm._redis_credential_provider",
         "",

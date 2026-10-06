@@ -4959,7 +4959,7 @@ def _environment_has_redis_connection_target() -> bool:
     know whether the env fallback would apply use this instead of building a
     client.
     """
-    redis_env_kwargs: Final = litellm._redis.redis_kwargs_from_environment()
+    redis_env_kwargs: Final = litellm._redis._redis_kwargs_from_environment()
     return (
         "host" in redis_env_kwargs
         or "url" in redis_env_kwargs
@@ -4981,7 +4981,7 @@ def _build_redis_usage_cache_from_environment() -> RedisCache | None:
     """
     if not _environment_has_redis_connection_target():
         return None
-    return _build_redis_usage_cache(litellm._redis.redis_kwargs_from_environment())
+    return _build_redis_usage_cache(litellm._redis._redis_kwargs_from_environment())
 
 
 def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: bool) -> None:

@@ -39,10 +39,11 @@ async def _get_email_settings(prisma_client) -> Dict[str, bool]:
             and general_settings_entry.param_value is not None
         ):
             # Get general settings value
-            if isinstance(general_settings_entry.param_value, str):
-                general_settings: Final = cast(Dict[str, object], json.loads(general_settings_entry.param_value))
-            else:
-                general_settings: Final = cast(Dict[str, object], general_settings_entry.param_value)
+            general_settings: Final = (
+                cast(Dict[str, object], json.loads(general_settings_entry.param_value))
+                if isinstance(general_settings_entry.param_value, str)
+                else cast(Dict[str, object], general_settings_entry.param_value)
+            )
 
             # Extract email_settings from general settings if it exists
             if general_settings and "email_settings" in general_settings:
@@ -78,16 +79,15 @@ async def _save_email_settings(prisma_client, settings: Dict[str, bool]):
         )
 
         # Initialize general settings dict
-        if (
-            general_settings_entry is not None
-            and general_settings_entry.param_value is not None
-        ):
-            if isinstance(general_settings_entry.param_value, str):
-                general_settings: Final = cast(Dict[str, object], json.loads(general_settings_entry.param_value))
-            else:
-                general_settings: Final = cast(Dict[str, object], dict(general_settings_entry.param_value))
-        else:
-            general_settings: Final = {}
+        general_settings: Final = (
+            (
+                cast(Dict[str, object], json.loads(general_settings_entry.param_value))
+                if isinstance(general_settings_entry.param_value, str)
+                else cast(Dict[str, object], dict(general_settings_entry.param_value))
+            )
+            if general_settings_entry is not None and general_settings_entry.param_value is not None
+            else {}
+        )
 
         # Update email_settings in general_settings
         general_settings["email_settings"] = settings

@@ -1584,7 +1584,7 @@ class TestNativeWebSocketDeploymentDefaults:
         stub.async_responses_websocket = AsyncMock()
         monkeypatch.setattr(responses_main, "base_llm_http_handler", stub)
 
-        await responses_main.aresponses_websocket.__wrapped__(
+        await responses_main._aresponses_websocket.__wrapped__(
             model="openai/gpt-5-pro",
             websocket=MagicMock(),
             api_key="sk-test",
@@ -1611,7 +1611,7 @@ class TestNativeWebSocketDeploymentDefaults:
         stub.async_responses_websocket = AsyncMock()
         monkeypatch.setattr(responses_main, "base_llm_http_handler", stub)
 
-        await responses_main.aresponses_websocket.__wrapped__(
+        await responses_main._aresponses_websocket.__wrapped__(
             model="openai/gpt-5-pro",
             websocket=MagicMock(),
             api_key="sk-test",

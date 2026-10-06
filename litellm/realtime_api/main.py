@@ -587,8 +587,6 @@ async def _arealtime(
         raise ValueError(f"Unsupported model: {model}")
 
 
-
-
 def _is_transcription_only_realtime_model(model: str, custom_llm_provider: str) -> bool:
     try:
         model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)

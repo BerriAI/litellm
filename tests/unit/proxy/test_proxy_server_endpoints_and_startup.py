@@ -13308,7 +13308,7 @@ def _run_init_cache_with_backend(cache_backend, redis_env_kwargs):
     with (
         _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
         patch(
-            "litellm._redis.redis_kwargs_from_environment",
+            "litellm._redis._redis_kwargs_from_environment",
             return_value=redis_env_kwargs,
         ),
         patch("litellm.Cache", return_value=mock_litellm_cache),
@@ -13501,7 +13501,7 @@ async def _run_init_coordination_redis_env_fallback(
             spend_cache=fresh_spend_cache, config_cache=fresh_config_cache, redis_cache_class=redis_cache_class
         ),
         patch(
-            "litellm._redis.redis_kwargs_from_environment",
+            "litellm._redis._redis_kwargs_from_environment",
             return_value=redis_env_kwargs,
         ),
     ):
@@ -13584,7 +13584,7 @@ def test_env_fallback_builds_cluster_client_from_cluster_nodes_env():
     with (
         patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
         patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
-        patch("litellm._redis.redis_kwargs_from_environment", return_value={}),
+        patch("litellm._redis._redis_kwargs_from_environment", return_value={}),
         mock.patch.dict(os.environ, {"REDIS_CLUSTER_NODES": nodes}, clear=False),
     ):
         result = proxy_server_module._build_redis_usage_cache_from_environment()
@@ -13599,7 +13599,7 @@ def test_env_fallback_builds_client_from_sentinel_nodes_env():
     with (
         patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
         patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
-        patch("litellm._redis.redis_kwargs_from_environment", return_value={}),
+        patch("litellm._redis._redis_kwargs_from_environment", return_value={}),
         mock.patch.dict(os.environ, {"REDIS_SENTINEL_NODES": '[["s1", 26379]]'}, clear=False),
     ):
         result = proxy_server_module._build_redis_usage_cache_from_environment()

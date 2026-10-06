@@ -1908,7 +1908,7 @@ async def test_arealtime_marks_litellm_params_async(monkeypatch):
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     with pytest.raises(ValueError, match="Unsupported model"):
-        await litellm.arealtime(model="anthropic/claude-x", websocket=MagicMock())
+        await litellm._arealtime(model="anthropic/claude-x", websocket=MagicMock())
     await asyncio.wait_for(async_logged.wait(), timeout=10)
     logger.log_failure_event.assert_not_called()
     assert captured["litellm_params"].get("_arealtime") is True
@@ -1937,7 +1937,7 @@ async def test_aresponses_websocket_hands_back_the_provider_failure_without_a_su
     with patch.object(  # test-quality-ok: the provider socket is the seam; how the wrapper treats the relay's outcome is under test
         base_llm_http_handler, "async_responses_websocket", AsyncMock(return_value=failure)
     ):
-        outcome = await litellm.aresponses_websocket(model="openai/gpt-4o", websocket=MagicMock(), api_key="sk-test")
+        outcome = await litellm._aresponses_websocket(model="openai/gpt-4o", websocket=MagicMock(), api_key="sk-test")
     await asyncio.sleep(0)
     with contextlib.suppress(asyncio.TimeoutError):
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)

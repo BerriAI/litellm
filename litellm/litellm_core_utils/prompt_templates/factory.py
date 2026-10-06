@@ -1195,7 +1195,9 @@ def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
     # First check tool's provider_specific_fields
     provider_fields: Final = tool.get("provider_specific_fields") or {}
     if isinstance(provider_fields, dict):
-        typed_provider_fields: Final = cast(dict[str, object], provider_fields)
+        typed_provider_fields: Final = cast(  # cast-ok: preserve dynamic provider response fields
+            dict[str, object], provider_fields
+        )
         signature_from_tool_fields: Final = typed_provider_fields.get("thought_signature")
         if signature_from_tool_fields:
             return cast(str, signature_from_tool_fields)  # cast-ok: untyped provider response field
@@ -1204,22 +1206,30 @@ def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
     function: Final = tool.get("function")
     if function:
         if isinstance(function, dict):
-            function_dict: Final = cast(dict[str, object], function)
+            function_dict: Final = cast(  # cast-ok: preserve dynamic provider response fields
+                dict[str, object], function
+            )
             func_provider_fields: Final = function_dict.get("provider_specific_fields") or {}
             if isinstance(func_provider_fields, dict):
-                typed_func_provider_fields: Final = cast(dict[str, object], func_provider_fields)
+                typed_func_provider_fields: Final = cast(  # cast-ok: preserve dynamic provider response fields
+                    dict[str, object], func_provider_fields
+                )
                 signature_from_function_fields: Final = typed_func_provider_fields.get("thought_signature")
                 if signature_from_function_fields:
                     return cast(str, signature_from_function_fields)  # cast-ok: untyped provider response field
         else:
             function_provider_fields: Final = getattr(function, "provider_specific_fields", None)
             if function_provider_fields and isinstance(function_provider_fields, dict):
-                typed_function_provider_fields: Final = cast(dict[str, object], function_provider_fields)
+                typed_function_provider_fields: Final = cast(  # cast-ok: provider fields are dynamic
+                    dict[str, object], function_provider_fields
+                )
                 signature_from_model_fields: Final = typed_function_provider_fields.get("thought_signature")
                 if signature_from_model_fields:
                     return cast(str, signature_from_model_fields)  # cast-ok: untyped provider response field
     # Check if thought signature is embedded in tool call ID
-    tool_call_id: Final = cast(str, tool.get("id"))  # cast-ok: tool IDs come from untyped model responses
+    tool_call_id: Final = cast(  # cast-ok: tool IDs come from model responses
+        str, tool.get("id")
+    )
     if tool_call_id and THOUGHT_SIGNATURE_SEPARATOR in tool_call_id:
         parts: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
         if len(parts) == 2:
@@ -4986,7 +4996,6 @@ def _bedrock_converse_messages_pt(
     return _ensure_document_messages_have_text(_rename_duplicate_bedrock_document_names(contents))
 
 
-
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     """Normalize tool names to Bedrock pattern [a-zA-Z][a-zA-Z0-9_-]*."""
 
@@ -5184,7 +5193,6 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
     return tool_block_list
 
 
-
 # Function call template
 def function_call_prompt(
     messages: list[dict[str, object]],
@@ -5194,18 +5202,26 @@ def function_call_prompt(
     for function in functions:
         function_prompt += f"""\n{function}\n"""
 
-    function_added_to_prompt = False
-    for message in messages:
-        role: Final = cast(Container[object], message["role"])
+    def _append_function_prompt(message: dict[str, object]) -> bool:
+        role: Final = cast(  # cast-ok: preserve dynamic role membership behavior
+            Container[object], message["role"]
+        )
         if "system" not in role:
-            continue
+            return False
 
         content: Final = message["content"]
         if isinstance(content, str):
             message["content"] = f"{content} {function_prompt}"
         else:
-            cast(list[object], content).append({"type": "text", "text": f""" {function_prompt}"""})
-        function_added_to_prompt = True
+            cast(  # cast-ok: preserve dynamic content append behavior
+                list[object], content
+            ).append({"type": "text", "text": f""" {function_prompt}"""})
+        return True
+
+    function_added_to_prompt = False
+    for message in messages:
+        if _append_function_prompt(message):
+            function_added_to_prompt = True
 
     if function_added_to_prompt is False:
         messages.append({"role": "system", "content": f"""{function_prompt}"""})

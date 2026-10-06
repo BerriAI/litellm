@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Se
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
 from httpx import Response
 from pydantic import BaseModel, JsonValue
@@ -4412,11 +4412,16 @@ def get_masked_values(
     )
 
     def _mask_value(v: object) -> object:
-        if isinstance(v, dict) and all(isinstance(key, str) for key in v):
+        if isinstance(v, dict):
+            typed_value: Final = cast(  # cast-ok: request values can contain arbitrary header keys
+                dict[object, object], v
+            )
+            if not all(isinstance(key, str) for key in typed_value):
+                return v
             if _depth >= _max_depth:
                 return v
             return get_masked_values(
-                {key: value for key, value in v.items() if isinstance(key, str)},
+                {key: value for key, value in typed_value.items() if isinstance(key, str)},
                 ignore_sensitive_values=ignore_sensitive_values,
                 mask_all_values=mask_all_values,
                 unmasked_length=unmasked_length,
@@ -4656,7 +4661,7 @@ def _init_custom_logger_compatible_class(
                 )
 
                 return DataDogHandler.get_datadog_logger_for_request(
-                    standard_callback_dynamic_params=cast(
+                    standard_callback_dynamic_params=cast(  # cast-ok: callback options come from dynamic config
                         StandardCallbackDynamicParams, custom_logger_init_args_value
                     ),
                     in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
@@ -5219,7 +5224,7 @@ def _init_custom_logger_compatible_class(
                 )
 
                 return NewRelicHandler.get_newrelic_logger_for_request(
-                    standard_callback_dynamic_params=cast(
+                    standard_callback_dynamic_params=cast(  # cast-ok: callback options come from dynamic config
                         StandardCallbackDynamicParams, custom_logger_init_args_value
                     ),
                     in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
@@ -6396,9 +6401,12 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_request_tags(litellm_params: dict[str, object], proxy_server_request: dict[str, object]) -> list[str]:
         def _string_tags(value: object) -> list[str]:
-            return [tag for tag in value if isinstance(tag, str)] if isinstance(value, list) else []
+            if not isinstance(value, list):
+                return []
+            typed_values: Final = cast(list[object], value)
+            return [tag for tag in typed_values if isinstance(tag, str)]
 
-        empty_metadata: Final[dict[str, object]] = {}
+        empty_metadata: Final = MappingProxyType({})
         metadata_value: Final = litellm_params.get("metadata")
         metadata: Final = metadata_value if isinstance(metadata_value, Mapping) else empty_metadata
         metadata_tags: Final = _string_tags(metadata.get("tags"))
@@ -6957,7 +6965,7 @@ def _get_traceback_str_for_error(error_str: str) -> str:
 from decimal import Decimal
 
 # used for unit testing
-from typing import Any, Union
+from typing import Any
 
 
 def create_dummy_standard_logging_payload() -> StandardLoggingPayload:

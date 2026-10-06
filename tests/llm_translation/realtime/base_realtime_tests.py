@@ -192,7 +192,7 @@ class BaseRealtimeTest(ABC):
         print(f"{'='*80}\n")
 
         try:
-            await litellm.arealtime(
+            await litellm._arealtime(
                 model=self.get_model(),
                 websocket=websocket_client,
                 api_key=os.environ.get(self.get_api_key_env_var()),
@@ -258,7 +258,7 @@ class BaseRealtimeTest(ABC):
         query_params: RealtimeQueryParams = {"model": model_name}
 
         try:
-            await litellm.arealtime(
+            await litellm._arealtime(
                 model=self.get_model(),
                 websocket=websocket_client,
                 api_key=os.environ.get(self.get_api_key_env_var()),
@@ -403,7 +403,7 @@ class BaseRealtimeTest(ABC):
         print(f"{'='*80}\n")
 
         try:
-            await litellm.arealtime(
+            await litellm._arealtime(
                 model=self.get_model(),
                 websocket=websocket_client,
                 api_key=os.environ.get(self.get_api_key_env_var()),
