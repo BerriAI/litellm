@@ -78,7 +78,13 @@ where
         };
         partial_hits(requests.len(), readable, entries, now)
     }
+}
 
+impl<B> ResponseCache<B>
+where
+    B: BaseCache<Value = CacheEntry>,
+    B::Context: Default + PartialEq,
+{
     pub async fn async_store_batch(
         &self,
         entries: Vec<(ResponseCacheRequest<B::Context>, Value)>,
