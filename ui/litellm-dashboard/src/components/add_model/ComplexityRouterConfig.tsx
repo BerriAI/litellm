@@ -1,3 +1,6 @@
+import type { JevClassifierConfig } from "./jev_classifier_config";
+import { type ClassifierType, usesLlmClassifier } from "./classifier_types";
+export { type ClassifierType, usesLlmClassifier, usesClassifierContext } from "./classifier_types";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
@@ -56,6 +59,7 @@ export const DEFAULT_SESSION_AFFINITY = false;
 export const DEFAULT_DEPLOYMENT_AFFINITY = true;
 
 export type ComplexityTiers = {
+  NON_REASONING?: string[];
   SIMPLE: string[];
   MEDIUM: string[];
   COMPLEX: string[];
@@ -110,19 +114,11 @@ export const CLASSIFICATION_RUBRIC_KEYS = Object.keys(CLASSIFICATION_RUBRIC_DESC
 export interface ClassifierLLMConfig {
   model: string;
   timeout_ms: number;
+  circuit_breaker_enabled?: boolean;
+  circuit_breaker_cooldown_seconds?: number;
   classification_rubric?: ClassificationRubric;
   system_prompt?: string;
 }
-
-export type ClassifierType = "heuristic" | "llm" | "heuristic_first";
-
-/**
- * Whether this router can call classifier_llm_config.model. Mirrors the backend's
- * ComplexityRouterConfig.uses_llm_classifier, and is the single gate for every classifier-only
- * control and payload key, so a new chaining type cannot strip knobs the operator set.
- */
-export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
-  classifierType === "llm" || classifierType === "heuristic_first";
 
 export type ClassifierFallback = "heuristic" | "default_model";
 
@@ -157,7 +153,7 @@ export const heuristicScoringRole = (value: ComplexityRouterConfigValue): Heuris
 // Derived, never written into the value, so undoing a tier edit reverts the form with nothing left behind.
 export const effectiveClassifierType = (
   value: Pick<ComplexityRouterConfigValue, "custom_tier_set" | "classifier_type">,
-): ClassifierType => (value.custom_tier_set ? "llm" : value.classifier_type);
+): ClassifierType => (value.custom_tier_set && value.classifier_type !== "jev" ? "llm" : value.classifier_type);
 
 const rowOrigin = (row: TierRow, editing: boolean): string => {
   if (!editing) return row.id;
@@ -374,6 +370,7 @@ export interface ComplexityRouterConfigValue {
   default_model?: string;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: JevClassifierConfig;
   classifier_context_window_size?: number;
   classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
@@ -381,8 +378,12 @@ export interface ComplexityRouterConfigValue {
   classifier_fallback?: ClassifierFallback;
   /** Opening instructions only; the router appends the tier bullets and the injection guard after them. */
   classification_prompt?: string;
+  classification_examples?: string;
   /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
   heuristic_first_max_tier?: string;
+  hybrid_boundary_margin?: number;
+  /** Opt into the NON_REASONING tier below SIMPLE; off keeps the four-tier ladder. */
+  enable_non_reasoning_tier?: boolean;
   session_affinity?: boolean;
   deployment_affinity?: boolean;
   /** Plan-mode floor as a tier ROW ID, unset meaning off. The wire carries the row's name. */
@@ -442,6 +443,11 @@ export const TIER_DESCRIPTIONS: Record<
   keyof ComplexityTiers,
   { label: string; description: string; examples: string }
 > = {
+  NON_REASONING: {
+    label: "Non-reasoning",
+    description: "Operational relay work: passing information along with no judgment about it",
+    examples: '"Reformat this tool output", "Acknowledge the write succeeded"',
+  },
   SIMPLE: {
     label: "Simple",
     description: "Basic questions, greetings, simple factual queries",
@@ -470,6 +476,8 @@ export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: Comp
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
 
 export const DEFAULT_HEURISTIC_FIRST_MAX_TIER = "SIMPLE";
+
+export const DEFAULT_HYBRID_BOUNDARY_MARGIN = 0.03;
 
 /**
  * Tiers the heuristic_first threshold may name. The top tier is excluded because it would short

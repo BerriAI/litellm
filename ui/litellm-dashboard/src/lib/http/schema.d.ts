@@ -1390,8 +1390,8 @@ export interface paths {
          *
          *     Runs the same check every write path runs (the router's own pydantic model), so a form can
          *     show the backend's exact verdict while the operator is still editing rather than after a
-         *     rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
-         *     naming their own team. Nothing is created, routed, or billed.
+         *     rejected save. Uses the same team opt-in and model-access checks as configuration
+         *     writes for members. Nothing is created, routed, or billed.
          */
         post: operations["validate_complexity_router_config_auto_router_validate_complexity_router_config_post"];
         delete?: never;
@@ -10094,6 +10094,27 @@ export interface paths {
         patch: operations["openai_proxy_route_openai_passthrough__endpoint__patch"];
         trace?: never;
     };
+    "/openrouter/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Openrouter Proxy Route */
+        get: operations["openrouter_proxy_route_openrouter__endpoint__get"];
+        /** Openrouter Proxy Route */
+        put: operations["openrouter_proxy_route_openrouter__endpoint__put"];
+        /** Openrouter Proxy Route */
+        post: operations["openrouter_proxy_route_openrouter__endpoint__post"];
+        /** Openrouter Proxy Route */
+        delete: operations["openrouter_proxy_route_openrouter__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /** Openrouter Proxy Route */
+        patch: operations["openrouter_proxy_route_openrouter__endpoint__patch"];
+        trace?: never;
+    };
     "/organization/daily/activity": {
         parameters: {
             query?: never;
@@ -15911,16 +15932,28 @@ export interface paths {
          * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
          */
         get: operations["typesafe_proxy_route_typesafe__endpoint__get"];
-        put?: never;
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        put: operations["typesafe_proxy_route_typesafe__endpoint__put"];
         /**
          * Typesafe Proxy Route
          * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
          */
         post: operations["typesafe_proxy_route_typesafe__endpoint__post"];
-        delete?: never;
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        delete: operations["typesafe_proxy_route_typesafe__endpoint__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        patch: operations["typesafe_proxy_route_typesafe__endpoint__patch"];
         trace?: never;
     };
     "/update/default_team_settings": {
@@ -23193,6 +23226,11 @@ export interface components {
              */
             router_name: string;
             /**
+             * Saved Model Id
+             * @description Test this saved deployment's server-side configuration instead of the supplied config and default model
+             */
+            saved_model_id?: string | null;
+            /**
              * System
              * @description The top-level system prompt an Anthropic /v1/messages body carries beside its messages
              */
@@ -23451,7 +23489,7 @@ export interface components {
             timeout?: number | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
+             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
              * @default fail_closed
              * @enum {string}
              */
@@ -24902,6 +24940,18 @@ export interface components {
          * @description Configuration for the LLM-based complexity classifier.
          */
         ClassifierLLMConfig: {
+            /**
+             * Circuit Breaker Cooldown Seconds
+             * @description How long to skip this router's LLM classifier after a classification call times out. Requests use classifier_fallback during the cooldown. When it expires, one request probes the classifier while concurrent requests keep using the fallback; a successful probe closes the circuit and a failed probe restarts the cooldown.
+             * @default 30
+             */
+            circuit_breaker_cooldown_seconds: number;
+            /**
+             * Circuit Breaker Enabled
+             * @description Whether one classifier timeout temporarily sends requests through classifier_fallback. Enabled by default so an unhealthy classifier cannot repeat its timeout across sessions.
+             * @default true
+             */
+            circuit_breaker_enabled: boolean;
             /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. 'business' carries business/sales anchors and business-flavored tier criteria that keep routine drafting and summarizing off the expensive tiers and reserve the top tier for committing to decisions under tradeoffs; it suits sales, support, and go-to-market traffic. Every preset keeps the same four tiers, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
             classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
@@ -27601,6 +27651,44 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        /** JevClassifierConfig */
+        JevClassifierConfig: {
+            /**
+             * Api Base
+             * @description TypeSafe API base, falling back to TYPESAFE_API_BASE and then https://api.typesafe.ai
+             */
+            api_base?: string | null;
+            /**
+             * Api Key
+             * @description TypeSafe API key, falling back to TYPESAFE_API_KEY
+             */
+            api_key?: string | null;
+            /**
+             * Circuit Breaker Cooldown Seconds
+             * @default 30
+             */
+            circuit_breaker_cooldown_seconds: number;
+            /**
+             * Circuit Breaker Enabled
+             * @default true
+             */
+            circuit_breaker_enabled: boolean;
+            /**
+             * Instructions
+             * @description Replaces the built-in Jev question instructions
+             */
+            instructions?: string | null;
+            /**
+             * Model
+             * @default jev-latest
+             */
+            model: string;
+            /**
+             * Timeout Ms
+             * @default 3000
+             */
+            timeout_ms: number;
+        };
         /** KeyHealthResponse */
         KeyHealthResponse: {
             /**
@@ -27626,7 +27714,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -34243,11 +34331,11 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, an LLM call, a custom classifier plugin, or 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier
+             * @description Classification strategy: local regex/keyword scoring, an LLM call, a custom classifier plugin, or 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'jev', a TypeSafe AI Jev structured choice call
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "llm" | "custom" | "heuristic_first";
+            classifier_type: "heuristic" | "llm" | "custom" | "heuristic_first" | "jev";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -34301,6 +34389,7 @@ export interface components {
              * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
              */
             housekeeping_patterns?: string[] | null;
+            jev_classifier_config?: components["schemas"]["JevClassifierConfig"] | null;
             /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
@@ -34391,7 +34480,7 @@ export interface components {
             };
             /**
              * Tier Definitions
-             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
+             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm', 'jev' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
              */
             tier_definitions?: components["schemas"]["TierDefinition"][] | null;
             /**
@@ -35465,11 +35554,17 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "jev_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            /** Classifier Confidence */
+            classifier_confidence?: number;
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
             classifier_model?: string;
+            /** Classifier Probabilities */
+            classifier_probabilities?: {
+                [key: string]: number;
+            };
             /** Conversation Continuing */
             conversation_continuing?: boolean;
             /** Escalated */
@@ -51950,6 +52045,161 @@ export interface operations {
             };
         };
     };
+    openrouter_proxy_route_openrouter__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    openrouter_proxy_route_openrouter__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    openrouter_proxy_route_openrouter__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    openrouter_proxy_route_openrouter__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    openrouter_proxy_route_openrouter__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_organization_daily_activity_organization_daily_activity_get: {
         parameters: {
             query?: {
@@ -58312,7 +58562,100 @@ export interface operations {
             };
         };
     };
+    typesafe_proxy_route_typesafe__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     typesafe_proxy_route_typesafe__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__patch: {
         parameters: {
             query?: never;
             header?: never;

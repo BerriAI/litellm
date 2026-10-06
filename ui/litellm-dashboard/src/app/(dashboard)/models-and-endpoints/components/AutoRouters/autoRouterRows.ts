@@ -57,6 +57,7 @@ const dedupe = (models: string[]): string[] => Array.from(new Set(models));
 
 const COMPLEXITY_TYPE_LABELS: Record<string, string> = {
   llm: "LLM Classifier",
+  jev: "JEV Classifier",
   heuristic_first: "Heuristic first",
   custom: "Custom classifier",
 };

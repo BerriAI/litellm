@@ -2813,6 +2813,7 @@ RoutingDecisionCause = Literal[
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
+    "jev_classifier",
     # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
     # or below heuristic_first_max_tier, so it decided the tier and the LLM classifier was never
     # called. Distinct from "heuristic_scorer", which is a router whose only classifier IS the
@@ -2881,6 +2882,8 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalation_keyword: str
     classifier_model: str
     classifier_cost: float
+    classifier_probabilities: ReadOnly[Mapping[str, float]]
+    classifier_confidence: ReadOnly[float]
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
     reasoning_override_min_score: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
@@ -2907,6 +2910,8 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "score",
         "classifier_model",
         "classifier_cost",
+        "classifier_probabilities",
+        "classifier_confidence",
         "escalated",
         "tier_boundaries",
         "reasoning_override_min_score",

@@ -55036,6 +55036,16 @@
         "mode": "embedding",
         "source": "https://docs.fireworks.ai/serverless/pricing"
     },
+    "openrouter/typesafe/jev-1.13": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 32000,
+        "max_output_tokens": 28800,
+        "max_tokens": 28800,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/typesafe/jev-1.13"
+    },
     "typesafe/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
