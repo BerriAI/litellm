@@ -66,13 +66,9 @@ from .workload_identity import resolve_openai_workload_identity_config
 openaiOSeriesConfig: Final = OpenAIOSeriesConfig()
 openAIGPT5Config: Final = OpenAIGPT5Config()
 
-_RUN_CREATE_PARAMS_ADAPTER: Final = TypeAdapter(RunCreateParamsBase)
-
 
 def _present(**values: object) -> RunCreateParamsBase:
-    return _RUN_CREATE_PARAMS_ADAPTER.validate_python(
-        {name: value for name, value in values.items() if value is not None}
-    )
+    return cast(RunCreateParamsBase, {name: value for name, value in values.items() if value is not None})
 
 
 def _serialize_thread_tool_resources(tool_resources: BaseModel | None) -> object | None:
