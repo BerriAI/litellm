@@ -124,6 +124,9 @@ export function RunHeader({
             <TabsTrigger value="steps" className="px-2.5 text-xs">
               Steps
             </TabsTrigger>
+            <TabsTrigger value="thread" className="px-2.5 text-xs">
+              Thread
+            </TabsTrigger>
             <TabsTrigger value="conversation" className="px-2.5 text-xs">
               Conversation
             </TabsTrigger>
