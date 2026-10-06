@@ -4003,45 +4003,30 @@ dependencies = [
 name = "litellm-inference"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
  "bytes",
  "futures-util",
  "litellm-auth",
- "litellm-auth-aws",
- "litellm-auth-gcp",
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
  "litellm-framer",
  "litellm-host",
- "litellm-host-native",
  "litellm-http",
  "litellm-inference",
  "litellm-llms",
- "litellm-llms-types",
  "litellm-secrets",
  "litellm-tracing",
- "mime_guess",
- "moka",
- "rand 0.8.7",
  "reqwest 0.12.28",
  "rstest",
- "rstest_reuse",
  "serde",
  "serde_json",
- "sha2 0.10.9",
- "strum",
- "subtle",
  "thiserror 2.0.19",
  "time",
  "tokio",
- "tokio-tungstenite",
  "tokio-util",
  "tracing",
  "url",
- "veil",
- "wiremock",
 ]
 
 [[package]]
@@ -6184,17 +6169,6 @@ dependencies = [
  "rustc_version",
  "syn 2.0.119",
  "unicode-ident",
-]
-
-[[package]]
-name = "rstest_reuse"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3a8fb4672e840a587a66fc577a5491375df51ddb88f2a2c2a792598c326fe14"
-dependencies = [
- "quote",
- "rand 0.8.7",
- "syn 2.0.119",
 ]
 
 [[package]]

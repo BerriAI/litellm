@@ -23,14 +23,10 @@ tokio-tungstenite.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-futures-util.workspace = true
 litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
-litellm-cache-response.workspace = true
 litellm-host-native.workspace = true
-litellm-http.workspace = true
 litellm-inference = { workspace = true, features = ["test-support"] }
 litellm-tracing.workspace = true
 rstest.workspace = true
-tokio.workspace = true
 wiremock.workspace = true
