@@ -608,9 +608,8 @@ def test_a2a_card_routes_front_the_agent_with_the_proxy_url_and_sdk_clients_call
         ], stream_events
         posts: Final = tuple(item for item in wire.drain() if item.method == "POST")
         assert len(posts) == 2, posts
-        sdk_transport_headers: Final = _TRANSPORT_HEADERS | frozenset({"a2a-version"})
         forwarded_headers: Final = tuple(
-            {name: value for name, value in post.headers.items() if name not in sdk_transport_headers} for post in posts
+            {name: value for name, value in post.headers.items() if name not in _TRANSPORT_HEADERS} for post in posts
         )
         assert all(_is_uuid(headers.get("x-litellm-trace-id", "")) for headers in forwarded_headers), forwarded_headers
         assert forwarded_headers == tuple(
@@ -619,6 +618,7 @@ def test_a2a_card_routes_front_the_agent_with_the_proxy_url_and_sdk_clients_call
                 "x-litellm-user-id": user,
                 "x-litellm-agent-id": identity,
                 "x-litellm-trace-id": headers.get("x-litellm-trace-id", ""),
+                "a2a-version": version,
             }
             for headers in forwarded_headers
         ), [post.headers for post in posts]
