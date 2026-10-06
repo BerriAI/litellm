@@ -36,6 +36,11 @@ def _graft_default_vertex_path(api_base: str, default_url: str) -> str:
     return parsed_api_base._replace(path=grafted_path).geturl()
 
 
+def _collection_url_under(api_base: str, endpoint: str) -> str:
+    resource_parent: Final = api_base.partition("/publishers/")[0]
+    return f"{resource_parent.rstrip('/')}/{endpoint}"
+
+
 GOOGLE_IMPORT_ERROR_MESSAGE: Final = (
     "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' or pip install google-cloud-aiplatform"
 )
@@ -632,15 +637,18 @@ class VertexBase:
         vertex_location: str | None = None,
         vertex_api_version: Literal["v1", "v1beta1"] | None = None,
         use_psc_endpoint_format: bool = False,
+        collection_endpoint: bool = False,
     ) -> tuple[str | None, str]:
         """
         for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
 
         Handles custom api_base for:
-        1. Gemini (Google AI Studio) - constructs /models/{model}:{endpoint}
+        1. Gemini (Google AI Studio) - constructs /models/{model}:{endpoint}, or {api_base}/{endpoint}
+           for a collection endpoint
         2. Vertex AI with standard proxies - grafts the default vertex URL path onto the
            api_base when its path is empty or only an API version (/v1, /v1beta1);
-           otherwise constructs {api_base}:{endpoint}
+           otherwise constructs {api_base}:{endpoint}, or, for a collection endpoint,
+           {api_base}/{endpoint} with a model resource path cut back to its location parent
         3. Vertex AI with PSC endpoints - constructs full path structure
            {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
            (only when use_psc_endpoint_format=True)
@@ -648,22 +656,26 @@ class VertexBase:
         Args:
             use_psc_endpoint_format: If True, constructs PSC endpoint URL format.
                                      If False (default), uses api_base as-is and appends :{endpoint}
+            collection_endpoint: True when `endpoint` names a collection resource such as
+                                 cachedContents rather than a model action such as generateContent
 
         ## Returns
         - (auth_header, url) - Tuple[Optional[str], str]
         """
         if api_base:
             if custom_llm_provider == "gemini":
-                # For Gemini (Google AI Studio), construct the full path like other providers
-                if model is None:
+                if model is None and not collection_endpoint:
                     raise ValueError("Model parameter is required for Gemini custom API base URLs")
-                url = f"{api_base}/models/{model}:{endpoint}"
+                url = (
+                    _collection_url_under(api_base, endpoint)
+                    if collection_endpoint
+                    else f"{api_base}/models/{model}:{endpoint}"
+                )
                 if gemini_api_key is None:
                     raise ValueError(
                         "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
                     )
-                if gemini_api_key is not None:
-                    auth_header = {"x-goog-api-key": gemini_api_key}
+                auth_header = {"x-goog-api-key": gemini_api_key}
             else:
                 # For Vertex AI
                 if use_psc_endpoint_format:
@@ -690,7 +702,7 @@ class VertexBase:
                 elif urlparse(api_base).path.rstrip("/") in ("/v1", "/v1beta1") and "/projects/" in urlparse(url).path:
                     url = _graft_default_vertex_path(api_base=api_base, default_url=url)
                 else:
-                    url = f"{api_base}:{endpoint}"
+                    url = _collection_url_under(api_base, endpoint) if collection_endpoint else f"{api_base}:{endpoint}"
             if stream is True:
                 parsed_stream_url: Final = urlparse(url)
                 stream_query: Final = f"{parsed_stream_url.query}&alt=sse" if parsed_stream_url.query else "alt=sse"

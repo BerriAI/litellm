@@ -2217,6 +2217,46 @@ class TestVertexAIGlobalLocation:
         assert auth_header == {"x-goog-api-key": "test-key"}
         assert url == "https://my-proxy.example.com/cachedContents"
 
+    @pytest.mark.parametrize(
+        ("api_base", "expected_url"),
+        [
+            (
+                "https://gateway.example.com",
+                "https://gateway.example.com/v1/projects/my-project/locations/us-central1/cachedContents",
+            ),
+            (
+                "https://gateway.example.com/v1",
+                "https://gateway.example.com/v1/projects/my-project/locations/us-central1/cachedContents",
+            ),
+            (
+                "https://gateway.example.com/v1/projects/my-project/locations/us-central1"
+                "/publishers/google/models/gemini-2.5-pro",
+                "https://gateway.example.com/v1/projects/my-project/locations/us-central1/cachedContents",
+            ),
+            (
+                "https://gateway.example.com/vertex-proxy",
+                "https://gateway.example.com/vertex-proxy/cachedContents",
+            ),
+        ],
+    )
+    def test_vertex_context_caching_with_custom_api_base_uses_collection_endpoint(
+        self, api_base: str, expected_url: str
+    ):
+        caching = ContextCachingEndpoints()
+
+        auth_header, url = caching._get_token_and_url_context_caching(
+            gemini_api_key=None,
+            custom_llm_provider="vertex_ai",
+            api_base=api_base,
+            vertex_project="my-project",
+            vertex_location="us-central1",
+            vertex_auth_header="vertex-token",
+            model="gemini-2.5-pro",
+        )
+
+        assert auth_header == "vertex-token"
+        assert url == expected_url
+
     def test_gemini_context_caching_without_api_base_ignores_model(self):
         """Without custom api_base, model param is not needed (default URL is used)."""
         caching = ContextCachingEndpoints()
