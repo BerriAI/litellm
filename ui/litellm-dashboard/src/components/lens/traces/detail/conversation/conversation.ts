@@ -164,7 +164,7 @@ function toolItem(
     detail.attributes["lens.content.input_status"] === "conflicting"
       ? "Conflicting tool arguments were recorded. Inspect the capture source spans."
       : undefined;
-  const toolAttempt =
+  const toolAttempt: ConversationItem["toolAttempt"] =
     detail.attributes["lens.content.execution_status"] === "not_recorded"
       ? {
           isError: detail.attributes["lens.content.tool_result_is_error"] === "1",
