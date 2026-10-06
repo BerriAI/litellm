@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
-LOCAL_TESTING_DIR = Path(__file__).parent
+LOCAL_TESTING_DIR = Path(__file__).parents[1] / "local_testing"
 
 
 def _top_level_test_invocations(tree):
