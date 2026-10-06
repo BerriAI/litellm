@@ -19,11 +19,13 @@ from .models import (
     Evidence,
     Execution,
     ExecutionContent,
+    Extraction,
     FindingDraft,
     InFlight,
     ModelMessage,
     ModelRequest,
     ModelResult,
+    Observation,
     Record,
     Result,
     Review,
@@ -35,20 +37,8 @@ from .models import (
     TracePart,
 )
 from .prompts import PROMPTS
+from .reviews import map_review
 from .trace_store import TraceStore, overview_content, trace_store
-
-
-class Observation(Record):
-    check_id: str
-    kind: Literal["issue", "pattern"] = "issue"
-    summary: str
-    evidence: tuple[Evidence, ...] = Field(default=())
-
-
-class Extraction(Record):
-    observations: tuple[Observation, ...] = ()
-    cannot_assess: bool = False
-    reasoning: str = Field(default="", max_length=800)
 
 
 class SpanRead(Record):
@@ -98,6 +88,9 @@ class Examined(Record):
     reasoning: str = ""
     shown: tuple[TracePart, ...] = ()
     tool_calls: tuple[ToolCount, ...] = ()
+    content_version: str = ""
+    reused: bool = False
+    consolidated: bool = False
 
 
 class Investigation(Record):
@@ -144,6 +137,10 @@ def validation_details(error: ValidationError) -> str:
 
 
 class AnalysisResponseError(ValueError):
+    pass
+
+
+class AnalysisStopped(ValueError):
     pass
 
 
@@ -270,11 +267,11 @@ async def concurrent_results(
         while pending:
             done, waiting = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
             pending = frozenset((*waiting, *done))
-            for task in done:
+            for task in sorted(done, key=lambda task: task.cancelled() or task.exception() is not None):
                 yield await task
                 pending = pending - frozenset((task,))
-                for _, item in islice(remaining, 1):
-                    pending = pending | frozenset((asyncio.create_task(operate(item)),))
+            for _, item in islice(remaining, len(done)):
+                pending = pending | frozenset((asyncio.create_task(operate(item)),))
     finally:
         for task in pending:
             task.cancel()
@@ -503,6 +500,17 @@ def review_of(examined: Examined, model: str, duration_ms: int, at: datetime) ->
         duration_ms=max(duration_ms, 0),
         at=at,
         tool_calls=examined.tool_calls,
+        extraction=Extraction(
+            observations=examined.observations,
+            reasoning=examined.reasoning[:800],
+            cannot_assess=examined.cannot_assess,
+        )
+        if examined.content_version and not examined.error
+        else None,
+        content_version=examined.content_version,
+        reused=examined.reused,
+        consolidated=examined.consolidated,
+        partial=examined.partial,
     )
 
 
@@ -743,6 +751,7 @@ async def analyze_with(
     analyze: AnalyzeSample,
 ) -> Result:
     originals: Final = MappingProxyType({f"r{index}": e for index, e in enumerate(sample.executions)})
+    aliases: Final = MappingProxyType({execution.id: alias for alias, execution in originals.items()})
     executions: Final = tuple(e.model_copy(update=MappingProxyType({"id": alias})) for alias, e in originals.items())
 
     async def read_alias(identity: str, cursor: str, offset: int) -> ExecutionContent:
@@ -773,7 +782,7 @@ async def analyze_with(
         await progress(
             stage,
             coverage,
-            review and review.model_copy(update=MappingProxyType({"execution_id": original(review.execution_id)})),
+            map_review(review, original) if review else None,
             None
             if reading is None
             else tuple(
@@ -789,7 +798,15 @@ async def analyze_with(
         )
 
     result: Final = await analyze(
-        claim,
+        claim.model_copy(
+            update=MappingProxyType(
+                {
+                    "reviews": tuple(map_review(review, lambda identity: aliases[identity]) for review in claim.reviews)
+                    if claim.reviews is not None
+                    else None
+                }
+            )
+        ),
         sample.model_copy(update=MappingProxyType({"executions": executions})),
         read_alias,
         model,
@@ -801,6 +818,10 @@ async def analyze_with(
                 "assessments": tuple(
                     a.model_copy(update=MappingProxyType({"execution_id": originals[a.execution_id].id}))
                     for a in result.assessments
+                ),
+                "review_versions": tuple(
+                    version.model_copy(update=MappingProxyType({"execution_id": original(version.execution_id)}))
+                    for version in result.review_versions
                 ),
                 "findings": tuple(
                     f.model_copy(
@@ -1026,16 +1047,20 @@ async def examine_executions(
     progress: ReportProgress,
     *,
     extractor: ExtractExecution = extract,
-) -> AsyncIterator[Examined]:
+) -> AsyncGenerator[Examined, None]:
     reading: tuple[InFlight, ...] = ()  # rebind-ok: the in-flight set changes as each read starts and finishes
     screened = 0  # rebind-ok: counts finished reads for progress
+    reused = 0  # rebind-ok: counts reported reused reviews independently of the reuse plan
     reporting: Final = asyncio.Lock()
 
     async def report(change: Callable[[tuple[InFlight, ...]], tuple[InFlight, ...]], review: Review | None) -> None:
-        nonlocal reading
+        nonlocal reading, reused
         async with reporting:
             reading = change(reading)
-            coverage: Final = Coverage(eligible=sample.eligible, selected=len(sample.executions), screened=screened)
+            reused += int(review is not None and review.reused)
+            coverage: Final = Coverage(
+                eligible=sample.eligible, selected=len(sample.executions), screened=screened, reused=reused
+            )
             await progress("Reading executions", coverage, review, reading)
 
     async def examine(execution: Execution) -> tuple[Examined, Review]:

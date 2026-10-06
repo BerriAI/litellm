@@ -1595,7 +1595,7 @@ def test_arouter_responses_api_bridge():
                 "litellm_params": {
                     "model": "azure/responses/o_series/webinterface-o3-pro",
                     "api_base": "https://webhook.site/fba79dae-220a-4bb7-9a3a-8caa49604e55",
-                    "api_key": "sk-1234567890",
+                    "api_key": "sk-9876567890",
                     "api_version": "preview",
                     "stream": True,
                 },
@@ -18968,6 +18968,8 @@ async def test_router_embedding_path_rejects_past_max_parallel_requests_without_
             },
         )
 
+    # Reap earlier tests' garbage first so only this test's coroutines are recorded
+    gc.collect()
     with respx.mock() as respx_mock, warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         route: Final = respx_mock.post("https://max-parallel-embed.local/v1/embeddings").mock(side_effect=upstream)

@@ -216,7 +216,7 @@ class AzureAIAgentsConfig(BaseConfig):
 
             converted_messages.append({"role": role, "content": content})
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "agent_id": agent_id,
             "messages": converted_messages,
             "api_version": self._get_api_version(optional_params),

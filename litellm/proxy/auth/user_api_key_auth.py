@@ -147,7 +147,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     normalize_route_for_root_path,
 )
-from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.repositories.table_repositories import JWTKeyMappingRepository, TeamMembershipRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
@@ -506,7 +506,7 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
         api_key = api_key.replace("bearer ", "")
     elif api_key.startswith("AWS4-HMAC-SHA256"):
         # Handle AWS Signature V4 format from LangChain
-        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer $LITELLM_MASTER_KEY/date/region/service/aws4_request, SignedHeaders=..., Signature=...
         # Extract the Bearer token from the Credential field
         match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
         if match:
@@ -602,7 +602,7 @@ def _get_bearer_token(
         api_key = api_key.replace("bearer ", "")
     elif api_key.startswith("AWS4-HMAC-SHA256"):
         # Handle AWS Signature V4 format from LangChain
-        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer $LITELLM_MASTER_KEY/date/region/service/aws4_request, SignedHeaders=..., Signature=...
         # Extract the Bearer token from the Credential field
         match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
         if match:
@@ -1038,7 +1038,7 @@ async def _auto_register_jwt_mapping(
 
     try:
         async with db_span("auto_register_jwt_mapping", "LiteLLM_JWTKeyMapping"):
-            await prisma_client.db.litellm_jwtkeymapping.create(
+            await JWTKeyMappingRepository(prisma_client).table.create(
                 data={
                     "jwt_issuer": jwt_issuer or "",
                     "jwt_claim_name": virtual_key_claim_field,
@@ -1572,7 +1572,6 @@ async def _user_api_key_auth_builder(
             route=route,
             request=request,
         )
-        # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
         custom_litellm_key_header_name: Final = general_settings.get("litellm_key_header_name")
         if custom_litellm_key_header_name is not None:
             api_key = get_api_key_from_custom_header(
@@ -2387,7 +2386,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         include={"litellm_budget_table": True},
                     )
                     if _db_member is not None:
-                        team_member_info = LiteLLM_TeamMembership(**_db_member.model_dump())
+                        team_member_info = LiteLLM_TeamMembership.model_validate(_db_member.model_dump())
                         await user_api_key_cache.async_set_cache(
                             key=_cache_key,
                             value=team_member_info,
@@ -3064,6 +3063,9 @@ async def _run_centralized_common_checks(
             user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
             user_role=LitellmUserRoles.PROXY_ADMIN,
             spend=user_object.spend if user_object is not None else 0.0,
+            object_permission_id=(
+                user_object.object_permission_id if isinstance(user_object, LiteLLM_UserTable) else None
+            ),
         )
 
     if project_object is not None:

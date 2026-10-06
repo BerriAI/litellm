@@ -116,7 +116,10 @@ export interface OwnedFinding {
 export function findFinding(lenses: readonly Lens[], key: string): OwnedFinding | undefined {
   return lenses
     .flatMap((lens) => lens.findings.map((finding) => ({ lens, finding })))
-    .find(({ lens, finding }) => findingKey(lens, finding) === key);
+    .find(
+      ({ lens, finding }) =>
+        findingKey(lens, finding) === key || finding.merged_finding_ids?.some((id) => `${lens.id}:${id}` === key),
+    );
 }
 
 export function stepLine(step: Step): string {
