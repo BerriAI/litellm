@@ -132,8 +132,6 @@ def test_client_secret_mint_refuses_model_outside_key_scope_before_reaching_open
 def test_client_secret_mint_refuses_blocked_or_exhausted_key(
     gateway: Gateway, refusal: str, expected_status: int, expected_type: str
 ) -> None:
-    # expected_message pins which enforcement path refused
-
     raw: Final = f"ek_raw_{uuid.uuid4().hex}"
     with wire_server(_scripted_openai(_endless_client_secrets(raw))) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire, "openai/gpt-realtime")
@@ -143,10 +141,11 @@ def test_client_secret_mint_refuses_blocked_or_exhausted_key(
         if refusal == "blocked":
             gateway.post("/key/block", {"key": key})
 
+        # the message pins which enforcement path refused (budget_reservation also refuses with a different message)
         expected_message: Final = (
             "Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin."
             if refusal == "blocked"
-            else (f"Budget has been exceeded! Key=key (sk-...{key[-4:]}) Current cost: 1.0, Max budget: 0.0001")
+            else f"Budget has been exceeded! Key=key (sk-...{key[-4:]}) Current cost: 1.0, Max budget: 0.0001"
         )
         refused: Final = _mint(gateway, {"model": model}, key)
         error: Final = _OpenAIErrorEnvelope.model_validate_json(refused.content).error
