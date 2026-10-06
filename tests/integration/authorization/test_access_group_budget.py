@@ -11,22 +11,23 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
 import yaml
-from integration._support.client import Gateway, Scenario, eventually
+from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 _INPUT_RATE: Final = 0.000001
 _OUTPUT_RATE: Final = 0.00001
 _MAX_BUDGET: Final = 0.0001
 _CALL_COST: Final = 10 * _INPUT_RATE + 10 * _OUTPUT_RATE
 _PROVIDER_MODEL: Final = "group-budget-probe"
+Grant = Literal["key", "team", "organization", "project"]
 
 
 class _Budget(BaseModel):
@@ -153,22 +154,52 @@ def _billed(request: Request) -> Reply:
     )
 
 
-@pytest.fixture(params=("reserved", "unreserved"))
-def proxy(request: pytest.FixtureRequest, gateway: Gateway, tmp_path: Path) -> Iterator[_BudgetProxy]:
+@pytest.fixture(
+    params=("reserved", "unreserved"),
+    ids=("reservation", "no-reservation"),
+    scope="module",
+)
+def proxy(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Iterator[_BudgetProxy]:
     """The shared proxy reserves budget per request; the owned one runs with ``disable_budget_reservation``."""
-    if request.param == "reserved":
-        yield _BudgetProxy(gateway=gateway, reserved=True)
-        return
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["general_settings"]["disable_budget_reservation"] = True
-    path: Final = tmp_path / "unreserved.yaml"
-    path.write_text(yaml.safe_dump(config))
-    with owned_proxy(gateway, tmp_path, {}, config=path) as owned:
-        yield _BudgetProxy(gateway=owned, reserved=False)
+    with gateway_from_environment() as gateway:
+        if request.param == "reserved":
+            yield _BudgetProxy(gateway=gateway, reserved=True)
+            return
+        directory: Final = tmp_path_factory.mktemp("access-group-budget-unreserved")
+        loaded_config: Final = TypeAdapter(dict[str, object]).validate_python(
+            yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        )
+        general_settings: Final = TypeAdapter(dict[str, object]).validate_python(
+            loaded_config.get("general_settings", {})
+        )
+        config: Final = {
+            **loaded_config,
+            "general_settings": {**general_settings, "disable_budget_reservation": True},
+        }
+        path: Final = directory / "unreserved.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, directory, {}, config=path) as owned:
+            yield _BudgetProxy(gateway=owned, reserved=False)
 
 
-def _budgeted_group(scenario: Scenario, wire: Wire) -> _Group:
-    """A database model in a fresh access group, a key granted only that group, and a 0.0001 group budget."""
+def _group_key(scenario: Scenario, name: str, grant: Grant) -> str:
+    match grant:
+        case "key":
+            return scenario.key(models=[name])
+        case "team":
+            team_id: Final = scenario.team(models=[name])
+            return scenario.key(team_id=team_id, models=[])
+        case "organization":
+            organization: Final = scenario.organization(models=[name])
+            return scenario.key(organization_id=organization, models=[])
+        case "project":
+            project_team: Final = scenario.team()
+            project_id: Final = scenario.project(project_team, models=[name])
+            return scenario.key(team_id=project_team, project_id=project_id, models=[])
+
+
+def _budgeted_group(scenario: Scenario, wire: Wire, grant: Grant = "key") -> _Group:
+    """A database model in a fresh access group with one grant and a 0.0001 group budget."""
     name: Final = f"integration-group-{uuid.uuid4().hex}"
     model: Final = scenario.model(
         model=f"openai/{_PROVIDER_MODEL}",
@@ -177,7 +208,7 @@ def _budgeted_group(scenario: Scenario, wire: Wire) -> _Group:
         output_cost_per_token=_OUTPUT_RATE,
         model_info={"access_groups": [name]},
     )
-    key: Final = scenario.key(models=[name])
+    key: Final = _group_key(scenario, name, grant)
     gateway: Final = scenario.gateway
     created: Final = gateway.request(
         "PUT", f"/access_group/{name}/budget", {"max_budget": _MAX_BUDGET, "budget_duration": "30d"}
@@ -341,6 +372,35 @@ def test_access_group_budget_refuses_traffic_once_spent_and_serves_again_after_d
             1,
             spelling,
         )
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("grant", ("team", "organization", "project"))
+def test_access_group_budget_refuses_a_key_granted_the_group_through_its_scope(
+    proxy: _BudgetProxy, grant: Literal["team", "organization", "project"]
+) -> None:
+    gateway: Final = proxy.gateway
+    text: Final = f"group granted through {grant}"
+    with wire_server(_billed) as wire, gateway.scenario() as scenario:
+        group: Final = _budgeted_group(scenario, wire, grant)
+        _assert_served(_chat(gateway, group, text, 1), wire, text, 1)
+        spent: Final = eventually(
+            lambda: _GroupBudget.model_validate_json(
+                gateway.request("GET", f"/access_group/{group.name}/budget").content
+            ),
+            lambda value: value.spend >= _MAX_BUDGET,
+            seconds=10,
+            return_last_on_timeout=True,
+        )
+        assert _provider_calls(wire) == (), "The served request was not drained before the refusal"
+        _assert_refused_for_budget(
+            _chat(gateway, group, f"{text} over budget", 1),
+            wire,
+            f"Budget has been exceeded! Model access group={group.name} Current cost: {_CALL_COST}, "
+            f"Max budget: {_MAX_BUDGET}",
+        )
+        assert spent.spend == pytest.approx(_CALL_COST), spent
+        assert _budget_rows(group.name)[0]["spend"] == pytest.approx(_CALL_COST)
 
 
 @pytest.mark.timeout(120)

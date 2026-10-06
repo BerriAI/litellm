@@ -10,14 +10,21 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import chain
 from typing import Final
 
 import httpx
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
+from integration._support.wire import Reply, Request, Wire, wire_server
+
+_PROVIDER_MODEL: Final = "gpt-4o-mini"
+_PROVIDER_API_KEY: Final = "integration-provider-key"
+_CALLER_KINDS: Final = ("key", "team", "organization", "project", "user", "access_group")
+_JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +49,21 @@ class _Usage(BaseModel):
 class _Completion(BaseModel):
     model: str
     usage: _Usage
+
+
+class _Error(BaseModel):
+    message: str
+    type: str
+    param: str | None
+    code: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _RenameCall:
+    kind: str
+    status_code: int
+    error: _Error
+    requests: tuple[Request, ...]
 
 
 def _model_id(gateway: Gateway, name: str) -> str:
@@ -116,12 +138,42 @@ def _allowlist(holder: _Holder) -> list[dict[str, object]]:
     )
 
 
-def _chat(gateway: Gateway, model: str, key: str) -> httpx.Response:
+def _chat(gateway: Gateway, model: str, caller: _Holder) -> httpx.Response:
     return gateway.request(
         "POST",
         "/v1/chat/completions",
-        {"model": model, "messages": [{"role": "user", "content": "after rename"}]},
-        key=key,
+        {"model": model, "messages": [{"role": "user", "content": f"after rename {caller.kind}"}]},
+        key=caller.key,
+    )
+
+
+def _expected_provider_body(text: str) -> dict[str, JsonValue]:
+    return {"model": _PROVIDER_MODEL, "messages": [{"role": "user", "content": text}]}
+
+
+def _rename_reply(request: Request) -> Reply:
+    assert (request.method, request.target) == ("POST", "/v1/chat/completions"), request
+    assert request.headers["authorization"] == f"Bearer {_PROVIDER_API_KEY}", request
+    assert _JSON_BODY.validate_json(request.body) in tuple(
+        _expected_provider_body(f"after rename {kind}") for kind in _CALLER_KINDS
+    ), request.body
+    return Reply(
+        body=json.dumps(
+            {
+                "id": "chatcmpl-rename",
+                "object": "chat.completion",
+                "created": 1,
+                "model": _PROVIDER_MODEL,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "renamed"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 20, "total_tokens": 40},
+            }
+        ).encode()
     )
 
 
@@ -145,27 +197,57 @@ def _assert_listing(gateway: Gateway, caller: _Holder, *, served: str, gone: str
 
 def _served(gateway: Gateway, model: str, caller: _Holder) -> httpx.Response:
     served: Final = eventually(
-        lambda: _chat(gateway, model, caller.key), lambda r: r.status_code == 200, return_last_on_timeout=True
+        lambda: _chat(gateway, model, caller), lambda r: r.status_code == 200, return_last_on_timeout=True
     )
     assert served.status_code == 200, f"{caller.kind}: {served.text}"
     return served
+
+
+def _baseline_call(gateway: Gateway, model: str, caller: _Holder, wire: Wire) -> tuple[Request, ...]:
+    served: Final = _served(gateway, model, caller)
+    assert _Completion.model_validate_json(served.content) == _Completion(model=model, usage=_Usage(total_tokens=40)), (
+        f"{caller.kind}: {served.text}"
+    )
+    _assert_listing(gateway, caller, served=model, gone=None)
+    requests: Final = wire.drain()
+    assert len(requests) == 1, f"{caller.kind}: expected one provider request, received {requests!r}"
+    return requests
+
+
+def _renamed_call(
+    gateway: Gateway,
+    old: str,
+    new: str,
+    caller: _Holder,
+    wire: Wire,
+) -> _RenameCall:
+    served: Final = _served(gateway, new, caller)
+    assert _Completion.model_validate_json(served.content) == _Completion(model=new, usage=_Usage(total_tokens=40)), (
+        f"{caller.kind}: {served.text}"
+    )
+    requests: Final = wire.drain()
+    assert len(requests) == 1, f"{caller.kind}: expected one provider request, received {requests!r}"
+    refused: Final = _chat(gateway, old, caller)
+    assert refused.status_code == 403, f"{caller.kind}: {refused.text}"
+    error: Final = _Error.model_validate(object_value(refused.json())["error"])
+    assert wire.drain() == (), f"{caller.kind}: the old name reached the provider"
+    _assert_listing(gateway, caller, served=new, gone=old)
+    return _RenameCall(caller.kind, refused.status_code, error, requests)
 
 
 @pytest.mark.parametrize("rename_style", ("patch", "legacy_post"))
 def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that_named_it(
     gateway: Gateway, rename_style: str
 ) -> None:
-    with gateway.scenario() as scenario:
-        old: Final = scenario.model()
+    with wire_server(_rename_reply) as wire, gateway.scenario() as scenario:
+        old: Final = scenario.model(api_base=f"{wire.url}/v1", api_key=_PROVIDER_API_KEY)
         model_id: Final = _model_id(gateway, old)
         holders: Final = _holders(scenario, old)
         access_team: Final = scenario.team(models=["no-default-models"])
         access_key: Final = scenario.key(team_id=access_team)
         with _access_group(gateway, access_team, old) as access_group_id:
             callers: Final = (*holders, _Holder("access_group", "", "", access_group_id, access_key))
-            for caller in callers:
-                _served(gateway, old, caller)
-                _assert_listing(gateway, caller, served=old, gone=None)
+            baseline_requests: Final = tuple(_baseline_call(gateway, old, caller, wire) for caller in callers)
 
             new: Final = f"integration-renamed-{uuid.uuid4().hex}"
             renamed: Final = (
@@ -182,6 +264,7 @@ def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that
                 {"model_name": new}
             ]
 
+            results: Final = tuple(_renamed_call(gateway, old, new, caller, wire) for caller in callers)
             for holder in holders:
                 assert _allowlist(holder) == [{"models": [new]}], holder.kind
             group: Final = gateway.request("GET", f"/v1/access_group/{access_group_id}")
@@ -190,32 +273,44 @@ def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that
                 access_group_id=access_group_id, access_model_names=[new]
             ), group.text
 
-            refusals: dict[str, tuple[int, dict[str, object]]] = {}
-            denials: dict[str, object] = {}
-            for caller in callers:
-                served = _served(gateway, new, caller)
-                assert _Completion.model_validate_json(served.content) == _Completion(
-                    model=new, usage=_Usage(total_tokens=40)
-                ), f"{caller.kind}: {served.text}"
-                refused = _chat(gateway, old, caller.key)
-                error = object_value(refused.json())["error"]
-                assert isinstance(error, dict), refused.text
-                refusals[caller.kind] = (refused.status_code, {k: v for k, v in error.items() if k != "type"})
-                denials[caller.kind] = error["type"]
-                _assert_listing(gateway, caller, served=new, gone=old)
-            denied: Final = {
-                "message": f"The requested model '{old}' is not available for this API key, or the model name is "
-                "invalid. Check the models available to you and try again.",
-                "param": "model",
-                "code": "403",
+            denied_message: Final = (
+                f"The requested model '{old}' is not available for this API key, or the model name is invalid. "
+                "Check the models available to you and try again."
+            )
+            expected_denials: Final = {
+                "key": _Error(message=denied_message, type="key_model_access_denied", param="model", code="403"),
+                "team": _Error(message=denied_message, type="team_model_access_denied", param="model", code="403"),
+                "organization": _Error(
+                    message=denied_message, type="team_model_access_denied", param="model", code="403"
+                ),
+                "project": _Error(message=denied_message, type="project_model_access_denied", param="model", code="403"),
+                "user": _Error(message=denied_message, type="user_model_access_denied", param="model", code="403"),
+                "access_group": _Error(
+                    message=denied_message, type="team_model_access_denied", param="model", code="403"
+                ),
             }
-            assert refusals == {caller.kind: (403, denied) for caller in callers}, json.dumps(refusals)
-            # The access-group caller holds no project, yet which object check names the refusal is not fixed.
-            assert denials.pop("access_group") in ("team_model_access_denied", "project_model_access_denied"), denials
-            assert denials == {
-                "key": "key_model_access_denied",
-                "team": "team_model_access_denied",
-                "organization": "team_model_access_denied",
-                "project": "project_model_access_denied",
-                "user": "user_model_access_denied",
-            }, json.dumps(denials)
+            assert tuple(result.status_code for result in results) == (403,) * len(callers)
+            assert {result.kind: result.error for result in results} == expected_denials, json.dumps(
+                {result.kind: result.error.model_dump() for result in results}
+            )
+            provider_requests: Final = tuple(
+                chain.from_iterable(baseline_requests)
+            ) + tuple(chain.from_iterable(result.requests for result in results))
+            expected_request: Final = (
+                "POST",
+                "/v1/chat/completions",
+                f"Bearer {_PROVIDER_API_KEY}",
+            )
+            expected_requests: Final = tuple(
+                (*expected_request, _expected_provider_body(f"after rename {caller.kind}"))
+                for caller in callers
+            ) * 2
+            assert tuple(
+                (
+                    request.method,
+                    request.target,
+                    request.headers["authorization"],
+                    _JSON_BODY.validate_json(request.body),
+                )
+                for request in provider_requests
+            ) == expected_requests

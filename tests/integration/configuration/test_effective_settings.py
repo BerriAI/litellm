@@ -142,14 +142,21 @@ def _sent_headers(request: Request) -> tuple[str, str | None]:
     return request.headers["authorization"], request.headers.get("openai-organization")
 
 
-def test_partial_credential_patch_merges_values_and_deletes_only_the_named_field(gateway: Gateway) -> None:
+@pytest.mark.parametrize("contains_slash", (False, True), ids=("plain-name", "slash-name"))
+def test_partial_credential_patch_merges_values_and_deletes_only_the_named_field(
+    gateway: Gateway, contains_slash: bool
+) -> None:
     api_key: Final = f"synthetic-merge-{uuid.uuid4().hex}"
     with (
         wire_server(_openai_reply) as original,
         wire_server(_openai_reply) as moved,
         gateway.scenario() as scenario,
     ):
-        name: Final = f"credential-{uuid.uuid4().hex}"
+        name: Final = (
+            f"team-{uuid.uuid4().hex}/cred-{uuid.uuid4().hex}"
+            if contains_slash
+            else f"credential-{uuid.uuid4().hex}"
+        )
         gateway.post("/credentials", {
             "credential_name": name,
             "credential_values": {"api_key": api_key, "api_base": f"{original.url}/v1", "organization": "org-merge"},

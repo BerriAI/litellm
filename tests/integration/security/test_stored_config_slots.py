@@ -395,7 +395,16 @@ def _served_openai_params(api_base: str, **changed: JsonValue) -> dict[str, Json
 
 
 @pytest.mark.timeout(240)
-def test_partial_legacy_model_update_keeps_the_stored_api_key_usable(rig: Rig) -> None:
+@pytest.mark.parametrize(
+    ("partial_params", "expected_params"),
+    (
+        pytest.param({"rpm": 10}, {"rpm": 10}, id="rpm"),
+        pytest.param({"timeout": 30}, {"timeout": 30.0}, id="timeout"),
+    ),
+)
+def test_partial_legacy_model_update_keeps_the_stored_api_key_usable(
+    rig: Rig, partial_params: dict[str, JsonValue], expected_params: dict[str, JsonValue]
+) -> None:
     b2: Final = canary("B2")
     marker: Final = canary(MARKER)
     api_base: Final = rig.provider.url + "/v1"
@@ -405,19 +414,28 @@ def test_partial_legacy_model_update_keeps_the_stored_api_key_usable(rig: Rig) -
         updated: Final = rig.proxy.request(
             "POST",
             "/model/update",
-            {"model_name": model, "model_info": {"id": model_id}, "litellm_params": {"rpm": 10}},
+            {"model_name": model, "model_info": {"id": model_id}, "litellm_params": partial_params},
         )
         assert updated.status_code == 200, updated.text
         assert find_canary(updated.text, (b2,)) == (), f"/model/update echoed the stored key: {updated.text}"
-        assert _stored_litellm_params(model_id) == {**stored_before, "rpm": 10}, (
+        stored_after: Final = _stored_litellm_params(model_id)
+        assert stored_after == {**stored_before, **expected_params}, (
             "A partial update rewrote stored params it was not sent, the api_key ciphertext included"
         )
+        assert tuple((key, type(stored_after[key]), stored_after[key]) for key in expected_params) == tuple(
+            (key, type(value), value) for key, value in expected_params.items()
+        ), stored_after
         _assert_stored_without_canary(
             """SELECT litellm_params->>'api_key' FROM "LiteLLM_ProxyModelTable" WHERE model_id=%s""", (model_id,), b2
         )
-        assert _served_params(rig.proxy, model_id) == _ServedParams(
-            model_name=model, litellm_params=_served_openai_params(api_base, rpm=10)
+        served_params: Final = _served_params(rig.proxy, model_id)
+        assert served_params == _ServedParams(
+            model_name=model, litellm_params=_served_openai_params(api_base, **expected_params)
         )
+        assert tuple(
+            (key, type(served_params.litellm_params[key]), served_params.litellm_params[key])
+            for key in expected_params
+        ) == tuple((key, type(value), value) for key, value in expected_params.items()), served_params
         caller: Final = _caller(scenario, models=[model])
         _chat(rig.proxy, caller.key, model, "B2", marker, "success")
         assert _provider_chat_matches(rig, marker, b2, f"slot B2 {marker.value}"), (
