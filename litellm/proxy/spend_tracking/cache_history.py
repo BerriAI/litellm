@@ -37,6 +37,7 @@ _SETTINGS: Final = (
     "context_management",
     "compaction",
 )
+_MODEL_SETTINGS: Final = frozenset(("reasoning", "reasoning_effort", "thinking"))
 _REQUEST_KEYS: Final = (*_SETTINGS, "messages", "input", "prompt_cache_options", "prompt_cache_retention")
 _MAX_BYTES: Final = 4 * 1024 * 1024
 _MAX_NODES: Final = 32768
@@ -109,7 +110,7 @@ class PreparedCacheRequest:
                 "cold_cache_at_session_start",
                 "reported_input_tokens_scaled_across_prefixes",
                 "same_output_tokens",
-                "supplied_request_settings_with_baseline_overrides",
+                "shared_request_settings_with_baseline_model_settings",
                 *self.policy.assumptions,
                 "message_boundary_cache_approximation",
                 "chunked_prefix_token_weights",
@@ -268,8 +269,8 @@ def prepare_cache_request(
     if not messages or not _within_budget(messages):
         return None
     combined: Final = {
-        **request,
-        **extra,
+        **{key: value for key, value in request.items() if key not in _MODEL_SETTINGS},
+        **{key: value for key, value in extra.items() if key not in _MODEL_SETTINGS},
         **{key: value for key, value in baseline.items() if value is not None},
         **baseline_extra,
     }

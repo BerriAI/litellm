@@ -81,6 +81,14 @@ class CapturedBaselineObservation(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
+class _NativeCapture:
+    capture: CapturedBaselineObservation
+    target: NativePredictionTarget
+    wire: httpx.Request = field(repr=False)
+    body: Mapping[str, JsonValue] = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class BaselineCacheContext:
     collector: AutoRouterBaselineCache
     capture: CapturedBaselineObservation
@@ -88,6 +96,7 @@ class BaselineCacheContext:
     baseline_deployment_id: str | None
     estimated_request: PreparedCacheRequest | None = None
     estimated: bool = False
+    native_capture: _NativeCapture | CapturedBaselineObservation | None = field(default=None, repr=False)
     invalidated: str | None = None
     finalization: asyncio.Task[CapturedBaselineObservation] | None = field(default=None, repr=False, compare=False)
 
@@ -212,7 +221,7 @@ class AutoRouterBaselineCache(CustomLogger):
                     request.route.baseline_deployment_id,
                     params,
                     prices,
-                    *((identity, "estimated_prefixes_v3") if estimated else ()),
+                    *((identity, "estimated_prefixes_v4") if estimated else ()),
                 )
             )
             started: Final = logging_obj.start_time.timestamp()
@@ -310,18 +319,29 @@ class AutoRouterBaselineCache(CustomLogger):
             return None, "token_count_unavailable"
 
 
-async def invalidate_baseline_cache(logging_obj: Logging, reason: str, *, completed: bool = False) -> None:
+async def invalidate_baseline_cache(
+    logging_obj: Logging, reason: str, *, completed: bool = False, preserve_native_usage: bool = False
+) -> None:
     context: Final = logging_obj.baseline_cache_context
     if context is not None:
+        observed: Final = (
+            context.native_capture.capture
+            if preserve_native_usage and not context.invalidated and isinstance(context.native_capture, _NativeCapture)
+            else context.capture
+        )
         logging_obj.baseline_cache_context = replace(context, invalidated=reason)
-        logging_obj.baseline_observation = context.capture.model_copy(
+        logging_obj.baseline_observation = observed.model_copy(
             update=MappingProxyType(
                 {
-                    "observation": context.capture.observation.model_copy(
+                    "observation": observed.observation.model_copy(
                         update=MappingProxyType(
                             {
-                                "available_at": max(context.capture.observation.started_at, context.collector.clock()),
-                                "reason": reason,
+                                "available_at": observed.observation.available_at
+                                if observed is not context.capture
+                                else max(context.capture.observation.started_at, context.collector.clock()),
+                                "reason": "token_count_timeout"
+                                if observed is not context.capture and reason == "baseline_estimation_timeout"
+                                else reason,
                             }
                         )
                     ),
@@ -334,21 +354,26 @@ async def finalize_baseline_cache(logging_obj: Logging, response_obj: object) ->
     context: Final = logging_obj.baseline_cache_context
     if context is None or logging_obj.baseline_observation is not None:
         return
-    task: Final = context.finalization or asyncio.create_task(_capture(context, logging_obj, response_obj))
-    if context.finalization is None:
-        task.add_done_callback(_consume_finalization)
-    active: Final = context if context.finalization is not None else replace(context, finalization=task)
-    logging_obj.baseline_cache_context = active
     try:
+        prepared: Final = (
+            replace(context, native_capture=_prepare_native_capture(context, logging_obj, response_obj))
+            if context.finalization is None and not context.estimated
+            else context
+        )
+        task: Final = prepared.finalization or asyncio.create_task(_capture(prepared, logging_obj, response_obj))
+        if prepared.finalization is None:
+            task.add_done_callback(_consume_finalization)
+        active: Final = prepared if prepared.finalization is not None else replace(prepared, finalization=task)
+        logging_obj.baseline_cache_context = active
         capture: Final = await asyncio.wait_for(asyncio.shield(task), timeout=optional_callback_budget(_COUNT_TIMEOUT))
         if logging_obj.baseline_cache_context is active:
             logging_obj.baseline_observation = capture  # rebind-ok: attach only to the captured request owner
     except TimeoutError:
         if logging_obj.baseline_observation is None:
-            await invalidate_baseline_cache(logging_obj, "baseline_estimation_timeout")
+            await invalidate_baseline_cache(logging_obj, "baseline_estimation_timeout", preserve_native_usage=True)
     except Exception:  # noqa: BLE001  # observation failures must preserve inference and billing
         if logging_obj.baseline_observation is None:
-            await invalidate_baseline_cache(logging_obj, "observation_unavailable")
+            await invalidate_baseline_cache(logging_obj, "observation_unavailable", preserve_native_usage=True)
 
 
 def _consume_finalization(task: asyncio.Task[CapturedBaselineObservation]) -> None:
@@ -356,9 +381,9 @@ def _consume_finalization(task: asyncio.Task[CapturedBaselineObservation]) -> No
         task.exception()
 
 
-async def _capture(
+def _prepare_native_capture(
     context: BaselineCacheContext, logging_obj: Logging, response_obj: object
-) -> CapturedBaselineObservation:
+) -> _NativeCapture | CapturedBaselineObservation:
     original: Final = context.capture.observation
     details: Final = _METADATA.validate_python(logging_obj.model_call_details)
     if details.get("cache_hit") is True:
@@ -371,8 +396,6 @@ async def _capture(
                 }
             )
         )
-    if context.estimated:
-        return await _capture_estimated(context, logging_obj, response_obj)
     event: Final = _WireEvent.model_validate(details)
     wire: Final = event.httpx_response.request
     usage: Final = _ResponseUsage.model_validate(response_obj).usage
@@ -420,9 +443,8 @@ async def _capture(
     same: Final = (
         logging_obj.get_router_model_id() == context.baseline_deployment_id and body.get("model") == target.model
     )
-    plan, reason = await context.collector.plan(target, wire, body, usage)
     minimum: Final = get_prompt_cache_min_tokens(target.model)
-    return context.capture.model_copy(
+    captured: Final = context.capture.model_copy(
         update=MappingProxyType(
             {
                 "observation": BaselineObservation(
@@ -432,13 +454,42 @@ async def _capture(
                     outcome="complete",
                     baseline_equivalent=same,
                     usage=usage,
-                    plan=plan,
                     minimum_cache_tokens=minimum,
-                    reason=reason,
                 )
             }
         )
     )
+
+    return _NativeCapture(captured, target, wire, body)
+
+
+async def _capture(
+    context: BaselineCacheContext, logging_obj: Logging, response_obj: object
+) -> CapturedBaselineObservation:
+    native: Final = context.native_capture
+    if isinstance(native, CapturedBaselineObservation):
+        return native
+    if isinstance(native, _NativeCapture):
+        plan, reason = await context.collector.plan(
+            native.target, native.wire, native.body, native.capture.observation.usage
+        )
+        return native.capture.model_copy(
+            update={
+                "observation": native.capture.observation.model_copy(update={"plan": plan, "reason": reason}),
+            }
+        )
+    if _METADATA.validate_python(logging_obj.model_call_details).get("cache_hit") is True:
+        return context.capture.model_copy(
+            update={
+                "observation": context.capture.observation.model_copy(
+                    update={
+                        "outcome": "response_cache",
+                        "reason": "response_cache_hit",
+                    }
+                ),
+            }
+        )
+    return await _capture_estimated(context, logging_obj, response_obj)
 
 
 async def _capture_estimated(

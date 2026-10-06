@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -37,8 +38,13 @@ def _usage(*, read: int = 0, write: int = 8000) -> Usage:
     )
 
 
-def _observation(request: dict[str, object], started: float = 10000.0, provider: str = "openai") -> BaselineObservation:
-    captured: Final = capture_cache_request(request, "gpt-6-astra", provider, _PRICES, {})
+def _observation(
+    request: dict[str, object],
+    started: float = 10000.0,
+    provider: str = "openai",
+    baseline_params: Mapping[str, object] | None = None,
+) -> BaselineObservation:
+    captured: Final = capture_cache_request(request, "gpt-6-astra", provider, _PRICES, baseline_params or {})
     assert captured is not None
     usage: Final = _usage()
     return BaselineObservation(
@@ -115,7 +121,6 @@ def test_unspecified_provider_lifetime_is_labeled_and_expires(seconds: int, expe
     (
         {"messages": [{"role": "user", "content": "a changed prefix"}]},
         {"tools": [{"type": "function", "function": {"name": "different_tool"}}]},
-        {"reasoning_effort": "high"},
         {"extra_body": {"prompt_cache_key": "different_key"}},
     ),
 )
@@ -200,7 +205,9 @@ def test_baseline_deployment_settings_override_selected_model_settings() -> None
     first: Final = capture_cache_request(
         _request(reasoning_effort="low"), "gpt-6-astra", "openai", _PRICES, {"reasoning_effort": "high"}
     )
-    second: Final = capture_cache_request(_request(reasoning_effort="high"), "gpt-6-astra", "openai", _PRICES, {})
+    second: Final = capture_cache_request(
+        _request(reasoning_effort="high"), "gpt-6-astra", "openai", _PRICES, {"reasoning_effort": "high"}
+    )
     assert first is not None and second is not None
     assert first.plan(_usage()) == second.plan(_usage())
 
@@ -431,7 +438,10 @@ def test_message_cache_marker_covers_all_multipart_content(surface: str, marker:
 def test_message_cache_marker_covers_string_content_parts(surface: str) -> None:
     captured: Final = capture_cache_request(
         {surface: [{"role": "user", "content": ["first", "last"], "cache_control": {"type": "ephemeral"}}]},
-        "claude-test", "custom_provider", _PRICES, {},
+        "claude-test",
+        "custom_provider",
+        _PRICES,
+        {},
     )
     assert captured is not None
     plan: Final = captured.plan(_usage())
@@ -462,3 +472,48 @@ def test_message_marker_matches_provider_precedence_without_losing_earlier_break
     assert tuple(marker.ttl_seconds for marker in plan.breakpoints) == (3600, 300)
     assert plan.breakpoints[-1].prefix_tokens == plan.total_tokens
     assert "cache_control" in messages[0]
+
+
+@pytest.mark.parametrize("nested", (False, True))
+@pytest.mark.parametrize(
+    "baseline_params", ({}, {"reasoning_effort": "medium"}, {"extra_body": {"thinking": {"type": "disabled"}}})
+)
+@pytest.mark.parametrize(
+    "tier_settings",
+    (
+        {"reasoning_effort": "high"},
+        {"reasoning": {"effort": "high"}},
+        {"thinking": {"type": "enabled", "budget_tokens": 4096}},
+    ),
+)
+def test_routed_tier_settings_do_not_reset_baseline_history(
+    nested: bool,
+    baseline_params: dict[str, object],
+    tier_settings: dict[str, object],
+) -> None:
+    history, _ = advance_baseline_history(
+        BaselineHistory(), (_observation(_request(), baseline_params=baseline_params),)
+    )
+    request: Final = _request(**({"extra_body": tier_settings} if nested else tier_settings))
+    _, estimates = advance_baseline_history(history, (_observation(request, 10002.0, baseline_params=baseline_params),))
+    assert estimates[0].usage is not None
+    assert estimates[0].usage.prompt_tokens_details.cached_tokens == 8000
+    assert estimates[0].usage.prompt_tokens_details.cache_creation_tokens == 0
+
+
+@pytest.mark.parametrize(
+    "baseline_params",
+    (
+        {"reasoning_effort": "high"},
+        {"extra_body": {"reasoning": {"effort": "high"}}},
+        {"thinking": {"type": "enabled", "budget_tokens": 4096}},
+    ),
+)
+def test_baseline_model_settings_still_invalidate_prefixes(baseline_params: dict[str, object]) -> None:
+    history, _ = advance_baseline_history(BaselineHistory(), (_observation(_request()),))
+    _, estimates = advance_baseline_history(
+        history, (_observation(_request(), 10002.0, baseline_params=baseline_params),)
+    )
+    assert estimates[0].usage is not None
+    assert estimates[0].usage.prompt_tokens_details.cached_tokens == 0
+    assert estimates[0].usage.prompt_tokens_details.cache_creation_tokens == 8000

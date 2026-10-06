@@ -674,3 +674,164 @@ async def test_saturated_estimator_preserves_success_spend_payloads_before_loggi
         await worker.stop()
     assert tuple(log.baseline_observation for log in logs) == observations
     assert all(capture.payloads.empty() for capture in captures)
+
+
+@pytest.mark.parametrize("worker_timeout", (8.0, 20.0))
+@pytest.mark.parametrize("stream", (False, True))
+async def test_native_count_timeout_preserves_observed_usage_and_session_equivalence(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_timeout: float,
+    stream: bool,
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.proxy.spend_tracking.baseline_accounting import BaselineHistory, advance_baseline_history
+
+    release: Final = asyncio.Event()
+
+    async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int:
+        await release.wait()
+        return await _count(model, api_key, body)
+
+    from litellm.litellm_core_utils import logging_worker
+
+    worker: Final = LoggingWorker(timeout=worker_timeout)
+    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", worker)
+    rig: Final = _Rig(monkeypatch, count=count)
+    logging: Final = rig.logging(stream)
+    try:
+        with _transport(_upstream):
+            await _call(rig.router, logging, messages=_MESSAGES_JSON.replace("question", "question USE_OPUS"))
+            payload: Final = await rig.capture.payload()
+        captured: Final = _observation(payload).observation
+        assert captured.outcome == "complete" and captured.baseline_equivalent
+        assert captured.usage is not None and captured.usage.completion_tokens == 10
+        assert captured.plan is None and captured.reason == "token_count_timeout"
+        assert payload["response_cost"] is not None and worker._timeout_total == 0
+        history, estimates = advance_baseline_history(BaselineHistory(), (captured,))
+        assert history.equivalent and estimates[0].provenance == "observed_identical"
+        _, subsequent = advance_baseline_history(
+            history,
+            (
+                captured.model_copy(
+                    update={
+                        "request_id": "next",
+                        "started_at": captured.available_at + 1,
+                        "available_at": captured.available_at + 2,
+                    }
+                ),
+            ),
+        )
+        assert subsequent[0].provenance == "observed_identical" and subsequent[0].usage == captured.usage
+        first: Final = logging.baseline_observation
+    finally:
+        release.set()
+        if logging.baseline_cache_context and logging.baseline_cache_context.finalization:
+            await logging.baseline_cache_context.finalization
+        await worker.stop()
+    assert logging.baseline_observation is first
+
+
+@pytest.mark.parametrize("deployment_baseline", (False, True))
+async def test_router_tier_effort_switch_reuses_baseline_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_baseline: bool,
+) -> None:
+    from datetime import timedelta
+
+    from litellm.proxy.spend_tracking.baseline_accounting import BaselineHistory, advance_baseline_history
+
+    baseline: Final = "baseline" if deployment_baseline else "openai/gpt-6-astra"
+    models: Final = _MESSAGES.validate_python(
+        [
+            {
+                "model_name": "test-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": {"model_name": "selected", "litellm_params": {"reasoning_effort": "low"}},
+                            "MEDIUM": {"model_name": "selected", "litellm_params": {"reasoning_effort": "low"}},
+                            "COMPLEX": {"model_name": "selected", "litellm_params": {"reasoning_effort": "high"}},
+                            "REASONING": baseline,
+                        },
+                        "session_affinity": False,
+                        "keyword_tier_rules": [{"keywords": ["ESCALATE"], "tier": "COMPLEX"}],
+                    },
+                },
+            },
+            {"model_name": "selected", "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": "test-key"}},
+            *(
+                [
+                    {
+                        "model_name": "baseline",
+                        "litellm_params": {
+                            "model": "openai/gpt-6-astra",
+                            "api_key": "test-key",
+                        },
+                        "model_info": {"id": "baseline"},
+                    }
+                ]
+                if deployment_baseline
+                else []
+            ),
+        ]
+    )
+    router: Final = Router(model_list=models, num_retries=0)
+    collector: Final = AutoRouterBaselineCache(None, router=lambda: router, clock=lambda: _STARTED.timestamp() + 10)
+    captures: Final = tuple(_Capture(uuid4().hex) for _ in range(2))
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    monkeypatch.setattr(litellm, "_async_success_callback", list(captures))
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    observations: Final[asyncio.Queue[CapturedBaselineObservation]] = asyncio.Queue()
+    prefix: Final[list[dict[str, JsonValue]]] = [{"role": "user", "content": "stable content " * 2000}]
+    with respx.mock() as transport:
+        route: Final = transport.post("https://api.openai.com/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-tier",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-6.1-sol",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 9000, "completion_tokens": 1, "total_tokens": 9001},
+            },
+        )
+        for index, capture in enumerate(captures):
+            messages: Final = (
+                prefix
+                if index == 0
+                else [
+                    *prefix,
+                    {"role": "assistant", "content": "OK"},
+                    {"role": "user", "content": "ESCALATE"},
+                ]
+            )
+            logging: Final = Logging(
+                model="gpt-6.1-sol",
+                messages=messages,
+                stream=False,
+                call_type=CallTypes.acompletion.value,
+                start_time=_STARTED + timedelta(seconds=index * 20),
+                litellm_call_id=capture.call_id,
+                function_id=capture.call_id,
+            )
+            await router.acompletion(
+                model="test-router",
+                messages=messages,
+                litellm_logging_obj=logging,
+                litellm_call_id=capture.call_id,
+                litellm_metadata={"user_api_key_hash": "test-caller-hash"},
+                litellm_session_id="tier-switch",
+            )
+            observations.put_nowait(_observation(await capture.payload()))
+        efforts: Final = tuple(
+            _JSON_OBJECT.validate_json(call.request.content)["reasoning_effort"] for call in route.calls
+        )
+    assert efforts == ("low", "high")
+    first, second = (observations.get_nowait() for _ in captures)
+    assert first.scope == second.scope
+    history, initial = advance_baseline_history(BaselineHistory(), (first.observation,))
+    _, reused = advance_baseline_history(history, (second.observation,))
+    assert initial[0].usage is not None and initial[0].usage.prompt_tokens_details.cached_tokens == 0
+    assert reused[0].usage is not None and reused[0].usage.prompt_tokens_details.cached_tokens > 0
