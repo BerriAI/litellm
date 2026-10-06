@@ -130,11 +130,11 @@ function LoadedRun({
     };
   }, [traceQuery.data]);
   const seekingSpan = !switching && selectedSpanMissing(trace, selection.spanId);
-  const { hasNextPage, isFetching, isError, fetchNextPage } = traceQuery;
+  const { hasNextPage, isFetching, isFetchNextPageError, fetchNextPage } = traceQuery;
   const canSeek = seekingSpan && hasNextPage;
   useEffect(() => {
-    if (canSeek && !isFetching && !isError) void fetchNextPage();
-  }, [canSeek, isFetching, isError, fetchNextPage]);
+    if (canSeek && !isFetching && !isFetchNextPageError) void fetchNextPage();
+  }, [canSeek, isFetching, isFetchNextPageError, fetchNextPage]);
 
   return (
     <Tabs
@@ -186,8 +186,8 @@ function LoadedRun({
         embedded={embedded}
         stale={switching}
         conversationPaging={{
-          loading: isFetching,
-          failed: isError,
+          loading: traceQuery.isFetchingNextPage,
+          failed: isFetchNextPageError,
           loadMore: fetchNextPage,
         }}
       />
