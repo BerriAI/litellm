@@ -73,4 +73,21 @@ describe("TraceThread", () => {
     expect(screen.getByRole("tab", { name: "Steps", selected: true })).toBeVisible();
     expect(screen.getByRole("treeitem", { selected: true })).toHaveAttribute("data-row-id", "tool");
   });
+
+  it("retries a step that failed to load and then shows the reply", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceSpanCall)
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockImplementation(async (_token, _trace, id) => details[id]);
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Thread" }));
+    const thread = await screen.findByRole("region", { name: "Trace thread" });
+    const alert = await within(thread).findByRole("alert");
+    expect(alert).toHaveTextContent("Could not load some steps of this thread.");
+    await user.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect(await within(thread).findByText("The release is ready")).toBeVisible();
+    expect(within(thread).queryByRole("alert")).not.toBeInTheDocument();
+  });
 });
