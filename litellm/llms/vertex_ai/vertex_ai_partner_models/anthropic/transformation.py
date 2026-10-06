@@ -143,19 +143,24 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         if context_management:
             self._add_context_management_beta_headers(beta_set, context_management)
 
-        if requires_native_compaction_beta("vertex_ai", optional_params, data["messages"]):
-            beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
-
+        compaction_betas: Final = (
+            frozenset({ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value})
+            if requires_native_compaction_beta("vertex_ai", optional_params, data["messages"])
+            else frozenset()
+        )
         extra_headers: Final = optional_params.get("extra_headers") or {}
-        beta_set.update(_beta_names(extra_headers.get("anthropic-beta")))
         data.pop("extra_headers", None)
-        beta_set.update(_beta_names(data.pop("anthropic_beta", None)))
+        requested_betas: Final = (
+            frozenset(beta_set)
+            | compaction_betas
+            | _beta_names(extra_headers.get("anthropic-beta"))
+            | _beta_names(data.pop("anthropic_beta", None))
+        )
 
-        body_betas: Final = beta_set - _VERTEX_HEADER_ONLY_BETAS
+        body_betas: Final = requested_betas - _VERTEX_HEADER_ONLY_BETAS
         if body_betas:
             data["anthropic_beta"] = list(body_betas)
-        existing_beta: Final = headers.get("anthropic-beta", "")
-        header_betas: Final = beta_set | {beta.strip() for beta in existing_beta.split(",") if beta.strip()}
+        header_betas: Final = requested_betas | _beta_names(headers.get("anthropic-beta"))
         if header_betas:
             headers["anthropic-beta"] = ",".join(header_betas)
 

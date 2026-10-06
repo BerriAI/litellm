@@ -795,12 +795,12 @@ async def test_vertex_messages_request_sends_compact_2026_09_04_beta_on_the_wire
     mock_response.headers = httpx.Headers({})
     mock_response.json.return_value = _VERTEX_MESSAGE_RESPONSE
 
-    with (
-        patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post,
-        patch(
-            "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
-            return_value=("token", "test-project"),
-        ),
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+    client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+        return_value=("token", "test-project"),
     ):
         await litellm.anthropic.messages.acreate(
             model="vertex_ai/claude-sonnet-4-6",
@@ -809,9 +809,10 @@ async def test_vertex_messages_request_sends_compact_2026_09_04_beta_on_the_wire
             compaction={"type": "summarize"},
             vertex_project="test-project",
             vertex_location="us-east5",
+            client=client,
         )
 
-    sent: Final = mock_post.call_args.kwargs
+    sent: Final = client.post.call_args.kwargs
     sent_body: Final = sent["json"] if "json" in sent else json.loads(sent["data"])
     assert sent["headers"]["anthropic-beta"].split(",").count("compact-2026-09-04") == 1
     assert sent_body["compaction"] == {"type": "summarize"}
