@@ -1222,15 +1222,14 @@ class TestAutoRouterBenchmarks:
         assert [group.router_name for group in response.groups] == ["tagged"]
 
     def test_the_listed_kinds_match_the_router_types_traffic_can_record(self):
-        """The one reason semantic is excluded, pinned against both declarations: a kind the
-        rollup can record must be listable, and a kind it cannot must not be."""
         from typing import get_args, get_type_hints
 
         from litellm.router_utils.auto_router_model_naming import StrategyRouterKind
         from litellm.types.utils import StandardLoggingRoutingDecision
 
-        recorded = set(get_args(get_type_hints(StandardLoggingRoutingDecision)["router_type"]))
-        assert set(get_args(StrategyRouterKind)) - {"semantic"} == recorded
+        readonly_router_type: Final = get_type_hints(StandardLoggingRoutingDecision, include_extras=True)["router_type"]
+        recorded: Final = set(get_args(get_args(readonly_router_type)[0]))
+        assert set(get_args(StrategyRouterKind)) == recorded
 
 
 # ---------------------------------------------------------------------------

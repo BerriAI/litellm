@@ -73,7 +73,8 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.otel.runtime import phase_event, phase_span
+from litellm.integrations.otel.routing import routing_decision_attributes
+from litellm.integrations.otel.runtime import phase_attributes, phase_event, phase_span
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -162,6 +163,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
 )
 from litellm.router_utils.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
+    STRATEGY_ROUTER_PARAM_FIELDS,
     GatedAutoRouterCapability,
     capability_limit_violation,
     claimed_capabilities,
@@ -8724,6 +8726,19 @@ class Router:
         breadcrumbs: Final = (*kept_breadcrumbs, attempt_record)
         earlier: Final = request_metadata.get("request_retry_count")
         request_retry_count: Final = (earlier if type(earlier) is int and 0 <= earlier else 0) + 1
+        decision: Final = request_metadata.get("routing_decision")
+        router_name: Final = decision.get("router_model_name") if isinstance(decision, Mapping) else None
+        if isinstance(router_name, str):
+            phase_event(
+                "litellm.routing.retry",
+                {
+                    "litellm.routing.router_model_name": router_name,
+                    "litellm.retry.count": request_retry_count,
+                    "error.type": type(e).__name__,
+                    **({"litellm.deployment.model_group": model_group} if isinstance(model_group, str) else {}),
+                    **({"litellm.deployment.id": deployment_id} if isinstance(deployment_id, str) else {}),
+                },
+            )
         kwargs[_metadata_var]["previous_models"] = breadcrumbs  # rebind-ok: the logging object already holds this dict
         kwargs[_metadata_var]["request_retry_count"] = request_retry_count  # rebind-ok: same dict, read by the cap
         return kwargs
@@ -9572,8 +9587,28 @@ class Router:
             )
         registry[deployment.model_name] = [
             *registry.get(deployment.model_name, []),
-            TaggedPreRoutingStrategy(tags=tags, strategy=strategy),
+            TaggedPreRoutingStrategy(
+                tags=tags,
+                strategy=strategy,
+                definition_fingerprint=self._routing_definition_fingerprint(deployment),
+                deployment=deployment,
+            ),
         ]
+
+    @staticmethod
+    def _routing_definition_fingerprint(deployment: Deployment) -> str | None:
+        """Identify configured routing fields, excluding external files and live strategy state."""
+        try:
+            definition: Final = json.dumps(
+                deployment.litellm_params.model_dump(
+                    include=STRATEGY_ROUTER_PARAM_FIELDS | {"model", "tags"}, exclude_none=True, warnings=False
+                ),
+                sort_keys=True,
+                default=Router._json_default_stable_id,
+            )
+        except (TypeError, ValueError):
+            return None
+        return Router.generate_model_id(deployment.model_name, {"routing_definition": definition})
 
     @staticmethod
     def _unregister_pre_routing_strategy(
@@ -9653,7 +9688,12 @@ class Router:
                 if adaptive_router is not None:
                     self.adaptive_routers[model_name] = [
                         *self.adaptive_routers.get(model_name, []),
-                        TaggedPreRoutingStrategy(tags=tagged.tags, strategy=adaptive_router),
+                        TaggedPreRoutingStrategy(
+                            tags=tagged.tags,
+                            strategy=adaptive_router,
+                            definition_fingerprint=tagged.definition_fingerprint,
+                            deployment=tagged.deployment,
+                        ),
                     ]
 
         self._sync_adaptive_router_hooks()
@@ -14224,6 +14264,7 @@ class Router:
         spend metadata is stamped before routing and the response carries the tier group the
         strategy picked.
         """
+        self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
         requested_registered_model_name: Final = self._get_model_from_alias(model=model) or model
         registered_model_name: Final = await self._resolve_claude_code_session_router(
             model=model,
@@ -14247,7 +14288,6 @@ class Router:
         )
         if selected_strategy is None:
             await arm_compaction(request_kwargs, None)
-            self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
             self._stamp_or_clear_metadata_key(
                 request_kwargs=request_kwargs, key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, value=None
             )
@@ -14258,6 +14298,26 @@ class Router:
 
         from litellm.proxy.auth.auto_router_checks import authorize_member_auto_router_inference
         from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
+
+        marker: Final = self._selected_strategy_marker_deployment(
+            model=registered_model_name, strategy_tags=selected_strategy.tags, request_kwargs=request_kwargs
+        )
+        definition: Final = selected_strategy.deployment
+        config_id: Final = definition.model_info.id if definition else None
+        updated_at: Final = definition.model_info.updated_at if definition else None
+        router_kind: Final = classify_strategy_router_model(definition.litellm_params.model) if definition else None
+        provenance: Final[StandardLoggingRoutingDecision] = {
+            "router_model_name": definition.model_name if definition else registered_model_name,
+            **({"router_type": router_kind} if router_kind is not None else {}),
+            **({"router_config_id": config_id} if config_id is not None else {}),
+            **({"router_config_updated_at": updated_at.isoformat()} if updated_at is not None else {}),
+            **(
+                {"router_config_fingerprint": selected_strategy.definition_fingerprint}
+                if selected_strategy.definition_fingerprint is not None
+                else {}
+            ),
+        }
+        phase_attributes(routing_decision_attributes(provenance))
 
         reject_recursive_compactor(registered_model_name)
         await arm_compaction(
@@ -14282,11 +14342,7 @@ class Router:
         )
 
         await authorize_member_auto_router_inference(
-            deployment=self._selected_strategy_marker_deployment(
-                model=registered_model_name,
-                strategy_tags=selected_strategy.tags,
-                request_kwargs=request_kwargs,
-            ),
+            deployment=marker,
             request_kwargs=request_kwargs,
             llm_router=self,
         )
@@ -14324,13 +14380,18 @@ class Router:
             input=input,
             specific_deployment=specific_deployment,
         )
+        traced_routed: Final = (
+            routed.model_copy(update={"routing_decision": {**provenance, **routed.routing_decision}})
+            if routed is not None and routed.routing_decision is not None
+            else routed
+        )
         # Routing-only compression must not leak into the response: the model call and
         # deployment-context filtering key off this field. Compared by value, since
         # pydantic rebuilds the list rather than keeping the object passed in.
         pre_routing_hook_response: Final = (
-            routed.model_copy(update={"messages": messages})
-            if routed is not None and routing_messages is not None and routed.messages == routing_messages
-            else routed
+            traced_routed.model_copy(update={"messages": messages})
+            if traced_routed is not None and routing_messages is not None and traced_routed.messages == routing_messages
+            else traced_routed
         )
         self._record_routing_decision(
             request_kwargs=request_kwargs,
@@ -14481,6 +14542,7 @@ class Router:
         """
         from litellm.types.router import BaselineRouteStamp
 
+        phase_attributes(routing_decision_attributes(routing_decision))
         baseline_model: Final = routing_decision.get("savings_baseline_model") if routing_decision else None
         baseline_id: Final = routing_decision.get("savings_baseline_deployment_id") if routing_decision else None
         router_name: Final = routing_decision.get("router_model_name") if routing_decision else None

@@ -310,6 +310,65 @@ class TestOpenTelemetryTeamAttributesOnChildSpans(unittest.TestCase):
         )
 
 
+def test_v1_routing_diagnostics_add_scalar_attributes_and_preserve_legacy_metadata() -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    decision: Final = {
+        "router_model_name": "auto-router",
+        "routed_model": "answer",
+        "router_config_id": "definition-1",
+        "cause": "heuristic",
+        "classifier_failure_reason": "timeout",
+        "classifier_error_type": "TimeoutError",
+        "classifier_cost": 0.001,
+    }
+    with provider.get_tracer(__name__).start_as_current_span("inference") as span:
+        otel.set_attributes(
+            span,
+            {
+                "model": "answer",
+                "standard_logging_object": {
+                    "id": "routing-call",
+                    "call_type": "acompletion",
+                    "metadata": {"routing_decision": decision},
+                },
+            },
+            {"model": "answer", "choices": [], "usage": {}},
+        )
+    (finished,) = exporter.get_finished_spans()
+    actual: Final = {
+        key: value for key, value in finished.attributes.items() if key.startswith("litellm.routing.")
+    }
+    assert actual == {f"litellm.routing.{key}": value for key, value in decision.items()}
+    assert finished.attributes["metadata.routing_decision"] == str(decision)
+
+
+@pytest.mark.parametrize("decision", ["custom", 42, ["custom"]])
+def test_v1_malformed_routing_metadata_preserves_inference_attributes(decision: object) -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    with provider.get_tracer(__name__).start_as_current_span("inference") as span:
+        otel.set_attributes(
+            span,
+            {
+                "model": "answer",
+                "standard_logging_object": {
+                    "id": "routing-call",
+                    "call_type": "acompletion",
+                    "metadata": {"routing_decision": decision},
+                },
+            },
+            {"model": "answer", "choices": [], "usage": {}},
+        )
+    (finished,) = exporter.get_finished_spans()
+    assert finished.attributes["gen_ai.request.model"] == "answer"
+    assert not any(key.startswith("litellm.routing.") for key in finished.attributes)
+
+
 class TestOpenTelemetryCostBreakdown(unittest.TestCase):
     def test_cost_breakdown_emitted_to_otel_span(self):
         """

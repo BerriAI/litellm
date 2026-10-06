@@ -1214,6 +1214,8 @@ class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
 
     tags: tuple[str, ...]
     strategy: _PreRoutingStrategyT_co
+    definition_fingerprint: str | None = None
+    deployment: Deployment | None = None
 
 
 @dataclass(frozen=True, slots=True)

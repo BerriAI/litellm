@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+from litellm.exceptions import Timeout as LiteLLMTimeout
 from litellm.router_strategy.auto_router.auto_router import AutoRouter
 
 pytestmark_skip_beta = pytest.mark.skip(
@@ -342,6 +343,8 @@ class FixedRouteLayer:
         self.route_choice = route_choice
 
     async def acall(self, vector: Any) -> Any:
+        if isinstance(self.route_choice, BaseException):
+            raise self.route_choice
         return self.route_choice
 
 
@@ -372,10 +375,14 @@ class StubEmbeddingRouter:
 class FailingEmbeddingRouter(StubEmbeddingRouter):
     """Router whose query embedding fails, as it does when the prompt exceeds the encoder's window."""
 
-    async def aembedding(self, input: List[str], model: str, **kwargs: Any) -> Any:
-        raise ValueError(
+    def __init__(self, error: Exception | None = None) -> None:
+        super().__init__()
+        self.error = error or ValueError(
             "litellm.InternalServerError: input is too large to process. increase the physical batch size"
         )
+
+    async def aembedding(self, input: List[str], model: str, **kwargs: Any) -> Any:
+        raise self.error
 
 
 def _auto_router(routelayer: Any, litellm_router_instance: Any = None, **kwargs: Any) -> AutoRouter:
@@ -395,24 +402,35 @@ class TestAutoRouterAlwaysResolvesARoutableModel:
     """The hook returns the alias's default model instead of failing or leaking the alias downstream."""
 
     @pytest.mark.asyncio
-    async def test_should_fall_back_to_default_model_when_the_embedding_call_fails(self):
+    @pytest.mark.parametrize("request_model", ["my-auto-router", "public-router-alias"])
+    async def test_should_fall_back_to_default_model_when_the_embedding_call_fails(self, request_model: str) -> None:
         auto_router: Final = _auto_router(FixedRouteLayer(None), litellm_router_instance=FailingEmbeddingRouter())
 
         result: Final = await auto_router.async_pre_routing_hook(
-            model="my-auto-router",
+            model=request_model,
             request_kwargs={},
             messages=[{"role": "user", "content": "a" * 100_000}],
         )
 
         assert result is not None
         assert result.model == "fallback-model"
+        assert result.routing_decision == {
+            "router_model_name": "my-auto-router",
+            "router_type": "semantic",
+            "routed_model": "fallback-model",
+            "cause": "semantic_error",
+            "classifier_model": auto_router.embedding_model,
+            "classifier_failure_reason": "classifier_error",
+            "classifier_error_type": "ValueError",
+        }
 
     @pytest.mark.asyncio
-    async def test_should_fall_back_to_default_model_when_no_route_matches(self):
+    @pytest.mark.parametrize("request_model", ["my-auto-router", "public-router-alias"])
+    async def test_should_fall_back_to_default_model_when_no_route_matches(self, request_model: str) -> None:
         auto_router: Final = _auto_router(FixedRouteLayer(None))
 
         result: Final = await auto_router.async_pre_routing_hook(
-            model="my-auto-router",
+            model=request_model,
             request_kwargs={},
             messages=[{"role": "user", "content": "nothing like any route"}],
         )
@@ -420,6 +438,13 @@ class TestAutoRouterAlwaysResolvesARoutableModel:
         assert result is not None
         # Leaving "my-auto-router" here fails downstream with "Unmapped LLM provider".
         assert result.model == "fallback-model"
+        assert result.routing_decision == {
+            "router_model_name": "my-auto-router",
+            "router_type": "semantic",
+            "routed_model": "fallback-model",
+            "cause": "semantic_no_match",
+            "classifier_model": auto_router.embedding_model,
+        }
 
     @pytest.mark.asyncio
     async def test_should_fall_back_to_default_model_when_the_route_layer_returns_an_empty_list(self):
@@ -452,14 +477,15 @@ class TestAutoRouterAlwaysResolvesARoutableModel:
         assert result.model == "code-model"
 
     @pytest.mark.asyncio
-    async def test_should_still_route_to_the_matched_route_when_one_matches(self):
+    @pytest.mark.parametrize("request_model", ["my-auto-router", "public-router-alias"])
+    async def test_should_still_route_to_the_matched_route_when_one_matches(self, request_model: str) -> None:
         from semantic_router.schema import RouteChoice
 
         router: Final = StubEmbeddingRouter()
         auto_router: Final = _auto_router(FixedRouteLayer(RouteChoice(name="code-model")), litellm_router_instance=router)
 
         result: Final = await auto_router.async_pre_routing_hook(
-            model="my-auto-router",
+            model=request_model,
             request_kwargs={},
             messages=[{"role": "user", "content": "fix this stack trace"}],
         )
@@ -467,6 +493,43 @@ class TestAutoRouterAlwaysResolvesARoutableModel:
         assert result is not None
         assert result.model == "code-model"
         assert router.seen_text == "fix this stack trace"
+        assert result.routing_decision == {
+            "router_model_name": "my-auto-router",
+            "router_type": "semantic",
+            "routed_model": "code-model",
+            "cause": "semantic_match",
+            "classifier_model": auto_router.embedding_model,
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error", (
+        TimeoutError("private request content"),
+        asyncio.TimeoutError("private request content"),
+        LiteLLMTimeout(message="private request content", model="embedding", llm_provider="openai"),
+    ))
+    @pytest.mark.parametrize("wrapped", [False, True])
+    async def test_should_record_timeout_without_exception_message(self, error: Exception, wrapped: bool) -> None:
+        auto_router: Final = _auto_router(
+            FixedRouteLayer(None if wrapped else error),
+            litellm_router_instance=FailingEmbeddingRouter(error) if wrapped else StubEmbeddingRouter(),
+        )
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router", request_kwargs={}, messages=[{"role": "user", "content": "route this"}]
+        )
+        assert result is not None and result.model == "fallback-model"
+        assert result.routing_decision is not None
+        assert result.routing_decision["cause"] == "semantic_error"
+        assert result.routing_decision["classifier_failure_reason"] == "timeout"
+        assert result.routing_decision["classifier_error_type"] == type(error).__name__
+        assert "private request content" not in str(result.routing_decision)
+
+    @pytest.mark.asyncio
+    async def test_should_propagate_cancellation_during_matching(self) -> None:
+        auto_router: Final = _auto_router(FixedRouteLayer(asyncio.CancelledError()))
+        with pytest.raises(asyncio.CancelledError):
+            await auto_router.async_pre_routing_hook(
+                model="my-auto-router", request_kwargs={}, messages=[{"role": "user", "content": "route this"}]
+            )
 
 
 class TestAutoRouterEmbeddingInputCap:
