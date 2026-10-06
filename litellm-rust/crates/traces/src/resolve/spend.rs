@@ -83,30 +83,52 @@ pub(super) fn call_ids(row: &TraceSpansRow) -> BTreeSet<CallKey> {
 
 enum SpanLog<'a> {
     NoLog,
-    One(&'a SpendRow),
+    Logs(Requests<'a>),
     Ambiguous,
 }
 
+fn contains(rows: &[&SpendRow], row: &SpendRow) -> bool {
+    rows.iter().any(|other| other.identity() == row.identity())
+}
+
 fn span_log<'a>(ids: &BTreeSet<CallKey>, spend_rows: &[&'a SpendRow]) -> SpanLog<'a> {
-    let candidates: Vec<Requests<'a>> = ids
+    let named: Vec<(&CallKey, Requests<'a>)> = ids
         .iter()
-        .map(|id| unique(spend_rows.iter().copied().filter(|spend| names(id, spend))))
-        .filter(|rows| !rows.is_empty())
-        .collect();
-    let Some((first, rest)) = candidates.split_first() else {
-        return SpanLog::NoLog;
-    };
-    let agreed: Vec<&'a SpendRow> = first
-        .iter()
-        .copied()
-        .filter(|row| {
-            rest.iter()
-                .all(|rows| rows.iter().any(|other| other.identity() == row.identity()))
+        .map(|id| {
+            (
+                id,
+                unique(spend_rows.iter().copied().filter(|spend| names(id, spend))),
+            )
         })
+        .filter(|(_, rows)| !rows.is_empty())
         .collect();
-    match agreed.as_slice() {
-        [row] => SpanLog::One(row),
-        _ => SpanLog::Ambiguous,
+    if named.is_empty() {
+        return SpanLog::NoLog;
+    }
+    let of_kind = |responses: bool| {
+        unique(
+            named
+                .iter()
+                .filter(|(id, _)| matches!(id, CallKey::ProviderResponse(_)) == responses)
+                .flat_map(|(_, rows)| rows.iter().copied()),
+        )
+    };
+    let (responses, calls) = (of_kind(true), of_kind(false));
+    let logs: Requests<'a> = match (responses.is_empty(), calls.is_empty()) {
+        (false, false) => responses
+            .into_iter()
+            .filter(|row| contains(&calls, row))
+            .collect(),
+        (true, _) => calls,
+        (false, true) => responses,
+    };
+    let each_id_names_one = named
+        .iter()
+        .all(|(_, rows)| rows.iter().filter(|row| contains(&logs, row)).count() == 1);
+    if logs.is_empty() || !each_id_names_one {
+        SpanLog::Ambiguous
+    } else {
+        SpanLog::Logs(logs)
     }
 }
 
@@ -125,10 +147,14 @@ pub(super) fn match_ids<'a>(
     if logs.iter().any(|log| matches!(log, SpanLog::Ambiguous)) {
         return (None, SpendMatch::Ambiguous);
     }
-    let matched = unique(logs.iter().filter_map(|log| match log {
-        SpanLog::One(row) => Some(*row),
-        SpanLog::NoLog | SpanLog::Ambiguous => None,
-    }));
+    let matched = unique(
+        logs.iter()
+            .flat_map(|log| match log {
+                SpanLog::Logs(rows) => rows.as_slice(),
+                SpanLog::NoLog | SpanLog::Ambiguous => &[],
+            })
+            .copied(),
+    );
     if matched.is_empty() {
         return (None, SpendMatch::NoSpendLog);
     }

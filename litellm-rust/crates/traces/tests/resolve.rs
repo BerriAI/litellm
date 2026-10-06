@@ -653,6 +653,27 @@ fn call_id_picks_the_call_when_its_response_id_has_a_cache_hit_twin() {
 }
 
 #[rstest]
+fn wrapper_recording_a_retry_and_its_final_attempt_prices_both() {
+    let rows = [TraceSpansRow {
+        call_keys: vec![
+            litellm_traces::CallKey::ProviderResponse("chatcmpl-retry".into()),
+            litellm_traces::CallKey::ProviderResponse("chatcmpl-final".into()),
+        ],
+        call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
+        ..llm("call", "", "agent", "")
+    }];
+    let logs = [
+        spend("retry", "chatcmpl-retry", 0.25),
+        spend("final", "chatcmpl-final", 0.5),
+    ];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(
+        (trace.summary.spend, trace.spans[0].spend_match),
+        (Some(0.75), Some(SpendMatch::Matched))
+    );
+}
+
+#[rstest]
 fn call_id_prices_a_legacy_spend_log_without_litellm_call_id() {
     let rows = [TraceSpansRow {
         call_keys: vec![litellm_traces::CallKey::LiteLlmRequest("legacy".into())],
