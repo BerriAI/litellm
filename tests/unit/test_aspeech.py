@@ -19,19 +19,21 @@ def _binary_response(content: bytes) -> HttpxBinaryResponseContent:
 
 
 @pytest.mark.asyncio
-async def test_aspeech_sync_result_is_used_without_second_call(monkeypatch):
+async def test_aspeech_sync_provider_called_once_with_marker(monkeypatch):
     """
-    #44546: when the provider's speech path returns synchronously (e.g. Gemini
-    TTS through the speech-to-completion bridge), aspeech must use the result
-    of the single run_in_executor call instead of invoking the provider a
-    second time - otherwise the provider generates and bills the audio twice.
+    #44546: a real synchronous provider (plain def speech() returning the
+    binary response, not a coroutine) must be invoked exactly once. The
+    returned audio must come from that single call (unique marker), and the
+    call must produce exactly one usage/cost record - otherwise a successful
+    aspeech() call triggers two upstream syntheses while logging one, making
+    user charges and provider cost reconciliation misleading.
     """
     calls = []
-    result = _binary_response(b"RIFF....WAVE-audio")
+    marker = b"RIFF....WAVE-marker-44546"
 
-    async def fake_speech(*args, **kwargs):
+    def fake_speech(*args, **kwargs):  # synchronous, like the Gemini TTS bridge
         calls.append(kwargs.get("model"))
-        return result
+        return _binary_response(marker)
 
     monkeypatch.setattr(litellm.main, "speech", fake_speech)
     monkeypatch.setattr(
@@ -40,11 +42,16 @@ async def test_aspeech_sync_result_is_used_without_second_call(monkeypatch):
         lambda model, api_base=None: ("gemini/gemini-3.8-flash-tts", "gemini", None, None),
     )
 
+    cost_records = []
+    monkeypatch.setattr(
+        litellm, "success_callback", [lambda *a, **kw: cost_records.append(kw)]
+    )
+
     response = await aspeech(model="gemini/gemini-3.8-flash-tts", input="Hello.", voice="Kore")
 
     assert len(calls) == 1, "sync provider must be called exactly once"
-    assert response is result
-    assert response.content == b"RIFF....WAVE-audio"
+    assert response.content == marker, "returned audio must come from that single call"
+    assert len(cost_records) == 1, "exactly one usage/cost record per call"
 
 
 @pytest.mark.asyncio
