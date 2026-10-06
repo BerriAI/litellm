@@ -70,13 +70,6 @@ pub(super) fn unique<'a>(requests: impl IntoIterator<Item = &'a SpendRow>) -> Re
         .collect()
 }
 
-fn unique_match<'a>(key: &CallKey, spend_rows: &'a [SpendRow]) -> Option<&'a SpendRow> {
-    match unique(spend_rows.iter().filter(|spend| names(key, spend))).as_slice() {
-        [request] => Some(request),
-        _ => None,
-    }
-}
-
 pub(super) fn call_ids(row: &TraceSpansRow) -> BTreeSet<CallKey> {
     CallEvidence::from_row(row)
         .key_set()
@@ -87,43 +80,25 @@ pub(super) fn call_ids(row: &TraceSpansRow) -> BTreeSet<CallKey> {
         .collect()
 }
 
-/// The spend rows that `ids` name, or `None` when there are no ids or any id matches no row or
-/// more than one.
-pub(super) fn requests<'a>(
+pub(super) fn match_ids<'a>(
     ids: &BTreeSet<CallKey>,
     spend_rows: &'a [SpendRow],
-) -> Option<Requests<'a>> {
+) -> (Option<Requests<'a>>, SpendMatch) {
     if ids.is_empty() {
-        return None;
+        return (None, SpendMatch::NoCallId);
     }
-    ids.iter()
-        .map(|id| unique_match(id, spend_rows))
-        .collect::<Option<Vec<_>>>()
-        .map(unique)
-}
-
-pub(super) fn spend_match(
-    ids: &BTreeSet<CallKey>,
-    spend_rows: &[SpendRow],
-    requests: Option<&Requests<'_>>,
-) -> SpendMatch {
-    if ids.is_empty() {
-        return SpendMatch::NoCallId;
-    }
-    if requests
-        .and_then(|requests| request_cost(requests))
-        .is_some()
-    {
-        return SpendMatch::Matched;
-    }
-    let logged = spend_rows
+    let named: Vec<Requests<'a>> = ids
         .iter()
-        .any(|spend| ids.iter().any(|key| names(key, spend)));
-    if logged {
-        SpendMatch::Ambiguous
-    } else {
-        SpendMatch::NoSpendLog
+        .map(|id| unique(spend_rows.iter().filter(|spend| names(id, spend))))
+        .collect();
+    if named.iter().any(|rows| rows.len() > 1) {
+        return (None, SpendMatch::Ambiguous);
     }
+    let matched = unique(named.into_iter().flatten());
+    if matched.is_empty() {
+        return (None, SpendMatch::NoSpendLog);
+    }
+    (Some(matched), SpendMatch::Matched)
 }
 
 pub(super) fn request_cost(requests: &[&SpendRow]) -> Option<f64> {

@@ -521,6 +521,54 @@ fn only_ids_litellm_assigned_join_spend(
 }
 
 #[rstest]
+#[case::legacy_row_without_call_id("", Some(0.25), SpendMatch::Matched)]
+#[case::call_id_names_nothing("missing", Some(0.25), SpendMatch::Matched)]
+fn an_id_that_names_no_spend_log_does_not_veto_the_call(
+    #[case] logged_call_id: &str,
+    #[case] expected: Option<f64>,
+    #[case] matched: SpendMatch,
+) {
+    let rows = [TraceSpansRow {
+        call_keys: vec![
+            litellm_traces::CallKey::ProviderResponse("chatcmpl-request".into()),
+            litellm_traces::CallKey::LiteLlmRequest("gateway".into()),
+        ],
+        call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
+        ..llm("call", "", "agent", "")
+    }];
+    let logs = [gateway_logged("request", logged_call_id, 0.25)];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(
+        (trace.spans[0].spend, trace.spans[0].spend_match),
+        (expected, Some(matched))
+    );
+}
+
+#[rstest]
+#[case::missing_cost(None, SpendMatch::Matched)]
+#[case::finite_cost(Some(0.25), SpendMatch::Matched)]
+fn a_single_matched_row_is_matched_whatever_its_cost(
+    #[case] cost: Option<f64>,
+    #[case] matched: SpendMatch,
+) {
+    let rows = [llm("call", "", "agent", "response")];
+    let logs = [SpendByResponseIdsRow {
+        spend: cost,
+        ..spend("request", "response", 0.0)
+    }];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(
+        (
+            trace.spans[0].spend,
+            trace.spans[0].spend_match,
+            trace.spans[0].spend_log_request_id.as_deref()
+        ),
+        (cost, Some(matched), Some("request"))
+    );
+    assert_eq!(trace.summary.priced_calls, u64::from(cost.is_some()));
+}
+
+#[rstest]
 #[case::same_request("gateway", Some(0.25))]
 #[case::two_requests("other", Some(0.75))]
 fn response_id_and_call_id_naming_one_request_count_it_once(

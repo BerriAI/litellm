@@ -110,18 +110,15 @@ impl<'a> Resolution<'a> {
     }
 
     pub(super) fn requests(&self, index: usize) -> Option<Requests<'a>> {
-        spend::requests(&spend::call_ids(self.row(index)), self.spend)
+        spend::match_ids(&spend::call_ids(self.row(index)), self.spend).0
     }
 
     pub(super) fn call_requests(&self, call: usize) -> Option<Requests<'a>> {
-        spend::requests(&self.call_ids(call), self.spend)
+        self.call_match(call).0
     }
 
     pub(super) fn call_match(&self, call: usize) -> (Option<Requests<'a>>, SpendMatch) {
-        let ids = self.call_ids(call);
-        let requests = spend::requests(&ids, self.spend);
-        let matched = spend::spend_match(&ids, self.spend, requests.as_ref());
-        (requests, matched)
+        spend::match_ids(&self.call_ids(call), self.spend)
     }
 
     /// A model call is priced by every id LiteLLM assigned that is recorded on it, on the LLM
