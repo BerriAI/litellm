@@ -1463,12 +1463,20 @@ async def test_reasoning_after_initial_server_tool_keeps_item_indexes(
     assert done["item"]["encrypted_content"] == completed[1]["encrypted_content"]
 
 
+@pytest.mark.parametrize("interstitial", ["none", "empty", "usage", "metadata"])
 @pytest.mark.asyncio
-async def test_resumed_thinking_blocks_without_reasoning_content_preserve_text() -> None:
+async def test_resumed_thinking_blocks_without_reasoning_content_preserve_text(interstitial: str) -> None:
     expected: Final = [
         {"type": "thinking", "thinking": "first", "signature": "first-signature"},
         {"type": "thinking", "thinking": "second", "signature": "second-signature"},
     ]
+    gap: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        model="test-model",
+        choices=[StreamingChoices(index=0, delta=Delta())],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2) if interstitial == "usage" else None,
+        provider_specific_fields={"test_marker": "sideband"} if interstitial == "metadata" else None,
+    )
     groups: Final = tuple(
         (
             ModelResponseStream(
@@ -1480,6 +1488,7 @@ async def test_resumed_thinking_blocks_without_reasoning_content_preserve_text()
                     )
                 ],
             ),
+            *((gap,) if interstitial != "none" else ()),
             _signature_only_thinking_chunk(block["signature"]),
             _chunk("interim"),
         )
@@ -1496,6 +1505,12 @@ async def test_resumed_thinking_blocks_without_reasoning_content_preserve_text()
     assert len(done) == 2
     assert [json.loads(item["encrypted_content"]) for item in done] == [[block] for block in expected]
     assert [item["encrypted_content"] for item in done] == [item["encrypted_content"] for item in completed]
+    assert [item["type"] for item in events[-1]["response"]["output"]] == [
+        "reasoning",
+        "message",
+        "reasoning",
+        "message",
+    ]
 
 
 @pytest.mark.parametrize("resume_reasoning", [False, True])

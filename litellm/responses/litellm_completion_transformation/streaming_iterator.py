@@ -1177,6 +1177,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     else self._pending_thinking_start_index
                 )
                 return
+            if (
+                self._pending_thinking_start_index is not None
+                and not delta.content
+                and not delta.tool_calls
+                and chunk.choices[0].finish_reason is None
+            ):
+                return
             self._pending_thinking_start_index = None
 
         # Reasoning-first
