@@ -656,17 +656,19 @@ async def test_proxy_restart_mid_burst_bills_each_landed_call_once(gateway: Gate
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as rebooted:
             follow_up_id, follow_up = _generate(rebooted.gateway, _CONFIG_MODEL)
             _assert_images(follow_up, follow_up_id, _REGIONAL_TOKEN_COST)
-            landed: Final = read_rows(
-                'SELECT request_id, spend FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(%s)', (list(call_ids),)
+            landed: Final = eventually(
+                lambda: read_rows(
+                    'SELECT request_id, spend FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(%s)', (list(call_ids),)
+                ),
+                lambda rows: set(succeeded) <= {str(row["request_id"]) for row in rows},
+                seconds=120,
             )
         landed_ids: Final = tuple(str(row["request_id"]) for row in landed)
-        assert set(landed_ids) <= set(succeeded), (landed_ids, succeeded)
-        assert len(set(landed_ids)) == len(landed_ids), landed_ids
-        assert all(float(str(row["spend"])) == pytest.approx(_REGIONAL_TOKEN_COST) for row in landed), landed
-        lost: Final = sorted(set(succeeded) - set(landed_ids))
         _artifact(
             tmp_path,
             "restart-loss.json",
-            {"served": len(served), "succeeded": len(succeeded), "landed": len(landed_ids), "lost_on_restart": lost},
+            {"served": len(served), "succeeded": len(succeeded), "landed": len(landed_ids)},
         )
-        assert len(lost) == len(succeeded) - len(landed_ids), (lost, succeeded, landed_ids)
+        assert set(succeeded) <= set(landed_ids), (succeeded, landed_ids)
+        assert len(set(landed_ids)) == len(landed_ids), landed_ids
+        assert all(float(str(row["spend"])) == pytest.approx(_REGIONAL_TOKEN_COST) for row in landed), landed
