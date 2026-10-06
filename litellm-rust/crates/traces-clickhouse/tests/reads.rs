@@ -844,12 +844,14 @@ async fn native_cost_correlation_survives_session_grouping_and_excludes_other_ow
 }
 
 #[rstest]
-#[case::recorded(false)]
-#[case::conflicting(true)]
+#[case::recorded(false, true)]
+#[case::conflicting(true, true)]
+#[case::invocation_without_execution(false, false)]
 #[tokio::test]
 async fn native_tool_content_agrees_between_single_and_bulk_reads(
     #[future(awt)] migrated_database: TestResult<SeededDatabase>,
     #[case] conflict: bool,
+    #[case] executed: bool,
 ) -> TestResult {
     use litellm_storage_clickhouse::fetch;
     use litellm_traces::query::named::{SpanDetailParams, SpanDetailsParams};
@@ -960,6 +962,7 @@ async fn native_tool_content_agrees_between_single_and_bulk_reads(
         DATABASE,
         InsertTable::OtelTraces,
         rows.into_iter()
+            .chain(executed.then_some(("execution", "team-a", "key-a", "s", "claude_code.tool.execution", "framework", "tool", "", "")))
             .map(
                 |(id, team, key, session, name, kind, parent, input, output)| {
                     BTreeMap::from([
@@ -974,7 +977,7 @@ async fn native_tool_content_agrees_between_single_and_bulk_reads(
                         ("Output".into(), json!(output)),
                         (
                             "SpanAttributes".into(),
-                            json!({"session.id":session,"tool_use_id":"call"}),
+                            json!({"session.id":session,"tool_use_id":"call", "span.type": if kind == "tool" { "tool" } else { "" }}),
                         ),
                         ("TeamId".into(), json!(team)),
                         ("ApiKeyHash".into(), json!(key)),
@@ -1027,6 +1030,10 @@ async fn native_tool_content_agrees_between_single_and_bulk_reads(
     assert_eq!(bulk.len(), 3);
     assert_eq!(bulk[0].input, r#"{"command":"exit 7"}"#);
     assert_eq!(bulk[0].attributes["lens.content.input_source"], "input");
+    assert_eq!(
+        bulk[0].attributes["lens.content.execution_status"],
+        if executed { "recorded" } else { "not_recorded" }
+    );
     assert_eq!(bulk[0].output, if conflict { "" } else { "Exit code 7" });
     assert_eq!(
         bulk[0].attributes["lens.content.output_status"],

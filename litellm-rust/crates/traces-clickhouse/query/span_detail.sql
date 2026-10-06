@@ -34,12 +34,20 @@ outputs AS (
       AND JSONType(result, 'content') = 'String'
     GROUP BY TeamId, ApiKeyHash, session_id, call_id
 ),
-executions AS (
+invocations AS (
     SELECT TeamId, ApiKeyHash, SpanAttributes['session.id'] AS session_id,
            groupUniqArray(coalesce(nullIf(SpanAttributes['gen_ai.tool.call.id'], ''), SpanAttributes['tool_use_id'])) AS call_ids
     FROM scoped
     WHERE ObservationType = 'tool' AND Framework IN ('claude-code', 'claude-agent-sdk')
     GROUP BY TeamId, ApiKeyHash, session_id
+),
+execution_spans AS (
+    SELECT TeamId, ApiKeyHash, SpanAttributes['session.id'] AS session_id,
+           ParentSpanId AS tool_span_id, min(SpanId) AS execution_span_id
+    FROM scoped
+    WHERE Framework IN ('claude-code', 'claude-agent-sdk')
+      AND (SpanAttributes['span.type'] = 'tool.execution' OR SpanName = 'claude_code.tool.execution')
+    GROUP BY TeamId, ApiKeyHash, session_id, tool_span_id
 ),
 answers AS (
     SELECT TeamId, ApiKeyHash, ParentSpanId AS parent_span_id, argMax(Output, Timestamp) AS output,
@@ -58,6 +66,8 @@ SELECT o.SpanId AS span_id,
                concat('[', arrayStringConcat(arrayFilter(result -> JSONExtractString(result, 'id') != '' AND NOT has(e.call_ids, JSONExtractString(result, 'id')),
                    JSONExtractArrayRaw(o.Output, 'tool_results')), ','), ']'), '[]'),
            'lens.content.input_source', multiIf(o.native_tool AND length(i.values) = 1, i.source_span, o.Input != '', o.SpanId, ''),
+           'lens.content.execution_status', if(o.native_tool AND o.SpanAttributes['span.type'] = 'tool',
+               if(x.execution_span_id != '', 'recorded', 'not_recorded'), ''),
            'lens.content.output_source', multiIf(o.Output != '', o.SpanId, o.native_tool AND length(r.values) = 1, r.source_span, o.ObservationType = 'agent' AND a.output != '', a.source_span, ''),
            'lens.content.input_status', multiIf(o.native_tool AND length(i.values) > 1, 'conflicting', input != '', 'recorded', 'not_recorded'),
            'lens.content.output_status', multiIf(o.Output != '', 'recorded', o.native_tool AND length(r.values) > 1, 'conflicting', o.native_tool AND length(r.values) = 1, 'recorded', output != '', 'recorded', 'not_recorded'),
@@ -66,7 +76,8 @@ SELECT o.SpanId AS span_id,
 FROM selected AS o
 LEFT JOIN inputs AS i ON o.native_tool AND o.TeamId = i.TeamId AND o.ApiKeyHash = i.ApiKeyHash AND o.session_id = i.session_id AND o.call_id = i.call_id
 LEFT JOIN outputs AS r ON o.native_tool AND o.TeamId = r.TeamId AND o.ApiKeyHash = r.ApiKeyHash AND o.session_id = r.session_id AND o.call_id = r.call_id
-LEFT JOIN executions AS e ON e.TeamId = o.TeamId AND e.ApiKeyHash = o.ApiKeyHash AND e.session_id = o.session_id
+LEFT JOIN invocations AS e ON e.TeamId = o.TeamId AND e.ApiKeyHash = o.ApiKeyHash AND e.session_id = o.session_id
+LEFT JOIN execution_spans AS x ON o.native_tool AND x.TeamId = o.TeamId AND x.ApiKeyHash = o.ApiKeyHash AND x.session_id = o.session_id AND x.tool_span_id = o.SpanId
 LEFT JOIN answers AS a ON a.parent_span_id = o.SpanId AND a.TeamId = o.TeamId AND a.ApiKeyHash = o.ApiKeyHash
 ORDER BY indexOf(requested_ids, o.SpanId)
 LIMIT length(requested_ids)

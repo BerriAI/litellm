@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 import { renderWithProviders, testQueryClient } from "../../../../../../tests/test-utils";
 import { RunView } from "../run/RunView";
+import { ContentTab } from "../content/ContentTab";
 import { useOpenTraceRouting } from "../../routing";
 import { TraceConversation } from "./TraceConversation";
 import type { SpanDetail, Trace } from "../../types";
@@ -127,6 +128,39 @@ describe("TraceConversation", () => {
     expect(within(result).getByText("exit_code")).toBeVisible();
     await user.click(within(result).getByRole("radio", { name: "Raw" }));
     expect(within(result).getByText(/"exit_code": 1/, { selector: "pre" })).toHaveTextContent('"error": null');
+  });
+
+  it.each([
+    ["recorded", "The user rejected this tool use", "Result recorded"],
+    ["recorded", "", "Result recorded"],
+    ["not_recorded", "", "Result not recorded"],
+    ["conflicting", "", "Conflicting results"],
+  ])("does not label an unexecuted invocation completed with %s output %j", async (status, output, badge) => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceSpanCall).mockResolvedValue({
+      ...toolDetail,
+      output,
+      attributes: {
+        "lens.content.execution_status": "not_recorded",
+        "lens.content.output_status": status,
+        "lens.content.tool_result_is_error": output ? "1" : "0",
+      },
+    });
+    renderWithProviders(
+      <TraceConversation trace={{ ...trace, spans: [tool] }} accessToken="test" onOpenStep={vi.fn()} />,
+    );
+    expect(await screen.findByText("Execution not recorded")).toBeVisible();
+    expect(screen.getByText(badge)).toBeVisible();
+    expect(screen.queryByText("Completed")).not.toBeInTheDocument();
+    const expand = screen.queryByRole("button", { name: "Expand read_file tool call" });
+    if (expand) await user.click(expand);
+    if (output) expect(screen.getByText(output)).toBeVisible();
+    else if (status === "recorded") expect(screen.getByText("The recorded result is empty.")).toBeVisible();
+    else if (status === "not_recorded") expect(screen.getByText("No result content recorded.")).toBeVisible();
+    else
+      expect(
+        screen.getByText("Conflicting tool outputs were recorded. Inspect the capture source spans."),
+      ).toBeVisible();
   });
 
   it("loads twenty span details initially and pages conversation entries on demand", async () => {
@@ -475,6 +509,37 @@ describe("TraceConversation", () => {
     renderWithProviders(<TraceConversation trace={trace} accessToken="test" onOpenStep={vi.fn()} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Retry this batch");
     expect(screen.queryByText("End of conversation")).not.toBeInTheDocument();
+  });
+
+  it("keeps loaded conversation content visible when a background refresh fails", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceSpansCall)
+      .mockResolvedValueOnce([rootDetail, toolDetail])
+      .mockRejectedValueOnce(new Error("refresh failed"));
+    renderWithProviders(<TraceConversation trace={trace} accessToken="test" onOpenStep={vi.fn()} />);
+    expect(await screen.findByText("The release is ready")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Expand read_file tool call" }));
+    await act(async () => {
+      await testQueryClient.invalidateQueries({ queryKey: ["agentTraceContents"] });
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Retry this batch");
+    expect(screen.getByText("Read the release notes")).toBeVisible();
+    expect(screen.getByText("All checks passed")).toBeVisible();
+    expect(screen.getByText("The release is ready")).toBeVisible();
+  });
+
+  it.each(["input", "output"])("distinguishes conflicting %s content from absent evidence", async (field) => {
+    vi.mocked(agentTraceSpanCall).mockResolvedValue({
+      ...toolDetail,
+      input: "",
+      output: "",
+      attributes: { [`lens.content.${field}_status`]: "conflicting" },
+    });
+    renderWithProviders(<ContentTab accessToken="test" traceId={trace.summary.trace_id} span={trace.spans[1]} />);
+    expect(
+      await screen.findByText(`Conflicting ${field} content was recorded. Inspect the capture source spans.`),
+    ).toBeVisible();
+    expect(screen.queryByText("No content recorded for this span.")).not.toBeInTheDocument();
   });
 
   it("retains readable split results and retries only the oversized span", async () => {

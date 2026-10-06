@@ -41,13 +41,17 @@ export function useConversationDetails(trace: Trace, accessToken: string) {
         queryKey,
         queryFn: async (): Promise<BatchResult> => {
           const previous = queryClient.getQueryData<BatchResult>(queryKey);
-          const retained = previous?.failedIds.length ? previous.details : [];
           const pending = previous?.failedIds.length ? previous.failedIds : ids;
           const result = await readBatch(traces, traceId, pending, traceRef);
+          const details = [
+            ...new Map(
+              [...(previous?.details ?? []), ...result.details].map((detail) => [detail.span_id, detail]),
+            ).values(),
+          ];
           for (const detail of result.details) {
             queryClient.setQueryData(["agentTraceSpan", traceId, traceRef, detail.span_id, accessToken], detail);
           }
-          return { details: [...retained, ...result.details], failedIds: result.failedIds };
+          return { details, failedIds: result.failedIds };
         },
         staleTime: 30_000,
         retry: false as const,

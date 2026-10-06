@@ -564,35 +564,38 @@ describe("coding sessions", () => {
     expect(items.find((item) => item.span.span_id === response.span_id)?.agentId).toBe("agent-tool");
   });
 
-  it("shows unexecuted tool results once as attempts without inventing executed spans", () => {
-    const body = {
-      ...root,
-      span_id: "body",
-      framework: "claude-code",
-      type: "framework" as const,
-      name: "claude_code.api_request_body",
-    };
-    const duplicate = { ...body, span_id: "retry" };
-    const output = {
-      ...detail("body", "", ""),
-      attributes: {
-        "lens.content.unexecuted_tool_results": JSON.stringify([
-          { id: "denied", content: "Tool permission denied", is_error: true },
-        ]),
-      },
-    };
-    const details = new Map([
-      [body.span_id, output],
-      [duplicate.span_id, { ...output, span_id: duplicate.span_id }],
-    ]);
-    const items = buildConversation([body, duplicate], details, true);
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      toolAttempt: { isError: true },
-      toolResult: "Tool permission denied",
-      span: { type: "framework" },
-    });
-  });
+  it.each(["claude-code", "claude-agent-sdk"])(
+    "shows %s unexecuted tool results once without inventing executed spans",
+    (framework) => {
+      const body = {
+        ...root,
+        span_id: "body",
+        framework,
+        type: "framework" as const,
+        name: "claude_code.api_request_body",
+      };
+      const duplicate = { ...body, span_id: "retry" };
+      const output = {
+        ...detail("body", "", ""),
+        attributes: {
+          "lens.content.unexecuted_tool_results": JSON.stringify([
+            { id: "denied", content: "Tool permission denied", is_error: true },
+          ]),
+        },
+      };
+      const details = new Map([
+        [body.span_id, output],
+        [duplicate.span_id, { ...output, span_id: duplicate.span_id }],
+      ]);
+      const items = buildConversation([body, duplicate], details, true);
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        toolAttempt: { isError: true, resultStatus: "recorded" },
+        toolResult: "Tool permission denied",
+        span: { type: "framework" },
+      });
+    },
+  );
 
   it("uses canonical native tool content without browser supplements overriding it", () => {
     const tool = {

@@ -76,7 +76,11 @@ interface ContentTabProps {
 export function ContentTab({ accessToken, traceId, traceRef, span }: ContentTabProps) {
   const detailQuery = useSpanDetail(accessToken, traceId, span.span_id, traceRef);
   const detail = detailQuery.data;
-  const empty = detail && !detail.input && !detail.output;
+  const empty =
+    detail &&
+    !detail.input &&
+    !detail.output &&
+    !["input", "output"].some((field) => detail.attributes[`lens.content.${field}_status`] === "conflicting");
   return (
     <div className="flex flex-col pb-4">
       {(span.status === "error" || span.error) && (

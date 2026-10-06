@@ -303,7 +303,13 @@ function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpen
   const failed = item.toolAttempt?.isError ?? item.span.status === "error";
   const executionStatus = failed ? "Failed" : "Completed";
   const [open, setOpen] = useState(failed);
-  const name = item.toolAttempt ? "Tool attempt" : item.span.name;
+  const name = item.toolCall?.name ?? item.span.name;
+  const attemptStatus =
+    item.toolAttempt?.resultStatus === "recorded"
+      ? "Result recorded"
+      : item.toolAttempt?.resultStatus === "conflicting"
+        ? "Conflicting results"
+        : "Result not recorded";
   const summary = toolSummary(item.toolCall?.args);
   return (
     <div className={cn("min-w-0 overflow-hidden rounded-md border", failed && "border-destructive/40")}>
@@ -329,7 +335,7 @@ function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpen
             )}
           </span>
           <span className={cn("ml-auto shrink-0 text-xs", failed ? "text-destructive" : "text-muted-foreground")}>
-            {item.toolAttempt ? "Result recorded" : executionStatus}
+            {item.toolAttempt ? attemptStatus : executionStatus}
           </span>
         </button>
         <Button

@@ -121,7 +121,7 @@ export interface ConversationItem {
   messages: TraceMessage[];
   toolCall?: TraceToolCall;
   toolResult?: string;
-  toolAttempt?: { isError: boolean };
+  toolAttempt?: { isError: boolean; resultStatus: "recorded" | "conflicting" | "not_recorded" };
   inputWarning?: string;
   contentWarning?: string;
   agentId?: string;
@@ -164,12 +164,28 @@ function toolItem(
     detail.attributes["lens.content.input_status"] === "conflicting"
       ? "Conflicting tool arguments were recorded. Inspect the capture source spans."
       : undefined;
+  const toolAttempt =
+    detail.attributes["lens.content.execution_status"] === "not_recorded"
+      ? {
+          isError: detail.attributes["lens.content.tool_result_is_error"] === "1",
+          resultStatus: status === "recorded" || status === "conflicting" ? status : "not_recorded",
+        }
+      : undefined;
   const contentWarning = (() => {
     if (status === "conflicting") return "Conflicting tool outputs were recorded. Inspect the capture source spans.";
     if (status === "recorded" && !result) return "The recorded result is empty.";
     return undefined;
   })();
-  return { id: span.span_id, span, messages: [], toolCall: call, toolResult: result, inputWarning, contentWarning };
+  return {
+    id: span.span_id,
+    span,
+    messages: [],
+    toolCall: call,
+    toolResult: result,
+    toolAttempt,
+    inputWarning,
+    contentWarning,
+  };
 }
 
 interface ConversationEvent {
@@ -330,7 +346,7 @@ export function buildConversation(
           span,
           messages: [],
           toolCall: { name: "Tool attempt", args: { tool_call_id: result.id } },
-          toolAttempt: { isError: result.isError },
+          toolAttempt: { isError: result.isError, resultStatus: "recorded" },
           toolResult: result.content,
         });
       }
