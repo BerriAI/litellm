@@ -92,7 +92,6 @@ fn cache_with_limit(max_entry_bytes: usize) -> Arc<dyn ResponseCacheService> {
         .with_config(ResponseCacheConfig {
             namespace: "test".into(),
             max_entry_bytes,
-            ..ResponseCacheConfig::default()
         }),
     )
 }

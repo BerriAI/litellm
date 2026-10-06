@@ -1,7 +1,7 @@
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheKeyInput, CacheOptions, CachePolicy, CacheScope, CacheTarget, ResponseCache,
-    ResponseCacheConfig, ResponseCacheService,
+    CacheKeyInput, CacheOptions, CachePolicy, CacheTarget, ResponseCache, ResponseCacheConfig,
+    ResponseCacheService,
 };
 use litellm_host::interceptors::{Interceptors, ProviderIdentity};
 use litellm_inference::{
@@ -81,7 +81,6 @@ fn cache_with_limit(max_entry_bytes: usize) -> Arc<dyn ResponseCacheService> {
         .with_config(ResponseCacheConfig {
             namespace: "test".into(),
             max_entry_bytes,
-            ..ResponseCacheConfig::default()
         }),
     )
 }
@@ -340,7 +339,7 @@ async fn forwarded_headers_and_the_deployment_decide_messages_cache_reuse(
         .expect(if hit { 1 } else { 2 })
         .mount(&upstream)
         .await;
-    let route = support::messages_route(support::no_secrets()).with_cache(cache);
+    let route = support::messages_route(litellm_inference_testing::no_secrets()).with_cache(cache);
     let hooks = ChangingHooks::default();
     let call = |change: &str| MessagesCall {
         body: serde_json::from_value(json!({

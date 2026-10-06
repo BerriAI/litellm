@@ -1,7 +1,7 @@
 mod support;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheOptions, CachePolicy, CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService,
+    CacheOptions, CachePolicy, ResponseCache, ResponseCacheConfig, ResponseCacheService,
 };
 use litellm_host::{
     interceptors::{
@@ -22,6 +22,10 @@ use std::{
     },
     time::Duration,
 };
+fn shared() -> CacheOptions {
+    CacheOptions::shared(CachePolicy::default())
+}
+
 #[fixture]
 fn cache() -> Arc<dyn ResponseCacheService> {
     cache_with_limit(4096)
@@ -36,7 +40,6 @@ fn cache_with_limit(max_entry_bytes: usize) -> Arc<dyn ResponseCacheService> {
         .with_config(ResponseCacheConfig {
             namespace: "test".into(),
             max_entry_bytes,
-            ..ResponseCacheConfig::default()
         }),
     )
 }

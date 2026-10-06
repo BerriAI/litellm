@@ -161,7 +161,6 @@ fn cache_with_limit(max_entry_bytes: usize) -> Arc<dyn ResponseCacheService> {
         .with_config(ResponseCacheConfig {
             namespace: "test".into(),
             max_entry_bytes,
-            ..ResponseCacheConfig::default()
         }),
     )
 }
@@ -584,7 +583,6 @@ async fn key_resolution_failure_skips_cache_and_runs_provider() {
         config: ResponseCacheConfig {
             namespace: "test".into(),
             max_entry_bytes: 4096,
-            ..ResponseCacheConfig::default()
         },
         lookups: AtomicUsize::new(0),
         stores: AtomicUsize::new(0),
@@ -653,7 +651,6 @@ async fn backend_failures_do_not_fail_inference() {
         ResponseCache::new(Arc::new(UnavailableCache)).with_config(ResponseCacheConfig {
             namespace: "test".into(),
             max_entry_bytes: 4096,
-            ..ResponseCacheConfig::default()
         }),
     );
     let calls = AtomicUsize::new(0);
@@ -852,14 +849,12 @@ async fn namespaces_and_surfaces_isolate_entries_on_shared_storage() {
         ResponseCache::new(storage.clone()).with_config(ResponseCacheConfig {
             namespace: "first".into(),
             max_entry_bytes: 4096,
-            ..ResponseCacheConfig::default()
         }),
     );
     let second_cache: Arc<dyn ResponseCacheService> = Arc::new(
         ResponseCache::new(storage).with_config(ResponseCacheConfig {
             namespace: "second".into(),
             max_entry_bytes: 4096,
-            ..ResponseCacheConfig::default()
         }),
     );
     let calls = AtomicUsize::new(0);
