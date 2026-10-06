@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 
 import type { TraceSummary } from "../../types";
-import type { TimeWindow } from "@/components/shared/timeline/Timeline";
+import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 
 import { SearchBox } from "@/components/shared/search/SearchBox";
 import { itemValues } from "@/components/shared/search/valueSource";
@@ -19,10 +19,11 @@ interface RunSearchProps {
   runs: readonly TraceSummary[];
   /** The range the list shows; the copied query bounds itself to it. */
   range?: TimeWindow;
+  busy?: boolean;
 }
 
 /** The runs list query box: free text plus `key:value` filters over run fields, copyable as a trace query. */
-export function RunSearch({ value, onChange, runs, range }: RunSearchProps) {
+export function RunSearch({ value, onChange, runs, range, busy = false }: RunSearchProps) {
   const command = useMemo(() => runQueryCommand(range), [range]);
   return (
     <SearchBox.Root
@@ -36,6 +37,7 @@ export function RunSearch({ value, onChange, runs, range }: RunSearchProps) {
       <SearchBox.Input
         className="h-8 overflow-hidden rounded-md px-3 whitespace-nowrap"
         placeholder="Search input or trace ID"
+        busy={busy}
       />
       <SearchBox.Suggestions>
         <SearchBox.CopyCommand title={COPY_HINT} command={command} />

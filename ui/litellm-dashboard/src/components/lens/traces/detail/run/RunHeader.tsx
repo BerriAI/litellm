@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, Copy } from "lucide-react";
+import { ArrowLeft, Check, Copy, Link } from "lucide-react";
 import { useState } from "react";
 import { useTimeout } from "usehooks-ts";
 
@@ -10,6 +10,7 @@ import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
 import type { TraceHandoff } from "../../api";
+import { traceRefOf, traceShareUrl } from "../../routing";
 import { formatCost } from "../../list/AgentTracesTable";
 import { IdChip } from "../../ui/IdChip";
 import { SpanIcon } from "../../ui/SpanIcon";
@@ -17,7 +18,14 @@ import { FrameworkLogo, traceFramework } from "../../ui/TraceFramework";
 import type { Trace } from "../../types";
 import { fmtMs, fmtTok, traceAgentNames, traceDisplayName } from "../../utils";
 
-function CopyForAgent({ handoff }: { handoff: TraceHandoff }) {
+interface CopyButtonProps {
+  label: string;
+  icon: typeof Copy;
+  text: () => string;
+  toast: string;
+}
+
+function CopyButton({ label, icon: Icon, text, toast }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
   useTimeout(() => setCopied(false), copied ? 1600 : null);
   return (
@@ -25,10 +33,10 @@ function CopyForAgent({ handoff }: { handoff: TraceHandoff }) {
       variant="outline"
       size="xs"
       className="h-7 shrink-0 gap-1.5 text-xs shadow-none"
-      onClick={async () => setCopied(await copyToClipboard(handoff.text, handoff.copied))}
+      onClick={async () => setCopied(await copyToClipboard(text(), toast))}
     >
-      {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-      {copied ? "Copied" : "Copy for agent"}
+      {copied ? <Check className="size-3" /> : <Icon className="size-3" />}
+      {copied ? "Copied" : label}
     </Button>
   );
 }
@@ -103,7 +111,15 @@ export function RunHeader({ trace, handoff, onBack, embedded }: RunHeaderProps) 
               Conversation
             </TabsTrigger>
           </TabsList>
-          <CopyForAgent handoff={handoff} />
+          <div className="flex items-center gap-1.5">
+            <CopyButton
+              label="Copy link"
+              icon={Link}
+              text={() => traceShareUrl(traceRefOf(summary), window.location)}
+              toast="Trace link copied"
+            />
+            <CopyButton label="Copy for agent" icon={Copy} text={() => handoff.text} toast={handoff.copied} />
+          </div>
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">

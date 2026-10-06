@@ -6,7 +6,18 @@ import datetime
 import enum
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+    Final,
+    Generic,
+    Literal,
+    TypeAlias,
+    TypeVar,
+    get_type_hints,
+)
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
@@ -39,6 +50,8 @@ from .utils import (
     # private alias: `from .types.router import *` would rebind a public Final in litellm/__init__.py
     server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
 )
+
+AllowedModelRegion: TypeAlias = Literal["eu", "us"]
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
