@@ -4368,7 +4368,7 @@ async def test_sse_keepalive_does_not_leak_parallel_slot_v3(answers_after_ping):
     from litellm.proxy.common_request_processing import open_sse_before_first_byte
     from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_BYTES
 
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-sse-keepalive-test")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
@@ -4431,7 +4431,7 @@ async def test_sse_keepalive_still_enforces_max_parallel_requests_v3():
 
     from litellm.proxy.common_request_processing import open_sse_before_first_byte
 
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-sse-keepalive-test")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
