@@ -232,6 +232,56 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
     )
 
 
+# Azure Foundry GPT-6.1 Sol announcement, 2026-09-29: https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-gpt-6-1-sol-in-microsoft-foundry-advanced-intelligence-optimized-for/4560811
+AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM: Final = MappingProxyType({"us": 1.1, "eu": 1.2, "apac": 1.2})
+
+
+@pytest.mark.parametrize("region", sorted(AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM))
+def test_azure_gpt_6_1_sol_data_zone_rows_charge_the_global_web_search_price(prices: dict, region: str):
+    global_search_cost = prices["azure/gpt-6.1-sol"]["search_context_cost_per_query"]
+    assert global_search_cost
+    assert prices[f"azure/{region}/gpt-6.1-sol"].get("search_context_cost_per_query") == global_search_cost
+
+
+@pytest.mark.parametrize("region", sorted(AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM))
+def test_azure_gpt_6_1_sol_data_zone_rows_price_requests_at_the_regional_premium(region: str):
+    premium = AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM[region]
+    usage = {"prompt_tokens": 300_000, "completion_tokens": 1_000, "cache_read_input_tokens": 100_000}
+
+    def total_cost(model: str) -> float:
+        prompt_cost, completion_cost = litellm.cost_per_token(
+            model=model,
+            custom_llm_provider="azure",
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            cache_read_input_tokens=usage["cache_read_input_tokens"],
+        )
+        return prompt_cost + completion_cost
+
+    global_cost = total_cost("azure/gpt-6.1-sol")
+    assert global_cost > 0
+    assert total_cost(f"azure/{region}/gpt-6.1-sol") == pytest.approx(global_cost * premium)
+
+
+# https://ai.google.dev/gemini-api/docs/models/deep-research-preview-04-2026
+@pytest.mark.parametrize("model", ["gemini/deep-research-preview-04-2026", "gemini/deep-research-max-preview-04-2026"])
+def test_gemini_deep_research_previews_accept_the_documented_input_window(prices: dict, model: str):
+    assert prices[model]["max_input_tokens"] == 1_048_576
+    assert prices[model]["max_output_tokens"] == 65_536
+
+
+# https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions
+VERTEX_GEMINI_FLASH_RETIREMENT_DATES: Final = MappingProxyType(
+    {"gemini-3.6-flash": "2026-11-19", "gemini-3.7-flash": "2027-01-28"}
+)
+
+
+@pytest.mark.parametrize("model", sorted(VERTEX_GEMINI_FLASH_RETIREMENT_DATES))
+@pytest.mark.parametrize("prefix", ["", "vertex_ai/"])
+def test_vertex_gemini_flash_rows_carry_the_documented_retirement_date(prices: dict, model: str, prefix: str):
+    assert prices[f"{prefix}{model}"]["deprecation_date"] == VERTEX_GEMINI_FLASH_RETIREMENT_DATES[model]
+
+
 OPENAI_REASONING_FAMILY_MARKERS = ("codex", "deep-research", "chat-latest")
 
 
