@@ -354,7 +354,7 @@ def test_conversation_is_forwarded_as_a_separate_responses_parameter(gateway: Ga
         requests: Final = drain_contract_requests(wire)
         assert [(request.method, request.target) for request in requests] == [("POST", "/v1/responses")], requests
         assert _JSON_OBJECT.validate_json(requests[0].body) == {
-            "model": model,
+            "model": _MODEL,
             "input": "continue this conversation",
             "conversation": conversation,
         }, requests[0].body
