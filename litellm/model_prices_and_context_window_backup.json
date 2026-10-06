@@ -27133,7 +27133,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
             "/v1/batch"
         ],
         "supported_modalities": [
@@ -27191,7 +27192,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
             "/v1/batch"
         ],
         "supported_modalities": [
@@ -27242,7 +27244,8 @@
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
             "/v1/batch"
         ],
         "supported_modalities": [
@@ -27288,7 +27291,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
             "/v1/batch"
         ],
         "supported_modalities": [
@@ -27330,7 +27334,8 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
             "/v1/batch"
         ],
         "supported_modalities": [
@@ -27376,7 +27381,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
             "/v1/batch"
         ],
         "supported_modalities": [
@@ -27576,7 +27582,7 @@
         "max_input_tokens": 65536,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
-        "mode": "image_generation",
+        "mode": "chat",
         "output_cost_per_image": 0.134,
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
@@ -28920,8 +28926,8 @@
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -28963,8 +28969,8 @@
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -29230,8 +29236,8 @@
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -29285,8 +29291,8 @@
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -29332,8 +29338,8 @@
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -29374,8 +29380,8 @@
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -29417,8 +29423,8 @@
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -50568,7 +50574,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
             "/v1/batch"
         ],
         "supported_modalities": [
@@ -50625,7 +50632,14 @@
         "output_cost_per_token_flex": 6e-06,
         "output_cost_per_token_priority": 2.16e-05,
         "supports_reasoning": false,
-        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
+            "/v1/batch"
+        ]
+
     },
     "vertex_ai/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -50652,7 +50666,14 @@
         "output_cost_per_token_above_200k_tokens_priority": 3.24e-05,
         "output_cost_per_token_batches": 6e-06,
         "supports_reasoning": false,
-        "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
+        "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
+            "/v1/batch"
+        ]
+
     },
     "vertex_ai/gemini-3.1-flash-image": {
         "cache_read_input_token_cost": 5e-08,
@@ -50675,7 +50696,14 @@
         "output_cost_per_token_flex": 1.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_reasoning": false,
-        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
+            "/v1/batch"
+        ]
+
     },
     "vertex_ai/gemini-3.1-flash-image-preview": {
         "input_cost_per_image": 0.00056,
@@ -50693,7 +50721,14 @@
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_batches": 1.5e-06,
         "supports_reasoning": false,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models"
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
+            "/v1/batch"
+        ]
+
     },
     "vertex_ai/gemini-3.1-flash-lite-image": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -50717,7 +50752,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
             "/v1/batch"
         ],
         "supported_modalities": [
@@ -50919,7 +50955,7 @@
         "max_input_tokens": 65536,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
-        "mode": "image_generation",
+        "mode": "chat",
         "output_cost_per_image": 0.134,
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
