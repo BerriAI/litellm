@@ -22,7 +22,7 @@ export function useConversationDetails(trace: Trace, accessToken: string) {
     [traceId, traceRef, accessToken, traces],
   );
   const queries = useQueries({ queries: visible.map(spanQuery) });
-  const unresolvedIndex = queries.findIndex((query) => !query.isSuccess);
+  const unresolvedIndex = queries.findIndex((query) => query.data === undefined);
   const loadedCount = unresolvedIndex < 0 ? queries.length : unresolvedIndex;
   const details = new Map(
     queries.slice(0, loadedCount).map((query, index) => [visible[index].span_id, query.data!] as const),
