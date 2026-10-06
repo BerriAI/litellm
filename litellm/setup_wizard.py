@@ -7,13 +7,14 @@ Guides users through selecting LLM providers, entering API keys,
 and generating a proxy config file — mirroring the Claude Code onboarding UX.
 """
 
-import importlib.metadata
 import os
 import re
 import secrets
 import sys
 import sysconfig
 from pathlib import Path
+
+from litellm._version import get_distribution
 
 # termios / tty are Unix-only; fall back gracefully on Windows
 try:
@@ -258,7 +259,7 @@ class SetupWizard:
     @staticmethod
     def _print_welcome() -> None:
         try:
-            version = importlib.metadata.version("litellm")
+            version = get_distribution().version
         except Exception:
             version = "unknown"
         print()

@@ -10,7 +10,6 @@ import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Sequence
 from contextlib import AbstractAsyncContextManager
 from functools import partial
-from importlib.metadata import version
 from types import MappingProxyType
 from typing import Final, TypeAlias, TypeVar, cast
 
@@ -24,6 +23,8 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._stream_protocols import ReadStream, WriteStream
 from mcp.shared.message import SessionMessage
+
+from litellm._version import get_distribution
 
 _TransportStreams: TypeAlias = tuple[
     ReadStream[SessionMessage | Exception],
@@ -566,7 +567,7 @@ class MCPClient:
             InitializeRequest(
                 params=InitializeRequestParams(
                     protocol_version=self.protocol_version,
-                    client_info=Implementation(name="litellm", version=version("litellm")),
+                    client_info=Implementation(name="litellm", version=get_distribution().version),
                     capabilities=ClientCapabilities(
                         sampling=SamplingCapability() if self._sampling_callback is not None else None,
                         elicitation=ElicitationCapability(

@@ -29,12 +29,12 @@ def check_environment_is_base_only() -> str:
 
 
 def check_import() -> str:
-    from importlib.metadata import version
+    from litellm._version import get_distribution
 
     import litellm
 
     _require(bool(litellm.__file__), "litellm has no __file__")
-    return f"imported litellm {version('litellm')}"
+    return f"imported litellm {get_distribution().version}"
 
 
 def check_completion() -> str:
@@ -51,10 +51,12 @@ def check_completion() -> str:
 
 
 def check_mcp_install_guidance() -> str:
+    from litellm._version import get_distribution_name
+
     try:
         import litellm.experimental_mcp_client
     except ImportError as error:
-        _require("pip install 'litellm[mcp]'" in str(error), f"missing MCP installation guidance: {error}")
+        _require(f"pip install '{get_distribution_name()}[mcp]'" in str(error), f"missing MCP installation guidance: {error}")
         _require(isinstance(error.__cause__, ModuleNotFoundError), "original missing-dependency cause was lost")
         _require(error.__cause__.name == "mcp", f"unexpected missing dependency: {error.__cause__}")
         return "optional MCP client explains how to install litellm[mcp]"

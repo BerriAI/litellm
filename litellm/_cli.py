@@ -1,11 +1,13 @@
 from importlib.util import find_spec
 from typing import Final
 
+from litellm._version import get_distribution_name
+
 
 def _require_cli(extra: str, modules: tuple[str, ...]) -> None:
     missing: Final = tuple(module for module in modules if find_spec(module) is None)
     if missing:
-        raise SystemExit(f'Install the {extra} commands with pip install "litellm[{extra}]"')
+        raise SystemExit(f'Install the {extra} commands with pip install "{get_distribution_name()}[{extra}]"')
 
 
 def run_server() -> None:

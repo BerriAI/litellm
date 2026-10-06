@@ -6,14 +6,15 @@ import json
 import os
 import subprocess
 import sys
-from importlib.metadata import distribution
 from importlib.resources import files
 from pathlib import Path
 from typing import Final
 
+from litellm._version import get_distribution
+
 
 def check_ui_packaging(profile: str) -> str:
-    sdk_files: Final = distribution("litellm").files or ()
+    sdk_files: Final = get_distribution().files or ()
     bundled_ui: Final = tuple(
         str(path) for path in sdk_files if str(path).startswith("litellm/proxy/_experimental/out/")
     )
@@ -29,6 +30,7 @@ def check_ui_packaging(profile: str) -> str:
 
 def check_proxy_ui() -> str:
     from fastapi.testclient import TestClient
+
     from litellm.proxy.proxy_server import app, ui_path
 
     root: Final = Path(ui_path)

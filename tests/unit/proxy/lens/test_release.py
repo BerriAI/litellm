@@ -42,7 +42,7 @@ def test_python_installs_recommend_the_matching_worker(
     metadata.joinpath("METADATA").write_text(f"Name: litellm\nVersion: {installed}\n")
 
     def installed_distribution(name: str) -> Distribution:
-        assert name == "litellm"
+        assert name in ("litellm-core", "litellm")
         return PathDistribution(metadata)
 
     monkeypatch.delenv("LITELLM_RELEASE_TAG", raising=False)

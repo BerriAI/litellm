@@ -14,6 +14,7 @@ def _require(condition: bool, message: str) -> None:
 
 def check_cli(profile: str) -> str:
     import litellm
+    from litellm._version import get_distribution_name
 
     if profile in ("cli", "proxy"):
         from litellm.proxy.proxy_cli import run_server
@@ -27,7 +28,7 @@ def check_cli(profile: str) -> str:
             _require("Usage:" in result.stdout, f"{command} did not display help")
         else:
             _require(result.returncode != 0, f"{command} succeeded without CLI dependencies")
-            _require(f"litellm[{extra}]" in result.stderr, f"{command} omitted installation guidance")
+            _require(f"{get_distribution_name()}[{extra}]" in result.stderr, f"{command} omitted installation guidance")
             _require("Traceback" not in result.stderr, f"{command} printed a traceback")
     return "console commands preserve help or explain their required extra"
 

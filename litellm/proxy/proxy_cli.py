@@ -1,5 +1,4 @@
 # ruff: noqa: T201
-import importlib
 import json
 import os
 import random
@@ -11,12 +10,14 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
+from litellm._version import get_distribution, get_distribution_name
+
 try:
     import click
 except ModuleNotFoundError as error:
     if error.name != "click":
         raise
-    raise ImportError('Install the proxy CLI with pip install "litellm[proxy]"') from error
+    raise ImportError(f'Install the proxy CLI with pip install "{get_distribution_name()}[proxy]"') from error
 
 import httpx
 from click.core import ParameterSource
@@ -211,7 +212,7 @@ def deprecated_v2_flag_passed_on_cli() -> bool:
 class ProxyInitializationHelpers:
     @staticmethod
     def _echo_litellm_version():
-        pkg_version: Final = importlib.metadata.version("litellm")
+        pkg_version: Final = get_distribution().version
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
 
     @staticmethod

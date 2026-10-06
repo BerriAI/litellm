@@ -31,6 +31,8 @@ def main() -> int:
             sys.stderr.write(f"failed to import {module_name}: {exc}\n")
             return 1
 
+    from litellm._version import get_distribution
+
     mcp_version: Final = _version_tuple("mcp")
     if mcp_version < MINIMUM_MCP_VERSION:
         sys.stderr.write(f"mcp {importlib.metadata.version('mcp')} below floor 2.2.0\n")
@@ -67,7 +69,7 @@ def main() -> int:
             importlib.metadata.version("mcp"),
             importlib.metadata.version("httpx2"),
             importlib.metadata.version("pydantic"),
-            importlib.metadata.version("litellm"),
+            get_distribution().version,
         )
     )
     return 0

@@ -198,9 +198,9 @@ def _terminal_user_agent() -> str:
 
 def _get_litellm_version() -> str:
     try:
-        from importlib.metadata import version
+        from litellm._version import get_distribution
 
-        return version("litellm")
+        return get_distribution().version
     except Exception:
         return "0.0.0"
 

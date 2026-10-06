@@ -10,11 +10,8 @@ authors = [
     { name = "BerriAI" },
 ]
 dependencies = [
-    # Ranges (not exact pins) so SDK consumers can coexist with their other
-    # deps. Reproducibility for our Docker/CI comes from `uv.lock`.
-    # When changing a floor, verify it installs + imports on every supported
-    # Python with: `uv pip install --resolution=lowest-direct .`
     "fastuuid>=0.14.0,<1.0",
+    "filelock>=3.16.1,<4.0",
     "httpx[http2]>=0.28.0,<1.0",
     "openai>=2.20.0,<3.0.0",
     "python-dotenv>=1.0.0,<2.0",
@@ -25,6 +22,7 @@ dependencies = [
     "tiktoken>=0.12.0,<1.0; python_version >= '3.14'",
     "tokenizers>=0.21.0,<1.0",
     "huggingface-hub>=0.34.0,<2.0",
+    "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
     "aiohttp>=3.14.2,<4.0",
     "pydantic>=2.11.0,<3.0.0; python_version < '3.14'",
@@ -340,6 +338,30 @@ exclude = [
     "**/.pytest_cache/**",
     "**/.ruff_cache",
     "**/.ruff_cache/**",
+]
+
+[tool.litellm.core]
+legacy-only-extras = ["semantic-router"]
+dependencies = [
+    "fastuuid>=0.14.0,<1.0",
+    "httpx[http2]>=0.28.0,<1.0",
+    "openai>=2.20.0,<3.0.0",
+    "python-dotenv>=1.0.0,<2.0",
+    "pyyaml>=6.0.3,<7.0",
+    "packaging>=24.0",
+    "importlib-metadata>=8.0.0,<9.0",
+    "tiktoken>=0.8.0,<1.0; python_version < '3.14'",
+    "tiktoken>=0.12.0,<1.0; python_version >= '3.14'",
+    "tokenizers>=0.21.0,<1.0",
+    "huggingface-hub>=0.34.0,<2.0",
+    "jinja2>=3.1.6,<4.0",
+    "aiohttp>=3.14.2,<4.0",
+    "pydantic>=2.11.0,<3.0.0; python_version < '3.14'",
+    "pydantic>=2.12.0,<3.0.0; python_version >= '3.14'",
+    "pydantic-settings>=2.14.1,<3.0",
+    "jsonschema>=4.0.0,<5.0",
+    "boto3>=1.43.1,<2.0",
+    "typing-extensions>=4.13.0,<5.0",
 ]
 
 [tool.litellm.ui]

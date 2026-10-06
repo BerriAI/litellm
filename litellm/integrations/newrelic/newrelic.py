@@ -188,9 +188,9 @@ class NewRelicLogger(CustomLogger):
             Version string (e.g., "1.80.0") or "unknown" if unable to determine
         """
         try:
-            from importlib.metadata import version
+            from litellm._version import get_distribution
 
-            return version("litellm")
+            return get_distribution().version
         except Exception as e:
             verbose_logger.warning("Unable to determine litellm version: %s", e)
             return "unknown"

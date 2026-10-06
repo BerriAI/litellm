@@ -95,6 +95,17 @@ jobs:
           mkdir -p ../../litellm-proxy-extras/litellm_proxy_extras/ui
           cp -R out/. ../../litellm-proxy-extras/litellm_proxy_extras/ui/
 
+      - name: Build the legacy distribution before selecting core metadata
+        if: steps.changes.outputs.decision != 'skip'
+        run: uv build --wheel --out-dir dist/legacy-check
+
+      - name: Select the independent core dependency profile
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          uv run --no-project --python 3.12 python scripts/prepare_core_distribution.py pyproject.toml
+          cp uv.core.lock uv.lock
+          uv lock --check
+
       - name: Check locked runtime installations
         if: steps.changes.outputs.decision != 'skip'
         run: |
@@ -126,7 +137,7 @@ jobs:
       - name: Check lowest direct runtime installations
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          wheel=$(realpath dist/mcp-check/litellm-[0-9]*.whl)
+          wheel=$(realpath dist/mcp-check/litellm_core-[0-9]*.whl)
           for extra in core cli mcp proxy; do
             args=()
             if [ "$extra" != core ]; then args=(--extra "$extra"); fi
