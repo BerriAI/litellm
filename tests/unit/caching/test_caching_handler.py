@@ -2325,10 +2325,15 @@ async def test_acompletion_with_empty_choices_is_not_cached(monkeypatch):
     )
     await asyncio.gather(*_PENDING_CACHE_WRITES)
     second = await litellm.acompletion(model="gpt-4o", messages=messages, mock_response="hi", caching=True)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    third = await litellm.acompletion(model="gpt-4o", messages=messages, mock_response="not cached", caching=True)
 
     assert first.choices == []
     assert [choice.message.content for choice in second.choices] == ["hi"], (
         "an empty-choices reply must not be replayed from the cache"
+    )
+    assert [choice.message.content for choice in third.choices] == ["hi"], (
+        "the healthy reply must still be cached and replayed"
     )
 
 
@@ -2340,8 +2345,12 @@ def test_completion_with_empty_choices_is_not_cached(monkeypatch):
         model="gpt-4o", messages=messages, mock_response=litellm.ModelResponse(choices=[]), caching=True
     )
     second = litellm.completion(model="gpt-4o", messages=messages, mock_response="hi", caching=True)
+    third = litellm.completion(model="gpt-4o", messages=messages, mock_response="not cached", caching=True)
 
     assert first.choices == []
     assert [choice.message.content for choice in second.choices] == ["hi"], (
         "an empty-choices reply must not be replayed from the cache"
+    )
+    assert [choice.message.content for choice in third.choices] == ["hi"], (
+        "the healthy reply must still be cached and replayed"
     )
