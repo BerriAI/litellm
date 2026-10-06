@@ -35,7 +35,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             sdk_data: Final = sdk_compatible_transcription_request_data(data)
             if data.get("stream") is True:
                 stream_response: Final = await openai_aclient.audio.transcriptions.create(**sdk_data, timeout=timeout)
-                return {}, stream_response  # mutable-ok: response headers use the existing mutable mapping contract
+                return {}, stream_response
             raw_response: Final = await openai_aclient.audio.transcriptions.with_raw_response.create(
                 **sdk_data, timeout=timeout
             )  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options

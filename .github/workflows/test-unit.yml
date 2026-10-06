@@ -416,6 +416,7 @@ jobs:
               tests/unit/ocr
               tests/unit/passthrough
               tests/unit/rag
+              tests/unit/cookbook
               tests/unit/realtime_api
               tests/unit/rerank_api
               tests/unit/search
