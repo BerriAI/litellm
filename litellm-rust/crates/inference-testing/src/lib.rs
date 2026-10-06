@@ -7,7 +7,7 @@ use litellm_http::{
 };
 use litellm_secrets::{SecretValue, source::SecretSource};
 
-use crate::resources::CoreResources;
+use litellm_inference::resources::CoreResources;
 
 pub fn http_pool() -> HttpClientPool {
     HttpClientPool::new(Arc::new(PublicDnsResolver))
@@ -32,7 +32,6 @@ pub fn http_config() -> HttpClientConfig {
     Resolution::from(&HttpSettings::default()).config
 }
 
-/// A secret source that answers from a fixed table and records every name it was asked for.
 pub struct RecordingSecrets {
     values: Vec<(String, String)>,
     fails: bool,

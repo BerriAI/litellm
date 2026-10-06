@@ -5,7 +5,7 @@
   - `RouteError` (`src/error.rs`), `CallOptions` (`src/lib.rs`), `CallContext` (`src/context.rs`)
   - diagnostic spans (`src/diagnostic.rs`), outbound send and signing (`src/outbound.rs`), provider resolution (`src/provider.rs`), `CoreResources` (`src/resources.rs`)
   - response caching (`src/caching.rs`): `Cachable`, `StreamCachable`, `CacheRequest`, `CallCache`, `execute_unary`, `execute_streaming`, stream capture
-  - shared test helpers behind the `test-support` feature (`src/test_support.rs`)
+  - Shared test helpers belong in litellm-inference-testing, used only as a dev dependency
 - Nothing here names an API format; format-specific code, constants, tests and test builders live in their `inference-<fmt>` crate
 - Never depend on an `inference-*` crate from here
 

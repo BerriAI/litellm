@@ -4013,7 +4013,6 @@ dependencies = [
  "litellm-framer",
  "litellm-host",
  "litellm-http",
- "litellm-inference",
  "litellm-llms",
  "litellm-secrets",
  "litellm-tracing",
@@ -4042,6 +4041,7 @@ dependencies = [
  "litellm-host-native",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
@@ -4068,6 +4068,7 @@ dependencies = [
  "litellm-host-native",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
@@ -4096,6 +4097,7 @@ dependencies = [
  "litellm-host-native",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
@@ -4125,6 +4127,7 @@ dependencies = [
  "litellm-host-native",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
@@ -4139,6 +4142,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-inference-testing"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-secrets",
+]
+
+[[package]]
 name = "litellm-inference-transcription"
 version = "0.1.0"
 dependencies = [
@@ -4147,6 +4160,7 @@ dependencies = [
  "litellm-core-utils",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-testing",
  "litellm-llms",
  "litellm-secrets",
  "litellm-tracing",
