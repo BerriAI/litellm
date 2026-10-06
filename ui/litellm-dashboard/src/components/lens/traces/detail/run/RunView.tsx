@@ -111,12 +111,14 @@ function LoadedRun({
   const refreshTrace = () => queryClient.resetQueries({ queryKey, exact: true });
   const failure = traceQuery.isFetchNextPageError ? classifyTraceReadFailure(traceQuery.error) : null;
   const readManually = (read: () => Promise<unknown>) => {
+    if (manualRead) return;
     setManualRead(true);
     void read().finally(() => setManualRead(false));
   };
   const refreshRun = () =>
     readManually(async () => {
       const refreshed = await traceQuery.refetch();
+      if (refreshed.isError) return;
       const contentRef = refreshed.data?.pages[0].summary.trace_ref ?? traceRef;
       await queryClient.invalidateQueries({
         queryKey: ["agentTraceSpan", traceId, contentRef],
@@ -182,7 +184,7 @@ function LoadedRun({
         handoff={traces.handoff(trace.summary.trace_id, null, trace.summary.trace_ref)}
         onBack={onBack}
         embedded={embedded}
-        refreshing={traceQuery.isFetching}
+        refreshing={manualRead || traceQuery.isFetching}
         onRefresh={refreshRun}
         live={live}
         canLive={traces.live}
@@ -191,7 +193,7 @@ function LoadedRun({
       {traceQuery.isRefetchError && (
         <div role="alert" className="flex items-center gap-3 border-b p-3 text-xs text-muted-foreground">
           Could not refresh this run. Previously received steps are still shown.
-          <Button variant="outline" size="sm" disabled={traceQuery.isFetching} onClick={refreshRun}>
+          <Button variant="outline" size="sm" disabled={manualRead || traceQuery.isFetching} onClick={refreshRun}>
             Retry refresh
           </Button>
         </div>
@@ -201,7 +203,7 @@ function LoadedRun({
           loaded={trace.spans.length}
           total={trace.summary.span_count}
           failure={failure}
-          busy={traceQuery.isFetching}
+          busy={manualRead || traceQuery.isFetching}
           onLoadMore={() => readManually(() => traceQuery.fetchNextPage())}
           onRefresh={() => readManually(refreshTrace)}
         />
