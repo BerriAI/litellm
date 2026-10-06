@@ -32,7 +32,7 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
         call_keys: Vec::new(),
         call_evidence: None,
         tool_call_id: String::new(),
-        team_id: String::new(),
+        team_id: "team".into(),
         api_key_hash: String::new(),
         user_id: String::new(),
     }
@@ -517,6 +517,29 @@ fn only_ids_litellm_assigned_join_spend(
     assert_eq!(
         (trace.summary.spend, trace.summary.priced_calls),
         (expected, u64::from(expected.is_some()))
+    );
+}
+
+#[rstest]
+#[case::same_team("team", Some(0.25), SpendMatch::Matched)]
+#[case::other_team("other-team", None, SpendMatch::NoSpendLog)]
+fn spend_logs_price_only_calls_in_their_own_team(
+    #[case] logged_team: &str,
+    #[case] expected: Option<f64>,
+    #[case] matched: SpendMatch,
+) {
+    let rows = [TraceSpansRow {
+        team_id: "team".into(),
+        ..llm("call", "", "agent", "response")
+    }];
+    let logs = [SpendByResponseIdsRow {
+        team_id: logged_team.into(),
+        ..spend("request", "response", 0.25)
+    }];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(
+        (trace.summary.spend, trace.spans[0].spend_match),
+        (expected, Some(matched))
     );
 }
 

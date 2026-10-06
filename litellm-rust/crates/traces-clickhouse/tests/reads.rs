@@ -601,7 +601,7 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
 
 #[rstest]
 #[tokio::test]
-async fn assigned_call_ids_join_spend_visible_to_the_reader_through_detail_and_batch_reads(
+async fn assigned_call_ids_join_spend_from_the_trace_team_through_detail_and_batch_reads(
     #[future(awt)] migrated_database: TestResult<SeededDatabase>,
 ) -> TestResult {
     let fixture = migrated_database?;
@@ -699,7 +699,7 @@ async fn assigned_call_ids_join_spend_visible_to_the_reader_through_detail_and_b
     let access = ReadAccessParams {
         all_teams: false,
         user_id: String::new(),
-        team_ids: vec!["team-a".into()],
+        team_ids: vec!["team-a".into(), "team-b".into()],
     };
     let page = reader
         .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)

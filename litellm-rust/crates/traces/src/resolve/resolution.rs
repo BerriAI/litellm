@@ -23,7 +23,7 @@ pub(super) fn agent_label(row: &TraceSpansRow) -> &str {
 
 pub(super) struct Resolution<'a> {
     pub(super) graph: Graph<'a>,
-    spend: &'a [SpendRow],
+    spend: Vec<&'a SpendRow>,
     types: HashMap<&'a str, ObservationType>,
     tool_failures: HashMap<&'a str, &'a TraceSpansRow>,
     pub(super) model_calls: Vec<usize>,
@@ -45,9 +45,10 @@ impl<'a> Resolution<'a> {
                         .any(|descendant| types[graph.id(descendant)] == ObservationType::Llm)
             })
             .collect();
+        let team_id = rows.first().map_or("", |row| row.team_id.as_str());
         Self {
             graph,
-            spend,
+            spend: spend.iter().filter(|row| row.team_id == team_id).collect(),
             types,
             tool_failures: rows
                 .iter()
@@ -110,7 +111,7 @@ impl<'a> Resolution<'a> {
     }
 
     pub(super) fn requests(&self, index: usize) -> Option<Requests<'a>> {
-        spend::match_ids(&spend::call_ids(self.row(index)), self.spend).0
+        spend::match_ids(&spend::call_ids(self.row(index)), &self.spend).0
     }
 
     pub(super) fn call_requests(&self, call: usize) -> Option<Requests<'a>> {
@@ -118,7 +119,7 @@ impl<'a> Resolution<'a> {
     }
 
     pub(super) fn call_match(&self, call: usize) -> (Option<Requests<'a>>, SpendMatch) {
-        spend::match_ids(&self.call_ids(call), self.spend)
+        spend::match_ids(&self.call_ids(call), &self.spend)
     }
 
     /// A model call is priced by every id LiteLLM assigned that is recorded on it, on the LLM

@@ -82,14 +82,14 @@ pub(super) fn call_ids(row: &TraceSpansRow) -> BTreeSet<CallKey> {
 
 pub(super) fn match_ids<'a>(
     ids: &BTreeSet<CallKey>,
-    spend_rows: &'a [SpendRow],
+    spend_rows: &[&'a SpendRow],
 ) -> (Option<Requests<'a>>, SpendMatch) {
     if ids.is_empty() {
         return (None, SpendMatch::NoCallId);
     }
     let named: Vec<Requests<'a>> = ids
         .iter()
-        .map(|id| unique(spend_rows.iter().filter(|spend| names(id, spend))))
+        .map(|id| unique(spend_rows.iter().copied().filter(|spend| names(id, spend))))
         .collect();
     if named.iter().any(|rows| rows.len() > 1) {
         return (None, SpendMatch::Ambiguous);
