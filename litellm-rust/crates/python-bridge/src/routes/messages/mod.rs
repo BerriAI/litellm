@@ -26,7 +26,7 @@ fn run_messages(
         py,
         arguments,
         move |py, arguments, request| {
-            let route = litellm_inference::messages::MessagesRoute::new(
+            let route = litellm_inference_messages::MessagesRoute::new(
                 crate::http::provider_client(py, arguments, asynchronous)?
                     .map_err(crate::http::client_error)?,
                 crate::http::resources().auth.clone(),

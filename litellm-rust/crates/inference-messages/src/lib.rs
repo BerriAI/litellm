@@ -1,4 +1,5 @@
 mod common_utils;
+mod constants;
 mod handler;
 mod prepare;
 pub mod route;
@@ -8,11 +9,11 @@ use futures_util::FutureExt;
 use litellm_auth::AuthServices;
 use litellm_host::interceptors::{ExecutionFacts, Interceptors, ResultSource};
 
-use crate::{caching::CallCache, context::CallContext};
+use litellm_inference::{caching::CallCache, context::CallContext};
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 
-pub use crate::error::RouteError as Error;
+pub use litellm_inference::RouteError as Error;
 pub use types::{MessagesCall, MessagesCallResponse, MessagesShaping, messages_body};
 
 #[derive(Clone)]
@@ -49,7 +50,7 @@ impl MessagesRoute {
         &self,
         call: MessagesCall,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
-        options: impl Into<crate::CallOptions>,
+        options: impl Into<litellm_inference::CallOptions>,
     ) -> Result<MessagesCallResponse, Error> {
         let context = CallContext::new(interceptors, options.into());
         litellm_host::lifecycle::observe_call(context.observers.clone(), self.run(call, context))
@@ -69,9 +70,12 @@ impl MessagesRoute {
         call: MessagesCall,
         context: CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<MessagesCallResponse, Error> {
-        crate::diagnostic::call(async {
+        litellm_inference::diagnostic::call(async {
             let prepared = prepare::prepare(call, self.secrets.as_ref()).await?;
-            crate::diagnostic::provider(&prepared.body.model, prepared.provider.as_str());
+            litellm_inference::diagnostic::provider(
+                &prepared.body.model,
+                prepared.provider.as_str(),
+            );
             let request = self.prepare_outbound(prepared, &context).boxed().await?;
             let cache = CallCache::<route::Messages>::from_wire(
                 self.cache.as_ref().filter(|_| request.cacheable()),

@@ -4,7 +4,7 @@ use litellm_host_python::{PythonHostCalls, PythonOwned};
 use bytes::Bytes;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
-use litellm_inference::messages::{
+use litellm_inference_messages::{
     Error, MessagesCall, MessagesShaping, messages_body,
     route::{Messages, MessagesStreamHead},
 };
