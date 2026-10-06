@@ -1,10 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use super::{actors, resolution::Resolution};
-use crate::{
-    ObservationType,
-    view::{ActorCapture, TraceCapture},
-};
+use crate::view::{ActorCapture, TraceCapture};
 
 pub(super) fn coverage(resolution: &Resolution<'_>) -> Option<TraceCapture> {
     let rows = resolution.graph.rows;
@@ -12,6 +9,7 @@ pub(super) fn coverage(resolution: &Resolution<'_>) -> Option<TraceCapture> {
         return None;
     }
     let calls: HashSet<_> = resolution.model_calls.iter().copied().collect();
+    let tools: HashSet<_> = resolution.unique_tools().into_iter().collect();
     let mut actors: BTreeMap<_, _> = resolution
         .actors
         .entries
@@ -47,7 +45,7 @@ pub(super) fn coverage(resolution: &Resolution<'_>) -> Option<TraceCapture> {
             continue;
         };
         actor.llm_calls += u64::from(calls.contains(&index));
-        actor.tool_calls += u64::from(resolution.kind(index) == ObservationType::Tool);
+        actor.tool_calls += u64::from(tools.contains(&index));
         actor.reply_events += u64::from(row.name == "claude_code.assistant_response");
         actor.model_outputs += u64::from(calls.contains(&index) && row.has_output);
         actor.content_events += u64::from(event);

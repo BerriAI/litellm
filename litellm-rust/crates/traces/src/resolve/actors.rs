@@ -78,7 +78,7 @@ impl Actors {
         let rows = graph.rows;
         let direct: Vec<_> = rows.iter().map(explicit).collect();
         let mut boundaries: HashMap<usize, BTreeSet<&str>> = HashMap::new();
-        let mut tools: HashMap<&str, BTreeSet<&str>> = HashMap::new();
+        let mut tools: HashMap<(&str, &str), BTreeSet<&str>> = HashMap::new();
         for (index, owner) in direct.iter().enumerate() {
             let Some(owner) = owner.as_deref() else {
                 continue;
@@ -90,7 +90,10 @@ impl Actors {
                 boundaries.entry(parent).or_default().insert(owner);
             }
             if !row.tool_call_id.is_empty() {
-                tools.entry(&row.tool_call_id).or_default().insert(owner);
+                tools
+                    .entry((&row.session_id, &row.tool_call_id))
+                    .or_default()
+                    .insert(owner);
             }
         }
         let unique = |set: Option<&BTreeSet<&str>>| {
@@ -126,7 +129,9 @@ impl Actors {
                 direct[index]
                     .clone()
                     .or_else(|| unique(boundaries.get(&index)))
-                    .or_else(|| unique(tools.get(row.tool_call_id.as_str())))
+                    .or_else(|| {
+                        unique(tools.get(&(row.session_id.as_str(), row.tool_call_id.as_str())))
+                    })
                     .or_else(|| {
                         let ancestor = if child_source(row) {
                             inherited_child[index]

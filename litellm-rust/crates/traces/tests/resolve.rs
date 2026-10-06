@@ -2359,3 +2359,79 @@ fn many_native_actors_count_only_their_own_calls() {
             .all(|actor| actor.llm_calls == 1 && actor.tool_calls == 0)
     );
 }
+
+#[rstest]
+#[case::same_session(false)]
+#[case::different_sessions(true)]
+fn native_tool_ownership_and_coverage_use_session_scoped_call_ids(#[case] separate: bool) {
+    let root = TraceSpansRow {
+        framework: "claude-code".into(),
+        session_id: "first-session".into(),
+        query_source: "repl_main_thread".into(),
+        ..row("root", "", "claude_code.interaction", "agent", "assistant")
+    };
+    let other_root = TraceSpansRow {
+        session_id: if separate {
+            "second-session"
+        } else {
+            "first-session"
+        }
+        .into(),
+        span_id: "other-root".into(),
+        ..root.clone()
+    };
+    let explicit = TraceSpansRow {
+        framework: "claude-code".into(),
+        session_id: root.session_id.clone(),
+        native_agent_id: "child".into(),
+        tool_call_id: "reused-call".into(),
+        ..row("explicit", "root", "Bash", "tool", "assistant")
+    };
+    let inherited = TraceSpansRow {
+        native_agent_id: String::new(),
+        session_id: other_root.session_id.clone(),
+        span_id: "inherited".into(),
+        parent_span_id: "other-root".into(),
+        ..explicit.clone()
+    };
+    let trace = resolve_trace(
+        "trace",
+        "ref",
+        &[root, other_root, explicit, inherited],
+        &[],
+    )
+    .unwrap();
+    let explicit_actor = &trace
+        .spans
+        .iter()
+        .find(|span| span.span_id == "explicit")
+        .unwrap()
+        .actor_id;
+    let inherited_actor = &trace
+        .spans
+        .iter()
+        .find(|span| span.span_id == "inherited")
+        .unwrap()
+        .actor_id;
+    assert_eq!(explicit_actor == inherited_actor, !separate);
+    let expected = if separate { 2 } else { 1 };
+    assert_eq!(trace.summary.tool_calls, expected);
+    assert_eq!(
+        trace
+            .agents
+            .iter()
+            .map(|actor| actor.tool_calls)
+            .sum::<u64>(),
+        expected
+    );
+    assert_eq!(
+        trace
+            .capture
+            .unwrap()
+            .actors
+            .iter()
+            .map(|actor| actor.tool_calls)
+            .sum::<u64>(),
+        expected
+    );
+}
