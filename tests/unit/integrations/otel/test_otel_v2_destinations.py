@@ -2371,6 +2371,188 @@ class TestPresetDegradation:
         assert "http://collector.local:4318" in {spec.endpoint for spec in langtrace.config.exporters}
 
 
+def credential_less_arize(monkeypatch) -> None:
+    """An operator with no Arize account and no generic OTLP collector or headers."""
+    for name in (
+        "ARIZE_SPACE_ID",
+        "ARIZE_SPACE_KEY",
+        "ARIZE_API_KEY",
+        "ARIZE_ENDPOINT",
+        "ARIZE_HTTP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        *_OTEL_SHORTHAND_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+ARIZE_DEST = OtelDestination(
+    endpoint="https://otlp.arize.com/v1",
+    headers={"arize-space-id": "space-team", "api_key": "key-team"},
+    callback_name="arize",
+    protocol="otlp_grpc",
+)
+
+
+class _ExporterCapture:
+    """Stands an in-memory exporter in for every exporter the provider builds, keyed
+    by the headers it would have sent (``None`` for the stdout placeholder), so a test
+    reads what each account received rather than which processors were wired."""
+
+    def __init__(self) -> None:
+        self.built: tuple[tuple[str | None, InMemorySpanExporter], ...] = ()
+
+    def build(self, spec: ExporterSpec) -> InMemorySpanExporter:
+        exporter: Final = InMemorySpanExporter()
+        self.built = (*self.built, (spec.headers, exporter))
+        return exporter
+
+    def received(self) -> Mapping[str | None, tuple[str, ...]]:
+        """Every span name each set of headers received; an exporter that got nothing is absent."""
+        return MappingProxyType(
+            {
+                headers: tuple(span.name for span in exporter.get_finished_spans())
+                for headers, exporter in self.built
+                if exporter.get_finished_spans()
+            }
+        )
+
+
+class TestArizeTenantOnly:
+    """An operator whose teams each bring their own Arize space keeps no Arize
+    credentials of their own; the preset then exports nowhere for traffic without a
+    team destination instead of posting it keyless to Arize."""
+
+    @staticmethod
+    def _capture_exporters(monkeypatch) -> "_ExporterCapture":
+        capture: Final = _ExporterCapture()
+        for kind in ("otlp_grpc", "otlp_http", "console"):
+            monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)
+        return capture
+
+    def test_a_credential_less_arize_exports_nowhere(self, monkeypatch):
+        credential_less_arize(monkeypatch)
+        capture = self._capture_exporters(monkeypatch)
+        config = arize_preset(allow_missing_credentials=True)
+        provider = build_tracer_provider(config, tenant_overrides=True)
+
+        emit(provider)
+        provider.force_flush()
+
+        assert capture.received() == {}, "not to Arize, and not to the stdout placeholder either"
+        assert "openinference" in config.mapper_names
+
+    def test_a_blank_otlp_headers_variable_is_no_credential_either(self, monkeypatch):
+        """``OTEL_EXPORTER_OTLP_TRACES_HEADERS=`` left empty in a compose file must not
+        turn into an Arize exporter that posts keyless."""
+        credential_less_arize(monkeypatch)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", " ")
+        capture = self._capture_exporters(monkeypatch)
+        provider = build_tracer_provider(arize_preset(allow_missing_credentials=True), tenant_overrides=True)
+
+        emit(provider)
+        provider.force_flush()
+
+        assert capture.received() == {}, "a blank header string is no credential: nothing leaves"
+
+    def test_the_operators_own_credentials_still_reach_the_operators_space(self, monkeypatch):
+        credential_less_arize(monkeypatch)
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-operator")
+        monkeypatch.setenv("ARIZE_API_KEY", "key-operator")
+        capture = self._capture_exporters(monkeypatch)
+        provider = build_tracer_provider(arize_preset(allow_missing_credentials=True), tenant_overrides=True)
+
+        emit(provider)
+        provider.force_flush()
+
+        assert capture.received() == {
+            "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
+            None: ("chat gpt-4",),
+        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+
+    def test_the_standard_otlp_headers_still_reach_the_operators_space(self, monkeypatch):
+        credential_less_arize(monkeypatch)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "space_id=space-operator,api_key=key-operator")
+        capture = self._capture_exporters(monkeypatch)
+        provider = build_tracer_provider(arize_preset(allow_missing_credentials=True), tenant_overrides=True)
+
+        emit(provider)
+        provider.force_flush()
+
+        assert capture.received() == {
+            "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
+            None: ("chat gpt-4",),
+        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+
+    def test_a_credential_less_arize_still_delivers_a_team_destination(self, monkeypatch):
+        from litellm.integrations.otel.plumbing.providers import attach_tenant_fan_out
+
+        credential_less_arize(monkeypatch)
+        capture = self._capture_exporters(monkeypatch)
+        config = arize_preset(allow_missing_credentials=True)
+        provider = build_tracer_provider(config, tenant_overrides=True)
+        attach_tenant_fan_out(provider, config)
+
+        def run():
+            set_request_destinations(deliverable_destinations((ARIZE_DEST,), provider))
+            emit(provider)
+
+        in_fresh_context(run)
+        provider.force_flush()
+
+        assert capture.received() == {ARIZE_DEST.header_string(): ("chat gpt-4",)}
+
+    def test_a_credential_less_proxy_builds_the_gated_arize_logger_beside_a_v2_carrier(self, monkeypatch):
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        credential_less_arize(monkeypatch)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        carrier = build_otel_v2_logger(OpenTelemetryV2Config(exporter="in_memory"))
+
+        def run():
+            set_request_destinations((ARIZE_DEST,))
+            return _maybe_construct_otel_v2("arize", [carrier])
+
+        is_otel_v2_enabled.cache_clear()
+        logger = in_fresh_context(run)
+        is_otel_v2_enabled.cache_clear()
+
+        assert logger is not None
+        assert all(spec.requires_headers and not spec.headers for spec in logger.config.exporters)
+
+    def test_a_credential_less_arize_stays_on_v2_at_startup_instead_of_the_keyless_legacy_logger(self, monkeypatch):
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        credential_less_arize(monkeypatch)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        capture = self._capture_exporters(monkeypatch)
+
+        is_otel_v2_enabled.cache_clear()
+        logger = in_fresh_context(_maybe_construct_otel_v2, "arize", [])
+        is_otel_v2_enabled.cache_clear()
+
+        assert isinstance(logger, OpenTelemetryV2), "None hands 'arize' to the legacy logger, which posts keyless"
+        emit(logger.tracer_provider)
+        logger.tracer_provider.force_flush()
+        assert capture.received() == {}, "no operator credentials: nothing leaves until a team destination exists"
+
+    def test_the_startup_logger_is_reused_by_later_requests_without_a_destination(self, monkeypatch):
+        """Every master-key request re-initialises the callback; building a fresh
+        provider each time would grow ``_in_memory_loggers`` for the life of the proxy."""
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        credential_less_arize(monkeypatch)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        loggers = []
+
+        is_otel_v2_enabled.cache_clear()
+        at_startup = in_fresh_context(_maybe_construct_otel_v2, "arize", loggers)
+        later = in_fresh_context(_maybe_construct_otel_v2, "arize", loggers)
+        is_otel_v2_enabled.cache_clear()
+
+        assert later is at_startup
+        assert loggers == [at_startup]
+
+
 class TestContextIsolation:
     def test_destinations_do_not_leak_between_requests(self):
         def first():
