@@ -7,7 +7,7 @@ import asyncio
 import json
 from collections.abc import Callable
 from datetime import datetime
-from typing import Final, Optional
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -33,7 +33,7 @@ from litellm.types.llms.openai import (
 
 
 def _sse_event(payload: dict) -> bytes:
-    return f"data: {json.dumps(payload)}\n\n".encode("utf-8")
+    return f"data: {json.dumps(payload)}\n\n".encode()
 
 
 def _mock_config() -> Mock:
@@ -67,7 +67,7 @@ def _make_iterator(
     *,
     sse_events: list[bytes],
     logging_obj: LiteLLMLoggingObj,
-    trailing_error: Optional[Exception] = None,
+    trailing_error: Exception | None = None,
     config: Mock | None = None,
     request_data: dict | None = None,
 ) -> ResponsesAPIStreamingIterator:
@@ -96,7 +96,8 @@ def _make_sync_iterator(
     *,
     sse_events: list[bytes],
     logging_obj: LiteLLMLoggingObj,
-    trailing_error: Optional[Exception] = None,
+    trailing_error: Exception | None = None,
+    config: Mock | None = None,
 ) -> SyncResponsesAPIStreamingIterator:
     def iter_bytes():
         for evt in sse_events:
@@ -111,7 +112,7 @@ def _make_sync_iterator(
     return SyncResponsesAPIStreamingIterator(
         response=mock_response,
         model="gpt-4o-mini",
-        responses_api_provider_config=_mock_config(),
+        responses_api_provider_config=config or _mock_config(),
         logging_obj=logging_obj,
         litellm_metadata={},
         custom_llm_provider="openai",
@@ -439,7 +440,6 @@ class _LoopRecordingLogger(CustomLogger):
         self.hook_loop = asyncio.get_running_loop()
         await asyncio.sleep(0.05)
         self.hook_finished = True
-        return None
 
 
 class _SyncOnlyRecordingLogger(CustomLogger):
@@ -815,6 +815,7 @@ def _unvalidated_response_with_dict_usage(usage: dict) -> ResponsesAPIResponse:
 
 def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
     from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+
     response = _unvalidated_response_with_dict_usage(
         {
             "input_tokens": 29,
@@ -836,6 +837,7 @@ def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
 
 def test_stamp_responses_usage_cost_computes_cost_for_dict_usage_without_cost():
     from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+
     response = _unvalidated_response_with_dict_usage({"input_tokens": 29, "output_tokens": 120, "total_tokens": 149})
     logging_obj = Mock(spec=LiteLLMLoggingObj)
     logging_obj._response_cost_calculator.return_value = 0.000704
@@ -876,7 +878,7 @@ def _capture_dispatch(logged: list):
     return _dispatch
 
 
-def _headers_config(*, transform_hidden_params: Optional[dict] = None) -> Mock:
+def _headers_config(*, transform_hidden_params: dict | None = None) -> Mock:
     """Config whose completed event carries a real ResponsesAPIResponse, so the logging copy
     performs a genuine model_dump/model_validate round trip."""
     mock_config = Mock(spec=BaseResponsesAPIConfig)
@@ -1280,3 +1282,172 @@ def test_persist_completed_response_to_cache_survives_an_unserializable_response
     iterator._persist_completed_response_to_cache(is_async=False)
 
     cache.add_cache.assert_not_called()
+
+
+def test_process_chunk_collects_output_item_done_in_order():
+    """output_item.done events are keyed by index and returned in order."""
+    logging_obj = _logging_obj_for_collector()
+    iterator = _make_collector_iterator(logging_obj=logging_obj)
+
+    for index, item in enumerate([{"id": "msg_1"}, {"id": "msg_2"}]):
+        chunk = iterator._process_chunk(
+            json.dumps({"type": "response.output_item.done", "output_index": index, "item": item})
+        )
+        iterator._collect_output_item_from_chunk(chunk)
+
+    assert iterator.get_streamed_output_items() == [{"id": "msg_1"}, {"id": "msg_2"}]
+
+
+def test_process_chunk_collector_fallback_index_avoids_collision():
+    """A missing/invalid index appends after the max key, never overwriting an entry."""
+    logging_obj = _logging_obj_for_collector()
+    iterator = _make_collector_iterator(logging_obj=logging_obj)
+
+    for payload in (
+        json.dumps({"type": "response.output_item.done", "output_index": 5, "item": {"id": "msg_5"}}),
+        json.dumps({"type": "response.output_item.done", "item": {"id": "msg_fallback"}}),
+    ):
+        chunk = iterator._process_chunk(payload)
+        iterator._collect_output_item_from_chunk(chunk)
+    items = iterator.get_streamed_output_items()
+    assert items == [{"id": "msg_5"}, {"id": "msg_fallback"}]
+
+
+def test_process_chunk_collector_duplicate_index_appends():
+    """A repeated index is never dropped: the second item is appended after the max key."""
+    logging_obj = _logging_obj_for_collector()
+    iterator = _make_collector_iterator(logging_obj=logging_obj)
+
+    for payload in (
+        json.dumps({"type": "response.output_item.done", "output_index": 1, "item": {"id": "msg_a"}}),
+        json.dumps({"type": "response.output_item.done", "output_index": 1, "item": {"id": "msg_b"}}),
+    ):
+        chunk = iterator._process_chunk(payload)
+        iterator._collect_output_item_from_chunk(chunk)
+    assert iterator.get_streamed_output_items() == [{"id": "msg_a"}, {"id": "msg_b"}]
+
+
+def test_get_streamed_output_items_empty_when_no_done_events():
+    logging_obj = _logging_obj_for_collector()
+    iterator = _make_collector_iterator(logging_obj=logging_obj)
+    assert iterator.get_streamed_output_items() == []
+
+
+class _ItemReplacingHook:
+    """Post-streaming deployment hook standing in for a DLP / content-policy callback."""
+
+    def __init__(self) -> None:
+        self.replacement_item: Final = {"id": "msg_redacted"}
+
+    async def async_post_call_streaming_deployment_hook(self, request_data, response_chunk, call_type):
+        if getattr(response_chunk, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            return Mock(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                item=self.replacement_item,
+                output_index=getattr(response_chunk, "output_index", None),
+            )
+        return None
+
+
+def _hook_stream_events() -> list[bytes]:
+    """A stream whose terminal response.completed carries an empty output array."""
+    return [
+        _sse_event({"type": "response.output_item.done", "output_index": 0, "item": {"id": "msg_secret"}}),
+        _sse_event({"type": "response.completed", "response": {"output": []}}),
+    ]
+
+
+def _hook_stream_config() -> Mock:
+    """output_item.done events carry item/index; response.completed is a real terminal event."""
+    mock_config = Mock(spec=BaseResponsesAPIConfig)
+    terminal = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp",
+            created_at=0,
+            status="completed",
+            model="gpt-4o-mini",
+            object="response",
+            output=[],
+            usage=ResponseAPIUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+        ),
+    )
+
+    def _transform(model, parsed_chunk, logging_obj):
+        evt_type = parsed_chunk.get("type")
+        if evt_type == "response.completed":
+            return terminal
+        return Mock(
+            type=evt_type,
+            item=parsed_chunk.get("item"),
+            output_index=parsed_chunk.get("output_index"),
+        )
+
+    mock_config.transform_streaming_response.side_effect = _transform
+    return mock_config
+
+
+@pytest.mark.asyncio
+async def test_async_rebuild_uses_post_hook_item_when_terminal_output_is_empty(monkeypatch):
+    """The empty-output rebuild must accumulate post-hook items, so a DLP /
+    content-policy callback's replacement cannot be bypassed by reconstruction."""
+    hook = _ItemReplacingHook()
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    iterator = _make_iterator(
+        sse_events=_hook_stream_events(),
+        logging_obj=_logging_obj_stub(),
+        config=_hook_stream_config(),
+    )
+
+    yielded = [chunk async for chunk in iterator]
+
+    assert len(yielded) == 2
+    assert yielded[0].item == {"id": "msg_redacted"}
+    assert iterator.get_streamed_output_items() == [{"id": "msg_redacted"}]
+
+
+def test_sync_rebuild_uses_post_hook_item_when_terminal_output_is_empty(monkeypatch):
+    """Sync path mirrors the async one: collection happens after the hook runs."""
+    hook = _ItemReplacingHook()
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    iterator = _make_sync_iterator(
+        sse_events=_hook_stream_events(),
+        logging_obj=_logging_obj_stub(),
+        config=_hook_stream_config(),
+    )
+
+    yielded = list(iterator)
+
+    assert len(yielded) == 2
+    assert yielded[0].item == {"id": "msg_redacted"}
+    assert iterator.get_streamed_output_items() == [{"id": "msg_redacted"}]
+
+
+def _streamed_item_config() -> Mock:
+    """transform_streaming_response returns output_item.done events with item/index preserved."""
+    mock_config = Mock()
+    mock_config.transform_streaming_response.side_effect = lambda model, parsed_chunk, logging_obj: Mock(
+        type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        item=parsed_chunk.get("item"),
+        output_index=parsed_chunk.get("output_index"),
+    )
+    return mock_config
+
+
+def _make_collector_iterator(*, logging_obj: Mock) -> SyncResponsesAPIStreamingIterator:
+    return SyncResponsesAPIStreamingIterator(
+        response=Mock(headers={}),
+        model="gpt-4o-mini",
+        responses_api_provider_config=_streamed_item_config(),
+        logging_obj=logging_obj,
+        litellm_metadata={},
+        custom_llm_provider="openai",
+        call_type="responses",
+    )
+
+
+def _logging_obj_for_collector() -> Mock:
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.completion_start_time = None
+    logging_obj.model_call_details = {"litellm_params": {}}
+    return logging_obj
