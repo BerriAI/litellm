@@ -146,7 +146,7 @@ jobs:
       - name: Build the core wheel and source distribution
         run: >-
           uv run --no-project --with coverage==7.14.0 python -m coverage run
-          --branch --source=scripts.build_core_distribution
+          --branch --include="*/scripts/build_core_distribution.py"
           scripts/build_core_distribution.py --out-dir dist/core
       - name: Verify metadata, resources, and independent source rebuild
         env:
