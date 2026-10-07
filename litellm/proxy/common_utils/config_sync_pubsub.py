@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
 
 
-class ConfigSyncPubSub(Protocol):
+class _ConfigSyncPubSub(Protocol):
     def subscribe(self, *channels: str) -> Awaitable[object]: ...
 
     def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Awaitable[object]: ...
@@ -21,7 +21,7 @@ class ConfigSyncPubSub(Protocol):
     def aclose(self) -> Awaitable[object]: ...
 
 
-_ConfigSyncPubSub: Final = ConfigSyncPubSub
+ConfigSyncPubSub = _ConfigSyncPubSub
 
 
 class _ConfigSyncPubSubClient(Protocol):

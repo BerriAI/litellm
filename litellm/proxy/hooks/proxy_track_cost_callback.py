@@ -105,7 +105,7 @@ def _proxy_spend_writer() -> DBSpendUpdateWriter:
     return proxy_logging_obj.db_spend_update_writer
 
 
-class ProxyDBLogger(CustomLogger):
+class _ProxyDBLogger(CustomLogger):
     def __init__(
         self,
         spend_event_producer: SpendEventProducer | None = None,
@@ -594,7 +594,7 @@ class ProxyDBLogger(CustomLogger):
         return
 
 
-_ProxyDBLogger: Final = ProxyDBLogger
+ProxyDBLogger: Final = _ProxyDBLogger
 
 
 def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:

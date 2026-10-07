@@ -290,7 +290,7 @@ def _resolve_entity_model_budgets(
     )
 
 
-class PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
+class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     """
     Handles budgets for model + virtual key
 
@@ -629,4 +629,4 @@ class PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         return polls == 1
 
 
-_PROXY_VirtualKeyModelMaxBudgetLimiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter
+PROXY_VirtualKeyModelMaxBudgetLimiter = _PROXY_VirtualKeyModelMaxBudgetLimiter

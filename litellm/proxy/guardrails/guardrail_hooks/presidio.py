@@ -177,7 +177,7 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
         yield chunk
 
 
-class OPTIONAL_PresidioPIIMasking(CustomGuardrail):
+class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
     ad_hoc_recognizers: list[str] | None = None
 
@@ -1773,4 +1773,4 @@ class OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
 
 
-_OPTIONAL_PresidioPIIMasking: Final = OPTIONAL_PresidioPIIMasking
+OPTIONAL_PresidioPIIMasking = _OPTIONAL_PresidioPIIMasking

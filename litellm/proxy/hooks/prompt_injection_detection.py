@@ -34,7 +34,7 @@ HEURISTICS_EXECUTOR: Final = ThreadPoolExecutor(
 )
 
 
-class OPTIONAL_PromptInjectionDetection(CustomLogger):
+class _OPTIONAL_PromptInjectionDetection(CustomLogger):
     enforces_request_content: bool = True
 
     # Class variables or attributes
@@ -280,4 +280,4 @@ class OPTIONAL_PromptInjectionDetection(CustomLogger):
         return is_prompt_attack
 
 
-_OPTIONAL_PromptInjectionDetection: Final = OPTIONAL_PromptInjectionDetection
+OPTIONAL_PromptInjectionDetection = _OPTIONAL_PromptInjectionDetection

@@ -54,7 +54,7 @@ def _source_field(source: object, key: str, snake_key: str) -> object:
     return getattr(source, snake_key, None)
 
 
-class CiscoAIDefenseMcpMixin:
+class _CiscoAIDefenseMcpMixin:
     """MCP-specific instance methods for ``CiscoAIDefenseGuardrail``.
 
     Holds the MCP hooks, JSON-RPC payload builders, and redaction helpers.
@@ -645,4 +645,4 @@ class CiscoAIDefenseMcpMixin:
         return None
 
 
-_CiscoAIDefenseMcpMixin: Final = CiscoAIDefenseMcpMixin
+CiscoAIDefenseMcpMixin = _CiscoAIDefenseMcpMixin

@@ -52,7 +52,7 @@ class CacheObject(TypedDict):
     request_count_end_user_id: dict | None
 
 
-class PROXY_MaxParallelRequestsHandler(CustomLogger):
+class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     # Class variables or attributes
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
@@ -863,4 +863,4 @@ class PROXY_MaxParallelRequestsHandler(CustomLogger):
             return await super().async_post_call_success_hook(data, user_api_key_dict, response)
 
 
-_PROXY_MaxParallelRequestsHandler: Final = PROXY_MaxParallelRequestsHandler
+PROXY_MaxParallelRequestsHandler: Final = _PROXY_MaxParallelRequestsHandler

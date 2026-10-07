@@ -57,7 +57,7 @@ return new_val
 DEFAULT_MAX_BUDGET_PER_SESSION_TTL: Final = 3600
 
 
-class PROXY_MaxBudgetPerSessionHandler(CustomLogger):
+class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
     """
     Pre-call hook that enforces max_budget_per_session.
 
@@ -273,4 +273,4 @@ class PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         return new_value
 
 
-_PROXY_MaxBudgetPerSessionHandler: Final = PROXY_MaxBudgetPerSessionHandler
+PROXY_MaxBudgetPerSessionHandler: Final = _PROXY_MaxBudgetPerSessionHandler

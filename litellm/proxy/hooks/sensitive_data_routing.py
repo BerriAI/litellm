@@ -34,7 +34,7 @@ SENSITIVE_ROUTING_CACHE_PREFIX: Final = "sensitive_route"
 DEFAULT_SENSITIVE_ROUTING_TTL: Final = 3600
 
 
-class PROXY_SensitiveDataRoutingHandler(CustomLogger):
+class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
     """
     Pre-call hook that checks for existing sensitive data routing overrides
     and applies them to incoming requests.
@@ -206,4 +206,4 @@ class PROXY_SensitiveDataRoutingHandler(CustomLogger):
         return data
 
 
-_PROXY_SensitiveDataRoutingHandler: Final = PROXY_SensitiveDataRoutingHandler
+PROXY_SensitiveDataRoutingHandler: Final = _PROXY_SensitiveDataRoutingHandler

@@ -13,7 +13,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
 
-class PROXY_CacheControlCheck(CustomLogger):
+class _PROXY_CacheControlCheck(CustomLogger):
     # Class variables or attributes
     def __init__(self):
         pass
@@ -58,4 +58,4 @@ class PROXY_CacheControlCheck(CustomLogger):
             )
 
 
-_PROXY_CacheControlCheck: Final = PROXY_CacheControlCheck
+PROXY_CacheControlCheck: Final = _PROXY_CacheControlCheck

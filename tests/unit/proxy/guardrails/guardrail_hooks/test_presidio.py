@@ -4302,7 +4302,7 @@ async def test_standalone_restoration_preserves_post_call_selection(event_hook: 
     ],
 )
 def test_validate_environment_missing_http(base_url):
-    pii_masking = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    pii_masking = OPTIONAL_PresidioPIIMasking(mock_testing=True)
 
     env_vars = {
         "PRESIDIO_ANALYZER_API_BASE": f"{base_url}/analyze",
@@ -4333,7 +4333,7 @@ async def test_output_parsing():
     """
     litellm.set_verbose = True
     litellm.output_parse_pii = True
-    pii_masking = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    pii_masking = OPTIONAL_PresidioPIIMasking(mock_testing=True)
 
     initial_message = [
         {
@@ -4413,7 +4413,7 @@ async def test_presidio_pii_masking_input_a():
     """
     Tests to see if correct parts of sentence anonymized
     """
-    pii_masking = _OPTIONAL_PresidioPIIMasking(
+    pii_masking = OPTIONAL_PresidioPIIMasking(
         mock_testing=True, mock_redacted_text=input_a_anonymizer_results
     )
 
@@ -4444,7 +4444,7 @@ async def test_presidio_pii_masking_input_b():
     """
     Tests to see if correct parts of sentence anonymized
     """
-    pii_masking = _OPTIONAL_PresidioPIIMasking(
+    pii_masking = OPTIONAL_PresidioPIIMasking(
         mock_testing=True, mock_redacted_text=input_b_anonymizer_results
     )
 
@@ -4474,7 +4474,7 @@ async def test_presidio_pii_masking_input_b():
 async def test_presidio_pii_masking_logging_output_only_no_pre_api_hook():
     from litellm.types.guardrails import GuardrailEventHooks
 
-    pii_masking = _OPTIONAL_PresidioPIIMasking(
+    pii_masking = OPTIONAL_PresidioPIIMasking(
         logging_only=True,
         mock_testing=True,
         mock_redacted_text=input_b_anonymizer_results,
@@ -4505,7 +4505,7 @@ async def test_presidio_language_configuration():
     """Test that presidio_language parameter is properly set and used in analyze requests"""
     litellm.turn_on_debug()
 
-    presidio_guardrail_de = _OPTIONAL_PresidioPIIMasking(
+    presidio_guardrail_de = OPTIONAL_PresidioPIIMasking(
         pii_entities_config={},
         presidio_language="de",
         mock_testing=True,
@@ -4520,7 +4520,7 @@ async def test_presidio_language_configuration():
     assert analyze_request["language"] == "de"
     assert analyze_request["text"] == test_text
 
-    presidio_guardrail_es = _OPTIONAL_PresidioPIIMasking(
+    presidio_guardrail_es = OPTIONAL_PresidioPIIMasking(
         pii_entities_config={}, presidio_language="es", mock_testing=True
     )
 
@@ -4533,7 +4533,7 @@ async def test_presidio_language_configuration():
     assert analyze_request_es["language"] == "es"
     assert analyze_request_es["text"] == test_text_es
 
-    presidio_guardrail_default = _OPTIONAL_PresidioPIIMasking(
+    presidio_guardrail_default = OPTIONAL_PresidioPIIMasking(
         pii_entities_config={}, mock_testing=True
     )
 
@@ -4554,7 +4554,7 @@ async def test_presidio_language_configuration_with_per_request_override():
     """Test that per-request language configuration overrides the default configured language"""
     litellm.turn_on_debug()
 
-    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
+    presidio_guardrail = OPTIONAL_PresidioPIIMasking(
         pii_entities_config={}, presidio_language="de", mock_testing=True
     )
 

@@ -77,7 +77,7 @@ class DynamicRateLimiterCache:
             raise e
 
 
-class PROXY_DynamicRateLimitHandler(CustomLogger):
+class _PROXY_DynamicRateLimitHandler(CustomLogger):
     # Class variables or attributes
     def __init__(self, internal_usage_cache: DualCache, time_fn: Callable[[], datetime] = get_utc_datetime):
         self.internal_usage_cache = DynamicRateLimiterCache(cache=internal_usage_cache, time_fn=time_fn)
@@ -284,4 +284,4 @@ class PROXY_DynamicRateLimitHandler(CustomLogger):
             return response
 
 
-_PROXY_DynamicRateLimitHandler: Final = PROXY_DynamicRateLimitHandler
+PROXY_DynamicRateLimitHandler: Final = _PROXY_DynamicRateLimitHandler

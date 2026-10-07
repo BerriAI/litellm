@@ -771,7 +771,7 @@ def _parse_output_cap_value(raw_value: object) -> int | None:
         return None
 
 
-class PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
+class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     batch_rate_limiter_script: _AsyncLuaScript | None
     batch_counter_read_script: _AsyncLuaScript | None
     token_increment_script: _AsyncLuaScript | None
@@ -5452,4 +5452,4 @@ class PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return
 
 
-_PROXY_MaxParallelRequestsHandler_v3: Final = PROXY_MaxParallelRequestsHandler_v3
+PROXY_MaxParallelRequestsHandler_v3 = _PROXY_MaxParallelRequestsHandler_v3

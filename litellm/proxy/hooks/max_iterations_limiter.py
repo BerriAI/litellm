@@ -49,7 +49,7 @@ return current
 DEFAULT_MAX_ITERATIONS_TTL: Final = 3600
 
 
-class PROXY_MaxIterationsHandler(CustomLogger):
+class _PROXY_MaxIterationsHandler(CustomLogger):
     """
     Pre-call hook that enforces max_iterations per session.
 
@@ -223,4 +223,4 @@ class PROXY_MaxIterationsHandler(CustomLogger):
         return new_value
 
 
-_PROXY_MaxIterationsHandler: Final = PROXY_MaxIterationsHandler
+PROXY_MaxIterationsHandler: Final = _PROXY_MaxIterationsHandler

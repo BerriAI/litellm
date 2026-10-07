@@ -14,7 +14,7 @@ from litellm.proxy.guardrails._content_utils import (
 )
 
 
-class PROXY_AzureContentSafety(
+class _PROXY_AzureContentSafety(
     CustomLogger
 ):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
@@ -149,7 +149,7 @@ class PROXY_AzureContentSafety(
                 await self.test_violation(content=content, source="output")
 
 
-_PROXY_AzureContentSafety: Final = PROXY_AzureContentSafety
+PROXY_AzureContentSafety: Final = _PROXY_AzureContentSafety
 
 # async def async_post_call_streaming_hook(
 #    self,

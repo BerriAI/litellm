@@ -15,7 +15,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
 
-class PROXY_BatchRedisRequests(CustomLogger):
+class _PROXY_BatchRedisRequests(CustomLogger):
     # Class variables or attributes
     in_memory_cache: InMemoryCache | None = None
 
@@ -115,4 +115,4 @@ class PROXY_BatchRedisRequests(CustomLogger):
             return None
 
 
-_PROXY_BatchRedisRequests: Final = PROXY_BatchRedisRequests
+PROXY_BatchRedisRequests: Final = _PROXY_BatchRedisRequests

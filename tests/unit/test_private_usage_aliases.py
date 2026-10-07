@@ -6,6 +6,94 @@ from typing import Final, cast
 
 import pytest
 
+PROXY_CLASS_NAME_ALIAS_CASES: Final = (
+    (
+        "litellm.proxy.hooks.dynamic_rate_limiter",
+        "_PROXY_DynamicRateLimitHandler",
+        "PROXY_DynamicRateLimitHandler",
+    ),
+    (
+        "litellm.proxy.hooks.dynamic_rate_limiter_v3",
+        "_PROXY_DynamicRateLimitHandlerV3",
+        "PROXY_DynamicRateLimitHandlerV3",
+    ),
+    (
+        "litellm.proxy.common_utils.config_sync_pubsub",
+        "_ConfigSyncPubSub",
+        "ConfigSyncPubSub",
+    ),
+    (
+        "litellm.proxy.guardrails.guardrail_hooks.presidio",
+        "_OPTIONAL_PresidioPIIMasking",
+        "OPTIONAL_PresidioPIIMasking",
+    ),
+    (
+        "litellm.proxy.hooks.prompt_injection_detection",
+        "_OPTIONAL_PromptInjectionDetection",
+        "OPTIONAL_PromptInjectionDetection",
+    ),
+    (
+        "litellm.proxy.hooks.batch_redis_get",
+        "_PROXY_BatchRedisRequests",
+        "PROXY_BatchRedisRequests",
+    ),
+    (
+        "litellm.proxy.hooks.azure_content_safety",
+        "_PROXY_AzureContentSafety",
+        "PROXY_AzureContentSafety",
+    ),
+    (
+        "litellm.proxy.guardrails.guardrail_hooks.cisco_ai_defense.cisco_ai_defense_mcp",
+        "_CiscoAIDefenseMcpMixin",
+        "CiscoAIDefenseMcpMixin",
+    ),
+    (
+        "litellm.proxy.hooks.cache_control_check",
+        "_PROXY_CacheControlCheck",
+        "PROXY_CacheControlCheck",
+    ),
+    (
+        "litellm.proxy.hooks.max_budget_per_session_limiter",
+        "_PROXY_MaxBudgetPerSessionHandler",
+        "PROXY_MaxBudgetPerSessionHandler",
+    ),
+    (
+        "litellm.proxy.hooks.max_iterations_limiter",
+        "_PROXY_MaxIterationsHandler",
+        "PROXY_MaxIterationsHandler",
+    ),
+    (
+        "litellm.proxy.hooks.parallel_request_limiter",
+        "_PROXY_MaxParallelRequestsHandler",
+        "PROXY_MaxParallelRequestsHandler",
+    ),
+    (
+        "litellm.proxy.hooks.parallel_request_limiter_v3",
+        "_PROXY_MaxParallelRequestsHandler_v3",
+        "PROXY_MaxParallelRequestsHandler_v3",
+    ),
+    (
+        "litellm.proxy.hooks.sensitive_data_routing",
+        "_PROXY_SensitiveDataRoutingHandler",
+        "PROXY_SensitiveDataRoutingHandler",
+    ),
+    (
+        "litellm.proxy.hooks.batch_rate_limiter",
+        "_PROXY_BatchRateLimiter",
+        "PROXY_BatchRateLimiter",
+    ),
+    (
+        "litellm.proxy.hooks.model_max_budget_limiter",
+        "_PROXY_VirtualKeyModelMaxBudgetLimiter",
+        "PROXY_VirtualKeyModelMaxBudgetLimiter",
+    ),
+    (
+        "litellm.proxy.hooks.proxy_track_cost_callback",
+        "_ProxyDBLogger",
+        "ProxyDBLogger",
+    ),
+)
+
 ALIAS_CASES: Final = (
     (
         "enterprise.enterprise_hooks.banned_keywords",
@@ -4106,6 +4194,23 @@ def test_public_aliases(
         assert old_value.__func__ is new_value.__func__
     else:
         assert old_value is new_value
+
+
+@pytest.mark.parametrize(
+    ("module_path", "private_name", "public_name"),
+    PROXY_CLASS_NAME_ALIAS_CASES,
+)
+def test_proxy_class_aliases_keep_the_private_name(
+    module_path: str,
+    private_name: str,
+    public_name: str,
+) -> None:
+    module: Final = import_module(module_path)
+    private_class: Final = cast(type[object], getattr(module, private_name))
+    public_class: Final = cast(type[object], getattr(module, public_name))
+
+    assert public_class is private_class
+    assert public_class.__name__ == private_name
 
 
 def _make_private_override(

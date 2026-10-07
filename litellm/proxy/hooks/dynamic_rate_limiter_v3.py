@@ -64,7 +64,7 @@ def _is_latin1_encodable(value: object) -> bool:
     return all(ord(char) < 256 for char in str(value))
 
 
-class PROXY_DynamicRateLimitHandlerV3(CustomLogger):
+class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     """
     Saturation-aware priority-based rate limiter using v3 infrastructure.
 
@@ -808,4 +808,4 @@ class PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             verbose_proxy_logger.exception("Error in dynamic rate limiter success event: %s", e)
 
 
-_PROXY_DynamicRateLimitHandlerV3: Final = PROXY_DynamicRateLimitHandlerV3
+PROXY_DynamicRateLimitHandlerV3: Final = _PROXY_DynamicRateLimitHandlerV3

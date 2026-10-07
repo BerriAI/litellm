@@ -119,7 +119,7 @@ class BatchFileUsage(LiteLLMBaseModel):
     per_model_usage: dict[str, dict[str, int]] = Field(default_factory=dict)
 
 
-class PROXY_BatchRateLimiter(CustomLogger):
+class _PROXY_BatchRateLimiter(CustomLogger):
     """
     Rate limiter for batch API requests.
 
@@ -1283,4 +1283,4 @@ class PROXY_BatchRateLimiter(CustomLogger):
             return data
 
 
-_PROXY_BatchRateLimiter: Final = PROXY_BatchRateLimiter
+PROXY_BatchRateLimiter = _PROXY_BatchRateLimiter

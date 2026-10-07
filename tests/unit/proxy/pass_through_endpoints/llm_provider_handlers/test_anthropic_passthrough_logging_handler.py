@@ -2839,11 +2839,7 @@ def test_handle_logging_anthropic_collected_chunks(all_chunks):
         "all_chunks": all_chunks,
     }
 
-    result = (
-        AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
-            **sent_args
-        )
-    )
+    result = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(**sent_args)
 
     assert isinstance(result["result"], ModelResponse)
     print("result=", json.dumps(result, indent=4, default=str))
@@ -2857,7 +2853,7 @@ def test_build_complete_streaming_response(all_chunks):
 
     litellm_logging_obj = Mock()
 
-    result = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+    result = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
         all_chunks=all_chunks,
         model="claude-sonnet-4-5-20250929",
         litellm_logging_obj=litellm_logging_obj,
