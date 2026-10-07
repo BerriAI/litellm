@@ -13,6 +13,21 @@ pub struct TraceListRequest {
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(length(max = 512)))]
     pub cursor: Option<String>,
+    /// Only runs this agent took part in, as named in TraceAgentList
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(length(max = 256)))]
+    pub agent: Option<String>,
+}
+
+#[macro_rules_attribute::apply(request_type)]
+#[derive(Clone, Debug)]
+pub struct TraceAgentsRequest {
+    /// Window start, unix ms. Default: 24h ago
+    #[serde(default)]
+    pub start_ms: Option<i64>,
+    /// Window end, unix ms. Default: now
+    #[serde(default)]
+    pub end_ms: Option<i64>,
 }
 
 #[macro_rules_attribute::apply(request_type)]
