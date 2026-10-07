@@ -42410,6 +42410,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_web_search": true,
+        "supports_adaptive_thinking": true,
+        "prompt_cache_min_tokens": 512,
         "supports_sampling_params": false
     },
     "openrouter/anthropic/claude-haiku-4.5": {
