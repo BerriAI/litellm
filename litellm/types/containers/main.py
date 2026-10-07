@@ -28,11 +28,11 @@ class ContainerObject(LiteLLMBaseModel):
     _hidden_params: dict[str, Any] = PrivateAttr(default={})
 
     @property
-    def hidden_params(self) -> dict[str, Any]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, Any]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
     def __contains__(self, key: str) -> bool:

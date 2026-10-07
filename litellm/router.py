@@ -4567,8 +4567,10 @@ class Router:
                 _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
                 response_hidden_params: Final = get_hidden_params(_response)
                 if response_hidden_params is not None:
-                    response_hidden_params.setdefault("additional_headers", {})
-                    response_hidden_params["additional_headers"].update({"x-litellm-request-prioritization-used": True})
+                    additional_headers: Final = cast(
+                        dict[str, object], response_hidden_params.setdefault("additional_headers", {})
+                    )
+                    additional_headers.update({"x-litellm-request-prioritization-used": True})
                 return _response
             except Exception as e:
                 setattr(e, "priority", priority)
@@ -4629,8 +4631,10 @@ class Router:
                 _response: Final = await original_function(*args, **kwargs)
                 response_hidden_params: Final = get_hidden_params(_response)
                 if response_hidden_params is not None:
-                    response_hidden_params.setdefault("additional_headers", {})
-                    response_hidden_params["additional_headers"].update({"x-litellm-request-prioritization-used": True})
+                    additional_headers: Final = cast(
+                        dict[str, object], response_hidden_params.setdefault("additional_headers", {})
+                    )
+                    additional_headers.update({"x-litellm-request-prioritization-used": True})
                 return _response
             except Exception as e:
                 setattr(e, "priority", priority)

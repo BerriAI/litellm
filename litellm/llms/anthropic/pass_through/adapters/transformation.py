@@ -1743,7 +1743,7 @@ class LiteLLMAnthropicMessagesAdapter:
             else:
                 response_hidden_params: Final = get_hidden_params(response)
                 litellm_usage_chunk = (
-                    response_hidden_params["usage"]
+                    cast(Usage, response_hidden_params["usage"])
                     if response_hidden_params is not None and "usage" in response_hidden_params
                     else None
                 )

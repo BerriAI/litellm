@@ -2,6 +2,7 @@
 Base Search transformation configuration.
 """
 
+import builtins
 from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
 
@@ -78,11 +79,11 @@ class SearchResponse(LiteLLMPydanticObjectBase):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
 

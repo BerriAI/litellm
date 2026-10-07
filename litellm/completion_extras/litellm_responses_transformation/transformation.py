@@ -24,7 +24,7 @@ from pydantic import BaseModel
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
     with_prompt_cache_breakpoint,
@@ -994,7 +994,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # Preserve hidden params from the ResponsesAPIResponse, especially the headers
         # which contain important provider information like x-request-id
-        raw_response_hidden_params: Final = getattr(raw_response, "_hidden_params", {})
+        raw_response_hidden_params: Final = get_hidden_params(raw_response) or {}
         if raw_response_hidden_params:
             model_response_hidden_params: Final = get_or_create_hidden_params(model_response)
             # Merge the raw_response hidden params with model_response hidden params

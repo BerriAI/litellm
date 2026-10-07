@@ -8828,7 +8828,9 @@ async def ahealth_check(
         if mode in mode_handlers:
             _response: Final = await mode_handlers[mode]()
             # Only process headers for chat mode
-            _response_headers: Final[dict] = cast(dict, (get_hidden_params(_response) or {}).get("headers", {}) or {})
+            _response_headers: Final = cast(
+                dict[str, object], (get_hidden_params(_response) or {}).get("headers", {}) or {}
+            )
             return create_health_check_response(_response_headers)
         else:
             raise Exception(f"Mode {mode} not supported. See modes here: https://docs.litellm.ai/docs/proxy/health")

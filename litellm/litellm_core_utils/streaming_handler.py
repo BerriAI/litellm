@@ -20,7 +20,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -188,7 +188,7 @@ def _provider_hidden_params(
     chunk: object,
     provider_response_model: str | None,
 ) -> Mapping[str, object] | None:
-    hidden: Final[object] = getattr(chunk, "_hidden_params", None)
+    hidden: Final = get_hidden_params(chunk)
     parsed: Final = _parsed_provider_hidden_params(hidden)
     provider_specific_fields: Final[object | None] = (
         dict(parsed.provider_specific_fields) if parsed is not None and parsed.provider_specific_fields else None
@@ -267,7 +267,7 @@ class CustomStreamWrapper:
             optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
         )
 
-        self._hidden_params = {
+        self._hidden_params: dict[str, object] = {
             "model_id": (_model_info.get("id", None)),
             "api_base": _api_base,
         }  # returned as x-litellm-model-id response header in proxy
@@ -289,7 +289,7 @@ class CustomStreamWrapper:
         self._repeated_messages_count = 1
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: int | None = None
-        self._last_returned_hidden_params: dict | None = None
+        self._last_returned_hidden_params: dict[str, object] | None = None
 
         _cached_logging_provider: Final = self.logging_obj.model_call_details.get("custom_llm_provider", None)
         self._cached_logging_llm_provider: str | None = _cached_logging_provider
@@ -633,8 +633,12 @@ class CustomStreamWrapper:
                     pass
                 if str_line.choices[0].finish_reason:
                     is_finished = True  # check if str_line._hidden_params["is_finished"] is True
-                    if hasattr(str_line, "_hidden_params") and str_line._hidden_params.get("is_finished") is not None:
-                        is_finished = str_line._hidden_params.get("is_finished")
+                    str_line_hidden_params: Final = get_hidden_params(str_line)
+                    is_finished_from_hidden_params: Final = (
+                        str_line_hidden_params.get("is_finished") if str_line_hidden_params is not None else None
+                    )
+                    if isinstance(is_finished_from_hidden_params, bool):
+                        is_finished = is_finished_from_hidden_params
                     finish_reason = str_line.choices[0].finish_reason
 
                 # checking for logprobs

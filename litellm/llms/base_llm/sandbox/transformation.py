@@ -6,6 +6,7 @@ returns whatever the sandbox produced. The lifecycle is create container ->
 run code -> delete container; `code_interpreter_tool` combines all three.
 """
 
+import builtins
 from typing import Any, Final
 
 import httpx
@@ -28,11 +29,11 @@ class ContainerHandle(LiteLLMPydanticObjectBase):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
 
@@ -51,11 +52,11 @@ class CodeExecutionResult(LiteLLMPydanticObjectBase):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
 

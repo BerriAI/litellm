@@ -6,7 +6,7 @@ import asyncio
 import os
 from collections.abc import Callable
 from datetime import datetime
-from typing import Final
+from typing import Final, cast
 
 import litellm
 from litellm import ModelResponse, Router
@@ -15,7 +15,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_param
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import (
@@ -244,10 +244,10 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         try:
             if isinstance(response, ModelResponse):
-                response_hidden_params: Final = getattr(response, HIDDEN_PARAMS_ATTR)
-                model_info: Final = self.llm_router.get_model_info(id=response_hidden_params["model_id"])
+                model_id: Final = cast(str, response.hidden_params["model_id"])
+                model_info: Final = self.llm_router.get_model_info(id=model_id)
                 assert model_info is not None, "Model info for model with id={} is None".format(
-                    response_hidden_params["model_id"]
+                    model_id
                 )
                 key_priority: Final[str | None] = user_api_key_dict.metadata.get("priority", None)
                 (

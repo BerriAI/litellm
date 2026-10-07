@@ -651,9 +651,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         if response is not None and self._accumulated_provider_specific_fields:
             response_hidden_params: Final = get_or_create_hidden_params(response)
-            response_hidden_params.setdefault("provider_specific_fields", {}).update(
-                self._accumulated_provider_specific_fields
+            provider_specific_fields: Final = cast(
+                dict[str, object], response_hidden_params.setdefault("provider_specific_fields", {})
             )
+            provider_specific_fields.update(self._accumulated_provider_specific_fields)
         return response
 
     @staticmethod
