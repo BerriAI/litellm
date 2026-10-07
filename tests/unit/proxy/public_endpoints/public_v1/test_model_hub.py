@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 import litellm
 from litellm.proxy._types import LiteLLMRoutes
-from litellm.proxy.proxy_server import app
+from litellm.proxy.proxy_server import app, proxy_config
 from litellm.types.router import ModelGroupInfo
 from tests._master_key import MASTER_KEY
 
@@ -398,7 +398,9 @@ def test_features_filter_matches_a_model_with_any_of_the_named_features(monkeypa
 
 
 def test_a_single_feature_filter_selects_only_models_with_it(monkeypatch):
-    _publish(monkeypatch, (_info("sees", supports_vision=True), _info("plain"), _info("reasons", supports_reasoning=True)))
+    _publish(
+        monkeypatch, (_info("sees", supports_vision=True), _info("plain"), _info("reasons", supports_reasoning=True))
+    )
 
     assert _groups(_get("filter[features][in]=vision")) == ["sees"]
     assert _groups(_get("filter[features][in]=reasoning")) == ["reasons"]
@@ -433,11 +435,14 @@ def test_a_facet_serves_the_distinct_values_of_its_column(monkeypatch, facet):
     response = _facet(facet)
 
     assert response.status_code == 200, response.text
-    assert response.json()["data"] == {
-        "providers": ["anthropic", "mistral", "openai"],
-        "modes": ["chat", "embedding"],
-        "features": ["vision"],
-    }[facet]
+    assert (
+        response.json()["data"]
+        == {
+            "providers": ["anthropic", "mistral", "openai"],
+            "modes": ["chat", "embedding"],
+            "features": ["vision"],
+        }[facet]
+    )
 
 
 def test_a_facet_offers_only_values_the_table_can_show(monkeypatch):
@@ -479,3 +484,133 @@ def test_a_facet_rejects_a_sort_it_does_not_offer(monkeypatch):
 @pytest.mark.parametrize("facet", FACET_PATHS)
 def test_a_facet_is_reachable_without_a_key(facet):
     assert f"{MODEL_HUB_PATH}/{facet}" in LiteLLMRoutes.public_routes.value
+
+
+PASS_THROUGH_TARGET = "https://nlp.internal.example/v1"
+
+
+def _configure_pass_throughs(monkeypatch, *endpoints: Mapping[str, object]) -> None:
+    """Pass-through endpoints as the config sync publishes them into the in-memory settings store."""
+    monkeypatch.setitem(
+        proxy_config.settings,
+        "pass_through_endpoints",
+        [{"target": PASS_THROUGH_TARGET, **endpoint} for endpoint in endpoints],
+    )
+
+
+def _pass_through_row(model_group: str, path: str, methods: list[str] | None = None) -> dict[str, object]:
+    return {
+        **ModelGroupInfo(model_group=model_group, providers=[], mode="passthrough").model_dump(mode="json"),
+        "is_public_model_group": True,
+        "health_status": None,
+        "health_response_time": None,
+        "health_checked_at": None,
+        "pass_through_path": path,
+        "pass_through_methods": methods,
+    }
+
+
+def test_a_pass_through_endpoint_opted_into_the_hub_is_listed_under_its_display_name(monkeypatch: pytest.MonkeyPatch):
+    _publish(monkeypatch, (_info("gpt-4o"),))
+    _configure_pass_throughs(
+        monkeypatch,
+        {"path": "/clinical-ner", "display_name": "Clinical NER", "show_in_model_hub": True},
+        {"path": "/kept-private", "display_name": "Kept private", "show_in_model_hub": False},
+        {"path": "/unnamed-tagger", "show_in_model_hub": True},
+        {"path": "/default-hidden"},
+    )
+
+    response = _get()
+
+    assert response.status_code == 200, response.text
+    assert _groups(response) == ["/unnamed-tagger", "Clinical NER", "gpt-4o"]
+    assert response.json()["data"][:2] == [
+        _pass_through_row("/unnamed-tagger", "/unnamed-tagger"),
+        _pass_through_row("Clinical NER", "/clinical-ner"),
+    ]
+
+
+def test_a_pass_through_row_carries_the_methods_its_route_accepts(monkeypatch: pytest.MonkeyPatch):
+    _publish(monkeypatch, (_info("gpt-4o"),))
+    _configure_pass_throughs(
+        monkeypatch, {"path": "/catalog", "display_name": "Catalog", "show_in_model_hub": True, "methods": ["GET"]}
+    )
+
+    response = _get()
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"][0] == _pass_through_row("Catalog", "/catalog", methods=["GET"])
+
+
+def test_a_pass_through_row_is_filterable_by_its_mode_and_offered_by_the_modes_facet(monkeypatch: pytest.MonkeyPatch):
+    _publish(monkeypatch, (_info("gpt-4o"), _info("embedder", mode="embedding")))
+    _configure_pass_throughs(
+        monkeypatch, {"path": "/clinical-ner", "display_name": "Clinical NER", "show_in_model_hub": True}
+    )
+
+    assert _groups(_get("filter[mode]=passthrough")) == ["Clinical NER"]
+    assert _groups(_get("filter[mode]=chat")) == ["gpt-4o"]
+    assert _facet("modes").json()["data"] == ["chat", "embedding", "passthrough"]
+
+
+def test_a_pass_through_endpoint_is_listed_even_when_no_model_group_is_published(monkeypatch: pytest.MonkeyPatch):
+    _publish(monkeypatch, ())
+    monkeypatch.setattr(litellm, "public_model_groups", None)
+    _configure_pass_throughs(
+        monkeypatch, {"path": "/clinical-ner", "display_name": "Clinical NER", "show_in_model_hub": True}
+    )
+
+    response = _get()
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == [_pass_through_row("Clinical NER", "/clinical-ner")]
+
+
+def test_a_pass_through_named_like_a_model_does_not_borrow_its_health(monkeypatch: pytest.MonkeyPatch):
+    prisma_client, read = _recording_prisma([_health_check("gpt-4o", status="unhealthy")])
+    prisma_client.get_all_latest_health_checks = AsyncMock(return_value=[_health_check("gpt-4o", status="unhealthy")])
+    _publish(monkeypatch, (_info("gpt-4o"),), prisma_client=prisma_client)
+    _configure_pass_throughs(monkeypatch, {"path": "/gpt-4o", "display_name": "gpt-4o", "show_in_model_hub": True})
+
+    rows = _get().json()["data"]
+    legacy_rows = client.get(LEGACY_MODEL_HUB_PATH).json()
+
+    assert [(row["pass_through_path"], row["health_status"]) for row in rows] == [
+        (None, "unhealthy"),
+        ("/gpt-4o", None),
+    ]
+    assert _asked_about(read) == ["gpt-4o"]
+    assert [(row["pass_through_path"], row["health_status"]) for row in legacy_rows] == [
+        (None, "unhealthy"),
+        ("/gpt-4o", None),
+    ]
+
+
+def test_a_pass_through_only_proxy_without_a_router_still_publishes_its_endpoints(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    _configure_pass_throughs(
+        monkeypatch, {"path": "/clinical-ner", "display_name": "Clinical NER", "show_in_model_hub": True}
+    )
+
+    response = _get()
+    legacy = client.get(LEGACY_MODEL_HUB_PATH)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == [_pass_through_row("Clinical NER", "/clinical-ner")]
+    assert legacy.status_code == 200, legacy.text
+    assert legacy.json() == [_pass_through_row("Clinical NER", "/clinical-ner")]
+
+
+def test_the_endpoint_it_supersedes_lists_pass_through_rows_after_the_model_groups(monkeypatch: pytest.MonkeyPatch):
+    _publish(monkeypatch, _named(2))
+    _configure_pass_throughs(
+        monkeypatch, {"path": "/clinical-ner", "display_name": "Clinical NER", "show_in_model_hub": True}
+    )
+
+    response = client.get(LEGACY_MODEL_HUB_PATH)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [row["model_group"] for row in body] == ["model-000", "model-001", "Clinical NER"], body
+    assert body[2] == _pass_through_row("Clinical NER", "/clinical-ner")

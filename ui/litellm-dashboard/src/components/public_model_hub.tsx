@@ -68,6 +68,13 @@ function PublicHubEmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
+const BODY_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH"]);
+
+const passThroughExampleMethod = (methods: string[] | null | undefined): string =>
+  !methods?.length || methods.includes("POST") ? "POST" : methods[0];
+
+const shellDoubleQuoted = (value: string): string => value.replace(/[\\"$`]/g, "\\$&");
+
 const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
   const anchor = useComboboxAnchor();
   const [proxyConfigured, setProxyConfigured] = useState<boolean>(false);
@@ -263,6 +270,38 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
   const formatCost = (cost: number) => {
     return `$${(cost * 1_000_000).toFixed(4)}`;
+  };
+
+  const usageSnippet = (model: ModelGroupInfo): string => {
+    if (model.pass_through_path) {
+      const method = passThroughExampleMethod(model.pass_through_methods);
+      const quotedMethod = shellDoubleQuoted(method);
+      const url = shellDoubleQuoted(`${getProxyBaseUrl()}${model.pass_through_path}`);
+      return BODY_METHODS.has(method)
+        ? [
+            `curl -X "${quotedMethod}" "${url}" \\`,
+            `  -H "Authorization: Bearer your_api_key" \\`,
+            `  -H "Content-Type: application/json" \\`,
+            `  -d '{"input": "Hello, how are you?"}'`,
+          ].join("\n")
+        : [`curl -X "${quotedMethod}" "${url}" \\`, `  -H "Authorization: Bearer your_api_key"`].join("\n");
+    }
+    const snippetRequest: Parameters<typeof generateCodeSnippet>[0] = {
+      apiKeySource: "custom",
+      accessToken: null,
+      apiKey: "your_api_key",
+      inputMessage: "Hello, how are you?",
+      chatHistory: [{ role: "user", content: "Hello, how are you?", isImage: false } as MessageType],
+      selectedTags: [],
+      selectedVectorStores: [],
+      selectedGuardrails: [],
+      selectedPolicies: [],
+      selectedMCPServers: [],
+      endpointType: getEndpointType(model.mode || "chat"),
+      selectedModel: model.model_group,
+      selectedSdk: "openai",
+    };
+    return generateCodeSnippet(snippetRequest);
   };
 
   const models = usePublicModelHubList(proxyConfigured);
@@ -488,7 +527,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   <DataTable
                     data={models.rows}
                     columns={modelColumns}
-                    getRowId={(model, index) => model.model_group || String(index)}
+                    getRowId={(model, index) =>
+                      model.pass_through_path
+                        ? `passthrough:${model.pass_through_path}:${index}`
+                        : model.model_group || String(index)
+                    }
                     sortingMode="server"
                     sorting={models.sorting}
                     onSortingChange={models.onSortingChange}
@@ -689,6 +732,12 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         <p className="font-medium">Mode:</p>
                         <p>{selectedModel.mode || "Not specified"}</p>
                       </div>
+                      {selectedModel.pass_through_path && (
+                        <div>
+                          <p className="font-medium">Endpoint:</p>
+                          <p className="font-mono text-sm">{selectedModel.pass_through_path}</p>
+                        </div>
+                      )}
                       <div>
                         <p className="font-medium">Providers:</p>
                         <div className="flex flex-wrap gap-1 mt-1">
@@ -744,36 +793,37 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     )}
                   </div>
 
-                  {/* Token and Cost Information */}
-                  <div>
-                    <p className="text-lg font-semibold mb-4">Token & Cost Information</p>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <p className="font-medium">Max Input Tokens:</p>
-                        <p>{selectedModel.max_input_tokens?.toLocaleString() || "Not specified"}</p>
-                      </div>
-                      <div>
-                        <p className="font-medium">Max Output Tokens:</p>
-                        <p>{selectedModel.max_output_tokens?.toLocaleString() || "Not specified"}</p>
-                      </div>
-                      <div>
-                        <p className="font-medium">Input Cost per 1M Tokens:</p>
-                        <p>
-                          {selectedModel.input_cost_per_token
-                            ? formatCost(selectedModel.input_cost_per_token)
-                            : "Not specified"}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="font-medium">Output Cost per 1M Tokens:</p>
-                        <p>
-                          {selectedModel.output_cost_per_token
-                            ? formatCost(selectedModel.output_cost_per_token)
-                            : "Not specified"}
-                        </p>
+                  {!selectedModel.pass_through_path && (
+                    <div>
+                      <p className="text-lg font-semibold mb-4">Token & Cost Information</p>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <p className="font-medium">Max Input Tokens:</p>
+                          <p>{selectedModel.max_input_tokens?.toLocaleString() || "Not specified"}</p>
+                        </div>
+                        <div>
+                          <p className="font-medium">Max Output Tokens:</p>
+                          <p>{selectedModel.max_output_tokens?.toLocaleString() || "Not specified"}</p>
+                        </div>
+                        <div>
+                          <p className="font-medium">Input Cost per 1M Tokens:</p>
+                          <p>
+                            {selectedModel.input_cost_per_token
+                              ? formatCost(selectedModel.input_cost_per_token)
+                              : "Not specified"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="font-medium">Output Cost per 1M Tokens:</p>
+                          <p>
+                            {selectedModel.output_cost_per_token
+                              ? formatCost(selectedModel.output_cost_per_token)
+                              : "Not specified"}
+                          </p>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Capabilities */}
                   <div>
@@ -834,51 +884,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   <div>
                     <p className="text-lg font-semibold mb-4">Usage Example</p>
                     <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
-                      <pre className="text-sm">
-                        {(() => {
-                          const codeSnippet = generateCodeSnippet({
-                            apiKeySource: "custom",
-                            accessToken: null,
-                            apiKey: "your_api_key",
-                            inputMessage: "Hello, how are you?",
-                            chatHistory: [
-                              { role: "user", content: "Hello, how are you?", isImage: false } as MessageType,
-                            ],
-                            selectedTags: [],
-                            selectedVectorStores: [],
-                            selectedGuardrails: [],
-                            selectedPolicies: [],
-                            selectedMCPServers: [],
-                            endpointType: getEndpointType(selectedModel.mode || "chat"),
-                            selectedModel: selectedModel.model_group,
-                            selectedSdk: "openai",
-                          });
-                          return codeSnippet;
-                        })()}
-                      </pre>
+                      <pre className="text-sm">{usageSnippet(selectedModel)}</pre>
                     </div>
                     <div className="mt-2 text-right">
                       <button
-                        onClick={() => {
-                          const codeSnippet = generateCodeSnippet({
-                            apiKeySource: "custom",
-                            accessToken: null,
-                            apiKey: "your_api_key",
-                            inputMessage: "Hello, how are you?",
-                            chatHistory: [
-                              { role: "user", content: "Hello, how are you?", isImage: false } as MessageType,
-                            ],
-                            selectedTags: [],
-                            selectedVectorStores: [],
-                            selectedGuardrails: [],
-                            selectedPolicies: [],
-                            selectedMCPServers: [],
-                            endpointType: getEndpointType(selectedModel.mode || "chat"),
-                            selectedModel: selectedModel.model_group,
-                            selectedSdk: "openai",
-                          });
-                          copyToClipboard(codeSnippet);
-                        }}
+                        onClick={() => copyToClipboard(usageSnippet(selectedModel))}
                         className="text-sm text-info hover:text-info/80 cursor-pointer"
                       >
                         Copy to clipboard

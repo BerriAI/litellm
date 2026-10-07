@@ -60,6 +60,17 @@ const model = (overrides: Partial<ModelGroupInfo> & { model_group: string }): Mo
   ...overrides,
 });
 
+const passThrough = (name: string, path: string, methods?: string[]): ModelGroupInfo => {
+  const spec: Partial<ModelGroupInfo> & { model_group: string } = {
+    model_group: name,
+    providers: [],
+    mode: "passthrough",
+    pass_through_path: path,
+    pass_through_methods: methods,
+  };
+  return model(spec);
+};
+
 const DEFAULT_MODELS = [model({ model_group: "gpt-4" }), model({ model_group: "claude-3", providers: ["anthropic"] })];
 
 const respondWith = (rows: ModelGroupInfo[], totalCount: number = rows.length, pageSize: number = 50) =>
@@ -359,6 +370,56 @@ describe("PublicModelHub", () => {
       expect(gpt35Row).toBeInTheDocument();
       expect(within(gpt35Row as HTMLElement).getByText("Unknown")).toBeInTheDocument();
     });
+  });
+
+  it("lists a published pass-through endpoint under its display name and opens its route", async () => {
+    respondWith([passThrough("Clinical NER", "/clinical-ner")]);
+    renderHub();
+
+    const row = await screen.findByRole("row", { name: /Clinical NER/ });
+    expect(row).toHaveTextContent("passthrough");
+    expect(row).toHaveTextContent("n/a");
+    expect(row).not.toHaveTextContent("Free");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clinical NER" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("/clinical-ner")).toBeInTheDocument();
+    expect(within(dialog).getByText(/curl -X "POST" "http:\/\/localhost:3000\/clinical-ner"/)).toBeInTheDocument();
+    expect(within(dialog).queryByText("Token & Cost Information")).not.toBeInTheDocument();
+  });
+
+  it("quotes a hostile configured method in the usage example", async () => {
+    respondWith([passThrough("Odd", "/odd", ['GET" ; touch /tmp/pwned ; "'])]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Odd" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText(/curl -X "GET\\" ; touch \/tmp\/pwned ; \\"" "http:\/\/localhost:3000\/odd"/),
+    ).toBeInTheDocument();
+  });
+
+  it("escapes shell characters in the pass-through route of the usage example", async () => {
+    respondWith([passThrough("Tenant", "/tenant/$acct")]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Tenant" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/curl -X "POST" "http:\/\/localhost:3000\/tenant\/\\\$acct"/)).toBeInTheDocument();
+  });
+
+  it("writes the usage example with a method the pass-through route accepts", async () => {
+    respondWith([passThrough("Catalog", "/catalog", ["GET"])]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Catalog" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/curl -X "GET" "http:\/\/localhost:3000\/catalog"/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/-d '\{"input"/)).not.toBeInTheDocument();
   });
 
   it("shows no models when the search has no matches (LIT-5230 regression)", async () => {
