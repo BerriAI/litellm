@@ -679,7 +679,7 @@ def test_build_database_url():
 
 
 def test_bedrock_llama():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.types.utils import CallTypes
     from litellm.utils import return_raw_request
 
@@ -847,7 +847,7 @@ def test_responses_api_bridge_check_strips_responses_prefix():
     """Test that responses_api_bridge_check strips 'responses/' prefix and sets mode."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 4096}
 
         model_info, model = responses_api_bridge_check(
@@ -881,7 +881,7 @@ def test_responses_api_bridge_check_gpt_5_4_tools_plus_reasoning_routes_to_respo
     """gpt-5.4 with both tools and reasoning_effort should route to Responses API."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.4",
@@ -911,7 +911,7 @@ def test_responses_api_bridge_check_gpt_5_5_tools_plus_reasoning_routes_to_respo
     """gpt-5.5+ with both tools and reasoning_effort should route to Responses API."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.5-pro",
@@ -928,7 +928,7 @@ def test_responses_api_bridge_check_azure_gpt_5_4_tools_plus_reasoning_routes_to
     """Azure gpt-5.4 with both tools and reasoning_effort should route to Responses API."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.4",
@@ -949,7 +949,7 @@ def test_responses_api_bridge_check_azure_gpt_5_4_tools_with_default_reasoning_r
     """
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.4",
@@ -970,7 +970,7 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_
     """
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.4",
@@ -980,6 +980,37 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_
         )
 
     assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
+@pytest.mark.parametrize("region", ("us", "eu"))
+@pytest.mark.parametrize(
+    "model_name",
+    (
+        "codex-mini",
+        "gpt-5-codex",
+        "gpt-5-pro",
+        "gpt-5.1-codex-max",
+        "gpt-5.2-codex",
+        "gpt-5.2-pro",
+        "gpt-5.3-codex",
+        "gpt-5.4-pro",
+    ),
+)
+def test_responses_api_bridge_check_azure_regional_responses_only_models_route_to_responses(
+    monkeypatch: pytest.MonkeyPatch, region: str, model_name: str
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model_info, model = litellm_main.responses_api_bridge_check(
+        model=f"{region}/{model_name}",
+        custom_llm_provider="azure",
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+        reasoning_effort=None,
+    )
+
+    assert model == f"{region}/{model_name}"
     assert model_info.get("mode") == "responses"
 
 
@@ -1010,7 +1041,7 @@ def test_responses_api_bridge_check_gpt_5_6_tools_with_default_reasoning_routes_
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
     monkeypatch.setattr(litellm, "api_base", None)
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model=model_name,
@@ -1030,7 +1061,7 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_reasoning_none_stays_chat
     """
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.4",
@@ -1047,7 +1078,7 @@ def test_responses_api_bridge_check_reasoning_none_with_summary_still_routes_to_
     """A reasoning summary is Responses-only regardless of effort value."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.4",
@@ -1069,7 +1100,7 @@ def test_responses_api_bridge_check_gpt_5_4_custom_tools_only_stays_chat():
     """
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.6",
@@ -1086,7 +1117,7 @@ def test_responses_api_bridge_check_gpt_5_4_mixed_function_and_custom_tools_rout
     """One function tool in the mix is enough to make chat unservable with reasoning on."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.6",
@@ -1106,7 +1137,7 @@ def test_responses_api_bridge_check_gpt_5_4_flat_function_tool_routes_to_respons
     """Responses-style flat function tool defs still count as function tools."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.6",
@@ -1152,7 +1183,7 @@ def test_responses_api_bridge_check_dict_effort_none_stays_chat():
     """The escape hatch must honor litellm's dict form: {"effort": "none"} means reasoning off."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.6",
@@ -1168,7 +1199,7 @@ def test_responses_api_bridge_check_dict_effort_none_stays_chat():
 def test_responses_api_bridge_check_dict_effort_active_routes_to_responses():
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.6",
@@ -1185,7 +1216,7 @@ def test_responses_api_bridge_check_dict_effort_none_with_summary_routes_to_resp
     """A summary inside the dict form is Responses-only even when effort is none."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.6",
@@ -1207,7 +1238,7 @@ def test_responses_api_bridge_check_blank_api_base_is_default_openai(blank_api_b
     """
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.6",
@@ -1229,7 +1260,7 @@ def test_responses_api_bridge_check_custom_api_base_with_unset_effort_stays_chat
     """
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.6",
@@ -1254,7 +1285,7 @@ def test_responses_api_bridge_check_custom_api_base_via_global_with_unset_effort
     from litellm.main import responses_api_bridge_check
 
     monkeypatch.setattr(litellm, "api_base", "http://vllm.internal:8000/v1")
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.6",
@@ -1281,7 +1312,7 @@ def test_responses_api_bridge_check_custom_api_base_via_env_with_unset_effort_st
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
     monkeypatch.setenv(env_var, "http://vllm.internal:8000/v1")
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.6",
@@ -1375,7 +1406,7 @@ def test_responses_api_bridge_check_custom_api_base_with_explicit_effort_still_r
     """Explicit reasoning_effort keeps its pre-existing bridging behavior on any api_base."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.6",
@@ -1393,7 +1424,7 @@ def test_responses_api_bridge_check_azure_with_api_base_and_unset_effort_routes(
     """Azure OpenAI always sets api_base and does enforce the constraint; keep bridging."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.4",
@@ -1473,7 +1504,7 @@ def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_ch
     """Pre-5.4 GPT-5 names keep the old boundary: tools alone never bridge."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.1",
@@ -1490,7 +1521,7 @@ def test_responses_api_bridge_check_gpt_5_4_reasoning_summary_without_tools_rout
     """gpt-5.4+ with reasoning_effort + reasoningSummary but no tools should bridge (AI SDK)."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5.4",
@@ -1508,7 +1539,7 @@ def test_responses_api_bridge_check_gpt_5_reasoning_summary_routes_to_responses(
     """Bare ``gpt-5`` with reasoning_effort + reasoningSummary should bridge (not 5.4+)."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5",
@@ -1526,7 +1557,7 @@ def test_responses_api_bridge_check_gpt_5_tools_without_summary_stays_chat():
     """gpt-5 with tools + reasoning_effort but no summary should stay on chat."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.return_value = {"max_tokens": 128000}
         model_info, model = responses_api_bridge_check(
             model="gpt-5",
@@ -1860,7 +1891,7 @@ def test_responses_api_bridge_check_handles_exception():
     """Test that responses_api_bridge_check handles exceptions and still processes responses/ models."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+    with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.side_effect = Exception("Model not found")
 
         model_info, model = responses_api_bridge_check(
@@ -1890,7 +1921,7 @@ def test_responses_api_bridge_check_global_flag_does_not_affect_azure():
     from litellm.main import responses_api_bridge_check
 
     with patch.object(litellm, "route_all_chat_openai_to_responses", True):
-        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
             mock_get_model_info.return_value = {"max_tokens": 4096}
             model_info, model = responses_api_bridge_check(
                 model="gpt-4o",
@@ -1905,7 +1936,7 @@ def test_responses_api_bridge_check_global_flag_default_false():
     from litellm.main import responses_api_bridge_check
 
     with patch.object(litellm, "route_all_chat_openai_to_responses", False):
-        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        with patch("litellm.main.get_model_info_helper") as mock_get_model_info:
             mock_get_model_info.return_value = {"max_tokens": 4096}
             model_info, model = responses_api_bridge_check(
                 model="gpt-4o",
@@ -3627,7 +3658,7 @@ def test_completion_default_api_base_sends_prompt_cache_breakpoint_for_gpt_5_6()
     assert request_body["messages"][0]["content"] == [
         {"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}
     ]
-    assert request_body["extra_body"]["prompt_cache_options"] == {"mode": "explicit"}
+    assert request_body["extra_body"]["prompt_cache_options"] == {"mode": "implicit"}
 
 
 _SUBSCRIPTION_OAUTH_CREDENTIAL = "Bearer sk-ant-oat01-fake-subscription-token-for-testing-0123456789"
@@ -4099,7 +4130,7 @@ def test_stream_chunk_builder_leaves_xai_reported_cost_to_the_calculator(monkeyp
     assert response is not None
     assert getattr(response.usage, "cost", None) == pytest.approx(0.42)
     assert response._hidden_params.get("response_cost") is None
-    assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.63)
+    assert logging_obj.response_cost_calculator(result=response) == pytest.approx(0.63)
 
 
 def test_speech_mistral_dispatches_and_decodes_audio(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
@@ -4181,6 +4212,62 @@ def test_azure_ai_speech_on_a_foundry_host_uses_the_azure_openai_deployment_rout
         input="hello",
         voice="alloy",
         api_base=FOUNDRY_HOST,
+        api_key="fake-key",
+    )
+
+    assert route.called
+    assert response.content == b"mp3-bytes"
+
+
+GROQ_INTERNAL_BASE: Final = "https://groq.gateway.internal/openai/v1"
+GROQ_WAV_FILE: Final = ("tone.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav")
+
+
+def test_groq_transcription_honors_base_url_alias(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+
+    response: Final = litellm.transcription(
+        model="groq/whisper-large-v3",
+        file=GROQ_WAV_FILE,
+        base_url=GROQ_INTERNAL_BASE,
+        api_key="fake-key",
+    )
+
+    assert route.called
+    assert response.text == "hello"
+
+
+async def test_groq_atranscription_honors_base_url_alias(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+
+    response: Final = await litellm.atranscription(
+        model="groq/whisper-large-v3",
+        file=GROQ_WAV_FILE,
+        base_url=GROQ_INTERNAL_BASE,
+        api_key="fake-key",
+    )
+
+    assert route.called
+    assert response.text == "hello"
+
+
+def test_groq_speech_honors_base_url_alias(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"mp3-bytes")
+    )
+
+    response: Final = litellm.speech(
+        model="groq/playai-tts",
+        input="hello",
+        voice="Fritz-PlayAI",
+        base_url=GROQ_INTERNAL_BASE,
         api_key="fake-key",
     )
 

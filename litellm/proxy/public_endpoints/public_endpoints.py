@@ -496,10 +496,11 @@ _AUTOROUTER_PRESETS_ADAPTER: Final = TypeAdapter(dict[str, AutoRouterPresetRecor
 
 
 def _load_bundled_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord]:
-    raw: Final = json.loads(
-        files("litellm.proxy.public_endpoints").joinpath("autorouter_presets.json").read_text(encoding="utf-8")
+    return _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+        json.loads(
+            files("litellm.proxy.public_endpoints").joinpath("autorouter_presets.json").read_text(encoding="utf-8")
+        )
     )
-    return _AUTOROUTER_PRESETS_ADAPTER.validate_python(raw)
 
 
 async def _fetch_remote_autorouter_presets(url: str) -> Mapping[str, AutoRouterPresetRecord]:
@@ -557,7 +558,7 @@ async def get_autorouter_presets(
 
 @router.get(
     "/public/autorouter_presets",
-    tags=["public", "auto router"],  # mutable-ok: FastAPI route tags take a list
+    tags=["public", "auto router"],
     response_model=dict[str, AutoRouterPresetRecord],
 )
 async def get_public_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord]:

@@ -125,11 +125,73 @@ E2E_FIXTURE_MODE=replay E2E_FIXTURE_DIR=/tmp/e2e-fixtures E2E_RESET_SPEND_LOGS=1
 
 Point the proxy at bogus provider credentials for the replay run and it still has to pass: that is the whole proof that nothing left the process. Bundles are never committed. `tests/e2e/.fixtures` is gitignored because a bundle holds verbatim provider response bodies and hard-fails after seven days. CI records and replays this lane on a schedule in `.github/workflows/e2e_record_replay.yml`, publishing the bundle as a private `e2e-fixtures-bundle` artifact instead of committing it, selecting the tests with the `@pytest.mark.replayable` marker, and proving the bogus-credentials replay hermetic by counting provider egress with `.github/scripts/e2e_egress_sentinel.py`
 
-Current limits: Bedrock cannot be mounted in record or replay (SigV4 signs the Host header, so a rewritten api_base fails signature verification); a test that needs to observe the Converse body registers its own `LiveEdge` with `provider_edge_bedrock.bedrock_signer` re-signing the forwarded request, and carries the `provider_edge_host` opt-in marker because the gateway must reach the pytest host, which the Buildkite ephemeral stack cannot (the GitHub changed-e2e lane, whose gateways run on the runner, sets `E2E_PROVIDER_EDGE_HOST_REACHABLE`). Deployments baked into the proxy's config file cannot be edge-wired (only `/model/new` registrations can carry the edge api_base), and a file upload routed by `custom_llm_provider` through the proxy's `files_settings` block never passes a deployment at all, so the batches `model_param` and `provider_fallback` scenarios keep uploading live in every mode
+Current limits: Bedrock cannot be mounted in record or replay (SigV4 signs the Host header, so a rewritten api_base fails signature verification); a test that needs to observe the Converse body registers its own `LiveEdge` with `provider_edge_bedrock.bedrock_signer` re-signing the forwarded request, and carries the `provider_edge_host` opt-in marker because the gateway must reach the pytest host, which the Buildkite ephemeral stack cannot, so those tests are deselected unless `E2E_PROVIDER_EDGE_HOST_REACHABLE` is set, as on a local run whose gateway can reach the pytest host. Deployments baked into the proxy's config file cannot be edge-wired (only `/model/new` registrations can carry the edge api_base), and a file upload routed by `custom_llm_provider` through the proxy's `files_settings` block never passes a deployment at all, so the batches `model_param` and `provider_fallback` scenarios keep uploading live in every mode
 
 ## Typing
 
 The harness is fully typed with no error budget: `make lint-e2e-basedpyright` must report zero basedpyright errors, and CI enforces that on any PR touching `tests/e2e/**/*.py`. When a response field is untyped, model it in `models.py` (just the fields you read) and let pydantic validate it, rather than threading a `dict` or `Any` through the test
+
+## Typed test metadata
+
+Separate from the coverage registry and additive to it: `@meta(Subject(...))` from `e2e_metadata.py` says what a test DRIVES, as closed enums rather than a string id. `@pytest.mark.covers("cell.id")` is untouched and keeps working exactly as before; the two markers coexist on the same test, and `@meta` always goes BELOW `@covers` so `Item.location` still anchors at the first decorator and every `source` deep link stays put
+
+```python
+@pytest.mark.covers("quota_management.budget.key.blocks_over_limit")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        providers=(Provider.ANTHROPIC,),
+        models=(CHEAP_ANTHROPIC_MODEL,),
+        mode=Mode.NONSTREAM,
+    )
+)
+def test_bare_key_blocks_over_its_own_budget(...) -> None: ...
+```
+
+`route` is the endpoint the test is checking: `TEAM_MANAGEMENT` for a `/team/update` test, `SPEND_REPORTING` for a `/spend/logs` test, `MESSAGES` for a test of spend on `/v1/messages`. A test whose chat call only triggers the behavior under test, like the budget block above, leaves it unset, since its steps already name the call
+
+Every pytest test in the live suites declares a `Subject` with at least its `domain`. Only the markerless harness tests (the root-level `test_*.py` files, `coverage_registry/`, `batches/test_batch_cleanup.py`, `guardrails/test_guardrails_client.py`, `logging/test_datadog_reader.py`, `logging/test_span_selection.py` and claude_code's `_*_unit_tests/`) and the `load/` suite carry none, since they drive nothing. The fields themselves stay optional, since a test that makes no LLM call has no provider, model or mode to name. Every field is a closed enum, so a typo is a basedpyright error at the call site rather than a property that silently never appears. `providers`, `models` and `capabilities` are tuples even with one member, because one test node routinely drives several: the claude_code matrix runs haiku, sonnet and opus in a single body, and a spend test calls two providers on one key. Declare every provider and every model the test drives, fallbacks included. The three are independent sets with no positional pairing between them (one provider x three models is the common case), and each is deduped and sorted at declaration so the committed run artifacts diff cleanly. `models=("gpt-5.5")` is a str and not a tuple, so anything but a tuple raises a `TypeError` where the decorator runs and shows up as a collection error naming the file. `Subject` is serialized with `dataclasses.asdict`, so a new scalar field needs no serializer edit; empty fields emit no `<property>` at all. A declared model names the constant the test drives (`CHEAP_ANTHROPIC_MODEL`, the file's own `BACKEND`), never a copy of its value, so the property cannot claim one model while an env override runs another. `e2e_metadata` and its call sites never import litellm, only the stdlib, pytest and pydantic: `Provider` mirrors litellm's `LlmProviders` values instead of importing them, because tests/e2e is shipped to the runner image on its own and a `from litellm...` at module scope would make the litellm package a hard dependency of COLLECTING the suite. `TestProviderMirrorsLitellm` in `tests/code_coverage_tests/test_e2e_metadata.py` fails on drift wherever litellm is importable and skips where it is not, so adding a provider is one line in `e2e_metadata`
+
+Declared fields ride out as JUnit `<property>` entries behind the fixed prefix, the same way steps do: each scalar under its field name, and each plural value as a repeated property under its SINGULAR name (`provider`, `model`, `capability`). The results JSON downstream regroups them under the plural key, so `providers`, `models` and `capabilities` are arrays there, `[]` when empty
+
+## Recorded test steps
+
+`@step` from `e2e_metadata.py` goes on harness helpers (client methods and poll loops), never on a test. Each call adds one plain-English sentence to the running test's list of steps, in call order, so the list reads as what the test did. The step is recorded before the helper runs, so when a test fails, its last step is where it failed. Nobody writes steps by hand. They come from the calls the test actually made, so they can't drift from what happened
+
+Every harness has steps: `ProxyClient`, each suite's own client, and the module-level helpers that create resources, poll or drive a CLI. Every new public method or function that does something (an HTTP call, a poll, a login, a CLI run) gets a `@step`. Pure builders, parsers and `_private` helpers don't. `TestLabelTemplates` in `tests/code_coverage_tests/test_e2e_metadata.py` finds every `@step` under tests/e2e on its own, so a new harness is checked without being registered anywhere: each dotted placeholder has to name a real field that is always set, and any request model a label can print has to hide its secret fields
+
+### Writing a label
+
+Write the label for someone who will never open the code, and fill it in from the helper's own parameters:
+
+```python
+@step("Generate a virtual key with {body}")
+def generate_key(self, body: KeyGenerateBody) -> str: ...
+
+@step('Send a /chat/completions request to {model} with the prompt "{content}"')
+def chat(self, key: str, model: str, content: str, *, max_tokens: int = 16) -> StreamingResponse: ...
+```
+
+A test that generates a key with an RPM limit and then sends one request shows:
+
+```
+Generate a virtual key with models: claude-haiku-4-5 and rpm limit: 3
+Send a /chat/completions request to claude-haiku-4-5 with the prompt "reply with one word d3940a1c4288"
+```
+
+A request model prints only the fields the test set, and a dotted placeholder like `{body.litellm_params.model}` prints just one field. A field marked `Field(repr=False)` never prints, so mark every secret field that way, along with any field that can name an internal host (`api_base`, `langfuse_host`), and never put a key, token or credential in a label. As a backstop, the recorder replaces the value of every secret-named environment variable (`*_KEY`, `*_SECRET`, `*_TOKEN`, `*_PASSWORD`, `*_CREDENTIALS`) with `***` wherever it shows up in a label. That only covers secrets the environment holds, so a key the proxy hands back during the test is still never named in a label. A placeholder that isn't one of the helper's parameters fails at import, and a literal brace is written `{{id}}`. A filled-in label is squashed onto one line and cut at 200 characters
+
+### Nesting and the step log
+
+Only the outermost step records. `ProxyClient.create_model` calls `register_model`, and domain clients call into `ProxyClient`, so each layer can carry its own label and the test still shows one step per action, worded at the level the test called
+
+On a `@contextmanager` helper, put `@step` above `@contextmanager`. The setup and cleanup around the `yield` count as that one step, and the test's own code inside the `with` records its steps as usual. A plain generator function is rejected at import because its body runs interleaved with the caller's. A decorated helper that warns about its caller uses `stacklevel=2 + STEP_FRAMES`, since the wrapper adds a frame. Nesting is tracked per thread, so a helper that hands work to worker threads still records their steps
+
+Back-to-back identical steps collapse into one, so a poll loop shows up once. The log keeps the latest 50 steps and notes how many earlier ones it dropped, since the end is where a failure happened. It is cleared when each test starts and saved after setup and again after the test body, so a test that errors in a fixture keeps what it recorded. Teardown steps are left out so cleanup never shows up after the step a test failed on
+
+### Where steps end up
+
+Each step is its own `<property name="step">` in the JUnit XML (`junit_properties.py`), because free text has no separator that is safe to join on. project-releaser gathers them into a `steps` array in the results JSON. The tests for all of this sit outside the suite, in `tests/code_coverage_tests/test_e2e_metadata.py` and `test_e2e_junit_report.py`. The second one runs real pytest with `--junitxml` under `-n 2` and checks what lands in the XML
 
 ## Coverage registry
 
@@ -262,3 +324,5 @@ other.<area>.<case>.<assertion>
 - spin up a local proxy by running the litellm proxy locally (`litellm --config <your-e2e-config>.yml --port 4000`; see CONTRIBUTING.md), make sure all tests pass. if a test fails due to an internally found issue, let users know to create a linear ticket for it. 
 
 - do not use xfail markers, tests should be written in a form that the end user expects it to pass
+
+- a cell addresses the stack through its front door (`PROXY_BASE_URL`) the way a customer does, never a gateway pod by address, and proves a cross-replica property with N independent calls through that door, naming the miss odds (2^-N at two pods) in its docstring. `PROXY_REPLICA_URLS` is for read-backs that are per pod by nature (polling until a management write has converged on every replica, `/metrics`, RSS), never for steering the scenario a cell asserts on at a chosen pod

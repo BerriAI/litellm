@@ -52,7 +52,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
     Usage,
-    _generate_id,
+    generate_id,
 )
 
 from ...base import BaseLLM
@@ -566,7 +566,7 @@ class ModelResponseIterator:
         # common case (no '/' or other invalid chars in any tool name).
         self.tool_name_reverse_map: dict[str, str] = tool_name_reverse_map or {}
         # Generate response ID once per stream to match OpenAI-compatible behavior
-        self.response_id = _generate_id()
+        self.response_id = generate_id()
         self.served_model: str | None = None
 
         # Track if we're currently streaming a response_format tool
@@ -702,17 +702,7 @@ class ModelResponseIterator:
 
             signature: Final = content_block["delta"].get("signature")
             if isinstance(signature, str) and signature:
-                thinking_blocks = [
-                    ChatCompletionThinkingBlock(
-                        type="thinking",
-                        thinking="".join(
-                            cast(str, block["delta"].get("thinking"))
-                            for block in self.content_blocks
-                            if isinstance(block["delta"].get("thinking"), str)
-                        ),
-                        signature=signature,
-                    )
-                ]
+                thinking_blocks = [ChatCompletionThinkingBlock(type="thinking", thinking="", signature=signature)]
                 provider_specific_fields["thinking_blocks"] = thinking_blocks
                 if reasoning_content is None:
                     reasoning_content = ""
@@ -763,7 +753,7 @@ class ModelResponseIterator:
         return content_block_start
 
     def _web_search_call_snapshot(self) -> dict[str, object]:
-        return dict(self._web_search_calls)  # mutable-ok: stream payload snapshot
+        return dict(self._web_search_calls)
 
     def _complete_web_search_call(self, result: dict[str, object]) -> None:
         tool_use_id: Final = result.get("tool_use_id")
@@ -771,7 +761,7 @@ class ModelResponseIterator:
             return
         self._web_search_calls[tool_use_id] = build_web_search_call(
             tool_id=tool_use_id,
-            tool_input=self._server_tool_inputs.get(tool_use_id, {}),  # mutable-ok: empty provider input
+            tool_input=self._server_tool_inputs.get(tool_use_id, {}),
             result=result,
         )
 
@@ -880,7 +870,7 @@ class ModelResponseIterator:
                             self._web_search_calls[self._current_server_tool_id] = build_web_search_call(
                                 self._current_server_tool_id,
                                 tool_input,
-                                {"content": []},  # mutable-ok: no provider result yet
+                                {"content": []},
                                 status="in_progress",
                             )
                             provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()

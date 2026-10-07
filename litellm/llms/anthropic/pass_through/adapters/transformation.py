@@ -201,7 +201,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import Choices, ModelResponse, StreamingChoices, Usage
 from litellm.utils import supports_mid_conversation_system
 
-from .streaming_iterator import AnthropicStreamWrapper
+from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -341,7 +341,7 @@ class AnthropicAdapter:
         )
         # Return the SSE-wrapped version for proper event formatting.
         if is_async:
-            return anthropic_wrapper.async_anthropic_sse_wrapper()
+            return AnthropicSSEStream(anthropic_wrapper)
         return anthropic_wrapper.anthropic_sse_wrapper()
 
 
@@ -962,7 +962,7 @@ class LiteLLMAnthropicMessagesAdapter:
             )
         elif isinstance(system_content, list):
             # Convert Anthropic system content blocks to OpenAI format
-            openai_system_content: Final[list[dict[str, Any]]] = []
+            openai_system_content: Final[list[dict[str, object]]] = []
             model_name: Final = anthropic_message_request.get("model", "")
             for block in system_content:
                 if isinstance(block, dict) and block.get("type") == "text":
@@ -1314,7 +1314,7 @@ class LiteLLMAnthropicMessagesAdapter:
             case ({"type": "text", "text": str(text)},):
                 return text
             case _:
-                return list(parts)  # mutable-ok: content must be a json list
+                return list(parts)
 
     def _tool_result_part(self, item: object) -> ToolMessageContentPart | None:
         if isinstance(item, str):

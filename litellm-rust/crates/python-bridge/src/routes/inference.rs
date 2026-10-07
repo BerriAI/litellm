@@ -1,7 +1,7 @@
-use litellm_core::RouteError;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host_python::{from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
+use litellm_inference::RouteError;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -33,32 +33,11 @@ impl InferenceHost {
         arguments: &Bound<'_, PyDict>,
         input: &str,
     ) -> PyResult<ProjectedCall> {
-        let request = self.request.bind(py);
-        let argument = |name: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
-            if let Some(value) = lookup(arguments, request, name)? {
-                return Ok((!value.is_none()).then_some(value));
-            }
-            let parameter = request
-                .getattr("parameters")?
-                .call_method1("get", (name,))?;
-            if !parameter.is_none() {
-                return Ok(Some(parameter));
-            }
-            let extra = request.getattr("kwargs")?.call_method1("get", (name,))?;
-            Ok((!extra.is_none()).then_some(extra))
-        };
+        let argument = |name: &str| self.argument(py, arguments, name);
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
-        let names: Vec<String> = py.import(self.module)?.getattr("PARAMETERS")?.extract()?;
-        let params = names
-            .iter()
-            .filter_map(|name| match argument(name) {
-                Ok(Some(value)) => Some(from_py(&value).map(|value| (name.clone(), value))),
-                Ok(None) => None,
-                Err(error) => Some(Err(error)),
-            })
-            .collect::<PyResult<Map<String, Value>>>()?;
+        let params = self.parameters(py, arguments)?;
         let timeout = argument("timeout")?
             .or(argument("request_timeout")?)
             .map(|value| python_timeout_seconds(py, value.unbind()))
@@ -95,6 +74,42 @@ impl InferenceHost {
             )?,
             params,
         })
+    }
+
+    pub fn argument<'py>(
+        &self,
+        py: Python<'py>,
+        arguments: &Bound<'py, PyDict>,
+        name: &str,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let request = self.request.bind(py);
+        if let Some(value) = lookup(arguments, request, name)? {
+            return Ok((!value.is_none()).then_some(value));
+        }
+        let parameter = request
+            .getattr("parameters")?
+            .call_method1("get", (name,))?;
+        if !parameter.is_none() {
+            return Ok(Some(parameter));
+        }
+        let extra = request.getattr("kwargs")?.call_method1("get", (name,))?;
+        Ok((!extra.is_none()).then_some(extra))
+    }
+
+    pub fn parameters(
+        &self,
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+    ) -> PyResult<Map<String, Value>> {
+        let names: Vec<String> = py.import(self.module)?.getattr("PARAMETERS")?.extract()?;
+        names
+            .iter()
+            .filter_map(|name| match self.argument(py, arguments, name) {
+                Ok(Some(value)) => Some(from_py(&value).map(|value| (name.clone(), value))),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect()
     }
 
     pub fn response(&self, py: Python<'_>, response: &impl Serialize) -> PyResult<Py<PyAny>> {

@@ -1145,6 +1145,35 @@ def test_generic_cost_per_token_gpt54_above_272k_tokens(_local_model_cost_map):
     assert round(completion_cost, 10) == round(expected_completion, 10)
 
 
+@pytest.mark.parametrize(
+    ("prompt_tokens", "input_rate", "cache_read_rate", "output_rate"),
+    [
+        (100_000, 1.2e-05, 1.2e-06, 6e-05),
+        (300_000, 2.4e-05, 2.4e-06, 9e-05),
+    ],
+)
+def test_generic_cost_per_token_azure_eu_gpt_6_astra_tiers(
+    _local_model_cost_map, prompt_tokens, input_rate, cache_read_rate, output_rate
+):
+    """azure/eu/gpt-6-astra bills Azure's Data Zone rates, doubling input and cache read past 272K."""
+    cached_tokens = 20_000
+    completion_tokens = 1_000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="azure/eu/gpt-6-astra",
+        usage=usage,
+        custom_llm_provider="azure",
+    )
+    expected_prompt = (prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost == pytest.approx(completion_tokens * output_rate)
+
+
 def test_generic_cost_per_token_minimax_m3_above_512k_tokens(_local_model_cost_map):
     """MiniMax-M3: prompts >512K input tokens priced at 2x input, output, and cache read."""
     model = "minimax/MiniMax-M3"
@@ -2390,17 +2419,17 @@ def test_service_tier_suffixes_constant_in_sync_with_enum():
 
 
 def test_get_cost_per_unit_falls_back_from_service_tier_key_to_base():
-    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_cost_per_unit
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_cost_per_unit
 
     model_info = {"input_cost_per_token": 2e-6}
     # service-tier key is absent -> falls back to the base key
-    assert _get_cost_per_unit(model_info, "input_cost_per_token_priority") == 2e-6
+    assert get_cost_per_unit(model_info, "input_cost_per_token_priority") == 2e-6
     # service-tier key present -> used directly, no fallback
     model_info_direct = {
         "input_cost_per_token_priority": 5e-6,
         "input_cost_per_token": 2e-6,
     }
-    assert _get_cost_per_unit(model_info_direct, "input_cost_per_token_priority") == 5e-6
+    assert get_cost_per_unit(model_info_direct, "input_cost_per_token_priority") == 5e-6
 
 
 def test_threshold_keys_exclude_service_tier_variants():
@@ -2831,7 +2860,7 @@ def test_token_type_cost_breakdown_openai_responses_api_cache_write_read(
     from litellm.responses.utils import ResponseAPILoggingUtils
 
     model = "gpt-5.6"
-    usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(raw_usage)
+    usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_usage)
 
     breakdown = get_token_type_cost_breakdown(model=model, custom_llm_provider="openai", usage=usage)
 

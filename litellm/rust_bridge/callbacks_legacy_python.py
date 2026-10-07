@@ -16,9 +16,12 @@ from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Final,
+    Literal,
     Protocol,
     cast,  # noqa: TID251  # bounded compatibility calls into legacy Python integrations
 )
+
+from pydantic import TypeAdapter
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -52,7 +55,7 @@ def setup(
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.utils import Rules, function_setup
 
-    arguments: Final = {  # mutable-ok: function_setup consumes an owned kwargs dict
+    arguments: Final = {
         "litellm_call_id": str(uuid.uuid4()),
         **kwargs,
     }
@@ -85,9 +88,18 @@ def finalize(
         MetadataUpdater, response_metadata.update_response_metadata
     )
     update(response, logger, model if isinstance(model, str) else None, kwargs, start_time, end_time)
+    cache_key: Final = logger.model_call_details.get("cache_key")
+    if logger.model_call_details.get("cache_hit") is True and isinstance(cache_key, str):
+        from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+
+        hidden: Final = get_hidden_params_dict(response, create=True)
+        hidden.update({"cache_key": cache_key, "cache_hit": True})
 
 
 class LoggingSurface(Protocol):
+    @property
+    def model_call_details(self) -> Mapping[str, object]: ...
+
     @property
     def litellm_params(self) -> Mapping[str, object]: ...
 
@@ -114,7 +126,7 @@ class LoggingSurface(Protocol):
     ) -> object: ...
 
     def handle_sync_success_callbacks_for_async_calls(
-        self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: object = None
+        self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: bool | None = None
     ) -> None: ...
 
     def failure_handler(
@@ -215,17 +227,26 @@ def post_call(
 
 
 def defers_async_logging(logger: LoggingSurface) -> bool:
-    return bool(getattr(logger, "_defer_async_logging", False))
+    return bool(getattr(logger, "defer_async_logging", False))
 
 
 def defer_success(logger: LoggingSurface, pending: object) -> None:
     setattr(logger, "_native_pending_logging", pending)
 
 
+def _cache_hit(logger: LoggingSurface) -> Literal[True] | None:
+    return True if logger.model_call_details.get("cache_hit") is True else None
+
+
 def sync_success_for_async_call(
     logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime
 ) -> None:
-    logger.handle_sync_success_callbacks_for_async_calls(result=response, start_time=start, end_time=end)
+    logger.handle_sync_success_callbacks_for_async_calls(
+        result=response,
+        start_time=start,
+        end_time=end,
+        cache_hit=_cache_hit(logger),
+    )
 
 
 def failure_handler(
@@ -245,13 +266,20 @@ def failure_handler(
 def submit_success(logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime) -> None:
     from litellm.litellm_core_utils.litellm_logging import executor
 
-    executor.submit(contextvars.copy_context().run, logger.success_handler, response, start, end)
+    executor.submit(
+        contextvars.copy_context().run,
+        logger.success_handler,
+        response,
+        start,
+        end,
+        cache_hit=_cache_hit(logger),
+    )
 
 
 def async_success_handler(
     logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime
 ) -> Coroutine[object, object, None]:
-    return logger.async_success_handler(response, start, end)
+    return logger.async_success_handler(response, start, end, cache_hit=_cache_hit(logger))
 
 
 def enqueue_logging(coroutine: Coroutine[object, object, None]) -> None:
@@ -311,9 +339,15 @@ def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_t
     return hook(kwargs, error, call_type)
 
 
-def stream_opened(logger: Logging) -> None:
+_STREAM_HEADERS: Final = TypeAdapter(Mapping[str, str])
+
+
+def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
     logger.stream = True
     logger.model_call_details["stream"] = True
+    logger.model_call_details["response_headers"] = _STREAM_HEADERS.validate_python(
+        head.get("additional_headers") or {}
+    )
 
 
 def stream_success(
