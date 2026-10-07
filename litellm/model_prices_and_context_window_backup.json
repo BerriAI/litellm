@@ -39226,6 +39226,48 @@
         "max_tokens": 8192,
         "mode": "embedding"
     },
+    "mistral/mistral-large-4": {
+        "cache_read_input_token_cost": 6.8e-08,
+        "input_cost_per_token": 6.8e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 524288,
+        "max_tokens": 524288,
+        "mode": "chat",
+        "output_cost_per_token": 2.09e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
+        "source": "https://docs.mistral.ai/models/mistral-large-4",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/mistral-large-4-0": {
+        "cache_read_input_token_cost": 6.8e-08,
+        "input_cost_per_token": 6.8e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 524288,
+        "max_tokens": 524288,
+        "mode": "chat",
+        "output_cost_per_token": 2.09e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
+        "source": "https://docs.mistral.ai/models/mistral-large-4",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "mistral/mistral-large-latest": {
         "cache_read_input_token_cost": 5e-08,
         "input_cost_per_token": 5e-07,
