@@ -10,6 +10,7 @@ Validates:
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -47,9 +48,9 @@ def test_get_complete_url_global():
 
 
 @pytest.mark.parametrize("location", ["us", "eu"])
-def test_get_complete_url_multi_region_uses_rep_host(location):
-    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location=location)
-    url = cfg.get_complete_url(api_base=None, model="gemini-3.8-live")
+def test_get_complete_url_multi_region_uses_rep_host(location: str):
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location=location)
+    url: Final = cfg.get_complete_url(api_base=None, model="gemini-3.8-live")
     # Google documents the multi-region Vertex endpoints as aiplatform.{us,eu}.rep.googleapis.com
     # (https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/locations, read 2026-10-07)
     assert url == (
@@ -59,10 +60,10 @@ def test_get_complete_url_multi_region_uses_rep_host(location):
 
 
 @pytest.mark.parametrize("location", ["us", "eu", "global", "us-central1", "europe-west4"])
-def test_get_complete_url_host_matches_shared_vertex_host(location):
-    cfg = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location=location)
-    url = cfg.get_complete_url(api_base=None, model="gemini-3.8-live")
-    shared_host = get_vertex_base_url(location).removeprefix("https://")
+def test_get_complete_url_host_matches_shared_vertex_host(location: str):
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location=location)
+    url: Final = cfg.get_complete_url(api_base=None, model="gemini-3.8-live")
+    shared_host: Final = get_vertex_base_url(location).removeprefix("https://")
     assert url == f"wss://{shared_host}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
 
 
