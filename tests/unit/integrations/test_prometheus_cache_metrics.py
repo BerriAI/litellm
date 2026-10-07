@@ -4,8 +4,11 @@ Unit tests for cache Prometheus metrics.
 Run with: uv run pytest tests/unit/integrations/test_prometheus_cache_metrics.py -v
 """
 
+from typing import Final
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
+
 from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
 
@@ -27,8 +30,9 @@ class TestPrometheusCacheMetrics:
 
     def test_cache_metrics_defined_in_types(self):
         """Test that cache metrics are defined in DEFINED_PROMETHEUS_METRICS"""
-        from litellm.types.integrations.prometheus import DEFINED_PROMETHEUS_METRICS
         from typing import get_args
+
+        from litellm.types.integrations.prometheus import DEFINED_PROMETHEUS_METRICS
 
         defined_metrics = get_args(DEFINED_PROMETHEUS_METRICS)
 
@@ -46,9 +50,7 @@ class TestPrometheusCacheMetrics:
         assert hasattr(PrometheusMetricLabels, "litellm_cache_hits_metric")
         assert hasattr(PrometheusMetricLabels, "litellm_cache_misses_metric")
         assert hasattr(PrometheusMetricLabels, "litellm_cached_tokens_metric")
-        assert hasattr(
-            PrometheusMetricLabels, "litellm_provider_cache_read_input_tokens_metric"
-        )
+        assert hasattr(PrometheusMetricLabels, "litellm_provider_cache_read_input_tokens_metric")
         assert hasattr(
             PrometheusMetricLabels,
             "litellm_provider_cache_creation_input_tokens_metric",
@@ -68,14 +70,8 @@ class TestPrometheusCacheMetrics:
             assert label in PrometheusMetricLabels.litellm_cache_hits_metric
             assert label in PrometheusMetricLabels.litellm_cache_misses_metric
             assert label in PrometheusMetricLabels.litellm_cached_tokens_metric
-            assert (
-                label
-                in PrometheusMetricLabels.litellm_provider_cache_read_input_tokens_metric
-            )
-            assert (
-                label
-                in PrometheusMetricLabels.litellm_provider_cache_creation_input_tokens_metric
-            )
+            assert label in PrometheusMetricLabels.litellm_provider_cache_read_input_tokens_metric
+            assert label in PrometheusMetricLabels.litellm_provider_cache_creation_input_tokens_metric
 
     def test_increment_cache_metrics_on_cache_hit(self, sample_enum_values):
         """Test that cache hit increments the correct metrics"""
@@ -132,20 +128,14 @@ class TestPrometheusCacheMetrics:
 
         # Verify cached tokens metric was incremented with total_tokens
         mock_logger.litellm_cached_tokens_metric.labels.assert_called()
-        mock_logger.litellm_cached_tokens_metric.labels().inc.assert_called_once_with(
-            100
-        )
+        mock_logger.litellm_cached_tokens_metric.labels().inc.assert_called_once_with(100)
 
         # Verify cache misses metric was NOT called
         mock_logger.litellm_cache_misses_metric.labels.assert_not_called()
 
         # Verify provider prompt caching metrics were incremented
-        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels().inc.assert_called_once_with(
-            25
-        )
-        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(
-            10
-        )
+        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels().inc.assert_called_once_with(25)
+        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(10)
 
     def test_increment_cache_metrics_on_cache_miss(self, sample_enum_values):
         """Test that cache miss increments the correct metrics"""
@@ -204,14 +194,10 @@ class TestPrometheusCacheMetrics:
         mock_logger.litellm_cached_tokens_metric.labels.assert_not_called()
 
         # Provider prompt caching metrics should still be emitted
-        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels().inc.assert_called_once_with(
-            20
-        )
+        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels().inc.assert_called_once_with(20)
         mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels.assert_not_called()
 
-    def test_provider_cache_read_does_not_fallback_on_explicit_zero(
-        self, sample_enum_values
-    ):
+    def test_provider_cache_read_does_not_fallback_on_explicit_zero(self, sample_enum_values):
         """Explicit cache_read_input_tokens=0 must not trigger fallback to cached_tokens."""
         mock_logger = MagicMock()
 
@@ -258,9 +244,7 @@ class TestPrometheusCacheMetrics:
         # Should not emit read metric, because explicit provider value is zero.
         mock_logger.litellm_provider_cache_read_input_tokens_metric.labels.assert_not_called()
 
-    def test_provider_cache_creation_fallback_to_cache_write_tokens(
-        self, sample_enum_values
-    ):
+    def test_provider_cache_creation_fallback_to_cache_write_tokens(self, sample_enum_values):
         """OpenAI-style usage (prompt_tokens_details.cache_write_tokens, no top-level
         cache_creation_input_tokens) must populate the provider cache creation metric."""
         mock_logger = MagicMock()
@@ -307,13 +291,9 @@ class TestPrometheusCacheMetrics:
             enum_values=sample_enum_values,
         )
 
-        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(
-            800
-        )
+        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(800)
 
-    def test_provider_cache_creation_fallback_to_cache_creation_tokens(
-        self, sample_enum_values
-    ):
+    def test_provider_cache_creation_fallback_to_cache_creation_tokens(self, sample_enum_values):
         """Normalized litellm usage dumps carry cache_creation_tokens in
         prompt_tokens_details; the fallback must read it when cache_write_tokens is absent."""
         mock_logger = MagicMock()
@@ -357,13 +337,9 @@ class TestPrometheusCacheMetrics:
             enum_values=sample_enum_values,
         )
 
-        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(
-            42
-        )
+        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(42)
 
-    def test_provider_cache_creation_does_not_fallback_on_explicit_zero(
-        self, sample_enum_values
-    ):
+    def test_provider_cache_creation_does_not_fallback_on_explicit_zero(self, sample_enum_values):
         """Explicit cache_creation_input_tokens=0 must not trigger fallback to
         prompt_tokens_details, mirroring the cache-read semantics."""
         mock_logger = MagicMock()
@@ -463,10 +439,122 @@ class TestPrometheusCacheMetrics:
         mock_logger.litellm_cached_tokens_metric.labels.assert_not_called()
 
         # Provider prompt caching metrics should still be emitted
-        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels().inc.assert_called_once_with(
-            25
-        )
+        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels().inc.assert_called_once_with(25)
         mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels.assert_not_called()
+
+
+class TestPrometheusCacheSimilarityScore:
+    """Tests for the semantic cache similarity-score histogram."""
+
+    @pytest.fixture
+    def sample_enum_values(self):
+        return UserAPIKeyLabelValues(
+            end_user="test-end-user",
+            hashed_api_key="test-key-hash",
+            api_key_alias="test-key-alias",
+            team="test-team",
+            team_alias="test-team-alias",
+            user="test-user",
+            model="gpt-3.5-turbo",
+        )
+
+    @staticmethod
+    def _real_histogram():
+        """A real Histogram on an isolated registry, wired like the production metric."""
+        from prometheus_client import CollectorRegistry, Histogram
+
+        from litellm.types.integrations.prometheus import PrometheusMetricLabels
+
+        labelnames: Final = list(PrometheusMetricLabels.litellm_cache_similarity_score)
+        hist: Final = Histogram(
+            "litellm_cache_similarity_score",
+            "test",
+            labelnames=labelnames,
+            buckets=[0.5, 0.9, 1.0],
+            registry=CollectorRegistry(),
+        )
+        mock_logger: Final = MagicMock()
+        mock_logger.litellm_cache_similarity_score = hist
+        mock_logger.get_labels_for_metric.return_value = labelnames
+        return mock_logger, hist, labelnames
+
+    @staticmethod
+    def _sample(hist, suffix):
+        name: Final = f"litellm_cache_similarity_score{suffix}"
+        return [s.value for s in hist.collect()[0].samples if s.name == name]
+
+    def test_observe_records_score_when_present(self, sample_enum_values):
+        """A numeric semantic-similarity is recorded as the histogram's observed value."""
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        mock_logger, hist, _ = self._real_histogram()
+
+        PrometheusLogger._observe_cache_similarity_score(
+            mock_logger,
+            request_metadata={"semantic-similarity": 0.92},
+            enum_values=sample_enum_values,
+        )
+
+        assert self._sample(hist, "_sum") == [0.92]
+        assert self._sample(hist, "_count") == [1.0]
+
+    @pytest.mark.parametrize(
+        "request_metadata",
+        [
+            None,
+            {},
+            {"semantic-similarity": None},
+            {"semantic-similarity": "not-a-number"},
+            {"semantic-similarity": "inf"},
+            {"semantic-similarity": "2.5"},
+        ],
+    )
+    def test_observe_noops_without_numeric_score(self, sample_enum_values, request_metadata):
+        """Exact-match caches (no score) and malformed values record nothing."""
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        mock_logger, hist, _ = self._real_histogram()
+
+        PrometheusLogger._observe_cache_similarity_score(
+            mock_logger,
+            request_metadata=request_metadata,
+            enum_values=sample_enum_values,
+        )
+
+        assert self._sample(hist, "_count") == []
+
+    def test_real_logger_records_and_scrapes_similarity(self, sample_enum_values):
+        """End to end on a real PrometheusLogger: the metric registers in __init__,
+        records a valid score, rejects an out-of-range one, and appears in /metrics."""
+        from prometheus_client import REGISTRY, generate_latest
+
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        previous: Final = tuple(REGISTRY._collector_to_names)
+        for collector in previous:
+            REGISTRY.unregister(collector)
+        try:
+            logger: Final = PrometheusLogger()
+            logger._observe_cache_similarity_score(
+                request_metadata={"semantic-similarity": 0.92},
+                enum_values=sample_enum_values,
+            )
+            logger._observe_cache_similarity_score(
+                request_metadata={"semantic-similarity": "inf"},
+                enum_values=sample_enum_values,
+            )
+            scrape: Final = generate_latest(REGISTRY).decode()
+        finally:
+            for collector in tuple(REGISTRY._collector_to_names):
+                REGISTRY.unregister(collector)
+            for collector in previous:
+                REGISTRY.register(collector)
+
+        sum_lines: Final = [
+            line for line in scrape.splitlines() if line.startswith("litellm_cache_similarity_score_sum")
+        ]
+        assert len(sum_lines) == 1
+        assert sum_lines[0].endswith(" 0.92")
 
 
 if __name__ == "__main__":
