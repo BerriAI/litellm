@@ -38,17 +38,13 @@ struct Runtime {
 
 fn command(directory: &Path, runtime_dir: &Path) -> Result<Command, Error> {
     if !cfg!(target_os = "linux") {
-        return Err(Error::Analysis(
-            "Python analysis requires the Linux Lens image with Landlock and seccomp support",
-        ));
+        return Err(Error::PythonUnsupportedPlatform);
     }
     let runtime: Runtime =
         serde_json::from_slice(&std::fs::read(runtime_dir.join("python-runtime.json"))?)?;
     let policy = runtime_dir.join("python.seccomp");
     if !policy.is_file() {
-        return Err(Error::Analysis(
-            "Python syscall policy is missing from the worker image",
-        ));
+        return Err(Error::PythonPolicyMissing);
     }
     let mut command = Command::new("/usr/bin/setpriv");
     command.args(["--no-new-privs", "--landlock-access", "fs:execute,write-file,read-file,read-dir,remove-dir,remove-file,make-char,make-dir,make-reg,make-sock,make-fifo,make-block,make-sym,refer,truncate"]);
@@ -99,9 +95,7 @@ async fn output(mut pipe: impl AsyncRead + Unpin) -> Result<Vec<u8>, Error> {
             return Ok(output);
         }
         if output.len() + count > 4 * 1024 * 1024 {
-            return Err(Error::Analysis(
-                "Python output exceeded 4 MiB on one stream. Print a smaller result.",
-            ));
+            return Err(Error::PythonOutputTooLarge);
         }
         output.extend_from_slice(&buffer[..count]);
     }
@@ -132,17 +126,13 @@ fn scratch_usage(directory: &Path, pid: u32) -> Result<(), Error> {
             bytes += metadata.len().max(metadata.blocks().saturating_mul(512));
         }
         if entries > 2048 || bytes > 64 * 1024 * 1024 {
-            return Err(Error::Analysis(
-                "Python exceeded its scratch storage or file-count limit",
-            ));
+            return Err(Error::PythonScratchTooLarge);
         }
         Ok(())
     };
     while let Some((descriptor, depth)) = directories.pop() {
         if depth > 128 {
-            return Err(Error::Analysis(
-                "Python exceeded its scratch directory-depth limit",
-            ));
+            return Err(Error::PythonScratchTooDeep);
         }
         for entry in std::fs::read_dir(format!("/proc/self/fd/{}", descriptor.as_raw_fd()))? {
             let entry = entry?;
@@ -208,9 +198,7 @@ fn scratch_usage(directory: &Path, pid: u32) -> Result<(), Error> {
             entries += 1;
         }
         if entries > 2048 || bytes > 64 * 1024 * 1024 {
-            return Err(Error::Analysis(
-                "Python exceeded its scratch storage or file-count limit",
-            ));
+            return Err(Error::PythonScratchTooLarge);
         }
     }
     Ok(())
@@ -218,7 +206,7 @@ fn scratch_usage(directory: &Path, pid: u32) -> Result<(), Error> {
 
 #[cfg(not(target_os = "linux"))]
 fn scratch_usage(_directory: &Path, _pid: u32) -> Result<(), Error> {
-    Err(Error::Analysis("Python confinement requires Linux"))
+    Err(Error::PythonUnsupportedPlatform)
 }
 
 async fn monitor(directory: PathBuf, pid: u32) -> Result<(), Error> {
@@ -287,9 +275,9 @@ async fn supervise(
         tokio::try_join!(feed, output(stdout), output(stderr), wait)
     };
     let result = tokio::select! {
-        result = tokio::time::timeout(Duration::from_secs(60), computation) => result.map_err(|_| Error::Analysis("Python exceeded its 60-second elapsed-time limit")).and_then(|r| r),
+        result = tokio::time::timeout(Duration::from_secs(60), computation) => result.map_err(|_| Error::PythonTimedOut).and_then(|r| r),
         result = monitor(directory_path.clone(), pid) => Err(result.err().unwrap_or(Error::Unavailable)),
-        _ = &mut cancelled => Err(Error::Analysis("Python computation cancelled")),
+        _ = &mut cancelled => Err(Error::PythonCancelled),
     };
     let result = result.and_then(|output| {
         scratch_usage(&directory_path, pid)?;

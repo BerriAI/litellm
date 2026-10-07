@@ -199,9 +199,7 @@ pub async fn compact(
                 }
             }
             Err(Error::Context(_)) => {
-                return Err(Error::Analysis(
-                    "The Lens task alone exceeds the model context window. Use a model with more context or shorten the investigation instructions.",
-                ));
+                return Err(Error::TaskContext);
             }
             Err(error) => return Err(error),
         }

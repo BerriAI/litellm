@@ -55,7 +55,7 @@ async fn worker_reviews_original_unicode_content_repairs_citations_and_submits_v
         ))
         .and(query_param("worker_release", "test-release"))
         .respond_with(ResponseTemplate::new(200).set_body_json(fixture()))
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
     let sample: Value = serde_json::from_str(include_str!("fixtures/sample.json")).unwrap();
@@ -64,9 +64,13 @@ async fn worker_reviews_original_unicode_content_repairs_citations_and_submits_v
         .respond_with(ResponseTemplate::new(200).set_body_json(&sample))
         .mount(&server)
         .await;
+    let reviews = Arc::new(Mutex::new(Vec::<wire::Review>::new()));
+    let previous = reviews.clone();
     Mock::given(method("GET"))
         .and(path("/lens/worker/lens-test/job-test/reviews"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .respond_with(move |_: &Request| {
+            ResponseTemplate::new(200).set_body_json(previous.lock().unwrap().clone())
+        })
         .mount(&server)
         .await;
     let text = format!("{}{}{}", "é".repeat(7990), QUOTE, "終".repeat(8000));
@@ -77,9 +81,17 @@ async fn worker_reviews_original_unicode_content_repairs_citations_and_submits_v
         let content: String = text.chars().skip(start).take(8000).collect();
         ResponseTemplate::new(200).set_body_json(json!({"execution":sample["executions"][0],"parts":[{"execution_id":"run-test","span_id":"span-test","name":"refund","kind":"tool","content":content,"truncated":start+8000<text.chars().count()}]}))
     }).mount(&server).await;
+    let recorded = Arc::new(Mutex::new(Vec::<wire::Review>::new()));
+    let progress_reviews = recorded.clone();
     Mock::given(method("POST"))
         .and(path("/lens/worker/lens-test/job-test/progress"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .respond_with(move |request: &Request| {
+            let progress: wire::Progress = request.body_json().unwrap();
+            if let Some(review) = progress.review {
+                progress_reviews.lock().unwrap().push(review);
+            }
+            ResponseTemplate::new(200).set_body_json(json!({}))
+        })
         .mount(&server)
         .await;
     let calls = Arc::new(AtomicUsize::new(0));
@@ -105,7 +117,7 @@ async fn worker_reviews_original_unicode_content_repairs_citations_and_submits_v
             captured.lock().unwrap().push(request.body_json().unwrap());
             ResponseTemplate::new(200).set_body_json(json!({}))
         })
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
     let worker = Worker::new(
@@ -117,8 +129,7 @@ async fn worker_reviews_original_unicode_content_repairs_citations_and_submits_v
         "test-release".into(),
     );
     assert!(worker.run_once().await.unwrap());
-    let saved = saved.lock().unwrap();
-    let result: wire::Result = serde_json::from_value(saved[0].clone()).unwrap();
+    let result: wire::Result = serde_json::from_value(saved.lock().unwrap()[0].clone()).unwrap();
     assert_eq!(result.error, "");
     assert_eq!(result.findings.len(), 1);
     assert_eq!(&*result.findings[0].evidence[0].quote, QUOTE);
@@ -127,6 +138,27 @@ async fn worker_reviews_original_unicode_content_repairs_citations_and_submits_v
     assert_eq!(result.review_versions.len(), 1);
     assert_eq!(result.assessments[0].issue_checks, vec!["refund"]);
     assert_eq!(calls.load(Ordering::SeqCst), 3);
+    let mut prior = recorded.lock().unwrap()[0].clone();
+    assert!(!prior.spans.is_empty());
+    prior.consolidated = true;
+    reviews.lock().unwrap().push(prior.clone());
+    recorded.lock().unwrap().clear();
+    assert!(worker.run_once().await.unwrap());
+    let reused = recorded.lock().unwrap()[0].clone();
+    assert!(reused.reused);
+    assert_eq!(
+        serde_json::to_value(&reused.spans).unwrap(),
+        serde_json::to_value(&prior.spans).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&reused.extraction).unwrap(),
+        serde_json::to_value(&prior.extraction).unwrap()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    let result: wire::Result = serde_json::from_value(saved.lock().unwrap()[1].clone()).unwrap();
+    assert_eq!(result.error, "");
+    assert_eq!(result.coverage.reused, 1);
+    assert!(result.findings.is_empty());
 }
 
 #[rstest]
@@ -289,6 +321,95 @@ async fn configured_private_dns_names_are_reachable_without_following_redirects(
 
 #[rstest]
 #[tokio::test]
+async fn checkpoint_history_preserves_only_the_supplied_finding_summary() {
+    use litellm_lens::{activity::Tracker, agent, evidence::Workspace};
+
+    let server = MockServer::start().await;
+    let mut saved = finding();
+    saved["id"] = json!("saved-finding");
+    saved["first_seen"] = json!("2026-01-01T00:00:00Z");
+    saved["last_seen"] = json!("2026-01-01T00:00:00Z");
+    saved["revision"] = json!(1);
+    let mut input = fixture();
+    input["findings"] = json!([saved]);
+    let claim: wire::Claim = serde_json::from_value(input).unwrap();
+    Mock::given(method("POST"))
+        .and(path("/lens/worker/lens-test/job-test/progress"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(&server)
+        .await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = calls.clone();
+    Mock::given(method("POST"))
+        .and(path("/lens/worker/lens-test/job-test/model"))
+        .respond_with(move |request: &Request| {
+            let model: wire::ModelRequest = request.body_json().unwrap();
+            let message: Value =
+                serde_json::from_str(&model.messages.last().unwrap().content).unwrap();
+            let turn = match observed.fetch_add(1, Ordering::SeqCst) {
+                0 => {
+                    assert_eq!(message["existing_findings"][0]["id"], "saved-finding");
+                    assert!(message["existing_findings"][0].get("evidence").is_none());
+                    json!({"checkpoint": "Recover the saved finding summary"})
+                }
+                1 => json!({"tools": [{"action": "history", "include_initial": true,
+                    "turn_start": 0, "turn_end": 0}]}),
+                2 => {
+                    let history: Value =
+                        serde_json::from_str(message["tool_results"][0].as_str().unwrap()).unwrap();
+                    let recovered = &history["initial_context"]["existing_findings"][0];
+                    assert_eq!(recovered["id"], "saved-finding");
+                    assert_eq!(recovered["title"], "Refund success was falsely reported");
+                    for field in ["evidence", "occurrences", "investigation_runs"] {
+                        assert!(
+                            recovered.get(field).is_none(),
+                            "{field} escaped into history"
+                        );
+                    }
+                    assert_eq!(
+                        history["initial_context"]["supplied"]["task_id"],
+                        "summary-test"
+                    );
+                    json!({"result": {"observations": []}})
+                }
+                _ => panic!("Unexpected retry while recovering a finding summary"),
+            };
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"content": turn.to_string(), "cost": 0}))
+        })
+        .expect(3)
+        .mount(&server)
+        .await;
+    let client = client(&server);
+    let workspace = Workspace::new(vec![], client.clone());
+    let tracker = Tracker::start(
+        &client,
+        "summary-test".into(),
+        wire::ActivityPhase::Review,
+        "Recover summary".into(),
+        vec![],
+    )
+    .await
+    .unwrap();
+    let output: wire::Extraction = agent::run(
+        &claim,
+        &workspace,
+        agent::Assignment {
+            stage: "test",
+            task: "Recover only supplied finding details".into(),
+            purpose: wire::ModelRequestPurpose::Extract,
+            supplied: json!({"task_id": "summary-test"}),
+        },
+        &tracker,
+    )
+    .await
+    .unwrap();
+    assert!(output.observations.is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+
+#[rstest]
+#[tokio::test]
 async fn oversized_combined_tool_replies_remain_readable_after_a_checkpoint() {
     use litellm_lens::{
         activity::Tracker,
@@ -305,7 +426,11 @@ async fn oversized_combined_tool_replies_remain_readable_after_a_checkpoint() {
     Mock::given(method("GET"))
         .and(path("/lens/worker/lens-test/job-test/content"))
         .respond_with(move |_: &Request| {
-            let marker = if page_count.fetch_add(1, Ordering::SeqCst) == 0 { "FIRST_REPLY" } else { "ARCHIVED_SECOND_REPLY" };
+            let marker = if page_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                "FIRST_REPLY"
+            } else {
+                "ARCHIVED_SECOND_REPLY"
+            };
             ResponseTemplate::new(200).set_body_json(json!({"execution":execution,"parts":[{
                 "execution_id":"run-test","span_id":"span-test","name":format!("{marker}{}", "x".repeat(filler_size)),"kind":"tool","content":"evidence","truncated":false
             }]}))

@@ -1060,9 +1060,11 @@ async def test_credential_snapshot_excludes_expired_keys_and_disables_caching(mo
 
     from litellm.proxy import proxy_server
     from litellm.proxy.lens.endpoints import ingestion_credentials
-    from litellm.proxy.lens.ingestion import IngestionCredential, IngestionKeyRequest, new_key
+    from litellm.proxy.lens.ingestion import IngestionCredential, IngestionKeyCreated, IngestionKeyRequest, new_key
 
-    current: Final = new_key(IngestionKeyRequest(team_id="team"), "owner").record
+    created: Final = new_key(IngestionKeyRequest(team_id="team"), "owner")
+    assert isinstance(created, IngestionKeyCreated)
+    current: Final = created.record
     expired: Final = current.model_copy(update={"id": "expired", "expires_at": 1})
     db: Final = SimpleNamespace(
         query_raw=AsyncMock(return_value=tuple(Row(data=key.model_dump(mode="json")) for key in (current, expired)))

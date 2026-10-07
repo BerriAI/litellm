@@ -35,9 +35,7 @@ impl Journal {
         let encoded = serde_json::to_string(turn)?;
         self.bytes += encoded.len();
         if self.bytes > 512 * 1024 * 1024 {
-            return Err(Error::Analysis(
-                "Investigation journal exceeded 512 MiB. Reduce the sample or split the investigation.",
-            ));
+            return Err(Error::JournalTooLarge);
         }
         tokio::fs::write(
             self.directory.path().join(self.turns.len().to_string()),
@@ -66,9 +64,7 @@ impl Journal {
             let path = self.directory.path().join(index.to_string());
             bytes += tokio::fs::metadata(&path).await?.len();
             if bytes > 32 * 1024 * 1024 {
-                return Err(Error::Analysis(
-                    "History reply exceeds 32 MiB. Select a smaller turn range, then a character range.",
-                ));
+                return Err(Error::HistoryTooLarge);
             }
             turns.push(serde_json::from_slice(&tokio::fs::read(path).await?)?);
         }

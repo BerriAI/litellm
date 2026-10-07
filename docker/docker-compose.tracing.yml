@@ -43,7 +43,7 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs:
-      - /tmp:rw,nosuid,nodev,size=256m,mode=1777
+      - /tmp:rw,noexec,nosuid,nodev,size=${LENS_WORKER_TMP_SIZE:-1g},mode=1777
     mem_limit: 2g
     cpus: 2
     pids_limit: 64

@@ -125,7 +125,7 @@ async fn review(
     let content_version = version.unwrap_or_default();
     let review: wire::Review = serde_json::from_value(json!({
         "execution_id": execution.id, "trace_id": execution.trace_id, "agent": if execution.service.is_empty() { &execution.name } else { &execution.service }, "name": execution.name,
-        "spans": workspace.previews(&execution.id), "reasoning": reasoning,
+        "spans": previous.map(|review| review.spans.clone()).unwrap_or_else(|| workspace.previews(&execution.id)), "reasoning": reasoning,
         "verdicts": extraction.observations.iter().filter(|o| o.evidence.iter().any(|q| q.execution_id == execution.id && q.role == wire::EvidenceRole::Support)).map(|o| json!({"check_id": o.check_id, "kind": o.kind, "summary": character_range(&o.summary, 0, Some(300))})).collect::<Vec<_>>(),
         "cannot_assess": extraction.cannot_assess, "model": claim.job.settings.model, "duration_ms": started.elapsed().as_millis() as u64, "at": chrono::Utc::now(), "tool_calls": tool_calls,
         "extraction": if !content_version.is_empty() && error.is_empty() { Some(&extraction) } else { None }, "content_version": content_version,

@@ -46,6 +46,7 @@ async fn workspace(text: Arc<Mutex<String>>) -> (MockServer, Workspace, wire::Ex
     (server, Workspace::new(sample.executions, client), execution)
 }
 
+#[rstest]
 #[tokio::test]
 async fn reads_search_citations_and_python_preserve_original_unicode_across_pages() {
     let original = format!(
@@ -108,15 +109,16 @@ async fn equal_length_edits_on_every_page_invalidate_reuse(#[case] position: usi
     assert_ne!(workspace.fingerprint(&execution).await.unwrap(), baseline);
 }
 
+#[rstest]
+#[case::joined("startend")]
+#[case::omission_marker("start\n[... content omitted ...]\nend")]
 #[tokio::test]
-async fn citations_cannot_join_across_omitted_content() {
+async fn citations_cannot_join_across_omitted_content(#[case] quote: &str) {
     let original = format!("{}start\n[... content omitted ...]\nend", "x".repeat(7990));
     let (_server, workspace, _) = workspace(Arc::new(Mutex::new(original))).await;
-    for quote in ["startend", "start\n[... content omitted ...]\nend"] {
-        let citation: wire::Evidence = serde_json::from_value(
-            json!({"execution_id":"run-test","span_id":"span-test","quote":quote}),
-        )
-        .unwrap();
-        assert!(!workspace.valid(&citation).await.unwrap());
-    }
+    let citation: wire::Evidence = serde_json::from_value(
+        json!({"execution_id":"run-test","span_id":"span-test","quote":quote}),
+    )
+    .unwrap();
+    assert!(!workspace.valid(&citation).await.unwrap());
 }

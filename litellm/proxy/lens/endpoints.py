@@ -26,6 +26,7 @@ from litellm.proxy.lens.ingestion import (
     IngestionKeyCreated,
     IngestionKeyRequest,
     IngestionSnapshot,
+    InvalidExpiry,
     ServiceConnection,
     ServiceStatus,
     new_key,
@@ -239,10 +240,9 @@ async def publish_credentials() -> bool:
 @router.post("/tracing/keys", response_model=IngestionKeyCreated)
 async def create_ingestion_key(body: IngestionKeyRequest, auth: Auth) -> IngestionKeyCreated:
     user_scope(auth, write=True)
-    try:
-        created: Final = new_key(body, auth.user_id or "")
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
+    created: Final = new_key(body, auth.user_id or "")
+    if isinstance(created, InvalidExpiry):
+        raise HTTPException(422, "Choose an expiry in the future")
     await repository().save_ingestion_key(created.record)
     return created.model_copy(update={"active": await publish_credentials()})
 

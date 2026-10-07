@@ -90,9 +90,7 @@ async fn registry(
                     pending.push_front(prior[..midpoint].to_vec());
                 }
                 Err(Error::Context(_)) => {
-                    return Err(Error::Analysis(
-                        "The smallest candidate comparison exceeds model context. Use a larger-context model.",
-                    ));
+                    return Err(Error::CandidateContext);
                 }
                 Err(error) => return Err(error),
             }

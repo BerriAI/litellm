@@ -163,7 +163,8 @@ pub async fn run<T: Output>(
             finding
         })
         .collect();
-    let initial = json!({"evidence": [], "supplied": assignment.supplied, "existing_findings": claim.findings});
+    let initial =
+        json!({"evidence": [], "supplied": assignment.supplied, "existing_findings": existing});
     let mut journal = Journal::new(&initial).await?;
     let prompt = json!({
         "stage": assignment.stage, "task": assignment.task,
@@ -207,9 +208,7 @@ pub async fn run<T: Output>(
                 continue;
             }
             Err(Error::Context(_)) => {
-                return Err(Error::Analysis(
-                    "The compacted task exceeds the model context window. Use a larger-context model or shorter instructions.",
-                ));
+                return Err(Error::CompactedContext);
             }
             result => result?,
         };

@@ -1,5 +1,6 @@
 import hashlib
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final
 from uuid import uuid4
@@ -60,10 +61,15 @@ class ServiceConnection(Record):
     status: ServiceStatus
 
 
-def new_key(request: IngestionKeyRequest, user_id: str) -> IngestionKeyCreated:
+@dataclass(frozen=True, slots=True)
+class InvalidExpiry:
+    pass
+
+
+def new_key(request: IngestionKeyRequest, user_id: str) -> IngestionKeyCreated | InvalidExpiry:
     now: Final = datetime.now(timezone.utc)
     if request.expires_at is not None and request.expires_at <= now:
-        raise ValueError("Choose an expiry in the future")
+        return InvalidExpiry()
     token: Final = f"lens-trace-{int(now.timestamp())}-" + secrets.token_urlsafe(40)
     digest: Final = hashlib.sha256(token.encode()).hexdigest()
     return IngestionKeyCreated(

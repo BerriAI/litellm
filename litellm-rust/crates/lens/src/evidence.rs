@@ -64,14 +64,14 @@ impl Workspace {
             .unwrap_or_default()
     }
 
-    fn incomplete(&self, execution: &wire::Execution, reason: &'static str) -> Error {
+    fn incomplete(&self, execution: &wire::Execution, error: Error) -> Error {
         if let Ok(mut partial) = self.partial.lock() {
             partial.insert(execution.id.clone());
         }
         if let Ok(mut errors) = self.errors.lock() {
-            errors.insert(format!("{reason} (execution {})", execution.id));
+            errors.insert(format!("{error} (execution {})", execution.id));
         }
-        Error::Analysis(reason)
+        error
     }
 
     async fn page(
@@ -84,16 +84,11 @@ impl Workspace {
             .client
             .content(&execution.id, cursor, offset)
             .await
-            .map_err(|_| {
-                self.incomplete(
-                    execution,
-                    "Trace content could not be read. Check Lens storage availability.",
-                )
-            })?;
+            .map_err(|_| self.incomplete(execution, Error::EvidenceUnavailable))?;
         if page.execution.id != execution.id
             || page.parts.iter().any(|p| p.execution_id != execution.id)
         {
-            return Err(self.incomplete(execution, "Trace content returned a different execution"));
+            return Err(self.incomplete(execution, Error::EvidenceExecutionChanged));
         }
         if page.partial
             && !page.parts.iter().any(|p| p.truncated)
@@ -146,8 +141,7 @@ impl Workspace {
                         state.cursor = next;
                     }
                     if !state.seen.insert(state.cursor.clone()) {
-                        return Err(self
-                            .incomplete(execution, "Trace content repeated a pagination cursor"));
+                        return Err(self.incomplete(execution, Error::EvidenceCursorRepeated));
                     }
                     let page = self.page(execution, &state.cursor, 1).await?;
                     state.parts = page.parts.into();
@@ -178,18 +172,12 @@ impl Workspace {
                         .into_iter()
                         .find(|p| p.span_id == source.part.span_id)
                         .ok_or_else(|| {
-                            self.incomplete(
-                                &source.execution,
-                                "Trace span disappeared during a content read",
-                            )
+                            self.incomplete(&source.execution, Error::EvidenceSpanMissing)
                         })?
                 };
                 let characters = part.content.chars().count();
                 if (!first && characters == 0) || (part.truncated && characters != 8000) {
-                    return Err(self.incomplete(
-                        &source.execution,
-                        "Trace content ended before its truncated span was complete",
-                    ));
+                    return Err(self.incomplete(&source.execution, Error::EvidenceIncomplete));
                 }
                 let pending = part.truncated;
                 Ok(Some((part, (false, pending, offset + 8000))))
@@ -260,9 +248,7 @@ impl Workspace {
             let fragment =
                 character_range(&piece.content, 0, end.map(|end| end.saturating_sub(offset)));
             if content.len().saturating_add(fragment.len()) > remaining {
-                return Err(Error::Analysis(
-                    "Tool output exceeds 8 MiB. Select narrower spans or a character range, or use Python to summarize the evidence.",
-                ));
+                return Err(Error::ToolOutputTooLarge);
             }
             content.push_str(&fragment);
             offset += size;
@@ -458,7 +444,7 @@ impl Workspace {
             .iter()
             .any(|id| !self.executions.iter().any(|e| &e.id == id))
         {
-            return Err(Error::Analysis("Unknown execution IDs in Python request"));
+            return Err(Error::UnknownPythonExecution);
         }
         let mut remaining = MAX_PYTHON_INPUT;
         write_input(file, b"{\"sessions\":[", &mut remaining).await?;
@@ -507,7 +493,7 @@ impl Workspace {
             .await?;
         }
         if !missing.is_empty() {
-            return Err(Error::Analysis("Unknown span IDs in Python request"));
+            return Err(Error::UnknownPythonSpan);
         }
         write_input(file, b"],\"reviews\":[", &mut remaining).await?;
         let mut separator = b"".as_slice();
@@ -532,9 +518,9 @@ async fn write_input(
     bytes: &[u8],
     remaining: &mut usize,
 ) -> Result<(), Error> {
-    *remaining = remaining.checked_sub(bytes.len()).ok_or(Error::Analysis(
-        "Python input exceeds 256 MiB. Select fewer executions or spans.",
-    ))?;
+    *remaining = remaining
+        .checked_sub(bytes.len())
+        .ok_or(Error::PythonInputTooLarge)?;
     file.write_all(bytes).await?;
     Ok(())
 }

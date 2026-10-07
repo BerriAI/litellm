@@ -25,8 +25,56 @@ pub enum Error {
         "The worker received an invalid response. Check that the gateway and worker versions match."
     )]
     Json(#[from] serde_json::Error),
-    #[error("{0}")]
-    Analysis(&'static str),
+    #[error("Trace content ended before its truncated span was complete")]
+    EvidenceIncomplete,
+    #[error("Trace span disappeared during a content read")]
+    EvidenceSpanMissing,
+    #[error("Trace content repeated a pagination cursor")]
+    EvidenceCursorRepeated,
+    #[error("Trace content returned a different execution")]
+    EvidenceExecutionChanged,
+    #[error("Trace content could not be read. Check Lens storage availability.")]
+    EvidenceUnavailable,
+    #[error("Python computation cancelled")]
+    PythonCancelled,
+    #[error("Python exceeded its 60-second elapsed-time limit")]
+    PythonTimedOut,
+    #[error("Python analysis requires the Linux Lens image with Landlock and seccomp support")]
+    PythonUnsupportedPlatform,
+    #[error("Python exceeded its scratch directory-depth limit")]
+    PythonScratchTooDeep,
+    #[error("Python exceeded its scratch storage or file-count limit")]
+    PythonScratchTooLarge,
+    #[error("Python output exceeded 4 MiB on one stream. Print a smaller result.")]
+    PythonOutputTooLarge,
+    #[error("Python syscall policy is missing from the worker image")]
+    PythonPolicyMissing,
+    #[error(
+        "The Lens task alone exceeds the model context window. Use a model with more context or shorten the investigation instructions."
+    )]
+    TaskContext,
+    #[error(
+        "The compacted task exceeds the model context window. Use a larger-context model or shorter instructions."
+    )]
+    CompactedContext,
+    #[error("History reply exceeds 32 MiB. Select a smaller turn range, then a character range.")]
+    HistoryTooLarge,
+    #[error(
+        "Investigation journal exceeded 512 MiB. Reduce the sample or split the investigation."
+    )]
+    JournalTooLarge,
+    #[error("Python input exceeds 256 MiB. Select fewer executions or spans.")]
+    PythonInputTooLarge,
+    #[error("Unknown span IDs in Python request")]
+    UnknownPythonSpan,
+    #[error("Unknown execution IDs in Python request")]
+    UnknownPythonExecution,
+    #[error(
+        "Tool output exceeds 8 MiB. Select narrower spans or a character range, or use Python to summarize the evidence."
+    )]
+    ToolOutputTooLarge,
+    #[error("The smallest candidate comparison exceeds model context. Use a larger-context model.")]
+    CandidateContext,
     #[error("The analysis conversation exceeds the model context window.")]
     Context(Box<crate::wire::ModelRequest>),
     #[error("invalid Lens configuration: {0}")]

@@ -20,6 +20,7 @@ master_key="sk-$(openssl rand -hex 16)"
 compose=(docker compose -p lens-compose-ci --env-file "$qa_dir/env" -f deploy/lens/stack.yaml)
 cleanup() {
   "${compose[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+  docker network rm lens-local-smoke_default >/dev/null 2>&1 || true
   rm -rf "$qa_dir"
 }
 trap cleanup EXIT
@@ -32,6 +33,32 @@ printf 'POSTGRES_PASSWORD=%s:/?#@%%\nCLICKHOUSE_PASSWORD=%s:/?#@%%\n' \
 docker tag "${LITELLM_IMAGE:?Set LITELLM_IMAGE to the built gateway image}" ghcr.io/berriai/litellm:0.0.0-lens-ci
 docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci -f deploy/lens/Dockerfile \
   -t ghcr.io/berriai/litellm-lens-worker:v0.0.0-lens-ci .
+cat > "$qa_dir/local-worker.yaml" <<'YAML'
+services:
+  lens-worker:
+    image: ghcr.io/berriai/litellm-lens-worker:v0.0.0-lens-ci
+YAML
+LITELLM_MASTER_KEY="$master_key" LITELLM_LENS_SERVICE_TOKEN="$(openssl rand -hex 32)" \
+LITELLM_RELEASE_TAG=v0.0.0-lens-ci \
+  docker compose --env-file /dev/null -p lens-local-smoke -f docker/docker-compose.tracing.yml \
+    -f "$qa_dir/local-worker.yaml" run --rm --no-deps --pull never --entrypoint python3.13 lens-worker -I -S -c '
+import os
+import pathlib
+import subprocess
+capacity = os.statvfs("/tmp")
+assert capacity.f_blocks * capacity.f_frsize >= 1024**3
+probe = pathlib.Path("/tmp/noexec-probe")
+probe.write_text("#!/bin/sh\nexit 0\n")
+probe.chmod(0o700)
+try:
+    subprocess.run([str(probe)], check=True)
+except PermissionError:
+    pass
+else:
+    raise SystemExit("Local tracing stack permits executable scratch files")
+'
+docker network rm lens-local-smoke_default
+printf 'Local tracing worker: at least 1 GiB scratch capacity and noexec enforced\n'
 "${compose[@]}" up -d
 
 api() {

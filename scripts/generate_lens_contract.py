@@ -1,5 +1,6 @@
 import argparse
 import json
+from itertools import chain
 from pathlib import Path
 from typing import Final
 
@@ -69,7 +70,7 @@ def draft_seven(value: JsonValue, names: bool = False) -> JsonValue:
 def contract() -> str:
     schemas: Final = tuple(model.model_json_schema(ref_template="#/definitions/{model}") for model in MODELS)
     definitions: Final = {
-        **{name: schema for document in schemas for name, schema in document.get("$defs", {}).items()},
+        **dict(chain.from_iterable(document.get("$defs", {}).items() for document in schemas)),
         **{
             model.__name__: {key: value for key, value in schema.items() if key != "$defs"}
             for model, schema in zip(MODELS, schemas, strict=True)
