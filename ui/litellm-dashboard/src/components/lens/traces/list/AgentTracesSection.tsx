@@ -2,7 +2,7 @@
 
 import moment from "moment";
 import { skipToken, useQuery } from "@tanstack/react-query";
-import { Flag, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { traceAgentNames } from "../utils";
 import { useMemo, useState } from "react";
 
@@ -59,34 +59,6 @@ function useSignalSetup(enabled: boolean) {
   });
   const loaded = enabled && config.data !== undefined;
   return { on: loaded && signalsConfigured(config.data), missing: loaded && !signalsConfigured(config.data) };
-}
-
-function SignalsCallout({ onSetUp }: { onSetUp?: () => void }) {
-  return (
-    <div
-      role="region"
-      aria-label="Signals setup"
-      className="flex flex-wrap items-center justify-between gap-3 border-b bg-destructive/5 px-3 py-2.5 text-sm"
-    >
-      <p className="flex min-w-0 items-start gap-2">
-        <Flag aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-destructive" />
-        <span>
-          <span className="font-medium">Signals are not set up.</span>{" "}
-          <span className="text-muted-foreground">
-            Pick a System 1 model and Lens flags every run that shows user frustration, a missing capability or a
-            repeated request.
-          </span>
-        </span>
-      </p>
-      {onSetUp ? (
-        <Button size="sm" onClick={onSetUp}>
-          Set up signals
-        </Button>
-      ) : (
-        <span className="text-xs text-muted-foreground">Ask a proxy admin to set up signals in Lens Settings</span>
-      )}
-    </div>
-  );
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -213,7 +185,6 @@ export function AgentTracesSection({
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
         {checkHistory && <TraceHistoryError history={history} />}
         <TracesReceived received={setup.received} />
-        {signalSetup.missing && <SignalsCallout onSetUp={onSetUpSignals} />}
         <Inspector.Panel label="Trace details" testId="run-drawer">
           {(shown: TraceRef) => (
             <RunView
@@ -264,6 +235,8 @@ export function AgentTracesSection({
           canViewFindings={canViewFindings}
           signals={signals}
           showSignals={signalSetup.on}
+          signalsColumn={signalSetup.on || signalSetup.missing}
+          onSetUpSignals={onSetUpSignals}
           isLoading={traces.isLoading || (checkHistory && history.isLoading)}
           error={traces.error}
           hasMore={traces.hasMore}

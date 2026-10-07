@@ -273,7 +273,7 @@ describe("AgentTracesTable signals", () => {
       classified_at: null,
     },
   });
-  const renderTable = (showSignals: boolean) =>
+  const renderTable = (showSignals: boolean, onSetUpSignals?: () => void) =>
     renderWithProviders(
       inList(
         <AgentTracesTable
@@ -293,6 +293,8 @@ describe("AgentTracesTable signals", () => {
             ])
           }
           showSignals={showSignals}
+          signalsColumn
+          onSetUpSignals={onSetUpSignals}
           isLoading={false}
           error={null}
           hasMore={false}
@@ -308,16 +310,23 @@ describe("AgentTracesTable signals", () => {
     const rows = screen.getAllByTestId("agent-trace-row");
     expect(rows.map((row) => row.hasAttribute("data-flagged"))).toEqual([true, false, false]);
     const flagged = within(rows[0]).getByRole("list", { name: "Signals" });
-    expect(within(flagged).getByRole("listitem")).toHaveTextContent("User frustration");
-    expect(flagged).toHaveTextContent("+1");
+    expect(
+      within(flagged)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(["User frustration", "Repeated request"]);
     expect(flagged).toHaveAttribute("title", "Signals: User frustration (92%), Repeated request (71%)");
     expect(within(rows[1]).getByTitle("No signals detected")).toBeInTheDocument();
     expect(within(rows[2]).getByText("Queued")).toBeInTheDocument();
   });
 
-  it("hides the signals column until signals are configured", () => {
-    renderTable(false);
-    expect(screen.queryByRole("columnheader", { name: "Signals" })).not.toBeInTheDocument();
+  it("keeps the signals column with a setup link until signals are configured", async () => {
+    const onSetUpSignals = vi.fn();
+    renderTable(false, onSetUpSignals);
+    const header = screen.getByRole("columnheader", { name: /Signals/ });
+    await userEvent.click(within(header).getByRole("button", { name: "Set up signals" }));
+    expect(onSetUpSignals).toHaveBeenCalledOnce();
+    expect(screen.getAllByTitle("Signals are not set up")).toHaveLength(3);
     expect(screen.getAllByTestId("agent-trace-row").some((row) => row.hasAttribute("data-flagged"))).toBe(false);
   });
 });

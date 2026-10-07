@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Flag, Plus, Trash2 } from "lucide-react";
+import { Flag, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useId, useState } from "react";
 
@@ -14,7 +14,8 @@ import { Textarea } from "@/components/ui/textarea";
 
 import { useLensApi } from "../../data/LensServices";
 import { lensKeys, lensQueries } from "../../data/queries";
-import { signalsConfigured, systemOneModels } from "../../model/signals";
+import { SIGNAL_LIBRARY, signalsConfigured, systemOneModels } from "../../model/signals";
+import { WatchPicker } from "../../setup/WatchPicker";
 import type { SignalConfig } from "../../model/types";
 import { SettingsCard, SettingsSection } from "../SettingsSection";
 import {
@@ -26,6 +27,8 @@ import {
   type SignalDraft,
   type SignalRow,
 } from "./signalDraft";
+
+const LIBRARY_IDS: ReadonlySet<string> = new Set(SIGNAL_LIBRARY.map((signal) => signal.id));
 
 export function SignalSettings() {
   return (
@@ -72,21 +75,6 @@ function SetupCallout({ hasModels }: { hasModels: boolean }) {
           </p>
         )}
       </div>
-    </div>
-  );
-}
-
-function EmptySignals({ onAdd }: { onAdd: () => void }) {
-  return (
-    <div className="flex flex-col items-center gap-2 rounded-md border border-dashed border-border p-6 text-center">
-      <p className="text-sm font-medium">No signals yet</p>
-      <p className="text-xs text-muted-foreground">
-        Add what you want flagged, for example user frustration, missing capabilities or repeated requests.
-      </p>
-      <Button size="sm" onClick={onAdd}>
-        <Plus aria-hidden="true" />
-        Add a signal
-      </Button>
     </div>
   );
 }
@@ -160,6 +148,21 @@ function SignalForm({ saved }: { saved: SignalConfig }) {
   const setRows = (rows: readonly SignalRow[]) => setDraft((current) => ({ ...current, rows }));
   const addRow = () => setRows([...draft.rows, newRow(crypto.randomUUID())]);
   const active = signalsConfigured(saved);
+  const custom = draft.rows.filter((row) => !LIBRARY_IDS.has(row.id));
+  const picked = new Set(draft.rows.filter((row) => LIBRARY_IDS.has(row.id)).map((row) => row.id));
+  const pick = (next: ReadonlySet<string>) =>
+    setRows([
+      ...SIGNAL_LIBRARY.filter((signal) => next.has(signal.id)).map(
+        (signal) =>
+          draft.rows.find((row) => row.id === signal.id) ?? {
+            key: signal.id,
+            id: signal.id,
+            name: signal.name,
+            question: signal.question,
+          },
+      ),
+      ...custom,
+    ]);
 
   return (
     <>
@@ -213,33 +216,34 @@ function SignalForm({ saved }: { saved: SignalConfig }) {
           </div>
         </div>
       </SettingsCard>
-      <SettingsCard className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-medium">What to flag</h3>
-            <p className="text-xs text-muted-foreground">Each signal is a yes or no question about the whole run</p>
-          </div>
-          {draft.rows.length > 0 && (
-            <Button variant="outline" size="sm" onClick={addRow} disabled={draft.rows.length >= MAX_SIGNALS}>
-              <Plus aria-hidden="true" />
-              Add signal
-            </Button>
-          )}
+      <SettingsCard className="space-y-4">
+        <div>
+          <h3 className="text-sm font-medium">What to flag</h3>
+          <p className="text-xs text-muted-foreground">Each signal is a yes or no question about the whole run</p>
         </div>
-        {draft.rows.length === 0 ? (
-          <EmptySignals onAdd={addRow} />
-        ) : (
-          <ul aria-label="Signals" className="space-y-2">
-            {draft.rows.map((row, index) => (
+        <WatchPicker
+          label="Flag runs where"
+          options={SIGNAL_LIBRARY}
+          selected={picked}
+          onChange={pick}
+          onAddCustom={addRow}
+          addDisabled={draft.rows.length >= MAX_SIGNALS}
+        />
+        {custom.length > 0 && (
+          <ul aria-label="Custom signals" className="space-y-2">
+            {custom.map((row) => (
               <SignalFields
                 key={row.key}
                 row={row}
                 problems={problems.rows.get(row.key)}
-                onChange={(changed) => setRows(draft.rows.with(index, changed))}
+                onChange={(changed) => setRows(draft.rows.map((other) => (other.key === row.key ? changed : other)))}
                 onRemove={() => setRows(draft.rows.filter((other) => other.key !== row.key))}
               />
             ))}
           </ul>
+        )}
+        {draft.rows.length === 0 && (
+          <p className="text-xs text-muted-foreground">Pick at least one signal to flag traces</p>
         )}
         <FieldError>{problems.signals}</FieldError>
       </SettingsCard>

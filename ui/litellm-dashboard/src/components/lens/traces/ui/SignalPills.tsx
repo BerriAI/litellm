@@ -19,30 +19,25 @@ function SignalPill({ flag, showScore }: { flag: SignalFlag; showScore: boolean 
 
 export function SignalPills({
   flags,
-  max = flags.length,
   showScore = false,
   className,
 }: {
   flags: readonly SignalFlag[];
-  max?: number;
   showScore?: boolean;
   className?: string;
 }) {
-  const shown = flags.slice(0, max);
-  const hidden = flags.length - shown.length;
   return (
     <span
       role="list"
       aria-label="Signals"
       title={`Signals: ${signalSummary(flags)}`}
-      className={cn("inline-flex min-w-0 items-center gap-1", className)}
+      className={cn("inline-flex max-w-full min-w-0 items-center gap-1", className)}
     >
-      {shown.map((flag) => (
+      {flags.map((flag) => (
         <span role="listitem" key={flag.signal_id} className="min-w-0">
           <SignalPill flag={flag} showScore={showScore} />
         </span>
       ))}
-      {hidden > 0 && <span className="shrink-0 text-xs font-medium text-destructive">+{hidden}</span>}
     </span>
   );
 }
