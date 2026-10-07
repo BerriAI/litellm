@@ -177,7 +177,7 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
                 with pytest.raises(MCPError, match="fresh listing"):
                     await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
                 assert not any(call["body"].get("method", "").endswith("/list") for call in peer.drain())
-        a.post("/key/update", {"key": owner, **policy})
+        a.post("/key/update", {"key": owner, "object_permission": {"mcp_servers": []}, **policy})
         changed = a.request("PUT", "/v1/mcp/server", {"server_id": identity, "description": "new catalog generation"})
         assert changed.status_code == 202, changed.text
         for method, first in first_pages.items():
