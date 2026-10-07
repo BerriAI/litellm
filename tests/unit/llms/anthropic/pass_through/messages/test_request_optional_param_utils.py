@@ -11,7 +11,7 @@ import pytest
 import litellm
 from litellm.llms.anthropic.pass_through.messages.utils import (
     AnthropicMessagesRequestUtils,
-    _anthropic_messages_optional_param_keys,
+    anthropic_messages_optional_param_keys,
 )
 
 
@@ -30,16 +30,16 @@ def test_optional_param_filtering_unchanged():
 
 
 def test_valid_keys_are_memoized():
-    _anthropic_messages_optional_param_keys.cache_clear()
-    first = _anthropic_messages_optional_param_keys()
+    anthropic_messages_optional_param_keys.cache_clear()
+    first = anthropic_messages_optional_param_keys()
     for _ in range(50):
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param({"temperature": 0.1})
-    info = _anthropic_messages_optional_param_keys.cache_info()
+    info = anthropic_messages_optional_param_keys.cache_info()
     # Resolved exactly once despite many calls.
     assert info.misses == 1
     assert info.hits >= 50
     # Stable identity (frozenset) returned each call.
-    assert _anthropic_messages_optional_param_keys() is first
+    assert anthropic_messages_optional_param_keys() is first
     assert isinstance(first, frozenset)
     assert "temperature" in first and "tools" in first
 

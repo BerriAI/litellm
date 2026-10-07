@@ -88,7 +88,7 @@ def test_transform_tool_calls_index():
     decoder = AWSEventStreamDecoder(model="test")
     parsed_chunks = []
     for chunk in chunks:
-        parsed_chunk = decoder._chunk_parser(chunk)
+        parsed_chunk = decoder.chunk_parser(chunk)
         parsed_chunks.append(parsed_chunk)
     tool_call_chunks1 = parsed_chunks[8:12]
     tool_call_chunks2 = parsed_chunks[13:17]
@@ -179,7 +179,7 @@ def test_transform_tool_calls_index_with_optional_arg_func():
     decoder = AWSEventStreamDecoder(model="test")
     parsed_chunks = []
     for chunk in chunks:
-        parsed_chunk = decoder._chunk_parser(chunk)
+        parsed_chunk = decoder.chunk_parser(chunk)
         parsed_chunks.append(parsed_chunk)
     tool_call_chunks = parsed_chunks[11:14]
     for tool_call_hunk in tool_call_chunks:
@@ -343,7 +343,7 @@ def _converse_stream_wrapper(events, model=CONVERSE_MODEL):
     async def bedrock_stream():
         decoder = AWSEventStreamDecoder(model=model)
         for event in events:
-            yield decoder._chunk_parser(chunk_data=event)
+            yield decoder.chunk_parser(chunk_data=event)
 
     return CustomStreamWrapper(
         completion_stream=bedrock_stream(),
