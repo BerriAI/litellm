@@ -21,6 +21,25 @@ tests:
           content:
             name: ANOTHER_VAR
             value: "another_value"
+      - equal:
+          path: spec.template.metadata.labels['app.kubernetes.io/component']
+          value: migration
+
+  - it: should keep migration component when shared pod labels conflict
+    template: migrations-job.yaml
+    set:
+      podLabels:
+        app.kubernetes.io/component: proxy
+        environment: test
+      migrationJob:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels['app.kubernetes.io/component']
+          value: migration
+      - equal:
+          path: spec.template.metadata.labels.environment
+          value: test
 
   - it: should work with extraEnvVars
     template: migrations-job.yaml

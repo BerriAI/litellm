@@ -16,6 +16,13 @@ tests:
           value:
             app.kubernetes.io/name: litellm
             app.kubernetes.io/instance: RELEASE-NAME
+      - equal:
+          path: spec.selector.matchExpressions
+          value:
+            - key: app.kubernetes.io/component
+              operator: NotIn
+              values:
+                - migration
 
 ---
 suite: "pdb disabled"

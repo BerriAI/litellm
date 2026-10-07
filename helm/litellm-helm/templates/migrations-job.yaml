@@ -22,9 +22,10 @@ spec:
     metadata:
       labels:
         {{- include "litellm.labels" . | nindent 8 }}
-        {{- with .Values.podLabels }}
+        {{- with omit (default dict .Values.podLabels) "app.kubernetes.io/component" }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        app.kubernetes.io/component: migration
       annotations:
         {{- with .Values.migrationJob.annotations }}
         {{- toYaml . | nindent 8 }}
