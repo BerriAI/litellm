@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import sys
+from typing import Final
 from litellm._uuid import uuid
 from unittest.mock import MagicMock, patch
 
@@ -64,9 +65,9 @@ class TestOllamaConfig:
         assert result["usage"]["total_tokens"] == 15
 
     def test_transform_response_reports_cached_tokens_ollama_sent(self):
-        config = OllamaConfig()
+        config: Final = OllamaConfig()
 
-        raw_response = MagicMock()
+        raw_response: Final = MagicMock()
         raw_response.json.return_value = {
             "response": "Hello",
             "prompt_eval_count": 6024,
@@ -74,15 +75,15 @@ class TestOllamaConfig:
             "eval_count": 5,
         }
 
-        model_response = ModelResponse(
+        model_response: Final = ModelResponse(
             id="test_id",
             choices=[{"message": Message(content="")}],
         )
 
-        mock_encoding = MagicMock()
+        mock_encoding: Final = MagicMock()
         mock_encoding.encode.return_value = [1, 2, 3]
 
-        result = config.transform_response(
+        result: Final = config.transform_response(
             model="llama2",
             raw_response=raw_response,
             model_response=model_response,
@@ -701,11 +702,11 @@ class TestOllamaTextCompletionResponseIterator:
         assert result["usage"]["total_tokens"] == 15
 
     def test_chunk_parser_done_chunk_reports_cached_tokens(self):
-        iterator = OllamaTextCompletionResponseIterator(
+        iterator: Final = OllamaTextCompletionResponseIterator(
             streaming_response=iter([]), sync_stream=True, json_mode=False
         )
 
-        done_chunk = {
+        done_chunk: Final = {
             "model": "llama2",
             "created_at": "2025-08-06T14:34:31.5276077Z",
             "response": "",
@@ -715,7 +716,7 @@ class TestOllamaTextCompletionResponseIterator:
             "eval_count": 5,
         }
 
-        result = iterator.chunk_parser(done_chunk)
+        result: Final = iterator.chunk_parser(done_chunk)
 
         assert result["usage"] is not None
         assert result["usage"]["prompt_tokens_details"]["cached_tokens"] == 6016
