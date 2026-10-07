@@ -551,9 +551,9 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
         held: Final = self.held_content
         self.held_content = ""
         try:
-            parsed: object = json.loads(_strip_json_code_fence(held))
+            parsed: Final[object] = json.loads(_strip_json_code_fence(held))
         except json.JSONDecodeError:
-            parsed = None
+            return GenericStreamingChunk(text=held, is_finished=True, finish_reason="stop", usage=usage)
         if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
             return GenericStreamingChunk(
                 text="",

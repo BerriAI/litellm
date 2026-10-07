@@ -708,7 +708,11 @@ class TestOllamaTextCompletionResponseIterator:
         ],
     )
     def test_chunk_parser_turns_streamed_json_function_call_into_tool_call(
-        self, response_chunks, expected_text, expected_tool_name, expected_finish_reason
+        self,
+        response_chunks: list[str],
+        expected_text: str,
+        expected_tool_name: str | None,
+        expected_finish_reason: str,
     ):
         iterator: Final = OllamaTextCompletionResponseIterator(
             streaming_response=iter([]), sync_stream=True, json_mode=False

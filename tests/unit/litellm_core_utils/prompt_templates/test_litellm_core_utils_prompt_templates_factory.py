@@ -134,12 +134,16 @@ def test_ollama_pt_simple_messages():
     assert result["images"] == []
 
 
-def test_ollama_pt_renders_tool_calls_in_function_prompt_format():
+@pytest.mark.parametrize(
+    ("assistant_content", "rendered_prefix"),
+    [("", ""), ("Checking calc.py", "Checking calc.py\n")],
+)
+def test_ollama_pt_renders_tool_calls_in_function_prompt_format(assistant_content: str, rendered_prefix: str):
     messages: Final = [
         {"role": "user", "content": "Fix calc.py"},
         {
             "role": "assistant",
-            "content": "",
+            "content": assistant_content,
             "tool_calls": [
                 {
                     "id": "call_1",
@@ -155,7 +159,7 @@ def test_ollama_pt_renders_tool_calls_in_function_prompt_format():
 
     assert result["prompt"] == (
         "### User:\nFix calc.py\n\n"
-        '### Assistant:\n{"name": "read", "arguments": {"filePath": "calc.py"}}\n\n'
+        f'### Assistant:\n{rendered_prefix}{{"name": "read", "arguments": {{"filePath": "calc.py"}}}}\n\n'
         "### User:\ndef add(a, b): return a - b\n\n"
     )
 

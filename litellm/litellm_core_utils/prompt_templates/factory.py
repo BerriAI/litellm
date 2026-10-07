@@ -251,6 +251,8 @@ def ollama_pt(
 
             tool_calls = messages[msg_i].get("tool_calls")
             if tool_calls:
+                if assistant_content_str:
+                    assistant_content_str += "\n"
                 assistant_content_str += "\n".join(
                     json.dumps(
                         {
