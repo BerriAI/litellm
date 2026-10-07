@@ -259,8 +259,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             construct_response: Final[Callable[..., ResponsesAPIResponse]] = ResponsesAPIResponse.model_construct
             response = construct_response(**raw_response_json)
 
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
         return response
 
     #########################################################
@@ -325,8 +325,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         processed_headers: Final = process_response_headers(raw_response_headers)
 
         response: Final = ResponsesAPIResponse.model_validate(raw_response_json)
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
         return response
 
     #########################################################
@@ -398,8 +398,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         processed_headers: Final = process_response_headers(raw_response_headers)
 
         response: Final = ResponsesAPIResponse.model_validate(raw_response_json)
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
         return response
 
     def should_fake_stream(

@@ -5,6 +5,7 @@ import { Activity, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { WorkerSettings } from "./worker/WorkerSettings";
+import { SignalSettings } from "./signals/SignalSettings";
 import { SettingsCard, SettingsSection } from "./SettingsSection";
 import type { LensList } from "../model/types";
 
@@ -53,6 +54,7 @@ export function LensSettings({
   return (
     <div aria-label="Settings" role="region" className="flex w-full flex-col divide-y divide-border">
       <TracingSection enabled={list.tracing_enabled} onOpenTraces={onOpenTraces} />
+      <SignalSettings />
       <SettingsSection
         heading="Analysis worker"
         description="Runs investigations on your server and bills model usage to an analysis key."

@@ -1,15 +1,20 @@
+import json
 from collections.abc import Iterable, Iterator
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import ClassVar, Final
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_registry import (
-    get_guardrail_initializer_from_hooks,
     GuardrailRegistry,
     InMemoryGuardrailHandler,
+    get_guardrail_initializer_from_hooks,
+    parse_tolerant_litellm_params,
 )
-from litellm.types.guardrails import GuardrailEventHooks, Guardrail, LitellmParams
+from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams, LoggingOnlyScope, Mode
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 
 def test_get_guardrail_initializer_from_hooks():
@@ -400,6 +405,85 @@ def test_sync_guardrail_from_db_marks_source_db_when_unchanged():
     assert handler.get_source("collide") == "db"
 
 
+def test_sync_guardrail_from_db_reject_flag_keeps_callback_order_on_noop_update():
+    """
+    The PUT endpoint syncs the whole object with reject_invalid_logging_only_scope=True.
+    That strictness must not force a teardown + re-append of an unchanged guardrail:
+    initialize_guardrail appends the rebuilt callback at the END of litellm.callbacks,
+    so a description-only PUT would reorder guardrails and change which one wins
+    between a BLOCK and a MASK guardrail over the same content.
+    """
+    import litellm
+
+    registry_module = _register_mode_following_initializer("mode_following_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    sentinel: Final = CustomGuardrail(
+        guardrail_name="order-sentinel",
+        supported_event_hooks=[GuardrailEventHooks.pre_call],
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+    try:
+        handler = InMemoryGuardrailHandler()
+        handler.initialize_guardrail(guardrail=_mode_following_db_row("123", "pre_call"), source="db")
+        original = handler.guardrail_id_to_custom_guardrail["123"]
+        assert original is not None
+        litellm.callbacks.append(sentinel)
+        index_before = litellm.callbacks.index(original)
+
+        handler.sync_guardrail_from_db(
+            guardrail=_mode_following_db_row("123", "pre_call", "description-only edit"),
+            reject_invalid_logging_only_scope=True,
+        )
+
+        assert handler.guardrail_id_to_custom_guardrail["123"] is original
+        assert litellm.callbacks.index(original) == index_before
+        assert _live_instances_named("mode-following") == 1
+    finally:
+        registry_module.guardrail_initializer_registry.pop("mode_following_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_sync_guardrail_from_db_reject_flag_still_rejects_invalid_unchanged_scope():
+    """
+    A PUT sends the whole object, so an unchanged row that already carries an
+    invalid logging_only_scope (tolerated at load) must still be rejected on the
+    strict sync path, without rebuilding the live callback.
+    """
+    registry_module = _register_mode_following_initializer("mode_following_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    row: Final = Guardrail(
+        guardrail_id="123",
+        guardrail_name="mode-following",
+        litellm_params={
+            "guardrail": "mode_following_test",
+            "mode": "pre_call",
+            "default_on": True,
+            "logging_only_scope": "input",
+        },
+        guardrail_info={},
+    )
+    try:
+        handler = InMemoryGuardrailHandler()
+        handler.initialize_guardrail(guardrail=row, source="db")
+        original = handler.guardrail_id_to_custom_guardrail["123"]
+        assert original is not None
+        assert original.logging_only_scope is None  # tolerated at load
+
+        with pytest.raises(ValueError, match="logging_only_scope is set"):
+            handler.sync_guardrail_from_db(guardrail=row, reject_invalid_logging_only_scope=True)
+
+        # Rejected without touching the live instance.
+        assert handler.guardrail_id_to_custom_guardrail["123"] is original
+        assert _live_instances_named("mode-following") == 1
+    finally:
+        registry_module.guardrail_initializer_registry.pop("mode_following_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
 @pytest.fixture
 def rotation_handler() -> Iterator[InMemoryGuardrailHandler]:
     registry_module = _register_mode_following_initializer("rotation_test")
@@ -528,6 +612,49 @@ def test_unchanged_db_params_do_not_register_as_changed():
     assert handler._has_guardrail_params_changed(gid, new) is False
 
 
+def test_db_poll_does_not_reinitialize_config_guardrail_without_default_on():
+    handler = InMemoryGuardrailHandler()
+    guardrail_id: Final = "config-default-on-guardrail"
+    guardrail_name: Final = "config-default-on-guardrail"
+    params: Final = {
+        "guardrail": "litellm_content_filter",
+        "mode": "pre_call",
+        "logging_only_scope": "Input",
+        "blocked_words": [{"keyword": "synthetic blocked phrase", "action": "BLOCK"}],
+    }
+    callback_lists: Final = _all_callback_lists()
+    callback_snapshots: Final = [list(callback_list) for callback_list in callback_lists]
+
+    try:
+        existing: Final = handler.initialize_guardrail(
+            guardrail=Guardrail(
+                guardrail_id=guardrail_id,
+                guardrail_name=guardrail_name,
+                litellm_params=params,
+            ),
+            source="config",
+        )
+        assert existing is not None
+        assert existing["litellm_params"].default_on is False
+        assert existing["litellm_params"].logging_only_scope is None
+
+        synced: Final = handler.sync_guardrail_from_db(
+            Guardrail(
+                guardrail_id=guardrail_id,
+                guardrail_name=guardrail_name,
+                litellm_params=params,
+            )
+        )
+
+        assert synced is existing
+        assert handler.IN_MEMORY_GUARDRAILS[guardrail_id] is existing
+        assert handler._sources[guardrail_id] == "db"
+    finally:
+        handler.delete_in_memory_guardrail(guardrail_id)
+        for callback_list, snapshot in zip(callback_lists, callback_snapshots):
+            callback_list[:] = snapshot
+
+
 def test_changed_db_params_register_as_changed():
     """Normalizing both sides must still surface a genuine config change."""
     handler = InMemoryGuardrailHandler()
@@ -563,6 +690,24 @@ def test_unnormalizable_db_params_register_as_changed_without_raising():
     malformed = {**raw, "default_on": "not-a-bool-xyz"}
     new = Guardrail(guardrail_id=gid, guardrail_name="cf", litellm_params=malformed)
     assert handler._has_guardrail_params_changed(gid, new) is True
+
+
+def test_invalid_scope_literal_db_params_compare_equal_after_normalization():
+    handler = InMemoryGuardrailHandler()
+    raw = _db_litellm_params()
+    gid = "77777777-7777-7777-7777-777777777777"
+    handler.IN_MEMORY_GUARDRAILS[gid] = Guardrail(
+        guardrail_id=gid,
+        guardrail_name="cf",
+        litellm_params=LitellmParams(**{**raw, "logging_only_scope": None}),
+    )
+    new = Guardrail(
+        guardrail_id=gid,
+        guardrail_name="cf",
+        litellm_params={**raw, "logging_only_scope": "Input"},
+    )
+
+    assert handler._has_guardrail_params_changed(gid, new) is False
 
 
 def _all_callback_lists():
@@ -1025,6 +1170,250 @@ class TestScanOnlyToolResultsInitRefusal:
             )
 
 
+class _LoggingOnlyScopeSupportedGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: str,
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return inputs
+
+
+class _LoggingOnlyScopeUnsupportedGuardrail(_LoggingOnlyScopeSupportedGuardrail):
+    async def async_logging_hook(
+        self,
+        kwargs: dict[str, object],
+        result: object,
+        call_type: str,
+    ) -> tuple[dict[str, object], object]:
+        return kwargs, result
+
+
+class _LoggingOnlyScopeNativeGuardrail(_LoggingOnlyScopeSupportedGuardrail):
+    use_native_lifecycle_hooks: ClassVar[bool] = True
+
+
+def _invalid_scope_content_filter_guardrail() -> Guardrail:
+    return Guardrail(
+        guardrail_id="invalid-scope-content-filter-test",
+        guardrail_name="invalid-scope-content-filter",
+        litellm_params={
+            "guardrail": "litellm_content_filter",
+            "mode": "pre_call",
+            "logging_only_scope": "Input",
+            "blocked_words": [{"keyword": "pineapple", "action": "BLOCK"}],
+        },
+    )
+
+
+class TestLoggingOnlyScopeValidation:
+    @pytest.mark.parametrize(
+        ("scope", "expected_scope"),
+        (("input", "input"), ("Input", None)),
+    )
+    def test_tolerant_parser_preserves_default_on_constructor_coercion(
+        self, scope: str, expected_scope: str | None
+    ) -> None:
+        params: Final = {
+            "guardrail": "litellm_content_filter",
+            "mode": "pre_call",
+            "logging_only_scope": scope,
+            "blocked_words": [{"keyword": "synthetic blocked phrase", "action": "BLOCK"}],
+        }
+
+        parsed: Final = parse_tolerant_litellm_params(params, "test-content-filter")
+        expected: Final = LitellmParams(**{**params, "logging_only_scope": expected_scope}).model_dump()
+
+        assert parsed.default_on is False
+        assert parsed.model_dump() == expected
+
+    def _initialize(
+        self,
+        mode: str | list[str] | Mode,
+        scope: LoggingOnlyScope | None,
+        callback_type: type[CustomGuardrail] = _LoggingOnlyScopeSupportedGuardrail,
+        reject_invalid_logging_only_scope: bool = False,
+        assert_registered: bool = False,
+    ) -> CustomGuardrail:
+        import litellm
+        from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+        guardrail_type: Final = "logging_only_scope_test"
+        created_callbacks: Final[list[CustomGuardrail]] = []
+
+        def _initializer(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
+            supported_event_hooks: Final = (
+                [GuardrailEventHooks.logging_only] if callback_type.use_native_lifecycle_hooks else None
+            )
+            callback: Final = callback_type(
+                guardrail_name=guardrail["guardrail_name"],
+                event_hook=litellm_params.mode,
+                default_on=True,
+                supported_event_hooks=supported_event_hooks,
+            )
+            litellm.logging_callback_manager.add_litellm_callback(callback)
+            created_callbacks.append(callback)
+            return callback
+
+        registry_module.guardrail_initializer_registry[guardrail_type] = _initializer
+        lists: Final = _all_callback_lists()
+        snapshots: Final = [list(callback_list) for callback_list in lists]
+        try:
+            handler: Final = InMemoryGuardrailHandler()
+            result: Final = handler.initialize_guardrail(
+                guardrail={
+                    "guardrail_name": "logging-only-scope-guardrail",
+                    "litellm_params": {
+                        "guardrail": guardrail_type,
+                        "mode": mode,
+                        "logging_only_scope": scope,
+                    },
+                },
+                reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
+            )
+            assert result is not None
+            callback: Final = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+            assert callback is not None
+            if assert_registered:
+                assert callback in lists[0]
+            return callback
+        except ValueError:
+            callback: Final = created_callbacks[0]
+            assert all(callback not in callback_list for callback_list in lists)
+            raise
+        finally:
+            for callback_list, snapshot in zip(lists, snapshots):
+                callback_list[:] = snapshot
+            registry_module.guardrail_initializer_registry.pop(guardrail_type, None)
+
+    def test_scope_without_logging_only_mode_is_ignored_at_load(self) -> None:
+        callback: Final = self._initialize(mode="pre_call", scope="input", assert_registered=True)
+
+        assert callback.logging_only_scope is None
+        assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+
+    def test_scope_without_logging_only_mode_is_rejected_for_api_writes(self) -> None:
+        with pytest.raises(ValueError, match="logging_only_scope is set") as exc_info:
+            self._initialize(mode="pre_call", scope="input", reject_invalid_logging_only_scope=True)
+
+        assert str(exc_info.value) == (
+            "Guardrail logging-only-scope-guardrail: logging_only_scope is set, but mode does not include "
+            "logging_only, so it would never apply. Add logging_only to mode or remove logging_only_scope."
+        )
+
+    @pytest.mark.parametrize(
+        "mode",
+        (
+            "logging_only",
+            ["pre_call", "logging_only"],
+            Mode(tags={"audit": "logging_only"}, default="pre_call"),
+        ),
+    )
+    def test_scope_accepts_logging_only_in_supported_mode_forms(self, mode: str | list[str] | Mode) -> None:
+        callback: Final = self._initialize(mode=mode, scope="input")
+
+        assert callback.logging_only_scope == "input"
+
+    def test_directional_scope_is_ignored_at_load_when_guardrail_owns_logging_hook(self) -> None:
+        callback: Final = self._initialize(
+            mode="logging_only",
+            scope="input",
+            callback_type=_LoggingOnlyScopeUnsupportedGuardrail,
+            assert_registered=True,
+        )
+
+        assert callback.logging_only_scope is None
+
+    def test_directional_scope_rejected_for_api_writes_when_guardrail_owns_logging_hook(self) -> None:
+        with pytest.raises(ValueError, match="logging_only_scope='input' is not supported") as exc_info:
+            self._initialize(
+                mode="logging_only",
+                scope="input",
+                callback_type=_LoggingOnlyScopeUnsupportedGuardrail,
+                reject_invalid_logging_only_scope=True,
+            )
+
+        assert str(exc_info.value) == (
+            "Guardrail logging-only-scope-guardrail: logging_only_scope='input' is not supported by this "
+            "guardrail, whose logging_only hook scans on its own. Remove logging_only_scope."
+        )
+
+    def test_both_scope_accepted_when_guardrail_owns_logging_hook(self) -> None:
+        callback: Final = self._initialize(
+            mode="logging_only",
+            scope="both",
+            callback_type=_LoggingOnlyScopeUnsupportedGuardrail,
+        )
+
+        assert callback.logging_only_scope == "both"
+
+    def test_output_scope_accepted_for_native_lifecycle_guardrail(self) -> None:
+        callback: Final = self._initialize(
+            mode="logging_only",
+            scope="output",
+            callback_type=_LoggingOnlyScopeNativeGuardrail,
+        )
+
+        assert callback.logging_only_scope == "output"
+
+    def test_invalid_scope_fails_litellm_params_validation(self) -> None:
+        with pytest.raises(ValidationError):
+            LitellmParams(guardrail="test", mode="logging_only", logging_only_scope="request")
+
+    def test_invalid_scope_literal_keeps_content_filter_registered_and_blocking(self) -> None:
+        import litellm
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
+
+        handler: Final = InMemoryGuardrailHandler()
+        callback_lists: Final = _all_callback_lists()
+        callback_snapshots: Final = [list(callback_list) for callback_list in callback_lists]
+        guardrail: Final = _invalid_scope_content_filter_guardrail()
+
+        try:
+            result: Final = handler.initialize_guardrail(guardrail=guardrail, source="config")
+            assert result is not None
+            callback: Final = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+            assert isinstance(callback, ContentFilterGuardrail)
+            assert callback in litellm.callbacks
+            assert callback.logging_only_scope is None
+            assert callback.event_hook == GuardrailEventHooks.pre_call
+            assert callback._check_blocked_words("pineapple") is not None
+        finally:
+            handler.delete_in_memory_guardrail(guardrail["guardrail_id"])
+            for callback_list, snapshot in zip(callback_lists, callback_snapshots):
+                callback_list[:] = snapshot
+
+    def test_invalid_scope_literal_is_rejected_for_strict_initialization_without_callback_leakage(self) -> None:
+        handler: Final = InMemoryGuardrailHandler()
+        callback_lists: Final = _all_callback_lists()
+        callback_snapshots: Final = [list(callback_list) for callback_list in callback_lists]
+
+        with pytest.raises(ValueError, match="logging_only_scope"):
+            handler.initialize_guardrail(
+                guardrail=_invalid_scope_content_filter_guardrail(),
+                source="config",
+                reject_invalid_logging_only_scope=True,
+            )
+
+        assert all(callback_list == snapshot for callback_list, snapshot in zip(callback_lists, callback_snapshots))
+
+    def test_invalid_scope_literal_does_not_tolerate_other_litellm_params_errors(self) -> None:
+        with pytest.raises(ValidationError):
+            parse_tolerant_litellm_params(
+                {
+                    "guardrail": "litellm_content_filter",
+                    "mode": "pre_call",
+                    "logging_only_scope": "Input",
+                    "default_on": "not-a-bool",
+                },
+                "invalid-scope-content-filter",
+            )
+
+
 @pytest.mark.asyncio
 async def test_update_guardrail_in_db_raises_when_row_missing():
     prisma_client = MagicMock()
@@ -1042,6 +1431,41 @@ async def test_update_guardrail_in_db_raises_when_row_missing():
             ),
             prisma_client=prisma_client,
         )
+
+
+@pytest.mark.asyncio
+async def test_update_guardrail_in_db_persists_raw_sparse_params_verbatim():
+    """
+    After a rejected PATCH, the endpoint rolls back by writing the stored row's
+    raw litellm_params through update_guardrail_in_db. A raw dict must be
+    persisted exactly as stored — a legacy 4-key row stays a 4-key row — instead
+    of being round-tripped through LitellmParams.model_dump(), which materializes
+    every field default and rewrites a row the admin never wrote.
+    """
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.update = AsyncMock(
+        return_value={"guardrail_id": "legacy-row", "guardrail_name": "legacy-one"}
+    )
+    legacy_params: Final = {
+        "guardrail": "litellm_content_filter",
+        "mode": "pre_call",
+        "guardrail_name": "legacy-one",
+        "blocked_words": [{"keyword": "x", "action": "BLOCK"}],
+    }
+
+    await GuardrailRegistry().update_guardrail_in_db(
+        guardrail_id="legacy-row",
+        guardrail=Guardrail(
+            guardrail_id="legacy-row",
+            guardrail_name="legacy-one",
+            litellm_params=legacy_params,
+            guardrail_info={},
+        ),
+        prisma_client=prisma_client,
+    )
+
+    persisted: Final = prisma_client.db.litellm_guardrailstable.update.call_args.kwargs["data"]
+    assert json.loads(persisted["litellm_params"]) == legacy_params
 
 
 def test_reinitialize_guardrail_restores_previous_on_failure():
@@ -1185,7 +1609,6 @@ _ENCRYPTED_PREFIX = "litellm_enc::"
 
 
 class _Row(dict[str, object]):
-
     def __getattr__(self, name: str) -> object:
         return self[name]
 
