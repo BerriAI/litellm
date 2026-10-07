@@ -10,6 +10,7 @@ have been aggregated across models.
 
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from itertools import accumulate
 from math import isclose, isfinite
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, NamedTuple
@@ -23,12 +24,13 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_prompt_caching_savings,
     generic_cost_per_token,
     get_cost_per_unit,
+    parse_prompt_tokens_details,
 )
 from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
     GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT,
 )
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -141,14 +143,17 @@ def baseline_cost_snapshot(
     actual_spend: float,
     cost_breakdown: Mapping[str, object] | None,
     routing_decision: Mapping[str, object] | None,
+    provider: str = "anthropic",
+    actual_token_cost: float | None = None,
 ) -> BaselineCostSnapshot:
+    recorded: Final = _recorded_token_cost(cost_breakdown)
     return BaselineCostSnapshot(
         model=model,
-        provider="anthropic",
+        provider=provider,
         prices=prices,
         actual_spend=actual_spend,
         basis=_pricing_basis(cost_breakdown),
-        actual_token_cost=_recorded_token_cost(cost_breakdown),
+        actual_token_cost=recorded if recorded is not None else actual_token_cost,
         classifier_cost=classifier_cost_from_decision(routing_decision) or 0.0,
     )
 
@@ -175,7 +180,10 @@ def price_baseline_comparison(
     if snapshot.prices is None or snapshot.actual_token_cost is None:
         return None
     token_cost: Final = _cost_of_usage(
-        _ModelIdentity(snapshot.model, snapshot.provider), baseline_usage, snapshot.prices, snapshot.basis
+        _ModelIdentity(snapshot.model, snapshot.provider),
+        _baseline_usage(baseline_usage, snapshot.prices, modeled=True),
+        snapshot.prices,
+        snapshot.basis,
     )
     if token_cost is None or not isfinite(token_cost) or token_cost < 0:
         return None
@@ -276,34 +284,72 @@ def _cache_token_split(usage: Usage) -> tuple[int, int]:
 
 
 def _baseline_cache_rate_keys(baseline_info: ModelInfo | None) -> tuple[bool, bool]:
-    """Whether the baseline model has a ``(cache read, cache write)`` rate of its own.
-
-    A missing rate is not a free bucket. `_get_token_base_cost` resolves an absent
-    `cache_read_input_token_cost` or `cache_creation_input_token_cost` to 0.0, so a
-    baseline whose provider prices caching implicitly, which is every OpenAI, Azure and
-    Gemini entry for cache writes, would carry the whole prompt for nothing and turn a
-    profitable route into a reported loss. Such a model pays its plain input rate for
-    those tokens, so the buckets it cannot price become ordinary input below.
-    """
+    """Missing cache rates use ordinary input pricing; explicit zero rates stay free."""
     if baseline_info is None:
         return True, True
-    return bool(baseline_info.get("cache_read_input_token_cost")), bool(
-        baseline_info.get("cache_creation_input_token_cost")
+    return baseline_info.get("cache_read_input_token_cost") is not None, (
+        baseline_info.get("cache_creation_input_token_cost") is not None
     )
 
 
-def _baseline_usage(usage: Usage, baseline_info: ModelInfo | None = None) -> Usage:
+def _modeled_modalities(
+    details: PromptTokensDetailsWrapper, total: int, read: int, writes: int
+) -> PromptTokensDetailsWrapper:
+    counts: Final = (details.audio_tokens or 0, details.image_tokens or 0, details.video_tokens or 0)
+    if total <= 0:
+        return details.model_copy(update={"cached_tokens_details": None})
+    boundaries: Final = tuple(accumulate(counts, initial=0))
+
+    def scale(tokens: int) -> tuple[int, ...]:
+        return tuple(
+            tokens * right // total - tokens * left // total for left, right in zip(boundaries, boundaries[1:])
+        )
+
+    audio, image, video = scale(total - read - writes)
+    cached_audio, cached_image, _ = scale(read)
+    return details.model_copy(
+        update={
+            "text_tokens": total - read - writes - audio - image - video,
+            "audio_tokens": audio + cached_audio,
+            "image_tokens": image + cached_image,
+            "video_tokens": video,
+            "cached_tokens_details": CachedTokensDetails(
+                audio_tokens=cached_audio, image_tokens=cached_image, text_tokens=0
+            ),
+        }
+    )
+
+
+def _baseline_usage(usage: Usage, baseline_info: ModelInfo | None = None, *, modeled: bool = False) -> Usage:
     cache_read, cache_creation = _cache_token_split(usage)
     details: Final = usage.prompt_tokens_details
-    if details is None or (cache_read <= 0 and cache_creation <= 0):
+    if details is None or (cache_read <= 0 and cache_creation <= 0 and not modeled):
         return usage
     prices_reads, prices_writes = _baseline_cache_rate_keys(baseline_info)
     reads: Final = cache_read if prices_reads else 0
     writes: Final = cache_creation if prices_writes else 0
-    if (reads, writes) == (cache_read, cache_creation):
+    if (reads, writes) == (cache_read, cache_creation) and not modeled:
         return usage
-    other_modalities: Final = sum(
-        (getattr(details, field, 0) or 0) for field in ("audio_tokens", "image_tokens", "video_tokens")
+    parsed: Final = parse_prompt_tokens_details(usage)
+    other_modalities: Final = (
+        parsed["audio_tokens"] + parsed["image_tokens"] + parsed["video_tokens"]
+        if reads
+        else (details.audio_tokens or 0) + (details.image_tokens or 0) + (details.video_tokens or 0)
+    )
+    cached_details: Final = (
+        details.cached_tokens_details if reads and hasattr(details, "cached_tokens_details") else None
+    )
+    remapped: Final = PromptTokensDetailsWrapper(
+        **{
+            **details.model_dump(),
+            "cached_tokens": reads,
+            "cache_creation_tokens": writes,
+            "cache_write_tokens": writes,
+            "cache_creation_token_details": parsed["cache_creation_token_details"] if writes else None,
+            "cached_tokens_details": cached_details,
+            "text_tokens": max(usage.prompt_tokens - reads - writes - other_modalities, 0)
+            + ((cached_details.text_tokens or 0) if cached_details is not None else 0),
+        }
     )
     return Usage(
         **{
@@ -311,16 +357,9 @@ def _baseline_usage(usage: Usage, baseline_info: ModelInfo | None = None) -> Usa
             # Rebuild through Usage so private fallback counts agree with the public buckets.
             "cache_read_input_tokens": reads,
             "cache_creation_input_tokens": writes,
-            "prompt_tokens_details": PromptTokensDetailsWrapper(
-                **{
-                    **details.model_dump(),
-                    "cached_tokens": reads,
-                    "cache_creation_tokens": writes,
-                    "cache_write_tokens": writes,
-                    "cache_creation_token_details": details.cache_creation_token_details if writes else None,
-                    "text_tokens": max(usage.prompt_tokens - reads - writes - other_modalities, 0),
-                }
-            ),
+            "prompt_tokens_details": _modeled_modalities(remapped, usage.prompt_tokens, reads, writes)
+            if modeled
+            else remapped,
         },
     )
 
@@ -350,7 +389,10 @@ def compute_autorouter_savings(
     effective_baseline_info: Final = baseline_info if baseline_info is not None else _model_info(baseline)
     modeled_usage: Final = baseline_usage if baseline_usage is not None else usage
     baseline_cost: Final = _cost_of_usage(
-        baseline, _baseline_usage(modeled_usage, effective_baseline_info), effective_baseline_info, basis
+        baseline,
+        _baseline_usage(modeled_usage, effective_baseline_info, modeled=baseline_provenance == "modeled"),
+        effective_baseline_info,
+        basis,
     )
     recorded_selected_cost: Final = _recorded_token_cost(cost_breakdown)
     selected_cost: Final = (

@@ -7,6 +7,7 @@ import pytest
 import litellm
 from litellm.llms.anthropic.cost_calculation import cost_per_token
 from litellm.llms.anthropic.prompt_cache_prediction import CountedBreakpoint, CountedPromptCachePlan
+from litellm.proxy.db.baseline_accounting import BaselineAccountingRecord, baseline_publication
 from litellm.proxy.spend_tracking.baseline_accounting import (
     BaselineEstimate,
     BaselineHistory,
@@ -14,7 +15,12 @@ from litellm.proxy.spend_tracking.baseline_accounting import (
     CacheEntry,
     advance_baseline_history,
 )
-from litellm.types.utils import CacheCreationTokenDetails, PromptTokensDetailsWrapper, Usage
+from litellm.proxy.spend_tracking.savings import (
+    BaselineCostSnapshot,
+    compute_autorouter_savings,
+    price_baseline_comparison,
+)
+from litellm.types.utils import CacheCreationTokenDetails, ModelInfo, PromptTokensDetailsWrapper, Usage
 
 
 def _usage() -> Usage:
@@ -76,6 +82,62 @@ def _replay(*observations: BaselineObservation) -> tuple[BaselineEstimate, ...]:
         history, estimates = advance_baseline_history(history, tuple(group))
         results.extend(estimates)
     return tuple(results)
+
+
+@pytest.mark.parametrize("write_rate", (None, 0.0, 0.017))
+@pytest.mark.parametrize("prefix", (4000, 8000))
+def test_multimodal_history_prices_absent_free_and_premium_writes(write_rate: float | None, prefix: int) -> None:
+    usage: Final = Usage(
+        prompt_tokens=8000, completion_tokens=20, total_tokens=8020,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=4500, audio_tokens=2000, image_tokens=1000, video_tokens=500,
+            cached_tokens=0, cache_creation_tokens=0,
+        ),
+    )
+    first: Final = _observation(
+        "cold", usage=usage, plan=CountedPromptCachePlan(8000, (_marker(ttl=1800, tokens=prefix),)),
+        minimum_cache_tokens=0, cache_policy="estimated", cache_write_pricing="standard",
+    )
+    estimates: Final = _replay(
+        first,
+        first.model_copy(update={"request_id": "warm", "started_at": 10002.0, "available_at": 10003.0}),
+        first.model_copy(update={"request_id": "expired", "started_at": 12000.0, "available_at": 12001.0}),
+    )
+    prices: Final[ModelInfo] = {
+        **litellm.get_model_info("gpt-6-astra", "openai"),
+        "input_cost_per_token": 0.01, "output_cost_per_token": 0.03,
+        "cache_read_input_token_cost": 0.001, "cache_read_input_audio_token_cost": 0.002,
+        "cache_creation_input_token_cost": write_rate,
+        "input_cost_per_audio_token": 0.02, "input_cost_per_image_token": 0.03, "input_cost_per_video_token": 0.04,
+    }
+    snapshot: Final = BaselineCostSnapshot(
+        model="gpt-6-astra", provider="openai", prices=prices, actual_spend=10.0, actual_token_cost=10.0,
+    )
+    record: Final = BaselineAccountingRecord(
+        scope="autorouter-baseline:v3:" + "a" * 64, api_key="key", session_id="session", router_name="router",
+        baseline_model="gpt-6-astra", observation=first, pricing=snapshot, turn=None, daily=None,
+    )
+    ordinary: Final = 4500 * 0.01 + 2000 * 0.02 + 1000 * 0.03 + 500 * 0.04
+    cold: Final = ordinary if write_rate is None else ordinary * (8000 - prefix) / 8000 + prefix * write_rate
+    warm: Final = ordinary * (8000 - prefix) / 8000 + prefix * (0.75 * 0.001 + 0.25 * 0.002)
+    for estimate, expected in zip(estimates, (cold, warm, cold)):
+        priced: Final = price_baseline_comparison(snapshot, estimate.usage, estimate.provenance)
+        assert priced is not None
+        assert priced.baseline == pytest.approx(expected + 20 * 0.03)
+        assert compute_autorouter_savings(
+            "openai/gpt-6-astra", "gpt-6-astra", "openai", usage,
+            baseline_info=prices, baseline_usage=estimate.usage, baseline_provenance="modeled",
+            cost_breakdown={"input_cost": 9.0, "output_cost": 1.0},
+        ) == pytest.approx(priced.savings)
+    for estimate in (*estimates, BaselineEstimate("observed", "identical", "observed_identical", usage)):
+        publication: Final = baseline_publication(record, estimate, first.started_at)
+        assert publication.input_tokens is not None
+        assert publication.cache_read_input_tokens is not None
+        assert publication.cache_creation_input_tokens is not None
+        assert (
+            publication.input_tokens + publication.cache_read_input_tokens + publication.cache_creation_input_tokens
+        ) == usage.prompt_tokens
+    assert usage.prompt_tokens_details.audio_tokens == 2000
 
 
 def test_initial_identical_path_preserves_full_usage_without_counting_or_exclusive_owner() -> None:
@@ -249,6 +311,15 @@ def test_short_lifetime_hit_cannot_seed_an_unpaid_long_lifetime_entry() -> None:
     assert upgrade.usage.prompt_tokens_details.cache_creation_token_details.ephemeral_1h_input_tokens == 0
     assert after_expiry.usage.prompt_tokens_details.cached_tokens == 0
     assert after_expiry.usage.prompt_tokens_details.cache_creation_token_details.ephemeral_1h_input_tokens == 4600
+
+
+@pytest.mark.parametrize("policy", ("anthropic", "estimated"))
+def test_duration_pricing_rejects_short_lived_prefix_before_long_lived_suffix(policy: str) -> None:
+    plan: Final = CountedPromptCachePlan(6200, (_marker("early", 300, 3000), _marker("last", 3600, 6000)))
+    observation: Final = _observation("invalid", plan=plan, cache_policy=policy, cache_write_pricing="duration")
+    history, estimates = advance_baseline_history(BaselineHistory(), (observation,))
+    assert estimates[0].usage is None and estimates[0].reason == "unsupported_cache_plan"
+    assert not history.entries
 
 
 @pytest.mark.parametrize("writes", (0, 50, None))

@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable, Generator, Mapping
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import product
 from types import MappingProxyType
 from typing import Final, cast
@@ -355,6 +355,112 @@ async def test_provider_counting_does_not_hold_the_inference_response(
             assert _observation(await rig.capture.payload()).observation.plan is not None
     finally:
         release.set()
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses", "normalized_responses", "messages"))
+async def test_direct_openai_baseline_collects_provider_usage_across_api_surfaces(surface: str) -> None:
+    from litellm.proxy.hooks.autorouter_baseline_cache import finalize_baseline_cache
+    from litellm.proxy.spend_tracking.baseline_accounting import BaselineHistory, advance_baseline_history
+    from litellm.types.utils import ModelResponse, Usage
+
+    call_type: Final = {
+        "chat": CallTypes.acompletion,
+        "responses": CallTypes.aresponses,
+        "normalized_responses": CallTypes.aresponses,
+        "messages": CallTypes.anthropic_messages,
+    }[surface]
+    prompt: Final = "shared stable content " * 2000
+    body: Final = (
+        {"input": [{"role": "user", "content": prompt}]}
+        if "responses" in surface
+        else {"messages": [{"role": "user", "content": prompt}]}
+    )
+    request: Final[dict[str, object]] = {
+        **body,
+        "litellm_metadata": {"user_api_key_hash": "test-key", "session_id": "test-session"},
+    }
+    Router._record_routing_decision(
+        request,
+        StandardLoggingRoutingDecision(
+            router_model_name="test-router",
+            router_type="complexity",
+            routed_model="openai/gpt-6.1-sol",
+            savings_baseline_model="openai/gpt-6-astra",
+        ),
+    )
+    now: Final = datetime(2026, 1, 1)
+    logging: Final = Logging(
+        model="openai/gpt-6.1-sol",
+        messages=[],
+        stream=False,
+        call_type=call_type.value,
+        start_time=now,
+        litellm_call_id="openai-observation",
+        function_id="test",
+        kwargs={},
+    )
+    logging._update_completion_start_time(now + timedelta(seconds=0.25))
+    collector: Final = AutoRouterBaselineCache(None, router=lambda: None, clock=lambda: now.timestamp() + 10)
+    await collector.async_pre_call_deployment_hook({**request, "litellm_logging_obj": logging}, call_type)
+    assert logging.baseline_cache_context is not None
+    if surface == "messages":
+        await collector.async_pre_call_deployment_hook(
+            {**request, "litellm_logging_obj": logging}, CallTypes.aresponses
+        )
+    usage: Final = Usage(
+        prompt_tokens=10000,
+        completion_tokens=10,
+        total_tokens=10010,
+        prompt_tokens_details={"cached_tokens": 4000, "cache_creation_tokens": 6000},
+    )
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    normalized: Final = ResponsesAPIResponse(
+        id="resp-test",
+        created_at=1,
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=10000, output_tokens=10, total_tokens=10010),
+    ).model_copy(update={"usage": usage})
+    response: Final = (
+        normalized
+        if surface == "normalized_responses"
+        else (
+            {
+                "usage": {
+                    "input_tokens": 10000,
+                    "output_tokens": 10,
+                    "total_tokens": 10010,
+                    "input_tokens_details": {"cached_tokens": 4000, "cache_creation_tokens": 6000},
+                }
+            }
+            if surface == "responses"
+            else ModelResponse(usage=usage)
+        )
+    )
+    await finalize_baseline_cache(logging, response)
+    captured: Final = logging.baseline_observation
+    assert captured is not None and captured.provider == "openai"
+    assert captured.observation.outcome == "complete", captured.observation.reason
+    assert captured.observation.usage is not None and captured.observation.usage.prompt_tokens == 10000
+    assert captured.observation.usage.prompt_tokens_details.cached_tokens == 4000
+    assert captured.observation.plan is not None
+    assert prompt not in captured.model_dump_json()
+    history, estimates = advance_baseline_history(BaselineHistory(), (captured.observation,))
+    assert estimates[0].usage is not None and estimates[0].usage.prompt_tokens_details.cached_tokens == 0
+    assert estimates[0].usage.prompt_tokens_details.cache_creation_tokens == 10000
+    _, followup = advance_baseline_history(
+        history,
+        (
+            captured.observation.model_copy(
+                update={
+                    "request_id": "followup",
+                    "started_at": now.timestamp() + 1,
+                    "available_at": now.timestamp() + 2,
+                }
+            ),
+        ),
+    )
+    assert followup[0].usage is not None and followup[0].usage.prompt_tokens_details.cached_tokens == 10000
 
 
 @pytest.mark.parametrize("baseline_effort", (None, "medium"))
@@ -793,8 +899,10 @@ async def test_native_baseline_projection_matches_direct_baseline_request(
         ({"inference_geo": "us"}, {}, "inference_geo", "us", 1.0),
     ),
 )
+@pytest.mark.parametrize("estimated", (False, True))
 async def test_native_baseline_prices_projected_settings_without_changing_actual_spend(
     monkeypatch: pytest.MonkeyPatch,
+    estimated: bool,
     selected: dict[str, JsonValue],
     baseline: dict[str, JsonValue],
     usage_field: str,
@@ -841,6 +949,7 @@ async def test_native_baseline_prices_projected_settings_without_changing_actual
                     "litellm_params": {
                         **_JSON_OBJECT.validate_python(_MODELS[2]["litellm_params"]),
                         **baseline,
+                        **({"extra_body": {}} if estimated else {}),
                     },
                 },
             ]
@@ -1096,3 +1205,206 @@ async def test_tier_pins_never_enter_the_caller_snapshot_on_later_routing_passes
     assert context is not None and context.baseline_body is not None
     assert context.baseline_body.get("max_tokens") == 16
     assert "output_config" not in context.baseline_body and "thinking" not in context.baseline_body
+
+
+@pytest.mark.parametrize("chat_adapter", (False, True))
+async def test_messages_estimate_keeps_adapted_baseline_extra_body_retention(
+    monkeypatch: pytest.MonkeyPatch, chat_adapter: bool
+) -> None:
+    settings: Final = {"prompt_cache_retention": "24h", "prompt_cache_key": "configured-baseline"}
+    models: Final = _MESSAGES.validate_python(
+        [
+            *_MODELS[:2],
+            {
+                "model_name": "opus",
+                "model_info": {"id": "baseline"},
+                "litellm_params": {
+                    "model": "openai/gpt-6-astra",
+                    "api_key": "test-selected",
+                    "api_base": "https://api.openai.com/v1",
+                    "extra_body": settings,
+                },
+            },
+        ]
+    )
+    rig: Final = _Rig(monkeypatch, models=models)
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", chat_adapter)
+
+    def openai_response(request: httpx.Request) -> httpx.Response:
+        body: Final = _JSON_OBJECT.validate_json(request.content)
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": "chatcmpl-baseline" if chat_adapter else "resp_baseline",
+                "object": "chat.completion" if chat_adapter else "response",
+                "model": body["model"],
+                **(
+                    {
+                        "created": 1,
+                        "choices": [
+                            {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "OK"}}
+                        ],
+                        "usage": {"prompt_tokens": 6000, "completion_tokens": 10, "total_tokens": 6010},
+                    }
+                    if chat_adapter
+                    else {
+                        "created_at": 1,
+                        "status": "completed",
+                        "output": [],
+                        "usage": {"input_tokens": 6000, "output_tokens": 10, "total_tokens": 6010},
+                    }
+                ),
+            },
+        )
+
+    with respx.mock() as transport:
+        transport.post("https://api.anthropic.com/v1/messages").mock(side_effect=_upstream)
+        adapted: Final = transport.post(
+            "https://api.openai.com/v1/" + ("chat/completions" if chat_adapter else "responses")
+        ).mock(side_effect=openai_response)
+        await rig.router.anthropic_messages(
+            model="opus", max_tokens=16, messages=[{"role": "user", "content": "question"}]
+        )
+        wire: Final = _JSON_OBJECT.validate_json(adapted.calls.last.request.content)
+        log: Final = rig.logging()
+        await _call(rig.router, log, messages='[{"role":"user","content":"question"}]')
+        captured: Final = _observation(await rig.capture.payload())
+    assert {key: wire.get(key) for key in settings} == settings
+    assert log.baseline_cache_context is not None
+    projected: Final = log.baseline_cache_context.estimated_request
+    assert projected is not None and {key: projected.get(key) for key in settings} == settings
+    assert captured.observation.plan is not None and captured.observation.plan.breakpoints
+    assert {marker.ttl_seconds for marker in captured.observation.plan.breakpoints} == {24 * 60 * 60}
+
+
+@pytest.mark.parametrize("passthrough", (False, True))
+async def test_messages_estimate_does_not_flatten_native_baseline_extra_body(
+    monkeypatch: pytest.MonkeyPatch, passthrough: bool
+) -> None:
+    settings: Final = {"prompt_cache_retention": "24h", "prompt_cache_key": "native-ignored"}
+    rig: Final = _Rig(
+        monkeypatch,
+        models=_MESSAGES.validate_python(
+            [
+                *_MODELS[:2],
+                {
+                    "model_name": "opus",
+                    "model_info": {
+                        "id": "baseline",
+                        **({"supported_endpoints": ["/v1/messages"]} if passthrough else {}),
+                    },
+                    "litellm_params": {
+                        "model": "openai/gpt-6-astra" if passthrough else "anthropic/claude-opus-5",
+                        "api_key": "test-selected",
+                        "api_base": "https://api.anthropic.com",
+                        "extra_body": settings,
+                    },
+                },
+            ]
+        ),
+    )
+    with _transport(_upstream) as route:
+        await rig.router.anthropic_messages(
+            model="opus", max_tokens=16, messages=[{"role": "user", "content": "question"}]
+        )
+        wire: Final = _JSON_OBJECT.validate_json(route.calls.last.request.content)
+        log: Final = rig.logging()
+        await _call(rig.router, log)
+        await rig.capture.payload()
+    assert log.baseline_cache_context is not None and log.baseline_cache_context.estimated
+    projected: Final = log.baseline_cache_context.estimated_request
+    assert projected is not None
+    assert (
+        {key: projected.get(key) for key in settings}
+        == {key: wire.get(key) for key in settings}
+        == {key: None for key in settings}
+    )
+
+
+@pytest.mark.parametrize("unresolved_input", (False, True))
+async def test_estimated_baseline_alias_resolves_threshold_and_preserves_usage_for_unsupported_input(
+    monkeypatch: pytest.MonkeyPatch, unresolved_input: bool,
+) -> None:
+    from litellm import utils
+    from litellm.proxy.hooks.autorouter_baseline_cache import finalize_baseline_cache
+    from litellm.proxy.spend_tracking.baseline_accounting import BaselineHistory, advance_baseline_history
+    from litellm.types.utils import ModelResponse, Usage
+
+    model: Final = "gemini/cache-minimum-test"
+    minimum: Final = 8192
+    monkeypatch.setattr(utils, "MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE", None)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "gemini",
+            "mode": "chat",
+            "supports_prompt_caching": True,
+            "prompt_cache_min_tokens": minimum,
+            "max_tokens": minimum * 2,
+            "max_input_tokens": minimum * 2,
+            "max_output_tokens": minimum,
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "cache_read_input_token_cost": 1e-7,
+        },
+    )
+    rig: Final = _Rig(
+        monkeypatch,
+        models=_MESSAGES.validate_python(
+            [
+                *_MODELS[:2],
+                {
+                    **_MODELS[2],
+                    "litellm_params": {"model": model, "api_key": "test-selected"},
+                    "model_info": {**litellm.get_model_info(model=model), "id": "baseline"},
+                },
+            ]
+        ),
+    )
+    logging: Final = rig.logging()
+    request: Final[dict[str, object]] = {
+        **_kwargs(logging),
+        "messages": None if unresolved_input else _MESSAGES.validate_json(_MESSAGES_JSON),
+    }
+    Router._record_routing_decision(
+        request,
+        StandardLoggingRoutingDecision(
+            router_model_name="test-router",
+            router_type="complexity",
+            routed_model="anthropic/claude-sonnet-5",
+            savings_baseline_model="opus",
+            savings_baseline_deployment_id="baseline",
+        ),
+    )
+    await rig.hook.async_pre_call_deployment_hook(request, CallTypes.anthropic_messages)
+    await finalize_baseline_cache(
+        logging, ModelResponse(usage=Usage(prompt_tokens=6000, completion_tokens=10, total_tokens=6010))
+    )
+    captured: Final = logging.baseline_observation
+    assert captured is not None
+    assert captured.baseline_model == "opus" and captured.provider == "gemini"
+    assert captured.observation.minimum_cache_tokens == minimum
+    assert captured.observation.outcome == "complete" and captured.observation.usage is not None
+    if unresolved_input:
+        assert captured.observation.plan is None and captured.observation.reason == "unsupported_cache_request"
+        assert captured.observation.usage.prompt_tokens == 6000
+        return
+    history, cold = advance_baseline_history(BaselineHistory(), (captured.observation,))
+    _, warm = advance_baseline_history(
+        history,
+        (
+            captured.observation.model_copy(
+                update={
+                    "request_id": "cache-minimum-followup",
+                    "started_at": captured.observation.available_at + 1,
+                    "available_at": captured.observation.available_at + 2,
+                }
+            ),
+        ),
+    )
+    for estimate in (*cold, *warm):
+        assert estimate.usage is not None, estimate.reason
+        assert estimate.usage.prompt_tokens_details.cached_tokens == 0
+        assert estimate.usage.prompt_tokens_details.cache_creation_tokens == 0
