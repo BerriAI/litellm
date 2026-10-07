@@ -1,11 +1,14 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
+use litellm_storage_clickhouse::Error as StorageError;
 use litellm_traces_clickhouse::{
     Connection, Error, InsertTable, NORMALIZED_FIELD_DEFINITIONS, Parameter, ReadQuery,
-    encode_rows, ensure_schema, execute_named_read, execute_read, schema_statements,
+    apply_migrations, encode_rows, ensure_schema, execute_named_read, execute_read,
+    reconcile_retention, schema_statements,
 };
 use rstest::rstest;
+use sqlx::migrate::MigrateError;
 mod support;
 
 use support::{ClickHouseDatabase, TestResult, database};
@@ -71,6 +74,44 @@ async fn mutation_rows(database: &ClickHouseDatabase) -> TestResult<u64> {
         .expect("ClickHouse returns mutation counts as unsigned integers"))
 }
 
+fn migration_versions() -> Vec<u64> {
+    let mut versions = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"))
+        .expect("migration directory exists")
+        .map(|entry| {
+            entry
+                .expect("migration directory entry is readable")
+                .file_name()
+                .into_string()
+                .expect("migration file name is UTF-8")
+        })
+        .filter_map(|name| {
+            name.strip_suffix(".sql")
+                .and_then(|stem| stem.split('_').next())
+                .and_then(|version| version.parse::<u64>().ok())
+        })
+        .collect::<Vec<_>>();
+    versions.sort_unstable();
+    versions
+}
+
+async fn migration_ledger_versions(database: &ClickHouseDatabase) -> TestResult<Vec<u64>> {
+    let response = read_json(
+        database,
+        "SELECT version FROM trace_test._sqlx_migrations GROUP BY version ORDER BY version",
+    )
+    .await?;
+    Ok(response["data"]
+        .as_array()
+        .expect("ClickHouse returns version rows")
+        .iter()
+        .map(|row| {
+            row["version"]
+                .as_u64()
+                .expect("ClickHouse returns versions as unsigned integers")
+        })
+        .collect())
+}
+
 #[rstest]
 #[tokio::test]
 async fn schema_supports_span_rollups_and_spend_joins(
@@ -80,6 +121,27 @@ async fn schema_supports_span_rollups_and_spend_joins(
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    let expected_versions = migration_versions();
+    let ledger = read_json(
+        &database,
+        "SELECT count() AS rows, uniqExact(version) AS versions, \
+         countIf(NOT match(checksum, '^[0-9a-f]{96}$')) AS invalid_checksums \
+         FROM trace_test._sqlx_migrations",
+    )
+    .await?;
+    assert_eq!(
+        ledger["data"][0]["rows"].as_u64(),
+        Some(expected_versions.len() as u64)
+    );
+    assert_eq!(
+        ledger["data"][0]["versions"].as_u64(),
+        Some(expected_versions.len() as u64)
+    );
+    assert_eq!(ledger["data"][0]["invalid_checksums"].as_u64(), Some(0));
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        expected_versions
+    );
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
     let span = serde_json::from_value(serde_json::json!({
         "Timestamp": timestamp, "TraceId": "trace-1", "SpanId": "span-1", "ParentSpanId": "",
@@ -149,6 +211,10 @@ async fn schema_supports_span_rollups_and_spend_joins(
             Parameter::Strings(vec!["response-1".into()]),
         ),
         ("request_ids".into(), Parameter::Strings(Vec::new())),
+        (
+            "provider_request_ids".into(),
+            Parameter::Strings(Vec::new()),
+        ),
         ("trace_ids".into(), Parameter::Strings(Vec::new())),
         ("all_teams".into(), Parameter::Integer(0)),
         ("user_id".into(), Parameter::Text(String::new())),
@@ -198,6 +264,112 @@ async fn schema_supports_span_rollups_and_spend_joins(
     assert_eq!(
         body["data"],
         serde_json::json!([{"spans": 1, "tokens": 12}])
+    );
+    Ok(())
+}
+
+#[rstest]
+#[case::quoted_versions("output_format_json_quote_64bit_integers=1")]
+#[case::asynchronous_inserts(
+    "async_insert=1&wait_for_async_insert=0&async_insert_busy_timeout_ms=20000"
+)]
+#[tokio::test]
+async fn schema_setup_records_migrations_synchronously_with_configured_settings(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] settings: &str,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&format!("{}?{settings}", database.url))?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        migration_versions()
+    );
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        migration_versions()
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn changed_migration_is_rejected(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    execute_write(
+        &database,
+        "ALTER TABLE trace_test._sqlx_migrations UPDATE checksum = '00' \
+         WHERE version = 1 SETTINGS mutations_sync = 1",
+    )
+    .await?;
+
+    assert!(matches!(
+        ensure_schema(&database.client, &writer, "trace_test", 7).await,
+        Err(Error::Migration(MigrateError::VersionMismatch(1)))
+    ));
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn concurrent_schema_setup_succeeds(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    let (first, second, third, fourth) = tokio::join!(
+        ensure_schema(&database.client, &writer, "trace_test", 7),
+        ensure_schema(&database.client, &writer, "trace_test", 7),
+        ensure_schema(&database.client, &writer, "trace_test", 7),
+        ensure_schema(&database.client, &writer, "trace_test", 7),
+    );
+    for result in [first, second, third, fourth] {
+        result?;
+    }
+    let tables = read_json(
+        &database,
+        "SELECT count() AS tables FROM system.tables \
+         WHERE database = 'trace_test' AND name IN \
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs')",
+    )
+    .await?;
+    assert_eq!(tables["data"][0]["tables"].as_u64(), Some(3));
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        migration_versions()
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn existing_schema_without_ledger_is_adopted(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    for statement in schema_statements("trace_test", 7)? {
+        execute_write(&database, &statement).await?;
+    }
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let span = serde_json::from_value(serde_json::json!({
+        "Timestamp": timestamp, "TraceId": "trace-adopted", "SpanId": "span-adopted",
+        "ParentSpanId": "", "ServiceName": "proxy", "SpanName": "request",
+        "Input": "existing row", "ResourceAttributes": {}, "SpanAttributes": {}
+    }))?;
+    insert_rows(&database, "otel_traces", vec![span]).await?;
+
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+
+    assert_eq!(table_rows(&database, "otel_traces").await?, 1);
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        migration_versions()
     );
     Ok(())
 }
@@ -787,6 +959,60 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
 
 #[rstest]
 #[tokio::test]
+async fn retention_reconciliation_updates_each_table_ttl(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    apply_migrations(&database.client, &writer, "trace_test", 7).await?;
+    reconcile_retention(&database.client, &writer, "trace_test", 7).await?;
+    let ttl_queries = read_json(
+        &database,
+        "SELECT name, create_table_query FROM system.tables \
+         WHERE database = 'trace_test' AND name IN \
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs') ORDER BY name",
+    )
+    .await?;
+    let ttl_queries = ttl_queries["data"].as_array().expect("retention tables");
+    assert_eq!(
+        ttl_queries
+            .iter()
+            .map(|row| row["name"].as_str().expect("table name"))
+            .collect::<Vec<_>>(),
+        ["agent_traces_by_key", "otel_traces", "spend_logs"]
+    );
+    for row in ttl_queries {
+        let query = row["create_table_query"]
+            .as_str()
+            .expect("table creation query");
+        assert!(
+            query.contains("toIntervalDay(7)") || query.contains("INTERVAL 7 DAY"),
+            "{query}"
+        );
+    }
+
+    reconcile_retention(&database.client, &writer, "trace_test", 3).await?;
+    let ttl_queries = read_json(
+        &database,
+        "SELECT name, create_table_query FROM system.tables \
+         WHERE database = 'trace_test' AND name IN \
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs') ORDER BY name",
+    )
+    .await?;
+    for row in ttl_queries["data"].as_array().expect("retention tables") {
+        let query = row["create_table_query"]
+            .as_str()
+            .expect("table creation query");
+        assert!(
+            query.contains("toIntervalDay(3)") || query.contains("INTERVAL 3 DAY"),
+            "{query}"
+        );
+    }
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
 async fn schema_statement_timeout_maps_to_transport_error() -> TestResult {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
@@ -804,7 +1030,7 @@ async fn schema_statement_timeout_maps_to_transport_error() -> TestResult {
     .await;
     server.abort();
     assert!(
-        matches!(result, Ok(Err(Error::SchemaTransport))),
+        matches!(result, Ok(Err(Error::Storage(StorageError::Transport)))),
         "{result:?}"
     );
     Ok(())
@@ -924,6 +1150,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         ("source".into(), Parameter::Text("traces".into())),
         ("id".into(), Parameter::Text("shared".into())),
         ("record_team".into(), Parameter::Text("team".into())),
+        ("start_time".into(), Parameter::Text(String::new())),
         ("trace_ref".into(), Parameter::Text(first_ref.into())),
         ("cursor".into(), Parameter::Text(String::new())),
         ("offset".into(), Parameter::Integer(1)),
@@ -951,6 +1178,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         ("source".into(), Parameter::Text("traces".into())),
         ("id".into(), Parameter::Text("shared".into())),
         ("record_team".into(), Parameter::Text("team".into())),
+        ("start_time".into(), Parameter::Text(String::new())),
         ("trace_ref".into(), Parameter::Text(first_ref.into())),
         ("span".into(), Parameter::Text("root".into())),
         ("quote".into(), Parameter::Text(opposite.into())),
@@ -1110,6 +1338,120 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
 }
 
 #[rstest]
+#[case::traces("traces", 9)]
+#[case::requests("requests", 3)]
+#[tokio::test]
+async fn lens_content_keeps_original_timestamps_with_start_time_slack(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] source: &str,
+    #[case] precision: usize,
+) -> TestResult {
+    let database = database?;
+    ensure_schema(
+        &database.client,
+        &Connection::writer(&database.url)?,
+        "trace_test",
+        7,
+    )
+    .await?;
+    let seconds = time::OffsetDateTime::now_utc().unix_timestamp();
+    let root_start = seconds * 1_000_000_000 + 123_456_789;
+    let child_start = root_start + 100_000_000;
+    insert_rows(&database, "otel_traces", vec![
+        serde_json::from_value(serde_json::json!({
+            "Timestamp": root_start, "Duration": 2_000_000_000, "TraceId": "run",
+            "SpanId": "z-root", "ParentSpanId": "", "SpanName": "root", "ObservationType": "agent",
+            "TeamId": "team", "Input": "task", "Output": "done", "StatusCode": "OK"
+        }))?,
+        serde_json::from_value(serde_json::json!({
+            "Timestamp": child_start, "Duration": 17, "TraceId": "run",
+            "SpanId": "a-child", "ParentSpanId": "z-root", "SpanName": "child", "ObservationType": "tool",
+            "TeamId": "team", "Input": "action", "Output": "result", "StatusCode": "OK"
+        }))?,
+    ]).await?;
+    let request_start = seconds * 1000 + 123;
+    let request_end = seconds * 1000 + 987;
+    insert_rows(
+        &database,
+        "spend_logs",
+        vec![serde_json::from_value(serde_json::json!({
+            "request_id": "run", "team_id": "team", "model": "model", "start_time": request_start,
+            "end_time": request_end, "messages": "request", "response": "response"
+        }))?],
+    )
+    .await?;
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let start_time_body = execute_read(
+        &database.client,
+        &connection,
+        "SELECT toString(fromUnixTimestamp64Nano({timestamp:Int64})) AS start_time FORMAT JSON",
+        &BTreeMap::from([(
+            "timestamp".into(),
+            Parameter::Integer(root_start + 86_400_000_000_000),
+        )]),
+    )
+    .await?;
+    let start_time: serde_json::Value = serde_json::from_str(&start_time_body)?;
+    let start_time = start_time["data"][0]["start_time"]
+        .as_str()
+        .ok_or("start time missing")?
+        .to_owned();
+    let parsed_time_body = execute_read(
+        &database.client,
+        &connection,
+        "SELECT toString(parseDateTime64BestEffortOrZero({start_time:String}, 9)) AS start_time FORMAT JSON",
+        &BTreeMap::from([("start_time".into(), Parameter::Text(start_time.clone()))]),
+    )
+    .await?;
+    let parsed_time: serde_json::Value = serde_json::from_str(&parsed_time_body)?;
+    assert_eq!(parsed_time["data"][0]["start_time"], start_time);
+    let parameters = BTreeMap::from([
+        ("source".into(), Parameter::Text(source.into())),
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("team".into(), Parameter::Text("team".into())),
+        ("record_team".into(), Parameter::Text("team".into())),
+        ("key_hash".into(), Parameter::Text(String::new())),
+        ("trace_ref".into(), Parameter::Text(String::new())),
+        ("start_time".into(), Parameter::Text(start_time)),
+        ("id".into(), Parameter::Text("run".into())),
+        ("cursor".into(), Parameter::Text(String::new())),
+        ("offset".into(), Parameter::Integer(1)),
+    ]);
+    let body = execute_named_read(
+        &database.client,
+        &connection,
+        ReadQuery::Content,
+        &parameters,
+    )
+    .await?;
+    let actual: serde_json::Value = serde_json::from_str(&body)?;
+    let format_string =
+        format!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:{precision}]");
+    let format = time::format_description::parse_borrowed::<2>(&format_string)?;
+    let timestamp = |nanos: i64| -> TestResult<String> {
+        Ok(time::OffsetDateTime::from_unix_timestamp_nanos(nanos.into())?.format(&format)?)
+    };
+    let expected = if source == "traces" {
+        serde_json::json!([
+            {"span_id":"a-child", "parent_span_id":"z-root", "name":"child", "kind":"tool",
+             "start_time":timestamp(child_start)?, "end_time":timestamp(child_start + 17)?,
+             "content":"Input: action\nOutput: result\nStatus: OK ", "truncated":0},
+            {"span_id":"z-root", "parent_span_id":"", "name":"root", "kind":"agent",
+             "start_time":timestamp(root_start)?, "end_time":timestamp(root_start + 2_000_000_000)?,
+             "content":"Input: task\nOutput: done\nStatus: OK ", "truncated":0}
+        ])
+    } else {
+        serde_json::json!([
+            {"span_id":"run", "parent_span_id":"", "name":"model", "kind":"llm",
+             "start_time":timestamp(request_start * 1_000_000)?, "end_time":timestamp(request_end * 1_000_000)?,
+             "content":"Input: request\nOutput: response\nError: ", "truncated":0}
+        ])
+    };
+    assert_eq!(actual["data"], expected);
+    Ok(())
+}
+
+#[rstest]
 #[case::short(100)]
 #[case::boundary(7970)]
 #[case::long(16000)]
@@ -1138,6 +1480,7 @@ async fn lens_content_keeps_output_visible_after_long_input(
         ("record_team".into(), Parameter::Text("team".into())),
         ("key_hash".into(), Parameter::Text(String::new())),
         ("trace_ref".into(), Parameter::Text(String::new())),
+        ("start_time".into(), Parameter::Text(String::new())),
         ("id".into(), Parameter::Text("request".into())),
         ("cursor".into(), Parameter::Text(String::new())),
         ("offset".into(), Parameter::Integer(1)),
@@ -1683,7 +2026,15 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         let values: serde_json::Value = serde_json::from_str(&body)?;
         assert_eq!(
             values["data"].as_array().ok_or("missing data")?.is_empty(),
-            !populated || example["name"] == "LLM spans without a direct spend match",
+            !populated
+                || matches!(
+                    example["name"].as_str(),
+                    Some(
+                        "LLM spans without a direct spend match"
+                            | "Recent failed spans"
+                            | "Filter calls by nested metadata"
+                    )
+                ),
             "{sql}"
         );
         if populated && example["name"] == "Traces correlated with LLM call metadata" {
@@ -1879,10 +2230,10 @@ async fn named_and_sql_readers_share_request_log_visibility(
     #[case] legacy_key: Option<&str>,
     #[case] expected: Vec<&str>,
 ) -> TestResult {
-    use litellm_traces_clickhouse::query::named::{
-        ReadAccessParams, SpendByResponseIds, SpendByResponseIdsParams,
+    use litellm_traces_clickhouse::{
+        QueryReaders, QueryScope,
+        query::named::{ReadAccessParams, SpendByResponseIds, SpendByResponseIdsParams},
     };
-    use litellm_traces_clickhouse::{QueryReaders, QueryScope};
 
     let database = database?;
     let writer = Connection::writer(&database.url)?;
@@ -1904,6 +2255,7 @@ async fn named_and_sql_readers_share_request_log_visibility(
                 "api_key_hash": legacy_key.unwrap_or_default(),
             }))?,
             response_ids: vec!["shared-response".into()],
+            provider_request_ids: Vec::new(),
             request_ids: Vec::new(),
             trace_ids: Vec::new(),
             start_ms: timestamp / 1_000_000 - 1,
@@ -2124,7 +2476,7 @@ async fn nullable_spend_upgrade_preserves_existing_costs_and_unknown_new_costs(
     let writer = Connection::writer(&database.url)?;
     let timestamp = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;
     let statements = schema_statements("trace_test", 7)?;
-    for statement in &statements[..statements.len() - 1] {
+    for statement in &statements[..14] {
         execute_write(&database, statement).await?;
     }
     let legacy = serde_json::from_value(serde_json::json!({
@@ -2163,6 +2515,43 @@ async fn nullable_spend_upgrade_preserves_existing_costs_and_unknown_new_costs(
             ("legacy", Some(0.25)),
             ("unknown", None)
         ]
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn gateway_id_upgrade_preserves_legacy_rows_and_accepts_new_ids(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    let timestamp = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;
+    let statements = schema_statements("trace_test", 7)?;
+    for statement in &statements[..15] {
+        execute_write(&database, statement).await?;
+    }
+    let legacy = serde_json::from_value(serde_json::json!({
+        "request_id": "legacy", "response_id": "response", "spend": 0.25,
+        "start_time": timestamp, "end_time": timestamp + 100
+    }))?;
+    insert_rows(&database, "spend_logs", vec![legacy]).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    let current = serde_json::from_value(serde_json::json!({
+        "request_id": "current", "response_id": "response", "litellm_call_id": "gateway",
+        "spend": null, "start_time": timestamp, "end_time": timestamp + 100
+    }))?;
+    insert_rows(&database, "spend_logs", vec![current]).await?;
+    let result = read_json(&database,
+        "SELECT request_id, litellm_call_id, spend FROM trace_test.spend_logs FINAL ORDER BY request_id"
+    ).await?;
+    assert_eq!(
+        result["data"],
+        serde_json::json!([
+            {"request_id": "current", "litellm_call_id": "gateway", "spend": null},
+            {"request_id": "legacy", "litellm_call_id": "", "spend": 0.25},
+        ])
     );
     Ok(())
 }

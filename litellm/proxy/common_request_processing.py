@@ -176,6 +176,7 @@ ProxyRouteType: TypeAlias = Literal[
     "avector_store_file_delete",
     "aocr",
     "asearch",
+    "adecisions",
     "avideo_generation",
     "avideo_list",
     "avideo_status",
@@ -269,6 +270,18 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
 
 def _withheld_provider_output(response: object) -> bool:
     return getattr(response, "has_buffered_provider_output", False) is True
+
+
+async def close_guarded_stream(stream: object) -> None:
+    if not isinstance(stream, AsyncGenerator):
+        return
+    with anyio.CancelScope(shield=True):
+        try:
+            await stream.aclose()
+        except Exception as e:  # noqa: BLE001  # a failing callback cleanup must not skip the refund and finalizer
+            verbose_proxy_logger.warning(
+                "Closing the guarded stream after a client disconnect raised %s", type(e).__name__
+            )
 
 
 def resolve_litellm_call_id(client_call_id: str | None) -> str:
@@ -1961,6 +1974,7 @@ class ProxyBaseLLMRequestProcessing:
             "avector_store_file_delete",
             "aocr",
             "asearch",
+            "adecisions",
             "avideo_generation",
             "avideo_list",
             "avideo_status",
@@ -2436,7 +2450,7 @@ class ProxyBaseLLMRequestProcessing:
         stored_cost: Final = logging_obj.model_call_details.get("response_cost")
         if isinstance(stored_cost, (int, float)):
             return float(stored_cost)
-        recomputed_cost: Final = logging_obj._response_cost_calculator(result=response)
+        recomputed_cost: Final = logging_obj.response_cost_calculator(result=response)
         return recomputed_cost if isinstance(recomputed_cost, (int, float)) else ""
 
     def _debug_log_request_payload(self) -> None:
@@ -2595,7 +2609,7 @@ class ProxyBaseLLMRequestProcessing:
         if _post_call_guardrails_active and not self._is_streaming_request(
             data=self.data, is_streaming_request=is_streaming_request
         ):
-            logging_obj._defer_async_logging = True
+            logging_obj.defer_async_logging = True
 
         tasks: Final = []
         # Start the moderation check (during_call_hook) as early as possible
@@ -3158,7 +3172,7 @@ class ProxyBaseLLMRequestProcessing:
             except HTTPException:
                 return
 
-        logging_obj._on_detached_stream_failure = _on_detached_stream_failure
+        logging_obj.on_detached_stream_failure = _on_detached_stream_failure
 
     def _is_streaming_response(self, response: object) -> bool:
         """
@@ -3414,10 +3428,10 @@ class ProxyBaseLLMRequestProcessing:
             if pending is not None:
                 logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
                 pending.release(not exception_raised)
-        _enqueue_fn: Final = getattr(logging_obj, "_enqueue_deferred_logging", None)
+        _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return
-        logging_obj._enqueue_deferred_logging = None
+        logging_obj.enqueue_deferred_logging = None
         if exception_raised:
             return
         try:
@@ -3464,7 +3478,7 @@ class ProxyBaseLLMRequestProcessing:
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.router_utils.add_retry_fallback_headers import HiddenParamsAsyncIteratorWrapper
 
-        unwrapped: Final = response._inner if isinstance(response, HiddenParamsAsyncIteratorWrapper) else response
+        unwrapped: Final = response.inner if isinstance(response, HiddenParamsAsyncIteratorWrapper) else response
 
         if isinstance(unwrapped, CustomStreamWrapper):
             # Intentionally a live reference (not a copy) — mirrors
@@ -3907,13 +3921,14 @@ class ProxyBaseLLMRequestProcessing:
         client_disconnected = False
         delivered_chunk = False
         recent_tail = SSE_STREAM_START_TAIL  # rebind-ok: rolling window over the yielded bytes
+        guarded_stream: Final[AsyncGenerator[object, None]] = proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_data=request_data,
+        )
         try:
             str_so_far = ""
-            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_data=request_data,
-            ):
+            async for chunk in guarded_stream:
                 # ``.format(chunk)`` was previously evaluated for every chunk
                 # regardless of log level; gate it behind the level check.
                 if debug_enabled:
@@ -3969,6 +3984,7 @@ class ProxyBaseLLMRequestProcessing:
             # Starlette closes on disconnect, so the nested iterator hook (which
             # only sees GeneratorExit on GC) cannot own the refund.
             client_disconnected = not stream_completed
+            await close_guarded_stream(guarded_stream)
             if not delivered_chunk and not _withheld_provider_output(response):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,
@@ -4207,7 +4223,7 @@ class ProxyBaseLLMRequestProcessing:
         debug_missing: Final = object()
         debug_before: Final = call_details.get(debug_key, debug_missing) if isinstance(call_details, dict) else None
         try:
-            cost: Final = litellm_logging_obj._response_cost_calculator(result=model_response)  # pyright: ignore[reportPrivateUsage]  # reuse the call's own cost calc for pricing parity with the logging callback
+            cost: Final = litellm_logging_obj.response_cost_calculator(result=model_response)
         except Exception:  # noqa: BLE001  # a pricing failure falls back to model-name pricing instead of breaking the stream
             return None
         finally:

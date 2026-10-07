@@ -61,10 +61,11 @@ class TraceReceiver:
         content_type: str | None,
         content_encoding: str | None,
         tenant: Tenant,
+        logs: bool = False,
     ) -> int:
         if not self._ingest_slots.acquire(blocking=False):
             raise TracingOverloadedError("OTLP ingestion is at capacity")
-        task: Final = asyncio.create_task(self._ingest(body, content_type, content_encoding, tenant))
+        task: Final = asyncio.create_task(self._ingest(body, content_type, content_encoding, tenant, logs))
         task.add_done_callback(self._release_ingest)
         return await asyncio.shield(task)
 
@@ -79,6 +80,7 @@ class TraceReceiver:
         content_type: str | None,
         content_encoding: str | None,
         tenant: Tenant,
+        logs: bool = False,
     ) -> int:
         try:
             received: Final = (
@@ -90,7 +92,7 @@ class TraceReceiver:
             raise TracingOverloadedError("OTLP body upload timed out") from error
         payload: Final = await asyncio.to_thread(self._decompressor, received, content_encoding)
         try:
-            return await self.storage.ingest(payload, content_type, tenant)
+            return await self.storage.ingest(payload, content_type, tenant, logs)
         except OverflowError as error:
             raise TracingPayloadTooLargeError(str(error)) from error
         except ValueError as error:
@@ -99,8 +101,15 @@ class TraceReceiver:
     async def list_traces(self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None = None) -> TracePage:
         return await self.storage.list_traces(scope, start_ms, end_ms, cursor, AGENT_TRACING_LIST_PAGE_SIZE)
 
-    async def get_trace(self, trace_id: str, scope: TraceScope, trace_ref: str = "") -> Trace | None:
-        return await self.storage.get_trace(trace_id, scope, trace_ref)
+    async def get_trace(
+        self,
+        trace_id: str,
+        scope: TraceScope,
+        trace_ref: str = "",
+        cursor: str | None = None,
+        page_size: int | None = None,
+    ) -> Trace | None:
+        return await self.storage.get_trace(trace_id, scope, trace_ref, cursor, page_size)
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
         return await self.storage.get_span(trace_id, span_id, scope, trace_ref)

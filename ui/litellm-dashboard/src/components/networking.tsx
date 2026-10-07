@@ -116,8 +116,17 @@ import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
-import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
-import type { SpanDetail, SpanErrorPage, Trace, TracePage } from "./view_logs/TraceView/traceTypes";
+import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
+import type {
+  SpanDetail,
+  SpanErrorPage,
+  SpanErrorQuery,
+  SpanQuery,
+  Trace,
+  TraceDetailQuery,
+  TraceListQuery,
+  TracePage,
+} from "./lens/traces/types";
 import {
   createApiClient,
   deriveErrorMessage,
@@ -1968,17 +1977,22 @@ export const agentTraceListCall = async ({
   endMs: number;
   cursor?: string | null;
 }): Promise<TracePage> => {
-  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined };
+  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined } satisfies TraceListQuery;
   return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
 };
 
 export const sendOtlpTraceCall = async (accessToken: string, exportRequest: object): Promise<void> =>
   apiClient.post(`/v1/traces`, { accessToken, body: exportRequest });
 
-export const agentTraceCall = async (accessToken: string, traceId: string, traceRef?: string): Promise<Trace> =>
+export const agentTraceCall = async (
+  accessToken: string,
+  traceId: string,
+  traceRef?: string,
+  cursor?: string | null,
+): Promise<Trace> =>
   apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
     accessToken,
-    query: { trace_ref: traceRef || undefined },
+    query: { trace_ref: traceRef || undefined, cursor: cursor ?? undefined, page_size: 200 } satisfies TraceDetailQuery,
   });
 
 export const agentTraceSpanCall = async (
@@ -1989,7 +2003,7 @@ export const agentTraceSpanCall = async (
 ): Promise<SpanDetail> =>
   apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
     accessToken,
-    query: { trace_ref: traceRef || undefined },
+    query: { trace_ref: traceRef || undefined } satisfies SpanQuery,
   });
 
 export const agentTraceSpanErrorCall = async (
@@ -2000,7 +2014,7 @@ export const agentTraceSpanErrorCall = async (
 ): Promise<SpanErrorPage> =>
   apiClient.get<SpanErrorPage>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}/error`, {
     accessToken,
-    query: { trace_ref: options.traceRef || undefined, cursor: options.cursor || undefined },
+    query: { trace_ref: options.traceRef || undefined, cursor: options.cursor || undefined } satisfies SpanErrorQuery,
   });
 
 export const adminSpendLogsCall = async (accessToken: string) => {
@@ -2160,7 +2174,7 @@ export const testConnectionRequest = async (
   accessToken: string,
   litellm_params: Record<string, any>,
   model_info: Record<string, any>,
-  mode: string,
+  mode?: string,
 ) => {
   try {
     // Construct the URL based on environment

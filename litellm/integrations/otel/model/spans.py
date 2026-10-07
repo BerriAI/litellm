@@ -290,6 +290,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_Config",
         "LiteLLM_SpendLogs",
         "LiteLLM_BudgetWindowSpend",
+        "LiteLLM_BackgroundInteractionSettlement",
         "LiteLLM_ErrorLogs",
         "LiteLLM_UserNotifications",
         "LiteLLM_TeamMembership",
@@ -348,8 +349,12 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_WorkflowEvent",
         "LiteLLM_WorkflowMessage",
         "LiteLLM_Lens",
+        "LiteLLM_LensDataset",
         "LiteLLM_LensRun",
+        "LiteLLM_LensReview",
         "LiteLLM_LensWorker",
+        "LiteLLM_LensSignalConfig",
+        "LiteLLM_LensTraceSignal",
     )
 )
 PRISMA_RELATIONS: Final[frozenset[str]] = _PRISMA_MODELS | _PRISMA_VIEWS

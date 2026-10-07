@@ -1,20 +1,22 @@
 import asyncio
 from collections.abc import AsyncIterator, Mapping
-from datetime import date
+from datetime import date, datetime
 from types import MappingProxyType
 from typing import Final, TypeVar
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
 )
 from litellm.proxy.roi_calculator.analytics import normalize_email
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.roi_calculator import ROIPullCommit, ROIPullEvidence, ROIPullFile, ROISettings
+from litellm.types.roi_observed import ObservedIssue
 
 _T: Final = TypeVar("_T")
 
@@ -23,12 +25,14 @@ class SourceError(Exception):
     pass
 
 
-class _GitHubModel(BaseModel):
+class _GitHubModel(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
 class _GitHubUser(_GitHubModel):
     login: str | None = None
+    type: str = "User"
+    email: str | None = None
 
 
 class _GitHubHeadRepository(_GitHubModel):
@@ -50,6 +54,7 @@ class GitHubPullListItem(_GitHubModel):
     body: str | None = None
     head: _GitHubHead | None = None
     user: _GitHubUser | None = None
+    created_at: datetime | None = None
 
 
 class _RepositoryItem(_GitHubModel):
@@ -215,15 +220,18 @@ _GRAPHQL_QUERY: Final = """query($owner:String!, $name:String!, $number:Int!, $c
 }"""
 
 
-async def _request(
+async def request_github(
     client: httpx.AsyncClient,
     method: str,
     path: str,
     params: Mapping[str, str | int] | None = None,
     json_body: object | None = None,
     headers: Mapping[str, str] | None = None,
+    *,
+    read_only: bool = False,
 ) -> httpx.Response:
     async def send(attempt: int) -> httpx.Response:
+        retryable: Final = (method == "GET" or read_only) and attempt < 2
         try:
             response: Final = await client.request(
                 method,
@@ -233,8 +241,11 @@ async def _request(
                 headers=headers,
             )
         except httpx.RequestError:
+            if retryable:
+                await asyncio.sleep(0.5 * (attempt + 1))
+                return await send(attempt + 1)
             raise SourceError("Could not reach GitHub. Check the API URL and network connection.") from None
-        if response.status_code in (429, 502, 503, 504) and method == "GET" and attempt < 2:
+        if response.status_code in (429, 502, 503, 504) and retryable:
             await asyncio.sleep(0.5 * (attempt + 1))
             return await send(attempt + 1)
         if response.status_code >= 400:
@@ -267,7 +278,7 @@ async def _fetch_page(
     headers: Mapping[str, str] | None = None,
     error_message: str = "GitHub returned an unexpected pagination response.",
 ) -> tuple[tuple[_T, ...], bool]:
-    response: Final = await _request(
+    response: Final = await request_github(
         client,
         "GET",
         path,
@@ -310,6 +321,21 @@ async def _collect(items: AsyncIterator[_T]) -> tuple[_T, ...]:
 
 class _GitHubUserProfile(_GitHubModel):
     email: str | None = None
+
+
+class _IssueLabel(_GitHubModel):
+    name: str
+
+
+class _Issue(_GitHubModel):
+    number: int
+    created_at: datetime
+    labels: tuple[_IssueLabel, ...] = ()
+    pull_request: object | None = None
+
+
+class GitHubIssueSettings(LiteLLMBaseModel):
+    has_issues: bool
 
 
 class GitHub:
@@ -408,8 +434,8 @@ class GitHub:
 
     async def test_repositories(self, repos: tuple[str, ...]) -> None:
         for repo in repos:
-            await _request(self.client, "GET", self._url(f"repos/{repo}"), headers=self._headers)
-            await _request(
+            await request_github(self.client, "GET", self._url(f"repos/{repo}"), headers=self._headers)
+            await request_github(
                 self.client,
                 "GET",
                 self._url(f"repos/{repo}/pulls"),
@@ -438,8 +464,40 @@ class GitHub:
 
         return await _collect(matching_pulls())
 
+    async def issues(self, repo: str, start: date, end: date) -> tuple[ObservedIssue, ...] | None:
+        response: Final = await request_github(self.client, "GET", self._url(f"repos/{repo}"), headers=self._headers)
+        try:
+            settings: Final = GitHubIssueSettings.model_validate(response.json())
+        except ValueError:
+            raise SourceError("GitHub returned invalid repository settings.") from None
+        if not settings.has_issues:
+            return None
+
+        async def matching_issues() -> AsyncIterator[ObservedIssue]:
+            async for page in _pages(
+                self.client,
+                self._url(f"repos/{repo}/issues"),
+                TypeAdapter(tuple[_Issue, ...]),
+                MappingProxyType(
+                    {"state": "all", "sort": "created", "direction": "desc", "since": f"{start}T00:00:00Z"}
+                ),
+                headers=self._headers,
+            ):
+                for issue in page:
+                    if issue.pull_request is None and start <= issue.created_at.date() <= end:
+                        yield ObservedIssue(
+                            repo=repo,
+                            number=issue.number,
+                            created_at=issue.created_at,
+                            labels=tuple(label.name for label in issue.labels),
+                        )
+                if page and page[-1].created_at.date() < start:
+                    return
+
+        return await _collect(matching_issues())
+
     async def evidence(self, repo: str, pull: GitHubPullListItem) -> ROIPullEvidence:
-        detail_response: Final = await _request(
+        detail_response: Final = await request_github(
             self.client,
             "GET",
             self._url(f"repos/{repo}/pulls/{pull.number}"),
@@ -574,7 +632,7 @@ class GitHub:
     ) -> tuple[tuple[ROIPullCommit, ...], tuple[tuple[str, str], ...], int]:
         if remaining_pages == 0:
             raise SourceError("GitHub commit pagination limit was reached.")
-        response: Final = await _request(
+        response: Final = await request_github(
             self.client,
             "POST",
             endpoint,
@@ -583,6 +641,7 @@ class GitHub:
                 query=_GRAPHQL_QUERY,
                 variables=_GraphQLVariables(owner=owner, name=name, number=number, cursor=cursor),
             ),
+            read_only=True,
         )
         try:
             parsed: Final = _GRAPHQL_RESPONSE.validate_python(response.json())

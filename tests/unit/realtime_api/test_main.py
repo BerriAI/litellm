@@ -1,15 +1,20 @@
 import asyncio
+import json
 import time
 from types import TracebackType
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.models.credentials import CredentialItem
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
+from litellm.types.guardrails import GuardrailEventHooks
+from typing import List
 
 
 @pytest.fixture
@@ -599,3 +604,161 @@ async def test_arealtime_openai_forwards_the_intent_query_param_to_the_upstream_
             litellm_logging_obj=FakeLogging(),
         )
     assert connect.url == "wss://api.openai.com/v1/realtime?model=gpt-realtime&intent=chat"
+
+
+@pytest.mark.parametrize(
+    ("model", "api_base", "client_query_params", "expected_backend_url"),
+    [
+        (
+            "openai/gpt-live-transcribe",
+            "https://api.openai.com/",
+            {"model": "my-transcribe-alias", "intent": "transcription"},
+            "wss://api.openai.com/v1/realtime?intent=transcription",
+        ),
+        (
+            "openai/gpt-live-transcribe",
+            "https://eu.api.openai.com/",
+            {"model": "my-transcribe-alias", "intent": "transcription"},
+            "wss://eu.api.openai.com/v1/realtime?intent=transcription",
+        ),
+        (
+            "openai/gpt-live-transcribe",
+            "https://api.openai.com/",
+            {"model": "my-realtime-alias"},
+            "wss://api.openai.com/v1/realtime?model=gpt-live-transcribe",
+        ),
+        (
+            "openai/gateway-transcribe-alias",
+            "https://gateway.example/",
+            {"model": "my-transcribe-alias", "intent": "transcription"},
+            "wss://gateway.example/v1/realtime?model=gateway-transcribe-alias&intent=transcription",
+        ),
+        (
+            "xai/grok-voice",
+            "https://api.x.ai/v1",
+            {"model": "my-voice-alias", "intent": "transcription"},
+            "wss://api.x.ai/v1/realtime?model=grok-voice&intent=transcription",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_arealtime_drops_model_from_the_upstream_url_only_for_transcription_sessions_on_openai_hosts(
+    model, api_base, client_query_params, expected_backend_url
+):
+    connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model=model,
+            websocket=_ClosableGaClientWebSocket(),
+            api_base=api_base,
+            api_key="fake-key",
+            litellm_logging_obj=FakeLogging(),
+            query_params=client_query_params,
+        )
+    assert connect.url == expected_backend_url
+
+
+BLOCKED_PHRASE = "XSECRETBLOCKTESTPHRASEX"
+
+
+class PhraseBlockingGuardrail(CustomGuardrail):
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        for text in inputs.get("texts", []):
+            if BLOCKED_PHRASE in text:
+                raise ValueError("Content blocked: contains forbidden test phrase.")
+        return inputs
+
+
+def _make_guardrail(event_hook=GuardrailEventHooks.pre_call):
+    return PhraseBlockingGuardrail(
+        guardrail_name="integration-test-guard",
+        event_hook=event_hook,
+        default_on=True,
+    )
+
+
+async def _build_streaming(client_events, backend_ws):
+    client_ws = MagicMock()
+    input_queue: asyncio.Queue = asyncio.Queue()
+
+    async def send_text(data: str):
+        client_events.append(json.loads(data))
+
+    client_ws.send_text = send_text
+    client_ws.receive_text = input_queue.get
+
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    logging_obj.model_call_details = {}
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        request_data={"guardrails": ["integration-test-guard"]},
+    )
+    return streaming, input_queue
+
+
+@pytest.mark.asyncio
+async def test_voice_transcript_blocked_by_guardrail():
+    """
+    Simulate a backend-side voice transcription event containing the blocked phrase.
+    Guardrail must block it - no response.create sent to OpenAI.
+    """
+    from websockets.exceptions import ConnectionClosed
+
+    guardrail = _make_guardrail(GuardrailEventHooks.realtime_input_transcription)
+    litellm.callbacks = [guardrail]
+
+    client_events: List[dict] = []
+
+    # Build the transcript event that would come from the OpenAI backend
+    transcript_event = json.dumps(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": f"This is {BLOCKED_PHRASE} in my voice message",
+            "item_id": "item_integ_test",
+        }
+    ).encode()
+
+    # Mock backend that delivers the transcript then closes
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            transcript_event,
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws.send = AsyncMock()
+
+    try:
+        streaming, _ = await _build_streaming(client_events, backend_ws)
+        await streaming.backend_to_client_send_messages()
+
+        event_types = [e.get("type") for e in client_events]
+
+        # 1. Error event must be sent to client
+        error_events = [e for e in client_events if e.get("type") == "error"]
+        assert len(error_events) >= 1, f"Expected guardrail error event, got: {event_types}"
+        assert error_events[0]["error"]["type"] == "guardrail_violation"
+
+        # 2. Check what was sent to backend.
+        #    The guardrail may send response.cancel + conversation.item.create (block msg)
+        #    + response.create (to speak the block message). That's acceptable.
+        #    What we assert is that a response.cancel was sent (blocking the original).
+        sent_to_backend = [
+            json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args and isinstance(c.args[0], str)
+        ]
+        response_cancels = [e for e in sent_to_backend if e.get("type") == "response.cancel"]
+        assert len(response_cancels) >= 1 or len(sent_to_backend) == 0, (
+            f"Guardrail should have sent response.cancel or nothing, got: {sent_to_backend}"
+        )
+
+        # Note: The guardrail may or may not send transcript deltas; the error event
+        # (assertion #1) is the primary signal that the blocked content was handled.
+
+    finally:
+        litellm.callbacks = []

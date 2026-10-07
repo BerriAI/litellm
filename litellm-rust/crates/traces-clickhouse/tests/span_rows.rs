@@ -214,3 +214,25 @@ fn absent_identity_fields_are_empty_only_in_storage(tenant: Tenant) {
     assert_eq!(row["CallKeys"], json!([]));
     assert_eq!(row["CallEvidence"], "unknown");
 }
+
+#[rstest]
+fn compatibility_id_keeps_provider_semantics_with_gateway_keys(tenant: Tenant) {
+    let body = export(vec![(
+        vec![],
+        vec![span(
+            &"02".repeat(8),
+            vec![
+                attribute("gen_ai.response.id", "response"),
+                attribute("litellm.call_id", "gateway"),
+            ],
+            json!({}),
+        )],
+    )]);
+    let stored = rows(&body, &tenant, MAX_VALUE_BYTES);
+    assert_eq!(stored[0]["LiteLLMRequestId"], "response");
+    assert_eq!(stored[0]["CallEvidence"], "partial");
+    assert_eq!(
+        stored[0]["CallKeys"],
+        json!(["litellm_request:gateway", "provider_response:response"])
+    );
+}

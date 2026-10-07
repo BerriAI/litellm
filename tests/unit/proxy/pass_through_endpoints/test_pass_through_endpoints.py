@@ -9,15 +9,17 @@ from collections.abc import Callable, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from io import BytesIO
-from types import MappingProxyType, SimpleNamespace
-from typing import Final
+from types import MappingProxyType, ModuleType, SimpleNamespace
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
-from fastapi import HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
+from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -27,14 +29,18 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
+    SafeRouteAdder,
     _registered_pass_through_routes,
     _truncate_upstream_error_body,
+    _update_metadata_with_tags_in_header,
     _with_trace_context,
     chat_completion_pass_through_endpoint,
     create_pass_through_route,
@@ -54,8 +60,21 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
+from tests._master_key import MASTER_KEY
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
+PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES: Final = MappingProxyType(
+    {
+        "/comprehendmedical": frozenset({"POST"}),
+        "/comprehendmedical/{operation}": frozenset({"POST"}),
+        "/transcribe": frozenset({"POST"}),
+        "/transcribe/{operation}": frozenset({"POST"}),
+        "/tinyfish/{endpoint:path}": frozenset({"GET", "POST"}),
+        "/laya/v1/systemone": frozenset({"POST"}),
+        "/bespoke/v1/systemone": frozenset({"POST"}),
+    }
+)
 
 
 def test_with_trace_context_without_opentelemetry(monkeypatch: pytest.MonkeyPatch):
@@ -284,7 +303,7 @@ async def test_make_multipart_http_request_removes_content_type_header():
     original_headers = {
         "content-type": "multipart/form-data; boundary=--------------------------416423083260054165225918",
         "user-agent": "PostmanRuntime/7.49.0",
-        "Authorization": "bearer sk-1234",
+        "Authorization": "bearer sk-9876",
     }
 
     # Test the function
@@ -308,7 +327,7 @@ async def test_make_multipart_http_request_removes_content_type_header():
 
     # Other headers should be preserved
     assert call_args["headers"]["user-agent"] == "PostmanRuntime/7.49.0"
-    assert call_args["headers"]["Authorization"] == "bearer sk-1234"
+    assert call_args["headers"]["Authorization"] == "bearer sk-9876"
 
     # Verify other parameters are correct
     assert call_args["method"] == "POST"
@@ -2516,7 +2535,7 @@ async def test_pass_through_request_query_params_forwarding():
 
                         # Create mock user API key dict
                         mock_user_api_key_dict = MagicMock()
-                        mock_user_api_key_dict.api_key = "sk-1234"
+                        mock_user_api_key_dict.api_key = MASTER_KEY
 
                         # Call pass_through_request
                         await pass_through_request(
@@ -3829,7 +3848,7 @@ from litellm.exceptions import (
     BlockedPiiEntityError,
     GuardrailRaisedException,
 )
-
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 _PT_MODULE = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
 
 
@@ -8319,3 +8338,448 @@ async def test_pass_throughs_stay_open_while_a_db_sync_reads_the_database(tmp_pa
     await sync
 
     assert (config_during_sync.status_code, db_during_sync.status_code) == (200, 200)
+
+
+def _lazy_feature(monkeypatch: pytest.MonkeyPatch, name: str, path: str) -> LazyFeature:
+    async def served() -> dict[str, str]:
+        return {"served_by": name}
+
+    router: Final = APIRouter()
+    router.add_api_route(path, served, methods=["POST"])
+    module: Final = ModuleType(f"tests.unit.proxy.pass_through_endpoints.lazy_fixture_{name}")
+    module.router = router  # pyright: ignore[reportAttributeAccessIssue]  # fixture module built at test time
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    return LazyFeature(name=name, module_path=module.__name__, path_prefixes=(path,))
+
+
+def test_a_pass_through_added_after_a_lazy_feature_loaded_takes_over_its_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_DISABLE_LAZY_ROUTES", raising=False)
+
+    async def pass_through() -> dict[str, str]:
+        return {"served_by": "pass-through"}
+
+    app: Final = FastAPI()
+    attach_lazy_features(app, (_lazy_feature(monkeypatch, "decider", "/v1/decider"),))
+    with TestClient(app) as client:
+        assert client.post("/v1/decider").json() == {"served_by": "decider"}
+        assert SafeRouteAdder.add_api_route_if_not_exists(app, "/v1/decider", pass_through, ["POST"])
+        assert client.post("/v1/decider").json() == {"served_by": "pass-through"}
+        assert not SafeRouteAdder.add_api_route_if_not_exists(app, "/v1/decider", pass_through, ["POST"])
+        assert client.post("/v1/decider").json() == {"served_by": "pass-through"}
+
+
+@pytest.fixture()
+async def _drain_logging_worker():
+    """
+    The logging queue is bound to the running loop, so anything left queued when a test's loop
+    goes away is carried onto the next loop and fires against that test's callbacks.
+    """
+    GLOBAL_LOGGING_WORKER.start()
+    try:
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    except asyncio.TimeoutError:
+        pass
+    await GLOBAL_LOGGING_WORKER.stop()
+    yield
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
+def test_update_pass_through_route_updates_registry():
+    """
+    REGRESSION TEST: Verify that calling add_exact_path_route (or add_subpath_route)
+    on an EXISTING route correctly updates the in-memory registry.
+    """
+
+    async def _async_test():
+        # Setup - Unique IDs to avoid collision with other tests
+        endpoint_id = "regression-test-endpoint"
+        path = "/regression-test-path"
+        # Default methods are sorted: DELETE,GET,PATCH,POST,PUT
+        methods_str = "DELETE,GET,PATCH,POST,PUT"
+        route_key = f"{endpoint_id}:exact:{path}:{methods_str}"
+        target = "http://example.com"
+
+        # Cleanup: Ensure clean state before test
+        if route_key in _registered_pass_through_routes:
+            del _registered_pass_through_routes[route_key]
+
+        try:
+            # 1. First Registration (Initial State)
+            InitPassThroughEndpointHelpers.add_exact_path_route(
+                app=MagicMock(),
+                path=path,
+                target=target,
+                custom_headers={"Authorization": "Bearer INITIAL_TOKEN"},
+                forward_headers=False,
+                merge_query_params=False,
+                dependencies=[],
+                cost_per_request=0,
+                endpoint_id=endpoint_id,
+            )
+
+            # Verify Initial State
+            assert route_key in _registered_pass_through_routes
+            initial_headers = _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"]
+            assert initial_headers["Authorization"] == "Bearer INITIAL_TOKEN"
+
+            # 2. Perform Update (Simulate API Update)
+            # This call should overwrite the existing entry
+            InitPassThroughEndpointHelpers.add_exact_path_route(
+                app=MagicMock(),
+                path=path,
+                target=target,
+                custom_headers={"Authorization": "Bearer NEW_UPDATED_TOKEN"},  # Changed Header
+                forward_headers=False,
+                merge_query_params=False,
+                dependencies=[],
+                cost_per_request=0,
+                endpoint_id=endpoint_id,
+            )
+
+            # 3. Verify Update Occurred
+            updated_headers = _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"]
+
+            # This assertion protects against the regression
+            assert updated_headers["Authorization"] == "Bearer NEW_UPDATED_TOKEN", (
+                "Registry failed to update! Old headers persisted despite update call."
+            )
+
+        finally:
+            # Cleanup: Remove test entry
+            if route_key in _registered_pass_through_routes:
+                del _registered_pass_through_routes[route_key]
+
+    asyncio.run(_async_test())
+
+
+@pytest.fixture
+def mock_request():
+    # Create a mock request with headers
+    class QueryParams:
+        def __init__(self):
+            self._dict = {}
+
+        def __iter__(self):
+            return iter(self._dict.items())
+
+        def items(self):
+            return self._dict.items()
+
+        def keys(self):
+            return self._dict.keys()
+
+        def values(self):
+            return self._dict.values()
+
+    class MockRequest:
+        def __init__(
+            self, headers=None, method="POST", request_body: Optional[dict] = None
+        ):
+            self.headers = headers or {}
+            self.query_params = QueryParams()
+            self.method = method
+            self.request_body = request_body or {}
+            # Add url attribute that the actual code expects
+            self.url = httpx.URL("http://localhost:8000/test")
+            self.scope = {"type": "http", "method": method, "path": "/test"}
+            # Add state attribute that FastAPI requests have
+            self.state = type("State", (), {})()
+
+        async def body(self) -> bytes:
+            return bytes(json.dumps(self.request_body), "utf-8")
+
+    return MockRequest
+
+
+@pytest.fixture
+def mock_user_api_key_dict():
+    return UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="test-team",
+        end_user_id="test-user",
+    )
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_update_metadata_with_tags_in_header_no_tags(mock_request):
+    """
+    No tags should be added to metadata if they do not exist in headers
+    """
+    # Test when no tags are present in headers
+    request = mock_request(headers={})
+    metadata = {"existing": "value"}
+
+    result = _update_metadata_with_tags_in_header(request=request, metadata=metadata)
+
+    assert result == {"existing": "value"}
+    assert "tags" not in result
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_update_metadata_with_tags_in_header_with_tags(mock_request):
+    """
+    Tags should be added to metadata if they exist in headers
+    """
+    # Test when tags are present in headers
+    request = mock_request(headers={"tags": "tag1,tag2,tag3"})
+    metadata = {"existing": "value"}
+
+    result = _update_metadata_with_tags_in_header(request=request, metadata=metadata)
+
+    assert result == {"existing": "value", "tags": ["tag1", "tag2", "tag3"]}
+
+
+def test_get_response_headers_filters_excluded_custom_headers():
+    """
+    Regression test:
+    Ensure excluded headers from FastAPI defaults (e.g. content-length: 0)
+    do not override passthrough response headers.
+    """
+    upstream_headers = httpx.Headers(
+        {
+            "content-type": "application/json",
+            "x-amzn-requestid": "req-123",
+            "content-length": "999",  # should be excluded
+        }
+    )
+
+    custom_headers = {
+        "x-litellm-version": "1.84.0",
+        "content-length": "0",  # should be excluded
+        "server": "uvicorn",  # should be excluded
+    }
+
+    result = HttpPassThroughEndpointHelpers.get_response_headers(
+        headers=upstream_headers,
+        litellm_call_id="call-123",
+        custom_headers=custom_headers,
+    )
+
+    assert result["content-type"] == "application/json"
+    assert result["x-amzn-requestid"] == "req-123"
+    assert result["x-litellm-version"] == "1.84.0"
+    assert result["x-litellm-call-id"] == "call-123"
+    assert "content-length" not in result
+    assert "server" not in result
+
+
+def test_pass_through_routes_support_all_methods():
+    """
+    A pass-through route fronts a whole provider API, so narrowing its method
+    set turns a request the upstream would have accepted into a 405. The
+    exceptions are the POST-only protocol routes listed above.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        router as llm_router,
+    )
+
+    expected_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
+
+    def check_router_methods(router):
+        for route in router.routes:
+            if isinstance(route, APIRoute):
+                path = route.path
+                methods = set(route.methods)
+                allowed = PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES.get(path, expected_methods)
+                assert (
+                    methods == allowed
+                ), f"Route {path} does not support all methods. Supported: {methods}, Expected: {allowed}"
+
+    check_router_methods(llm_router)
+
+
+def test_protocol_constrained_pass_through_exemptions_are_not_stale():
+    """
+    The exemption list above weakens the method contract, so it must not
+    outlive the routes it covers: a renamed or deleted route has to fail here
+    rather than sit in the list silently exempting nothing.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        router as llm_router,
+    )
+
+    registered_paths = {route.path for route in llm_router.routes if isinstance(route, APIRoute)}
+    unmatched = set(PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES) - registered_paths
+    assert not unmatched, f"Exempted pass-through routes no longer exist: {sorted(unmatched)}"
+
+
+def test_is_bedrock_agent_runtime_route():
+    """
+    Test that _is_bedrock_agent_runtime_route correctly identifies bedrock agent runtime endpoints
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _is_bedrock_agent_runtime_route,
+    )
+
+    # Test agent runtime endpoints (should return True)
+    assert _is_bedrock_agent_runtime_route("/knowledgebases/kb-123/retrieve") is True
+    assert (
+        _is_bedrock_agent_runtime_route("/agents/knowledgebases/kb-123/retrieve")
+        is True
+    )
+
+    # Test regular bedrock runtime endpoints (should return False)
+    assert (
+        _is_bedrock_agent_runtime_route("/guardrail/test-id/version/1/apply") is False
+    )
+    assert (
+        _is_bedrock_agent_runtime_route("/model/cohere.command-r-v1:0/converse")
+        is False
+    )
+    assert _is_bedrock_agent_runtime_route("/some/random/endpoint") is False
+
+
+def test_custom_pricing_used_in_cost_calculation():
+    """
+    Test that when custom pricing parameters are provided in litellm_params,
+    they are actually used for cost calculation.
+
+    This ensures that the custom pricing functionality works end-to-end:
+    1. Pricing params are stored in litellm_params
+    2. These params are used by completion_cost() to calculate costs
+
+    Regression test for: LIT-1221
+    """
+    from litellm import completion_cost, Choices, Message, ModelResponse
+    from litellm.utils import Usage
+
+    # Create a mock response with usage
+    resp = ModelResponse(
+        id="chatcmpl-test-123",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="This is a test response",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1234567890,
+        model="gpt-5.5",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    # Test 1: Standard pricing (should use default model pricing)
+    standard_cost = completion_cost(
+        completion_response=resp,
+        model="gpt-5.5",
+    )
+    print(f"Standard cost: {standard_cost}")
+
+    # Test 2: Custom pricing via custom_cost_per_token parameter
+    custom_input_price = 0.00010  # $0.0001 per token
+    custom_output_price = 0.00020  # $0.0002 per token
+
+    custom_cost = completion_cost(
+        completion_response=resp,
+        custom_cost_per_token={
+            "input_cost_per_token": custom_input_price,
+            "output_cost_per_token": custom_output_price,
+        },
+    )
+
+    # Calculate expected cost
+    expected_custom_cost = (100 * custom_input_price) + (50 * custom_output_price)
+
+    print(f"Custom cost: {custom_cost}")
+    print(f"Expected custom cost: {expected_custom_cost}")
+
+    # Verify custom pricing is used (should match our calculation)
+    assert round(custom_cost, 10) == round(expected_custom_cost, 10)
+
+    # Verify custom cost is different from standard cost (unless prices happen to match)
+    # This confirms custom pricing is actually being applied
+    assert (
+        custom_cost != standard_cost
+    ), "Custom pricing should produce different cost than standard pricing"
+
+    # Test 3: Custom pricing with cache_read_input_token_cost and input_cost_per_token_batches
+    # This specifically tests the parameters that were causing the original issue
+    cache_cost = completion_cost(
+        completion_response=resp,
+        custom_cost_per_token={
+            "input_cost_per_token": 0.00001,
+            "output_cost_per_token": 0.00002,
+            "cache_read_input_token_cost": 0.000005,  # Should be accepted
+            "input_cost_per_token_batches": 0.000003,  # Should be accepted
+            "output_cost_per_token_batches": 0.000004,  # Should be accepted
+        },
+    )
+
+    # Basic validation that it doesn't throw an error and returns a number
+    assert isinstance(cache_cost, (int, float))
+    assert cache_cost >= 0
+
+    print(f"Cache-aware cost: {cache_cost}")
+    print("✅ Custom pricing parameters are correctly used in cost calculation")
+
+
+@pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
+def test_update_subpath_route_updates_registry():
+    """
+    REGRESSION TEST: Verify that calling add_subpath_route
+    on an EXISTING route correctly updates the in-memory registry.
+    """
+
+    async def _async_test():
+        # Setup
+        endpoint_id = "regression-test-subpath"
+        path = "/regression-test-wildcard"
+        # Default methods are sorted: DELETE,GET,PATCH,POST,PUT
+        methods_str = "DELETE,GET,PATCH,POST,PUT"
+        route_key = f"{endpoint_id}:subpath:{path}:{methods_str}"
+        target = "http://example.com"
+
+        if route_key in _registered_pass_through_routes:
+            del _registered_pass_through_routes[route_key]
+
+        try:
+            # 1. First Registration
+            InitPassThroughEndpointHelpers.add_subpath_route(
+                app=MagicMock(),
+                path=path,
+                target=target,
+                custom_headers={"Authorization": "Bearer INITIAL_SUBPATH_TOKEN"},
+                forward_headers=False,
+                merge_query_params=False,
+                dependencies=[],
+                cost_per_request=0,
+                endpoint_id=endpoint_id,
+            )
+
+            assert (
+                _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"]["Authorization"]
+                == "Bearer INITIAL_SUBPATH_TOKEN"
+            )
+
+            # 2. Update
+            InitPassThroughEndpointHelpers.add_subpath_route(
+                app=MagicMock(),
+                path=path,
+                target=target,
+                custom_headers={"Authorization": "Bearer NEW_SUBPATH_TOKEN"},
+                forward_headers=False,
+                merge_query_params=False,
+                dependencies=[],
+                cost_per_request=0,
+                endpoint_id=endpoint_id,
+            )
+
+            # 3. Verify
+            updated_headers = _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"]
+            assert updated_headers["Authorization"] == "Bearer NEW_SUBPATH_TOKEN", "Subpath registry failed to update!"
+
+        finally:
+            if route_key in _registered_pass_through_routes:
+                del _registered_pass_through_routes[route_key]
+
+    asyncio.run(_async_test())

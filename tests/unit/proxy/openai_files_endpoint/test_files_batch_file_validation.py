@@ -11,10 +11,12 @@ from litellm.proxy.openai_files_endpoints.batch_file_validation import (
     BatchFileLineNotObject,
     BatchFileMissingLineKey,
     BatchFileTooLarge,
+    BatchFileTooManyRecords,
     BatchFileWrongExtension,
     check_batch_file_upload,
     raise_batch_file_validation_failure,
 )
+from litellm.proxy.openai_files_endpoints.file_usage_caps import FileUsageLimit
 
 VALID_LINE = (
     b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions",'
@@ -44,9 +46,7 @@ def test_wrong_extension_rejected(filename):
 
 def test_size_over_cap_rejected_for_bytes():
     content = b"x" * (2 * 1024 * 1024)
-    assert check_batch_file_upload("batch.jsonl", content, 1) == BatchFileTooLarge(
-        size_bytes=len(content), limit_mb=1
-    )
+    assert check_batch_file_upload("batch.jsonl", content, 1) == BatchFileTooLarge(size_bytes=len(content), limit_mb=1)
 
 
 def test_size_over_cap_rejected_for_binaryio():
@@ -151,6 +151,12 @@ def test_scan_stops_at_first_failure():
             ("210.0 MB", "max_batch_file_size_mb", "10 MB", "not forwarded"),
         ),
         (
+            BatchFileTooManyRecords(limit=FileUsageLimit("max_batch_file_records", 1000, "team")),
+            "413",
+            "file",
+            ("more than 1000 records", "max_batch_file_records of 1000", "this team's metadata", "not forwarded"),
+        ),
+        (
             BatchFileWrongExtension(filename="batch.csv"),
             "400",
             "file",
@@ -208,3 +214,27 @@ def test_passthrough_missing_key_message_says_what_a_passthrough_upload_takes():
     assert "passthrough upload takes native Vertex batch rows" in exc_info.value.message
     assert "with a request key." in exc_info.value.message
     assert "custom_id" not in exc_info.value.message
+
+
+RECORD_LIMIT_3 = FileUsageLimit("max_batch_file_records", 3, "key")
+
+
+@pytest.mark.parametrize(
+    "content, expected",
+    [
+        ((VALID_LINE + b"\n") * 3, None),
+        ((VALID_LINE + b"\n") * 4, BatchFileTooManyRecords(limit=RECORD_LIMIT_3)),
+        (b"\n\n" + (VALID_LINE + b"\n\n  \n") * 3, None),
+        (io.BytesIO((VALID_LINE + b"\n") * 4), BatchFileTooManyRecords(limit=RECORD_LIMIT_3)),
+        (b"broken\n" + (VALID_LINE + b"\n") * 4, BatchFileInvalidJsonLine(line_number=1)),
+    ],
+)
+def test_record_limit_counts_non_blank_request_lines(content, expected):
+    assert check_batch_file_upload("batch.jsonl", content, None, max_records=RECORD_LIMIT_3) == expected
+
+
+def test_record_limit_applies_to_passthrough_rows():
+    content = (NATIVE_VERTEX_LINE + b"\n") * 4
+    assert check_batch_file_upload(
+        "batch.jsonl", content, None, PASSTHROUGH_BATCH_LINE_SHAPE, RECORD_LIMIT_3
+    ) == BatchFileTooManyRecords(limit=RECORD_LIMIT_3)

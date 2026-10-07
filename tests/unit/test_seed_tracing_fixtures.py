@@ -1,32 +1,40 @@
+import base64
+import hashlib
 import json
 import re
 from datetime import datetime
 from itertools import chain
 from pathlib import Path
 from typing import Final
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
-from prisma import Json
+from prisma import Json, Prisma
 from pydantic import InstanceOf, TypeAdapter
 
-from litellm.rust_bridge.trace.storage import span_rows
+from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
+from litellm.rust_bridge.trace.storage import Tenant, span_rows
 from litellm.tracing.types import SpendLogRecord
 from scripts.seed_tracing_fixtures import (
     JSON,
-    SPEND_FIXTURE,
-    SPEND_ROWS,
     TRACE_FIXTURES,
+    bulk_span_rows,
     fixture_capture,
     fixture_replays,
+    managed_response,
     postgres_row,
     rebase,
     rebase_spend,
     response_ids,
     response_pattern,
+    seed_arguments,
+    seed_copy,
     seed_id,
     spend_fixtures,
     timestamps,
 )
+from tests._master_key import MASTER_KEY
 
 CALL_KEYS: Final = TypeAdapter(tuple[str, ...])
 DATETIMES: Final = TypeAdapter(tuple[datetime, datetime])
@@ -60,7 +68,26 @@ def test_all_fixture_replays_are_recent_and_preserve_spans(path: Path) -> None:
         trace_id, span_id, parent_id, timestamp = SPAN_IDENTITY.validate_python(
             (before["TraceId"], before["SpanId"], before["ParentSpanId"], before["Timestamp"])
         )
-        assert after["TraceId"] == seed_id(trace_id, replay.namespace, 32)
+        span_attributes: Final = before["SpanAttributes"]
+        if isinstance(span_attributes, dict) and "lens.original_trace_id" in span_attributes:
+            before_original_trace_id: Final = span_attributes["lens.original_trace_id"]
+            before_session: Final = span_attributes["session.id"]
+            assert isinstance(before_original_trace_id, str)
+            assert isinstance(before_session, str)
+            after_span_attributes: Final = after["SpanAttributes"]
+            assert isinstance(after_span_attributes, dict)
+            assert after_span_attributes["lens.original_trace_id"] == seed_id(
+                before_original_trace_id, replay.namespace, 32
+            )
+            assert (
+                after["TraceId"]
+                == hashlib.sha256(
+                    f"litellm.claude.session.v1\0{seed_id(before_session, replay.namespace, 32)}".encode()
+                ).hexdigest()[:32]
+            )
+            assert after["TraceId"] != before["TraceId"]
+        else:
+            assert after["TraceId"] == seed_id(trace_id, replay.namespace, 32)
         assert after["SpanId"] == seed_id(span_id, replay.namespace, 16)
         assert after["ParentSpanId"] == seed_id(parent_id, replay.namespace, 16)
         assert after["Timestamp"] == timestamp + replay.offset_ms * 1_000_000
@@ -78,11 +105,9 @@ def test_all_fixture_replays_are_recent_and_preserve_spans(path: Path) -> None:
 
 @pytest.mark.requires_rust_extension
 def test_replay_preserves_trace_topology_usage_and_event_timing() -> None:
-    export: Final = JSON.validate_json((TRACE_FIXTURES / "deeplite_swarm.json").read_bytes())
+    export: Final = JSON.validate_json((TRACE_FIXTURES / "deepagents_swarm.json").read_bytes())
     original: Final = span_rows(json.dumps(export).encode(), "application/json")
-    spend_rows: Final = SPEND_ROWS.validate_python(
-        tuple(json.loads(line) for line in SPEND_FIXTURE.read_text().splitlines())
-    )
+    spend_rows: Final = dict(spend_fixtures())["deepagents_swarm"]
     pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spend_rows))
     shifted: Final = rebase(export, 123_000_000, "first-run", pattern)
     replayed: Final = span_rows(json.dumps(shifted).encode(), "application/json")
@@ -106,40 +131,8 @@ def test_replay_preserves_trace_topology_usage_and_event_timing() -> None:
         )
 
 
-@pytest.mark.requires_rust_extension
-def test_paired_fixture_joins_every_successful_llm_span_after_replay() -> None:
-    export: Final = JSON.validate_json((TRACE_FIXTURES / "deeplite_swarm.json").read_bytes())
-    spends: Final = SPEND_ROWS.validate_python(
-        tuple(json.loads(line) for line in SPEND_FIXTURE.read_text().splitlines())
-    )
-    pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spends))
-    replays: Final = fixture_replays(TRACE_FIXTURES, max(timestamps(export)) // 1_000_000 + 1123, "paired-run", pattern)
-    replay: Final = next(item for item in replays if item.name == "deeplite_swarm")
-    rebased_spends: Final = rebase_spend(spends, replay.offset_ms, replay.namespace, pattern)
-    spans: Final = span_rows(json.dumps(replay.export).encode(), "application/json")
-    llm_spans: Final = tuple(span for span in spans if span["ObservationType"] == "llm")
-    by_response: Final = {row["response_id"]: row for row in rebased_spends}
-
-    assert len(by_response) == len(llm_spans) == len(rebased_spends)
-    assert frozenset(by_response) == frozenset(span["LiteLLMRequestId"] for span in llm_spans)
-    for span, spend in ((span, by_response[span["LiteLLMRequestId"]]) for span in llm_spans):
-        assert spend["request_id"] == span["LiteLLMRequestId"]
-        assert spend["trace_id"] == spend["session_id"] == span["TraceId"]
-        assert spend["span_id"] == span["SpanId"]
-        assert spend["start_time"] == span["Timestamp"] // 1_000_000
-        assert spend["end_time"] == (span["Timestamp"] + span["Duration"]) // 1_000_000
-        assert spend["prompt_tokens"] == span["InputTokens"]
-        assert spend["completion_tokens"] == span["OutputTokens"]
-        assert spend["total_tokens"] == spend["prompt_tokens"] + spend["completion_tokens"]
-        assert json.loads(spend["response"])["id"] == spend["response_id"]
-        assert json.loads(spend["response"])["usage"]["total_tokens"] == spend["total_tokens"]
-        assert json.loads(spend["metadata"])["synthetic_spend"] is True
-
-
 def test_postgres_rows_preserve_clickhouse_cost_identity_and_payloads() -> None:
-    spends: Final = SPEND_ROWS.validate_python(
-        tuple(json.loads(line) for line in SPEND_FIXTURE.read_text().splitlines())
-    )
+    spends: Final = dict(spend_fixtures())["deepagents_swarm"]
 
     for spend, postgres in ((spend, postgres_row(spend)) for spend in spends):
         start_time, end_time = DATETIMES.validate_python((postgres["startTime"], postgres["endTime"]))
@@ -151,7 +144,7 @@ def test_postgres_rows_preserve_clickhouse_cost_identity_and_payloads() -> None:
             spend["api_key"],
             spend["team_id"],
             spend["user"],
-            spend["trace_id"],
+            spend["session_id"],
         )
         assert postgres["spend"] == spend["spend"]
         assert postgres["total_tokens"] == spend["prompt_tokens"] + spend["completion_tokens"]
@@ -164,7 +157,7 @@ def test_postgres_rows_preserve_clickhouse_cost_identity_and_payloads() -> None:
 
 
 @pytest.mark.requires_rust_extension
-@pytest.mark.parametrize("name,spends", tuple(item for item in spend_fixtures() if item[0] != "deeplite_swarm"))
+@pytest.mark.parametrize("name,spends", spend_fixtures())
 def test_captured_spend_replay_preserves_real_cost_and_call_identity(
     name: str, spends: tuple[SpendLogRecord, ...]
 ) -> None:
@@ -189,6 +182,105 @@ def test_captured_spend_replay_preserves_real_cost_and_call_identity(
         assert after["request_id"] != before["request_id"]
         assert after["start_time"] == before["start_time"] + offset_ms
         assert after["end_time"] == before["end_time"] + offset_ms
-        assert bool(frozenset(f"provider_response:{identity}" for identity in response_ids((after,))) & keys) is (
-            capture.spend_linked
-        )
+        if before["litellm_call_id"]:
+            assert after["litellm_call_id"] != before["litellm_call_id"]
+        identities: Final = frozenset(f"provider_response:{identity}" for identity in response_ids((after,))) | {
+            f"litellm_request:{after['litellm_call_id']}"
+        }
+        assert bool(identities & keys) is capture.spend_linked
+
+
+@pytest.mark.parametrize("call_id", (None, "gateway"))
+def test_spend_fixture_loading_preserves_gateway_ids_and_defaults_legacy_rows(
+    tmp_path: Path, call_id: str | None
+) -> None:
+    original: Final = dict(spend_fixtures())["deepagents_swarm"][0]
+    fields: Final = {key: value for key, value in original.items() if key != "litellm_call_id"}
+    supplied: Final = fields if call_id is None else {**fields, "litellm_call_id": call_id}
+    (tmp_path / "example_spend_logs.jsonl").write_text(json.dumps(supplied) + "\n")
+    loaded: Final = spend_fixtures(tmp_path)
+    assert loaded == (("example", ({**original, "litellm_call_id": call_id or ""},)),)
+
+
+@pytest.mark.requires_rust_extension
+def test_bulk_export_preserves_all_spans_and_disjoint_copy_ids() -> None:
+    first: Final = fixture_replays(TRACE_FIXTURES, 1_800_000_000_000, "copy-1", re.compile(r"(?!)"))
+    second: Final = fixture_replays(TRACE_FIXTURES, 1_800_000_001_000, "copy-2", re.compile(r"(?!)"))
+    merged: Final = bulk_span_rows(first + second, Tenant("", ""))
+    separate: Final = tuple(
+        span for replay in first + second for span in span_rows(json.dumps(replay.export).encode(), "application/json")
+    )
+    assert tuple(merged) == separate
+    first_ids: Final = frozenset(span["TraceId"] for span in bulk_span_rows(first, Tenant("", "")))
+    second_ids: Final = frozenset(span["TraceId"] for span in bulk_span_rows(second, Tenant("", "")))
+    assert first_ids.isdisjoint(second_ids)
+
+
+@pytest.mark.requires_rust_extension
+@pytest.mark.asyncio
+async def test_first_copy_stamps_the_authenticated_tenant_and_writes_both_stores(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.rust_bridge.trace.storage import ClickHouseStorage
+
+    monkeypatch.setenv("LITELLM_MASTER_KEY", MASTER_KEY)
+    fixtures: Final = spend_fixtures()
+    pattern: Final = response_pattern(tuple(chain.from_iterable(rows for _, rows in fixtures)))
+    replays: Final = fixture_replays(TRACE_FIXTURES, 1_800_000_000_000, "first", pattern)
+    storage: Final = AsyncMock(spec=ClickHouseStorage)
+    storage.query_sql.return_value = TraceSQLResponse(
+        data=({"team_id": "local-team", "api_key": "local-hash", "user": "admin"},)
+    )
+    database: Final = AsyncMock(spec=Prisma, litellm_spendlogs=AsyncMock())
+    client: Final = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = httpx.Response(200, request=httpx.Request("POST", "http://proxy/v1/traces"))
+    captures: Final = await seed_copy(client, storage, database, replays, fixtures, pattern)
+    assert tuple(JSON.validate_json(call.kwargs["content"]) for call in client.post.call_args_list) == tuple(
+        replay.export for replay in replays
+    )
+    rows: Final = tuple(chain.from_iterable(rows for _, rows in captures))
+    assert {name for name, _ in captures} == {name for name, _ in fixtures}
+    assert storage.insert_rows.call_args.args == ("spend_logs", rows)
+    assert len(rows) == sum(len(original) for _, original in fixtures)
+    assert all((row["team_id"], row["api_key"], row["user"]) == ("local-team", "local-hash", "admin") for row in rows)
+    saved: Final = database.litellm_spendlogs.create_many.call_args.kwargs["data"]
+    assert tuple(row["request_id"] for row in saved) == tuple(row["request_id"] for row in rows)
+    assert tuple(row["spend"] for row in saved) == tuple(row["spend"] for row in rows)
+
+
+def test_seed_cli_rejects_nonpositive_copies() -> None:
+    with pytest.raises(SystemExit) as error:
+        seed_arguments(["--copies", "0"])
+    assert error.value.code == 2
+    assert seed_arguments(["--profile", "large", "--copies", "5"]).copies == 5
+
+
+@pytest.mark.parametrize("timeout", ("0", "-1", "inf", "nan"))
+def test_seed_cli_rejects_invalid_http_timeouts(timeout: str) -> None:
+    with pytest.raises(SystemExit) as error:
+        seed_arguments(["--timeout-seconds", timeout])
+    assert error.value.code == 2
+
+
+def test_replay_rebases_provider_request_evidence_with_the_spend_row() -> None:
+    spend: Final = {**dict(spend_fixtures())["deepagents_swarm"][0], "provider_request_id": "req_replay"}
+    pattern: Final = response_pattern((spend,))
+    replayed: Final = rebase_spend((spend,), 0, "another-run", pattern)[0]
+    export: Final = rebase({"request_id": "req_replay"}, 0, "another-run", pattern)
+
+    assert export == {"request_id": replayed["provider_request_id"]}
+    assert replayed["provider_request_id"] != spend["provider_request_id"]
+    assert replayed["provider_request_id"].startswith("req_")
+
+
+@pytest.mark.parametrize("upstream", ("msg_response", "req_response", "chatcmpl-response"))
+def test_replay_preserves_identity_between_managed_and_plain_response_ids(upstream: str) -> None:
+    payload: Final = f"model:example;response_id:{upstream}"
+    managed: Final = "resp_" + base64.b64encode(payload.encode()).decode()
+    spend: Final = {**dict(spend_fixtures())["deepagents_swarm"][0], "response_id": managed}
+    pattern: Final = response_pattern((spend,))
+    replayed: Final = rebase_spend((spend,), 0, "managed-replay", pattern)[0]
+    plain: Final = rebase(upstream, 0, "managed-replay", pattern)
+
+    assert plain != upstream
+    assert managed_response(replayed["response_id"]) == f"model:example;response_id:{plain}"

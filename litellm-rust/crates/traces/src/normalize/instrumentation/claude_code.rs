@@ -1,7 +1,7 @@
 use super::{
     Integration, ObservationType, RoleEvidence, Rule, SpanContext, SpanFacts, attr, present,
 };
-use crate::normalize::{CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE};
+use crate::normalize::{CLAUDE_CODE_AGENT, CLAUDE_CODE_EVENTS_SCOPE, CLAUDE_CODE_SCOPE};
 use std::collections::BTreeMap;
 
 pub(super) const SCOPE: &str = CLAUDE_CODE_SCOPE;
@@ -32,7 +32,7 @@ pub(super) struct ClaudeCode;
 
 impl Rule for ClaudeCode {
     fn matches(&self, context: &SpanContext<'_>) -> bool {
-        context.scope == SCOPE
+        matches!(context.scope, SCOPE | CLAUDE_CODE_EVENTS_SCOPE)
     }
     fn integration(&self, context: &SpanContext<'_>) -> Option<Integration> {
         Some(framework(context.attributes))

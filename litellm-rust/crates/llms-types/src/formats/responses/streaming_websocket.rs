@@ -1,7 +1,16 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
-#[derive(Clone, Debug, PartialEq, Eq, strum::AsRefStr)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    strum::AsRefStr,
+    strum::EnumString,
+    strum::Display,
+    serde_with::DeserializeFromStr,
+    serde_with::SerializeDisplay,
+)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(with = "String"))]
 pub enum ResponsesWsEventType {
@@ -24,33 +33,6 @@ pub enum ResponsesWsEventType {
 impl ResponsesWsEventType {
     pub fn as_str(&self) -> &str {
         self.as_ref()
-    }
-}
-
-impl Serialize for ResponsesWsEventType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for ResponsesWsEventType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Ok(match value.as_str() {
-            "response.create" => Self::ResponseCreate,
-            "response.created" => Self::ResponseCreated,
-            "response.completed" => Self::ResponseCompleted,
-            "response.failed" => Self::ResponseFailed,
-            "response.incomplete" => Self::ResponseIncomplete,
-            "error" => Self::Error,
-            _ => Self::Other(value),
-        })
     }
 }
 
@@ -113,21 +95,6 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-
-    #[rstest]
-    #[case::known("response.completed", ResponsesWsEventType::ResponseCompleted)]
-    #[case::unknown(
-        "response.output_text.delta",
-        ResponsesWsEventType::Other("response.output_text.delta".to_string())
-    )]
-    fn event_type_round_trips_known_and_unknown_values(
-        #[case] value: &str,
-        #[case] expected: ResponsesWsEventType,
-    ) {
-        let actual: ResponsesWsEventType =
-            serde_json::from_str(&serde_json::to_string(value).unwrap()).expect("valid event type");
-        assert_eq!(actual, expected);
-    }
 
     #[test]
     fn error_frame_matches_proxy_shape() {

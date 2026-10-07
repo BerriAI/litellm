@@ -3,9 +3,11 @@ import {
   investigationDefaults,
   investigationSchema,
   investigationSettings,
+  investigationStepFields,
+  SETUP_STEPS,
   type InvestigationInput,
 } from "./investigationSchema";
-import { watchChecks } from "./watches";
+import { watchChecks } from "../model/watches";
 
 const defaults = investigationDefaults(undefined, "new", "traces");
 
@@ -38,11 +40,11 @@ describe("investigation validation", () => {
     );
   });
 
-  it.each([0, 0.5, 8761, NaN, Infinity])("rejects an invalid history window: %s", (lookback_hours) => {
+  it.each([0, 0.5, NaN, Infinity])("rejects an invalid history window: %s", (lookback_hours) => {
     expectIssue(
       { selection: { lookback_hours } },
       ["selection", "lookback_hours"],
-      "Choose a time range between 1 hour and 365 days",
+      "Choose a time range of at least 1 hour",
     );
   });
 
@@ -62,10 +64,13 @@ describe("investigation validation", () => {
     );
   });
 
-  it.each([1, 8760])("accepts the history boundary %s with fractional sampling and no maximum", (lookback_hours) => {
-    const result = parse({ selection: { lookback_hours, sample_percent: 0.01, sample_size: null } });
-    expect(result.success).toBe(true);
-  });
+  it.each([1, 8760, 8761, 100000])(
+    "accepts the history window %s with fractional sampling and no maximum",
+    (lookback_hours) => {
+      const result = parse({ selection: { lookback_hours, sample_percent: 0.01, sample_size: null } });
+      expect(result.success).toBe(true);
+    },
+  );
 
   it("requires individual runs only on the Run step", () => {
     expectIssue(
@@ -89,8 +94,8 @@ describe("investigation validation", () => {
   });
 
   it("validates budget and repeat interval with field-specific paths", () => {
-    expectIssue({ budget: Infinity }, ["budget"], "Choose a monthly limit greater than zero and up to 100000");
-    expectIssue({ repeat: true, interval: 1.5 }, ["interval"], "Choose a repeat interval between 1 and 10080 minutes");
+    expectIssue({ budget: Infinity }, ["budget"], "Choose a monthly limit greater than zero");
+    expectIssue({ repeat: true, interval: 1.5 }, ["interval"], "Choose a repeat interval of at least 1 minute");
     expect(parse({ repeat: false, interval: 0 }).success).toBe(true);
     expect(parse({ repeat: true, interval: 10080 }).success).toBe(true);
   });
@@ -135,5 +140,14 @@ describe("investigation validation", () => {
       interval_minutes: 15,
       enabled: false,
     });
+  });
+});
+
+describe("investigationStepFields", () => {
+  it("assigns every form field to exactly one step", () => {
+    const { selection, ...rest } = defaults;
+    const formFields = [...Object.keys(rest), ...Object.keys(selection).map((key) => `selection.${key}`)].sort();
+    const stepFields = SETUP_STEPS.flatMap((step) => investigationStepFields[step]).sort();
+    expect(stepFields).toEqual(formFields);
   });
 });

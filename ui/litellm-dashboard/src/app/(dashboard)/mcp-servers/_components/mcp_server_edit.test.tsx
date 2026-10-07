@@ -16,21 +16,40 @@ vi.mock("@/components/networking", () => ({
 }));
 
 const mockOauth: {
+  status: string;
   tokenResponse: any;
   getTemporaryPayload: (() => Record<string, unknown> | null) | null;
-  onTokenReceived: ((token: Record<string, unknown> | null) => void) | null;
+  onTokenReceived:
+    | ((
+        token: Record<string, unknown> | null,
+        registeredClient?: {
+          client_id: string;
+          client_secret?: string;
+          dcr_issuer?: string;
+          dcr_server_url?: string;
+        },
+      ) => void)
+    | null;
   reset: ReturnType<typeof vi.fn>;
-} = { tokenResponse: null, getTemporaryPayload: null, onTokenReceived: null, reset: vi.fn() };
+} = { status: "idle", tokenResponse: null, getTemporaryPayload: null, onTokenReceived: null, reset: vi.fn() };
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: (opts: {
     getTemporaryPayload?: () => Record<string, unknown> | null;
-    onTokenReceived?: (token: Record<string, unknown> | null) => void;
+    onTokenReceived?: (
+      token: Record<string, unknown> | null,
+      registeredClient?: {
+        client_id: string;
+        client_secret?: string;
+        dcr_issuer?: string;
+        dcr_server_url?: string;
+      },
+    ) => void;
   }) => {
     mockOauth.getTemporaryPayload = opts?.getTemporaryPayload ?? null;
     mockOauth.onTokenReceived = opts?.onTokenReceived ?? null;
     return {
       startOAuthFlow: vi.fn(),
-      status: "idle",
+      status: mockOauth.status,
       error: null,
       tokenResponse: mockOauth.tokenResponse,
       reset: mockOauth.reset,
@@ -547,6 +566,7 @@ describe("MCPServerEdit (auth type switch)", () => {
 describe("MCPServerEdit OAuth token invalidation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockOauth.status = "idle";
   });
 
   const renderOAuthEdit = () =>
@@ -559,6 +579,77 @@ describe("MCPServerEdit OAuth token invalidation", () => {
         availableAccessGroups={[]}
       />,
     );
+
+  it.each(["authorizing", "exchanging"])("blocks Save while OAuth is %s", async (status) => {
+    mockOauth.status = status;
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+    const view = renderOAuthEdit();
+    const save = screen.getAllByRole("button", { name: "Save Changes" })[0];
+    expect(save).toBeDisabled();
+    await act(async () => {
+      fireEvent.submit(screen.getByRole("form", { name: "Edit MCP server" }));
+    });
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+    act(() => {
+      mockOauth.onTokenReceived?.(
+        { access_token: "new-token" },
+        {
+          client_id: "new-client",
+          dcr_issuer: "https://new.example",
+          dcr_server_url: "https://new.example/mcp",
+        },
+      );
+    });
+    mockOauth.status = "success";
+    view.rerender(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+    expect(screen.getAllByRole("button", { name: "Save Changes" })[0]).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    });
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.updateMCPServer).mock.calls[0][1].credentials).toMatchObject({
+      client_id: "new-client",
+      dcr_issuer: "https://new.example",
+    });
+  });
+
+  it.each(["Save Changes", "Cancel"])("keeps a newly registered client isolated until %s", async (action) => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+    renderOAuthEdit();
+    act(() => {
+      mockOauth.onTokenReceived?.(
+        { access_token: "new-token" },
+        {
+          client_id: "new-client",
+          client_secret: "new-secret",
+          dcr_issuer: "https://new.example",
+          dcr_server_url: "https://new.example/mcp",
+        },
+      );
+    });
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: action })[0]);
+    });
+    if (action === "Cancel") {
+      expect(networking.updateMCPServer).not.toHaveBeenCalled();
+      return;
+    }
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.updateMCPServer).mock.calls[0][1].credentials).toMatchObject({
+      client_id: "new-client",
+      client_secret: "new-secret",
+      dcr_issuer: "https://new.example",
+    });
+  });
 
   it("invalidates a session-authorized token when the transport switches to stdio", async () => {
     // Switching to stdio clears url/auth_type via programmatic form.setFieldsValue, which antd does
@@ -1685,6 +1776,51 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
 
     // Keep + warn parity with the create form: the stored app is kept, and the banner appears.
     expect(screen.getByText(/registered for the previous upstream/)).toBeInTheDocument();
+  });
+
+  it("discards a canceled OAuth snapshot before saved server data loads", async () => {
+    setSecureItem(
+      EDIT_OAUTH_UI_STATE_KEY,
+      JSON.stringify({
+        serverId: interactiveOAuthServer.server_id,
+        formValues: { ...interactiveOAuthServer, url: "https://new.example/mcp" },
+      }),
+    );
+    const props = { accessToken: "access-token", onCancel: vi.fn(), onSuccess: vi.fn(), availableAccessGroups: [] };
+    const view = render(<MCPServerEdit {...props} mcpServer={{ ...interactiveOAuthServer, server_id: "", url: "" }} />);
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]);
+    });
+    expect(props.onCancel).toHaveBeenCalledOnce();
+    expect(window.sessionStorage.getItem(EDIT_OAUTH_UI_STATE_KEY)).toBeNull();
+    expect(mockOauth.reset).toHaveBeenCalled();
+    view.unmount();
+    render(<MCPServerEdit {...props} mcpServer={interactiveOAuthServer} />);
+    await waitFor(() => expect(screen.getByLabelText("MCP Server URL")).toHaveValue(interactiveOAuthServer.url));
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+  });
+
+  it("restores the edited upstream after OAuth when saved server data loads later", async () => {
+    setSecureItem(
+      EDIT_OAUTH_UI_STATE_KEY,
+      JSON.stringify({
+        serverId: interactiveOAuthServer.server_id,
+        formValues: { ...interactiveOAuthServer, url: "https://new.example/mcp", issuer: "https://new.example" },
+      }),
+    );
+    const props = {
+      accessToken: "access-token",
+      userID: "user-1",
+      onCancel: vi.fn(),
+      onSuccess: vi.fn(),
+      availableAccessGroups: [],
+    };
+    const { rerender } = render(
+      <MCPServerEdit {...props} mcpServer={{ ...interactiveOAuthServer, server_id: "", url: "" }} />,
+    );
+    rerender(<MCPServerEdit {...props} mcpServer={interactiveOAuthServer} />);
+    await waitFor(() => expect(screen.getByLabelText("MCP Server URL")).toHaveValue("https://new.example/mcp"));
+    expect(screen.getByLabelText("Issuer (optional)")).toHaveValue("https://new.example");
   });
 
   it("preserves a stored client_id on OAuth-resume restore even when the saved snapshot is token-only", async () => {

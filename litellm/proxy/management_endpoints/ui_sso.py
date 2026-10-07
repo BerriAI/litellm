@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -100,6 +100,7 @@ from litellm.proxy.auth.team_grants import TeamModelAliasTable
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
+    is_admin_ui_disabled,
     show_missing_vars_in_env,
 )
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
@@ -137,7 +138,8 @@ from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-from litellm.secret_managers.main import get_secret_bool, get_secret_str, str_to_bool
+from litellm.secret_managers.main import get_secret_bool, get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -217,14 +219,14 @@ def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
 _SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
-class _TeamRowGrants(BaseModel):
+class _TeamRowGrants(LiteLLMBaseModel):
     team_id: str
     team_alias: str | None = None
     models: tuple[str, ...] = ()
     litellm_model_table: TeamModelAliasTable | None = None
 
 
-class CliSsoTeamDetail(BaseModel):
+class CliSsoTeamDetail(LiteLLMBaseModel):
     """The per-team snapshot cached in the CLI SSO flow and echoed to the CLI on poll."""
 
     team_id: str | None = None
@@ -1029,11 +1031,10 @@ async def google_login(
     generic_client_id: Final = os.getenv("GENERIC_CLIENT_ID", None)
 
     ####### Check if UI is disabled #######
-    _disable_ui_flag: Final = os.getenv("DISABLE_ADMIN_UI")
-    if _disable_ui_flag is not None:
-        is_disabled: Final = str_to_bool(value=_disable_ui_flag)
-        if is_disabled:
-            return admin_ui_disabled()
+    admin_ui_is_disabled: Final = is_admin_ui_disabled()
+    is_cli_sso_login: Final = source == LITELLM_CLI_SOURCE_IDENTIFIER
+    if admin_ui_is_disabled and not is_cli_sso_login:
+        return admin_ui_disabled()
 
     ####### Check if user is a Enterprise / Premium User #######
     if (
@@ -1055,7 +1056,7 @@ async def google_login(
         sso_callback_route="sso/callback",
     )
 
-    if source == LITELLM_CLI_SOURCE_IDENTIFIER:
+    if is_cli_sso_login:
         _get_cli_sso_flow_or_raise(login_id=key, cache=cli_sso_session_cache)
 
     # Store CLI login handle in state for OAuth flow
@@ -1114,6 +1115,9 @@ async def google_login(
         if sso_redirect is not None:
             _persist_return_to_cookie(sso_redirect, return_to, request)
         return sso_redirect
+
+    if admin_ui_is_disabled:
+        return admin_ui_disabled()
 
     from fastapi.responses import HTMLResponse
 
@@ -2158,8 +2162,7 @@ async def saml_login(request: Request, return_to: str | None = None):
     """SP-initiated SAML login. Redirects the user to the configured IdP."""
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    _disable_ui_flag: Final = os.getenv("DISABLE_ADMIN_UI")
-    if _disable_ui_flag is not None and str_to_bool(value=_disable_ui_flag):
+    if is_admin_ui_disabled():
         return admin_ui_disabled()
 
     return await SAMLAuthHandler.build_login_redirect(request=request, cache=user_api_key_cache, relay_state=return_to)
@@ -2186,8 +2189,7 @@ async def saml_callback(request: Request):
         user_api_key_cache,
     )
 
-    _disable_ui_flag: Final = os.getenv("DISABLE_ADMIN_UI")
-    if _disable_ui_flag is not None and str_to_bool(value=_disable_ui_flag):
+    if is_admin_ui_disabled():
         return admin_ui_disabled()
 
     if prisma_client is None:

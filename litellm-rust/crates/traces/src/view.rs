@@ -17,7 +17,7 @@ pub enum SpanStatus {
 }
 
 #[macro_rules_attribute::apply(response_type)]
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Span {
     pub span_id: String,
     pub parent_span_id: Option<String>,
@@ -37,11 +37,24 @@ pub struct Span {
     pub output_tokens: u32,
     pub litellm_request_id: Option<String>,
     pub spend: Option<f64>,
+    pub spend_log_request_id: Option<String>,
+    pub spend_match: Option<SpendMatch>,
+}
+
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpendMatch {
+    Matched,
+    NoCallId,
+    NoSpendLog,
+    Ambiguous,
+    IncompleteEvidence,
 }
 
 /// One distinct agent in a trace: 200 invocations of `researcher` are one node.
 #[macro_rules_attribute::apply(response_type)]
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AgentNode {
     pub name: String,
     pub parent_agent: Option<String>,
@@ -50,11 +63,14 @@ pub struct AgentNode {
     pub tool_calls: u64,
     pub duration_ms: f64,
     pub spend: Option<f64>,
+    pub priced_calls: u64,
 }
 
 #[macro_rules_attribute::apply(response_type)]
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TraceSummary {
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub resolution_limited: bool,
     pub trace_id: String,
     #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
     pub trace_ref: String,
@@ -78,14 +94,17 @@ pub struct TraceSummary {
     pub output_tokens: u64,
     pub models: Vec<String>,
     pub spend: Option<f64>,
+    pub priced_calls: u64,
 }
 
 #[macro_rules_attribute::apply(response_type)]
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Trace {
     pub summary: TraceSummary,
     pub agents: Vec<AgentNode>,
     pub spans: Vec<Span>,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub next_cursor: Option<String>,
 }
 
 #[macro_rules_attribute::apply(response_type)]
