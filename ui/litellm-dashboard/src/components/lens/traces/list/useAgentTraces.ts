@@ -9,6 +9,7 @@ import {
   type TimeWindow,
   timeWindow,
 } from "@/components/shared/timeRange/timeRange";
+import { TRACE_AGENT_LIST_REFRESH_MS } from "@/components/constants";
 import { ApiError } from "@/lib/http/client";
 
 import type { TracePage, TraceSummary } from "../types";
@@ -42,7 +43,6 @@ interface UseAgentTracesOptions {
   accessToken: string;
   range: RelativeRange;
   enabled: boolean;
-  /** Only runs this agent took part in, filtered by the server so every page matches. */
   agent?: string;
 }
 
@@ -116,7 +116,6 @@ interface UseTraceAgentsOptions {
 
 const NO_AGENTS: readonly string[] = [];
 
-/** Every agent with a run in the range, not only the loaded pages; empty while loading or on error. */
 export function useTraceAgents({ accessToken, range, enabled }: UseTraceAgentsOptions): readonly string[] {
   const traces = useTracesApi(accessToken);
   const options: UseQueryOptions<readonly string[], Error> = {
@@ -124,9 +123,9 @@ export function useTraceAgents({ accessToken, range, enabled }: UseTraceAgentsOp
     queryFn: () => traces.agents(timeWindow(range, Date.now())),
     enabled,
     placeholderData: keepPreviousData,
-    staleTime: LIVE_TAIL_INTERVAL_MS,
+    staleTime: TRACE_AGENT_LIST_REFRESH_MS,
     retry: (failureCount, error) => !requiresUserAction(error) && failureCount < 1,
-    refetchInterval: (q) => (isLive(range) && !requiresUserAction(q.state.error) ? LIVE_TAIL_INTERVAL_MS : false),
+    refetchInterval: (q) => (isLive(range) && !requiresUserAction(q.state.error) ? TRACE_AGENT_LIST_REFRESH_MS : false),
     refetchOnWindowFocus: (q) => !requiresUserAction(q.state.error),
     refetchOnReconnect: (q) => !requiresUserAction(q.state.error),
     refetchIntervalInBackground: false,
