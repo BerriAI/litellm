@@ -9,7 +9,6 @@ import type { Span, TraceMessage, TraceSummary, TraceToolCall } from "./types";
 /*  Formatting                                                         */
 /* ------------------------------------------------------------------ */
 
-/** Same rule as the server's agent filter: the run's agents, else the service that sent it. */
 export const traceAgentNames = (trace: TraceSummary): readonly string[] => {
   if (trace.agent_names?.length) return trace.agent_names;
   return trace.service ? [trace.service] : [];
