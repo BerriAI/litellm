@@ -184,6 +184,10 @@ fn collect_input_text(value: &Value, parts: &mut Vec<String>) {
                 collect_input_text(content, parts);
                 return;
             }
+            if let Some(output) = map.get("output").filter(|output| output.is_array()) {
+                collect_input_text(output, parts);
+                return;
+            }
             for key in ["text", "output", "input_text", "output_text"] {
                 if let Some(Value::String(text)) = map.get(key)
                     && push_trimmed(text, parts)

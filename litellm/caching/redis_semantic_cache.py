@@ -296,6 +296,11 @@ class RedisSemanticCache(BaseCache):
                 cls._collect_responses_input_text(content, prompt_parts)
                 return
 
+            output = value.get("output")
+            if isinstance(output, list):
+                cls._collect_responses_input_text(output, prompt_parts)
+                return
+
             for text_key in ("text", "output", "input_text", "output_text"):
                 text_value = value.get(text_key)
                 if isinstance(text_value, str):

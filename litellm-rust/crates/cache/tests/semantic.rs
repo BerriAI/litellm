@@ -191,6 +191,15 @@ fn prompt_from_messages_reads_messages_only(
     ])),
     Some("model dump prompt\ndict prompt\ninline prompt"),
 )]
+#[case::function_call_output_blocks(
+    None,
+    Some(json!([
+        {"role": "user", "content": "update the config"},
+        {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": "{\"path\": \"a\"}"},
+        {"type": "function_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": "wrote a"}]},
+    ])),
+    Some("update the config\nwrote a"),
+)]
 #[case::object_content(
     None,
     Some(json!({"content": [{"text": "object content prompt"}]})),

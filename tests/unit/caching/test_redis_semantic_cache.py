@@ -568,6 +568,20 @@ def test_redis_semantic_cache_set_cache_flattens_structured_responses_input():
     )
 
 
+def test_redis_semantic_cache_prompt_extraction_reads_function_call_output_blocks():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(
+        input=[
+            {"role": "user", "content": "update the config"},
+            {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": '{"path": "a"}'},
+            {"type": "function_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": "wrote a"}]},
+        ]
+    )
+
+    assert prompt == "update the config\nwrote a"
+
+
 def test_redis_semantic_cache_prompt_extraction_prefers_messages():
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
