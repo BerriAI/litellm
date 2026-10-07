@@ -1,6 +1,7 @@
 "use client";
 
 import moment from "moment";
+import { skipToken, useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { traceAgentNames } from "../utils";
 import { useMemo, useState } from "react";
@@ -12,6 +13,10 @@ import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
 import { useTraceFindings } from "./useTraceFindings";
+import { useTraceSignals } from "./useTraceSignals";
+import { useOptionalLensApi } from "../../data/LensServices";
+import { lensKeys } from "../../data/queries";
+import { signalsConfigured } from "../../model/signals";
 import { type TraceRef, traceKey, traceRefOf, useOpenTraceRouting, useRunFilterRouting } from "../routing";
 import type { TraceSummary } from "../types";
 import { RunView } from "../detail/run/RunView";
@@ -41,6 +46,18 @@ interface AgentTracesSectionProps {
   readOnly?: boolean;
   canMintTracingKey?: boolean;
   canViewFindings?: boolean;
+  onSetUpSignals?: () => void;
+}
+
+function useSignalSetup(enabled: boolean) {
+  const api = useOptionalLensApi();
+  const config = useQuery({
+    queryKey: lensKeys.signalConfig(api?.scope ?? ""),
+    queryFn: api && enabled ? () => api.signalConfig() : skipToken,
+    staleTime: 5000,
+  });
+  const loaded = enabled && config.data !== undefined;
+  return { on: loaded && signalsConfigured(config.data), missing: loaded && !signalsConfigured(config.data) };
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -79,6 +96,7 @@ export function AgentTracesSection({
   readOnly = false,
   canMintTracingKey = false,
   canViewFindings,
+  onSetUpSignals,
 }: AgentTracesSectionProps) {
   const live = useTracesLive();
   const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
@@ -109,6 +127,8 @@ export function AgentTracesSection({
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
   const findings = useTraceFindings(accessToken, runs, isActive, canViewFindings);
+  const signalSetup = useSignalSetup(isActive && canViewFindings !== false);
+  const signals = useTraceSignals(accessToken, runs, isActive && signalSetup.on);
 
   const changeRange = (hours: number, apply: (hours: number) => void) => {
     setZoom(null);
@@ -173,6 +193,7 @@ export function AgentTracesSection({
               accessToken={accessToken}
               onBack={() => openRun(null)}
               embedded
+              showSignals={signalSetup.on}
             />
           )}
         </Inspector.Panel>
@@ -211,6 +232,10 @@ export function AgentTracesSection({
           traces={runs}
           findings={findings}
           canViewFindings={canViewFindings}
+          signals={signals}
+          showSignals={signalSetup.on}
+          signalsColumn={signalSetup.on || signalSetup.missing}
+          onSetUpSignals={onSetUpSignals}
           isLoading={traces.isLoading || (checkHistory && history.isLoading)}
           error={traces.error}
           hasMore={traces.hasMore}

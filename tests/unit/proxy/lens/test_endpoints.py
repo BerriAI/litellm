@@ -1,25 +1,30 @@
-from collections.abc import Callable
+import asyncio
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 
 import pytest
 from fastapi import HTTPException
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.lens.endpoints import (
     claim_due,
+    get_signals,
     list_agents,
+    put_signals,
     read_reviews,
     result,
     run_settings,
     run_window,
     trace_findings,
+    trace_signal_statuses,
     user_scope,
     validate_model,
+    validate_signal_model,
     watchable,
     watching,
     worker_supports_model,
@@ -43,6 +48,7 @@ from litellm.proxy.lens.models import (
     Worker,
 )
 from litellm.proxy.lens.repository import DueLens, Row
+from litellm.proxy.lens.signals import SignalConfig, StoredTraceSignal
 from litellm.proxy.lens.state import claim_job, queue_job, replace_job
 from litellm.rust_bridge.trace.generated.models import ExecutionRow, LensSampleParams
 from tests.unit.proxy.lens.test_agent_workspace import execution
@@ -69,6 +75,46 @@ class ResultDatabase:
         assert isinstance(payload, str)
         self.completed = TypeAdapter(tuple[ReviewVersion, ...]).validate_json(payload)
         return len(self.completed)
+
+
+class SignalStatusDatabase:
+    def __init__(self, config: SignalConfig, rows: Mapping[str, StoredTraceSignal]) -> None:
+        self.config: Final = config
+        self.rows: Final = rows
+        self.saved: Final[asyncio.Queue[tuple[object, ...]]] = asyncio.Queue()
+
+    async def query_raw(self, query: str, *args: object) -> object:
+        if '"LiteLLM_LensSignalConfig"' in query:
+            return ({"data": self.config.model_dump(mode="json")},)
+        payload: Final = args[0]
+        assert isinstance(payload, str)
+        requested: Final = TypeAdapter(tuple[TraceIdentity, ...]).validate_json(payload)
+        return tuple(
+            {"data": row.model_dump(mode="json")}
+            for identity in requested
+            if (row := self.rows.get(identity.trace_id)) is not None
+        )
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        await self.saved.put(args)
+        return 1
+
+
+def signal_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "decision",
+                "litellm_params": {"model": "openai/test-decision", "api_key": "test-key"},
+                "model_info": {"mode": "evaluation"},
+            },
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/test-chat", "api_key": "test-key"},
+                "model_info": {"mode": "chat"},
+            },
+        ]
+    )
 
 
 @pytest.mark.asyncio
@@ -467,6 +513,144 @@ async def test_trace_finding_counts_require_investigation_read_access() -> None:
     with pytest.raises(HTTPException) as error:
         await trace_findings(request, auth)
     assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_signal_endpoints_return_statuses_in_request_order_for_admin_viewers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    config: Final = SignalConfig(model="decision")
+    rows: Final = {
+        "pending": StoredTraceSignal(
+            trace_id="pending",
+            config_key=config.key(),
+            span_count=1,
+            claimed_until=NOW + timedelta(minutes=1),
+            data={"status": "pending", "scores": {}, "model": "decision", "error": ""},
+        ),
+        "classified": StoredTraceSignal(
+            trace_id="classified",
+            config_key=config.key(),
+            span_count=1,
+            classified_at=NOW,
+            data={
+                "status": "classified",
+                "scores": {"user_frustration": 0.7, "missing_capability": 0.8},
+                "model": "decision",
+                "error": "",
+            },
+        ),
+        "failed": StoredTraceSignal(
+            trace_id="failed",
+            config_key=config.key(),
+            span_count=1,
+            classified_at=NOW,
+            data={"status": "failed", "scores": {}, "model": "decision", "error": "classification failed"},
+        ),
+        "stale": StoredTraceSignal(
+            trace_id="stale",
+            config_key="old-config",
+            span_count=1,
+            classified_at=NOW,
+            data={
+                "status": "classified",
+                "scores": {"user_frustration": 1.0},
+                "model": "old",
+                "error": "",
+            },
+        ),
+    }
+    database: Final = SignalStatusDatabase(config, rows)
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database))
+    viewer: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+    request: Final = TraceFindingsRequest(
+        traces=tuple(
+            TraceIdentity(trace_id=trace_id) for trace_id in ("failed", "classified", "missing", "pending", "stale")
+        )
+    )
+
+    assert await get_signals(viewer) == config
+    results: Final = await trace_signal_statuses(request, viewer)
+
+    assert tuple((result.trace_id, result.status) for result in results) == (
+        ("failed", "failed"),
+        ("classified", "classified"),
+        ("missing", "unclassified"),
+        ("pending", "pending"),
+        ("stale", "unclassified"),
+    )
+    assert tuple((flag.signal_id, flag.name, flag.score) for flag in results[1].flags) == (
+        ("missing_capability", "Missing capability", 0.8),
+        ("user_frustration", "User frustration", 0.7),
+    )
+
+
+@pytest.mark.asyncio
+async def test_signal_endpoints_require_connected_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+    with pytest.raises(HTTPException) as error:
+        await get_signals(auth)
+
+    assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_put_signals_saves_config_for_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    database: Final = SignalStatusDatabase(SignalConfig(), {})
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database))
+    monkeypatch.setattr(proxy_server, "llm_router", signal_router())
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    body: Final = SignalConfig(model="decision", threshold=0.7)
+
+    assert await put_signals(body, auth) == body
+
+    saved: Final = await database.saved.get()
+    assert saved[0] == "global"
+    assert isinstance(saved[1], str)
+    assert SignalConfig.model_validate_json(saved[1]) == body
+
+
+def test_signal_model_requires_a_ready_router() -> None:
+    with pytest.raises(HTTPException) as error:
+        validate_signal_model(SignalConfig(model="decision"), None)
+
+    assert error.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
+async def test_put_signals_rejects_non_admin_roles(role: LitellmUserRoles) -> None:
+    auth: Final = UserAPIKeyAuth(user_role=role)
+    with pytest.raises(HTTPException) as error:
+        await put_signals(SignalConfig(model="decision"), auth)
+    assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("chat", "unconfigured"))
+async def test_put_signals_rejects_chat_and_unknown_model_groups(monkeypatch: pytest.MonkeyPatch, model: str) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", signal_router())
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(HTTPException) as error:
+        await put_signals(SignalConfig(model=model), auth)
+
+    assert error.value.status_code == 400
+    assert error.value.detail == "Choose a System 1 model (evaluation mode) configured on this proxy"
+
+
+def test_signal_model_accepts_only_evaluation_mode_groups() -> None:
+    assert validate_signal_model(SignalConfig(model="decision"), signal_router()) is None
 
 
 @pytest.mark.parametrize(

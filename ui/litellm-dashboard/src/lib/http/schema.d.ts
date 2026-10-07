@@ -9103,6 +9103,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Signals */
+        get: operations["get_signals_lens_signals_get"];
+        /** Put Signals */
+        put: operations["put_signals_lens_signals_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/traces/findings": {
         parameters: {
             query?: never;
@@ -9114,6 +9132,23 @@ export interface paths {
         put?: never;
         /** Trace Findings */
         post: operations["trace_findings_lens_traces_findings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/traces/signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Trace Signal Statuses */
+        post: operations["trace_signal_statuses_lens_traces_signals_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -45477,6 +45512,58 @@ export interface components {
             /** Type */
             type: "shell" | string;
         };
+        /** Signal */
+        Signal: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Question */
+            question: string;
+        };
+        /** SignalConfig */
+        SignalConfig: {
+            /**
+             * Model
+             * @default
+             */
+            model: string;
+            /**
+             * Signals
+             * @default [
+             *       {
+             *         "id": "user_frustration",
+             *         "name": "User frustration",
+             *         "question": "Does the user show frustration, annoyance or dissatisfaction with the agent in this run, for example complaints, irritated corrections, all caps, profanity, or giving up on the task?"
+             *       },
+             *       {
+             *         "id": "missing_capability",
+             *         "name": "Missing capability",
+             *         "question": "Does the user ask for something the agent cannot do in this run, so that the agent refuses, says it lacks a tool, permission, integration or data source, or fails because the capability does not exist?"
+             *       },
+             *       {
+             *         "id": "repeated_request",
+             *         "name": "Repeated request",
+             *         "question": "Does the user ask for the same thing more than once in this run, usually because the agent did not deliver it the first time?"
+             *       }
+             *     ]
+             */
+            signals: components["schemas"]["Signal"][];
+            /**
+             * Threshold
+             * @default 0.5
+             */
+            threshold: number;
+        };
+        /** SignalFlag */
+        SignalFlag: {
+            /** Name */
+            name: string;
+            /** Score */
+            score: number;
+            /** Signal Id */
+            signal_id: string;
+        };
         /**
          * Skill
          * @description Represents a skill from the Anthropic Skills API
@@ -47718,6 +47805,33 @@ export interface components {
             data: {
                 [key: string]: components["schemas"]["JsonValue"];
             }[];
+        };
+        /** TraceSignals */
+        TraceSignals: {
+            /** Classified At */
+            classified_at?: string | null;
+            /**
+             * Flags
+             * @default []
+             */
+            flags: components["schemas"]["SignalFlag"][];
+            /**
+             * Model
+             * @default
+             */
+            model: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "unclassified" | "pending" | "classified" | "failed";
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
         };
         /** TraceSource */
         TraceSource: {
@@ -63081,6 +63195,59 @@ export interface operations {
             };
         };
     };
+    get_signals_lens_signals_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalConfig"];
+                };
+            };
+        };
+    };
+    put_signals_lens_signals_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignalConfig"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalConfig"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     trace_findings_lens_traces_findings_post: {
         parameters: {
             query?: never;
@@ -63101,6 +63268,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TraceFindingCount"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trace_signal_statuses_lens_traces_signals_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TraceFindingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceSignals"][];
                 };
             };
             /** @description Validation Error */

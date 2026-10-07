@@ -37,6 +37,8 @@ function demoLensApi(data: LensDemoData): LensApi {
     saveLens: readOnly,
     startRun: readOnly,
     watchAll: async () => ({ watching: [], skipped: [] }),
+    signalConfig: async () => ({ model: "", threshold: 0.5, signals: [] }),
+    saveSignalConfig: readOnly,
     cancelRun: readOnly,
     reviewFinding: readOnly,
     registerWorker: readOnly,
@@ -90,6 +92,8 @@ function demoTracesApi(data: LensDemoData): TracesApi {
         );
         return { ...trace, finding_count: assessed.length ? findings.size : null };
       }),
+    signals: async (traces) =>
+      traces.map((trace) => ({ ...trace, status: "unclassified" as const, flags: [], model: "", classified_at: null })),
     anyRecorded: async () => data.runs.length > 0,
     trace: (traceId) => found(run(traceId)?.trace),
     span: (traceId, spanId) => found(run(traceId)?.details.find((span) => span.span_id === spanId)),

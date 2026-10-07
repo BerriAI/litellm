@@ -291,7 +291,7 @@ describe("Lens interactive demo", () => {
     await expectUrl(onUrlUpdate, (url) => expect(url.get("tab")).toBe("settings"));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     const panel = within(screen.getByRole("region", { name: "Settings" }));
-    expect(panel.getByRole("status")).toHaveTextContent("Tracing enabled");
+    expect(panel.getByText("Tracing enabled", { exact: true })).toBeVisible();
     expect(panel.getByRole("heading", { name: "Analysis worker" })).toBeVisible();
     expect(panel.getByRole("heading", { name: worker.name })).toBeVisible();
     expect(panel.getByText("Connected")).toBeVisible();

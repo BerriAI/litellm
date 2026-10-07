@@ -25,6 +25,7 @@ export const lensKeys = {
   models: (scope: string) => [...lensKeys.all, "models", { scope }] as const,
   modelDetails: (scope: string) => [...lensKeys.all, "model-details", { scope }] as const,
   activity: (scope: string) => [...lensKeys.all, "activity-available", { scope }] as const,
+  signalConfig: (scope: string) => [...lensKeys.all, "signal-config", { scope }] as const,
   discoveries: () => [...lensKeys.all, "discovery"] as const,
   discovery: (scope: string, source: Settings["source"], hours: number | undefined) =>
     [...lensKeys.discoveries(), { scope, source, hours }] as const,
@@ -45,6 +46,13 @@ export const lensQueries = {
   },
   modelDetails(api: LensApi) {
     return queryOptions({ queryKey: lensKeys.modelDetails(api.scope), queryFn: () => api.modelDetails() });
+  },
+  signalConfig(api: LensApi) {
+    return queryOptions({
+      queryKey: lensKeys.signalConfig(api.scope),
+      queryFn: () => api.signalConfig(),
+      staleTime: 5000,
+    });
   },
   activity(api: LensApi, loaded: boolean) {
     const options = {
