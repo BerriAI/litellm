@@ -15,3 +15,5 @@ export const useBaseUrl = () => {
 };
 
 export const defaultPageSize = 25;
+
+export const TRACE_AGENT_LIST_REFRESH_MS = 5 * 60_000;
