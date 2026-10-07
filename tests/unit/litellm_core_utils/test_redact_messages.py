@@ -6,10 +6,12 @@ but litellm_params["litellm_metadata"] is None.
 """
 
 import threading
+from collections.abc import Mapping
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
-from types import SimpleNamespace
 
 import pytest
+from pydantic import JsonValue
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -21,6 +23,7 @@ from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
 from litellm.responses.main import mock_responses_api_response
+from litellm.types.router import BaselineRouteStamp
 
 
 @pytest.fixture(autouse=True)
@@ -1040,3 +1043,33 @@ def test_perform_redaction_drops_the_served_output_texts_from_the_callback_kwarg
     details: Final = {"litellm_params": {}, SERVED_OUTPUT_TEXTS_KEY: ("Card: <CREDIT_CARD>",)}
     perform_redaction(details, None)
     assert SERVED_OUTPUT_TEXTS_KEY not in details
+
+
+@pytest.mark.parametrize("callback_only", (False, True))
+@pytest.mark.parametrize("with_standard_payload", (False, True))
+def test_baseline_snapshots_are_redacted_without_mutating_request_state(
+    callback_only: bool, with_standard_payload: bool
+) -> None:
+    snapshot: Final[Mapping[str, JsonValue]] = MappingProxyType({"system": "private system"})
+    route: Final = BaselineRouteStamp("router", "baseline", "deployment", snapshot)
+    metadata: Final = {"_autorouter_baseline_route": route, "session_id": "session"}
+    params: Final = {"metadata": metadata, "litellm_metadata": metadata}
+    details: Final = {
+        "litellm_params": params,
+        **({"standard_logging_object": {"model": "model"}} if with_standard_payload else {}),
+    }
+    logger: Final = CustomLogger()
+    logger.turn_off_message_logging = True
+    if not callback_only:
+        perform_redaction(details, None)
+    redacted: Final = logger.redact_standard_logging_payload_from_model_call_details(details) if callback_only else details
+    expected: Final = BaselineRouteStamp(route.router_name, route.baseline_model, route.baseline_deployment_id)
+    assert redacted["litellm_params"] == {
+        key: {"_autorouter_baseline_route": expected, "session_id": "session"}
+        for key in ("metadata", "litellm_metadata")
+    }
+    assert route.request_parameters is snapshot
+    assert params["metadata"]["_autorouter_baseline_route"] is route
+    assert params["litellm_metadata"]["_autorouter_baseline_route"] is route
+    if callback_only:
+        assert details["litellm_params"] is params

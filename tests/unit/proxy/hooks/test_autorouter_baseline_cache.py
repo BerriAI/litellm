@@ -357,13 +357,16 @@ async def test_provider_counting_does_not_hold_the_inference_response(
 
 
 @pytest.mark.parametrize("baseline_effort", (None, "medium"))
-@pytest.mark.parametrize("automatic_system, caching", (
-    (None, "explicit"),
-    ("stable system", "request"),
-    ([{"type": "text", "text": "stable system"}], "request"),
-    ("stable system", "global"),
-    ([{"type": "text", "text": "stable system"}], "configured"),
-))
+@pytest.mark.parametrize(
+    "automatic_system, caching",
+    (
+        (None, "explicit"),
+        ("stable system", "request"),
+        ([{"type": "text", "text": "stable system"}], "request"),
+        ("stable system", "global"),
+        ([{"type": "text", "text": "stable system"}], "configured"),
+    ),
+)
 async def test_native_tier_switch_uses_baseline_settings_and_preserves_history(
     monkeypatch: pytest.MonkeyPatch,
     baseline_effort: str | None,
@@ -404,10 +407,16 @@ async def test_native_tier_switch_uses_baseline_settings_and_preserves_history(
     )
     rig: Final = _Rig(monkeypatch, models=models)
     monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", caching == "global")
-    controls: Final = {"cache_control_injection_points": [
-        {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
-        {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "1h"}},
-    ]} if caching == "configured" else {"enable_prompt_caching": caching == "request"}
+    controls: Final = (
+        {
+            "cache_control_injection_points": [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "1h"}},
+            ]
+        }
+        if caching == "configured"
+        else {"enable_prompt_caching": caching == "request"}
+    )
     captures: Final[asyncio.Queue[CapturedBaselineObservation]] = asyncio.Queue()
     with _transport(_upstream) as route:
         for suffix in ("", " ESCALATE"):
@@ -444,7 +453,11 @@ async def test_native_tier_switch_uses_baseline_settings_and_preserves_history(
     )
     _, result = advance_baseline_history(
         history,
-        (second.observation.model_copy(update={"request_id": "second", "started_at": 10020.0, "available_at": 10021.0}),),
+        (
+            second.observation.model_copy(
+                update={"request_id": "second", "started_at": 10020.0, "available_at": 10021.0}
+            ),
+        ),
     )
     assert result[0].usage is not None and result[0].usage.prompt_tokens_details.cached_tokens == 5000
 
@@ -536,8 +549,8 @@ async def test_native_baseline_identity_keeps_the_actual_transformed_body(
     assert observed.outcome == "complete"
     assert log.baseline_cache_context is not None
     assert observed.baseline_equivalent and observed.usage is not None, (
-        log.baseline_cache_context.baseline_parameters,
-        log.baseline_cache_context.selected_parameters,
+        log.baseline_cache_context.baseline_body,
+        log.baseline_cache_context.selected_body_digest,
     )
 
 
@@ -596,8 +609,18 @@ async def test_native_baseline_projection_matches_wire_parameter_placement(
         return await _count(model, api_key, body)
 
     models: Final = _MESSAGES.validate_python(
-        [{**entry, "litellm_params": {**_JSON_OBJECT.validate_python(entry["litellm_params"]), "model": "anthropic/claude-opus-5"}}
-         if entry["model_name"] == "sonnet" else entry for entry in _MODELS]
+        [
+            {
+                **entry,
+                "litellm_params": {
+                    **_JSON_OBJECT.validate_python(entry["litellm_params"]),
+                    "model": "anthropic/claude-opus-5",
+                },
+            }
+            if entry["model_name"] == "sonnet"
+            else entry
+            for entry in _MODELS
+        ]
     )
     rig: Final = _Rig(monkeypatch, count=count, models=models)
     settings: Final = {"speed": "standard", "thinking": {"type": "adaptive"}, "output_config": {"effort": "medium"}}
@@ -620,3 +643,220 @@ async def test_native_baseline_projection_matches_wire_parameter_placement(
         key: wire[key] for key in settings if key in wire
     }
     assert {key: wire[key] for key in settings if key in wire} == ({} if nested else settings)
+
+
+_PARITY_TOOL: Final = {"name": "custom", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}}
+_PARITY_SYSTEM: Final = [{"type": "text", "text": "stable system", "cache_control": {"type": "ephemeral"}}]
+_PARITY_POINTS: Final = [{"location": "message", "role": "system"}, {"location": "message", "index": -1}]
+
+
+@pytest.mark.parametrize(
+    "caller,selected,baseline,summary",
+    (
+        pytest.param({"extra_body": {"cache_control": {"type": "ephemeral"}}}, {}, {}, False, id="envelope-control"),
+        pytest.param({"extra_body": {"system": _PARITY_SYSTEM}}, {}, {}, False, id="envelope-system"),
+        pytest.param(
+            {"extra_body": {"messages": _MESSAGES.validate_json(_MESSAGES_JSON)}}, {}, {}, False, id="envelope-messages"
+        ),
+        pytest.param({}, {"tools": [_PARITY_TOOL]}, {}, False, id="selected-tool-mark"),
+        pytest.param({}, {}, {"tools": [_PARITY_TOOL]}, False, id="baseline-tool-mark"),
+        pytest.param({}, {"system": _PARITY_SYSTEM}, {"system": "baseline system"}, False, id="selected-system-mark"),
+        pytest.param({}, {"system": "selected system"}, {"system": _PARITY_SYSTEM}, False, id="baseline-system-mark"),
+        pytest.param({"system": None}, {}, {"system": "configured system"}, False, id="null-system"),
+        pytest.param({"thinking": None}, {}, {"thinking": {"type": "adaptive"}}, False, id="null-thinking"),
+        pytest.param({"tools": None}, {}, {"tools": [_PARITY_TOOL]}, False, id="null-tools"),
+        pytest.param({"verbosity": "low", "instructions": "ignored"}, {}, {}, False, id="ignored-native-options"),
+        pytest.param(
+            {"messages": _MESSAGES.validate_json(_MESSAGES_JSON.replace("stable", " "))},
+            {},
+            {},
+            False,
+            id="empty-marked-block",
+        ),
+        pytest.param({"thinking": {"type": "adaptive"}}, {}, {}, True, id="reasoning-summary"),
+        pytest.param(
+            {"thinking": {"type": "adaptive"}, "additional_drop_params": ["thinking.display"]},
+            {},
+            {},
+            True,
+            id="drop-nested-option",
+        ),
+        pytest.param(
+            {"cache_control_injection_points": _PARITY_POINTS},
+            {"tools": [{**_PARITY_TOOL, "name": f"custom_{index}"} for index in range(4)]},
+            {},
+            False,
+            id="configured-cap",
+        ),
+    ),
+)
+async def test_native_baseline_projection_matches_direct_baseline_request(
+    monkeypatch: pytest.MonkeyPatch,
+    caller: dict[str, JsonValue],
+    selected: dict[str, JsonValue],
+    baseline: dict[str, JsonValue],
+    summary: bool,
+) -> None:
+    counted: Final[asyncio.Queue[Mapping[str, JsonValue]]] = asyncio.Queue()
+
+    async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int:
+        counted.put_nowait(body)
+        return await _count(model, api_key, body)
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        body: Final = _JSON_OBJECT.validate_json(request.content)
+        model: Final = body.get("model")
+        assert isinstance(model, str)
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                **_message(True, model),
+                "usage": {"input_tokens": 6000, "output_tokens": 10},
+            },
+        )
+
+    models: Final = _MESSAGES.validate_python(
+        [
+            _MODELS[0],
+            {
+                **_MODELS[1],
+                "litellm_params": {**_JSON_OBJECT.validate_python(_MODELS[1]["litellm_params"]), **selected},
+            },
+            {
+                **_MODELS[2],
+                "litellm_params": {**_JSON_OBJECT.validate_python(_MODELS[2]["litellm_params"]), **baseline},
+            },
+        ]
+    )
+    rig: Final = _Rig(monkeypatch, models=models, count=count)
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", summary)
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+    request: Final = {
+        "messages": [{"role": "user", "content": "question"}],
+        **({"system": "stable system"} if "system" not in selected and "system" not in baseline else {}),
+        "max_tokens": 4096,
+        "enable_prompt_caching": True,
+        **caller,
+    }
+    with _transport(upstream) as route:
+        await rig.router.anthropic_messages(model="opus", **_JSON_OBJECT.validate_python(request))
+        direct: Final = _JSON_OBJECT.validate_json(route.calls.last.request.content)
+        await rig.router.anthropic_messages(
+            model="test-router",
+            litellm_logging_obj=rig.logging(),
+            litellm_call_id=rig.call_id,
+            litellm_metadata={"user_api_key_hash": "test-caller-hash"},
+            litellm_session_id="native-projection-parity",
+            **_JSON_OBJECT.validate_python(request),
+        )
+        captured: Final = _observation(await rig.capture.payload())
+    assert captured.observation.plan is not None, captured.observation.reason
+    projected: Final = counted.get_nowait()
+    assert {key: value for key, value in projected.items() if key not in ("metadata", "stream")} == {
+        key: value for key, value in direct.items() if key not in ("metadata", "stream")
+    }
+
+
+async def test_native_baseline_prices_projected_speed_without_changing_actual_spend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.spend_tracking.baseline_accounting import BaselineHistory, advance_baseline_history
+    from litellm.proxy.spend_tracking.savings import baseline_cost_snapshot, price_baseline_comparison
+    from litellm.types.utils import ModelInfo
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        body: Final = _JSON_OBJECT.validate_json(request.content)
+        model: Final = body.get("model")
+        assert isinstance(model, str) and body.get("speed") is None
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                **_message(True, model),
+                "usage": {
+                    "input_tokens": 6000,
+                    "output_tokens": 10,
+                    "speed": "standard",
+                    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                },
+            },
+        )
+
+    rig: Final = _Rig(
+        monkeypatch,
+        models=_MESSAGES.validate_python(
+            [
+                *_MODELS[:2],
+                {
+                    **_MODELS[2],
+                    "litellm_params": {
+                        **_JSON_OBJECT.validate_python(_MODELS[2]["litellm_params"]),
+                        "speed": "fast",
+                    },
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
+    with _transport(upstream):
+        response: Final = _JSON_OBJECT.validate_python(
+            await rig.router.anthropic_messages(
+                model="test-router",
+                max_tokens=16,
+                messages=[{"role": "user", "content": "question"}],
+                litellm_logging_obj=rig.logging(),
+                litellm_call_id=rig.call_id,
+                litellm_metadata={"user_api_key_hash": "test-caller-hash"},
+                litellm_session_id="baseline-speed",
+            )
+        )
+        payload: Final = await rig.capture.payload()
+    captured: Final = _observation(payload)
+    _, estimates = advance_baseline_history(BaselineHistory(), (captured.observation,))
+    estimate: Final = estimates[0]
+    assert captured.prices is not None
+    prices: Final[ModelInfo] = {
+        **captured.prices,
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "provider_specific_entry": {"fast": 3.0},
+    }
+    actual: Final = payload["response_cost"]
+    assert isinstance(actual, float)
+    snapshot: Final = baseline_cost_snapshot(
+        captured.model,
+        prices,
+        actual,
+        _OBJECTS.validate_python(payload["cost_breakdown"]),
+        None,
+    )
+    comparison: Final = price_baseline_comparison(snapshot, estimate.usage, estimate.provenance)
+    assert comparison is not None and snapshot.actual_token_cost is not None, estimate.reason
+    assert comparison.baseline == pytest.approx(actual + (6000 * 1e-6 + 10 * 2e-6) * 3.0 - snapshot.actual_token_cost)
+    assert comparison.actual == actual
+    assert _JSON_OBJECT.validate_python(response["usage"])["speed"] == "standard"
+
+
+async def test_native_request_rewritten_after_capture_preserves_spend_without_guessing_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RewriteSystem(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: Mapping[str, object], call_type: CallTypes | None
+        ) -> dict[str, object]:
+            return {**kwargs, "system": "hook system"}
+
+    rig: Final = _Rig(monkeypatch)
+    monkeypatch.setattr(litellm, "callbacks", [rig.hook, RewriteSystem()])
+    with _transport(_upstream) as route:
+        await _call(rig.router, rig.logging())
+        payload: Final = await rig.capture.payload()
+        wire: Final = _JSON_OBJECT.validate_json(route.calls.last.request.content)
+    observed: Final = _observation(payload).observation
+    assert wire["system"] == "hook system"
+    assert observed.reason == "unsupported_request_transformation" and observed.plan is None
+    assert observed.usage is not None
+    actual: Final = payload["response_cost"]
+    assert isinstance(actual, float) and actual > 0

@@ -71,12 +71,12 @@ def _complete_usage(usage: Usage | None) -> bool:
     if usage is None or usage.prompt_tokens < 0 or usage.completion_tokens < 0:
         return False
     details: Final = usage.prompt_tokens_details
-    if details is None:
+    if details is None or not hasattr(details, "cache_creation_tokens"):
         return False
     values: Final = (details.text_tokens, details.cached_tokens, details.cache_creation_tokens)
     if any(value is None or value < 0 for value in values):
         return False
-    split: Final = details.cache_creation_token_details
+    split: Final = details.cache_creation_token_details if hasattr(details, "cache_creation_token_details") else None
     writes: Final = details.cache_creation_tokens or 0
     return (
         usage.total_tokens == usage.prompt_tokens + usage.completion_tokens

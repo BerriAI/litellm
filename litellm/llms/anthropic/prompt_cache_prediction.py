@@ -5,6 +5,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import reduce
 from itertools import accumulate, groupby
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
@@ -13,17 +14,21 @@ import httpx
 from pydantic import ConfigDict, Field, JsonValue, StrictInt, TypeAdapter, ValidationError
 
 import litellm
-from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, is_anthropic_oauth_key
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
+from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
+    is_anthropic_oauth_key,
+    strip_provider_specific_fields_from_anthropic_messages,
+)
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
+from litellm.llms.anthropic.pass_through.messages.utils import AnthropicMessagesRequestUtils, prepare_native_messages
 from litellm.router_utils.baseline_request import (
     BASELINE_PARAMETERS,
-    baseline_request,
     capture_baseline_parameters,
     within_baseline_budget,
 )
@@ -334,7 +339,7 @@ def _entry_fingerprint(fingerprint: str, ttl_seconds: int) -> str:
 
 def parse_cache_plan(body: Mapping[str, JsonValue]) -> PromptCachePlan | UnsupportedCachePlan:
     try:
-        request: Final = _PlanRequest.model_validate(body)
+        request: Final = _PlanRequest.model_validate(dict(body))
         positions: Final = _positions(body)
     except ValidationError:
         return UnsupportedCachePlan("unsupported_prompt_shape")
@@ -627,55 +632,46 @@ def resolve_baseline_prediction_target(params: LiteLLM_Params) -> NativePredicti
     return _resolve_prediction_target(params, allow_configured_endpoint=True)
 
 
-def capture_native_baseline_parameters(request: Mapping[str, object], model: str) -> Mapping[str, JsonValue] | None:
-    parameters: Final = capture_baseline_parameters(request, include_extra_body=False)
-    if (
-        parameters is None
-        or parameters.get("system") is None
-        or not (
-            litellm.enable_anthropic_prompt_caching is True
-            or request.get("enable_prompt_caching") is True
-            or request.get("cache_control_injection_points")
-        )
-    ):
-        return parameters
-    messages: Final = request.get("messages") or []
-    if not within_baseline_budget(messages):
-        return None
-    _, system = AnthropicCacheControlHook.maybe_inject_cache_control(
-        messages=_MESSAGES.validate_python(messages),
-        system=_SYSTEM.validate_python(parameters.get("system")),
-        kwargs={key: value for key, value in request.items() if key not in ("metadata", "litellm_metadata")},
-        model=model,
-        custom_llm_provider="anthropic",
-        tools=_MESSAGES.validate_python(parameters.get("tools") or []),
-    )
-    return capture_baseline_parameters({**parameters, "system": system}, include_extra_body=False)
-
-
-def project_baseline_body(
-    body: Mapping[str, JsonValue], parameters: Mapping[str, JsonValue] | None, model: str
-) -> dict[str, JsonValue] | None:
+def prepare_native_baseline_body(request: Mapping[str, object], model: str) -> Mapping[str, JsonValue] | None:
+    parameters: Final = capture_baseline_parameters(request)
     if parameters is None:
         return None
-    projected: Final = baseline_request(body, parameters, {})
-    if projected is None:
+    source: Final = {**parameters, "messages": request.get("messages"), "stream": request.get("stream", False)}
+    if not within_baseline_budget(source):
         return None
-    owned: Final = _JSON_OBJECT.validate_python(projected)
-    messages: Final = _MESSAGES.validate_python(owned.get("messages"))
-    options: Final = {
-        **{key: value for key, value in owned.items() if key not in ("messages", "model")},
-        "max_tokens": owned.get("max_tokens", body.get("max_tokens")),
-    }
-    return _JSON_OBJECT.validate_python(
-        AnthropicMessagesConfig().transform_anthropic_messages_request(
-            model=model,
-            messages=messages,
-            anthropic_messages_optional_request_params=options,
+    try:
+        owned: Final = _JSON_OBJECT.validate_python(source)
+        context: Final = {**{k: v for k, v in request.items() if k not in ("metadata", "litellm_metadata")}, **owned}
+        resolved_model: Final = litellm.get_llm_provider(model=model, custom_llm_provider="anthropic")[0]
+        messages, system = prepare_native_messages(
+            _MESSAGES.validate_python(owned.get("messages")),
+            _SYSTEM.validate_python(owned.get("system")),
+            context,
+            model=resolved_model,
+            custom_llm_provider="anthropic",
+            tools=_MESSAGES.validate_python(owned.get("tools") or []),
+        )
+        options: Final = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+            {**owned, "system": system},
+            model=resolved_model,
+            custom_llm_provider="anthropic",
+            drop_params=owned.get("drop_params") is True,
+        )
+        filtered: Final = reduce(
+            delete_nested_value,
+            TypeAdapter(tuple[str, ...]).validate_python(owned.get("additional_drop_params") or ()),
+            dict(options),
+        )
+        body: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+            model=resolved_model,
+            messages=strip_provider_specific_fields_from_anthropic_messages(messages),
+            anthropic_messages_optional_request_params=filtered,
             litellm_params=GenericLiteLLMParams(),
             headers={},
         )
-    )
+        return MappingProxyType(_JSON_OBJECT.validate_python(body))
+    except Exception:  # noqa: BLE001  # an unsupported hypothetical request is unavailable, never an inference failure
+        return None
 
 
 def _resolve_prediction_target(

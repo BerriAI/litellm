@@ -42,6 +42,10 @@ BASELINE_PARAMETERS: Final = (
     "top_p",
     "top_k",
     "stop_sequences",
+    "enable_prompt_caching",
+    "cache_control_injection_points",
+    "drop_params",
+    "additional_drop_params",
 )
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _MAX_BYTES: Final = 4 * 1024 * 1024
@@ -79,18 +83,23 @@ def within_baseline_budget(value: object) -> bool:
     )
 
 
-def _parameters(value: object) -> dict[str, object]:
+def _parameters(value: object, *, envelope: bool = False) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
     mapping: Final = cast(Mapping[str, object], value)
-    return {key: mapping[key] for key in BASELINE_PARAMETERS if mapping.get(key) is not None}
+    keys: Final = (*BASELINE_PARAMETERS, "messages") if envelope else BASELINE_PARAMETERS
+    return {key: mapping[key] for key in keys if key in mapping}
 
 
 def capture_baseline_parameters(
     kwargs: Mapping[str, object], *, include_extra_body: bool = True
 ) -> Mapping[str, JsonValue] | None:
-    extra: Final = _parameters(kwargs.get("extra_body")) if include_extra_body else {}
-    parameters: Final = {**_parameters(kwargs), **({"extra_body": extra} if extra else {})}
+    extra: Final = (
+        {"extra_body": _parameters(kwargs.get("extra_body"), envelope=True)}
+        if include_extra_body and "extra_body" in kwargs
+        else {}
+    )
+    parameters: Final = {**_parameters(kwargs), **extra}
     if not within_baseline_budget(parameters):
         return None
     try:
@@ -114,18 +123,23 @@ def baseline_request(
         **(_parameters(snapshot.get("extra_body")) if include_extra_body else {}),
     }
     requested: Final = {**_parameters(caller), **(_parameters(caller.get("extra_body")) if include_extra_body else {})}
-    configured_tools: Final = configured.get("tools")
-    caller_tools: Final = requested.get("tools")
+    configured_tools: Final = configured.get("tools") or []
+    caller_tools: Final = requested.get("tools") or []
     merged_tools: Final = (
         {"tools": [*configured_tools, *caller_tools]}
-        if isinstance(configured_tools, list) and isinstance(caller_tools, list)
+        if (configured_tools or caller_tools) and isinstance(configured_tools, list) and isinstance(caller_tools, list)
         else {}
     )
     return MappingProxyType(
         {
             **{key: value for key, value in kwargs.items() if key not in (*BASELINE_PARAMETERS, "extra_body")},
-            **{key: value for key, value in configured.items() if value is not None},
+            **configured,
             **requested,
             **merged_tools,
+            **(
+                {"extra_body": caller.get("extra_body", snapshot.get("extra_body"))}
+                if not include_extra_body and ("extra_body" in caller or "extra_body" in snapshot)
+                else {}
+            ),
         }
     )

@@ -249,3 +249,23 @@ def test_short_lifetime_hit_cannot_seed_an_unpaid_long_lifetime_entry() -> None:
     assert upgrade.usage.prompt_tokens_details.cache_creation_token_details.ephemeral_1h_input_tokens == 0
     assert after_expiry.usage.prompt_tokens_details.cached_tokens == 0
     assert after_expiry.usage.prompt_tokens_details.cache_creation_token_details.ephemeral_1h_input_tokens == 4600
+
+
+@pytest.mark.parametrize("writes", (0, 50, None))
+def test_cache_creation_split_is_optional_only_without_writes(writes: int | None) -> None:
+    usage: Final = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=100 - (writes or 0),
+            cached_tokens=0,
+            cache_creation_tokens=writes,
+        ),
+    )
+    observed: Final = _observation("no-split", usage=usage, plan=CountedPromptCachePlan(100, ()))
+    restored: Final = BaselineObservation.model_validate_json(observed.model_dump_json())
+    estimate: Final = _replay(restored)[0]
+    assert (estimate.usage is not None) is (writes == 0)
+    if estimate.usage is not None:
+        assert estimate.usage.prompt_tokens == usage.prompt_tokens
