@@ -109,7 +109,7 @@ class TestReplicateStartingStatus:
         # Verify that GET was called 3 times (starting, processing, succeeded)
         assert mock_client.get.call_count == 3
 
-    @patch("litellm.llms.replicate.chat.handler._get_httpx_client")
+    @patch("litellm.llms.replicate.chat.handler.get_httpx_client")
     def test_sync_completion_handles_starting_status(self, mock_get_client):
         """Test that sync completion polls correctly when status is 'starting'"""
         # Mock the sync HTTP client

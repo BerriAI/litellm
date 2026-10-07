@@ -396,7 +396,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
-        usage_dict: UsageDelta = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
+        usage_dict: UsageDelta = LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage_delta(
             chunk.usage
         )
         if self.applied_edits and "context_management" not in merged_chunk:
@@ -1163,7 +1163,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         (
             block_type,
             content_block_start,
-        ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+        ) = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(
             choices=chunk.choices
         )
 

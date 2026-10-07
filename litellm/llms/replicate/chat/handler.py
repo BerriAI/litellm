@@ -12,8 +12,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import CustomStreamWrapper, ModelResponse
@@ -186,7 +186,7 @@ def completion(
     )
 
     ## COMPLETION CALL
-    httpx_client: Final = _get_httpx_client(
+    httpx_client: Final = get_httpx_client(
         params={"timeout": 600.0},
     )
     response = httpx_client.post(

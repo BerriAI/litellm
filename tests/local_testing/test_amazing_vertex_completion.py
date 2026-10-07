@@ -22,7 +22,7 @@ from litellm import (
     image_generation,
 )
 from litellm.llms.vertex_ai.gemini.transformation import (
-    _gemini_convert_messages_with_history,
+    gemini_convert_messages_with_history,
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
@@ -1190,15 +1190,12 @@ def test_tool_name_conversion():
         # Now the assistant can reply with the result of the tool call.
     ]
 
-    translated_messages = _gemini_convert_messages_with_history(messages=messages)
+    translated_messages = gemini_convert_messages_with_history(messages=messages)
 
     print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
 
     # assert that the last tool response has the corresponding tool name
-    assert (
-        translated_messages[-1]["parts"][0]["function_response"]["name"]
-        == "get_weather"
-    )
+    assert translated_messages[-1]["parts"][0]["function_response"]["name"] == "get_weather"
 
 
 def test_prompt_factory():
@@ -1237,7 +1234,7 @@ def test_prompt_factory():
         # Now the assistant can reply with the result of the tool call.
     ]
 
-    translated_messages = _gemini_convert_messages_with_history(messages=messages)
+    translated_messages = gemini_convert_messages_with_history(messages=messages)
 
     print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
 
@@ -1247,23 +1244,19 @@ def test_prompt_factory_nested():
         {"role": "user", "content": [{"type": "text", "text": "hi"}]},
         {
             "role": "assistant",
-            "content": [
-                {"type": "text", "text": "Hi! 👋 \n\nHow can I help you today? 😊 \n"}
-            ],
+            "content": [{"type": "text", "text": "Hi! 👋 \n\nHow can I help you today? 😊 \n"}],
         },
         {"role": "user", "content": [{"type": "text", "text": "hi 2nd time"}]},
     ]
 
-    translated_messages = _gemini_convert_messages_with_history(messages=messages)
+    translated_messages = gemini_convert_messages_with_history(messages=messages)
 
     print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
 
     for message in translated_messages:
         assert len(message["parts"]) == 1
         assert "text" in message["parts"][0], "Missing 'text' from 'parts'"
-        assert isinstance(
-            message["parts"][0]["text"], str
-        ), "'text' value not a string."
+        assert isinstance(message["parts"][0]["text"], str), "'text' value not a string."
 
 
 @pytest.mark.asyncio
@@ -1942,7 +1935,7 @@ def test_gemini_function_call_parameter_in_messages():
 def test_gemini_function_call_parameter_in_messages_2():
     litellm.set_verbose = True
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
 
     messages = [
@@ -1962,7 +1955,7 @@ def test_gemini_function_call_parameter_in_messages_2():
         },
     ]
 
-    returned_contents = _gemini_convert_messages_with_history(messages=messages)
+    returned_contents = gemini_convert_messages_with_history(messages=messages)
 
     print(f"returned_contents: {returned_contents}")
     assert returned_contents == [

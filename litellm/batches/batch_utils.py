@@ -369,7 +369,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
             row,
             model_name,
             model_info=model_info,
-            calculate_usage=VertexGeminiConfig._calculate_usage,
+            calculate_usage=VertexGeminiConfig.calculate_usage,
             cost_calculator=batch_cost_calculator,
         )
         for row in vertex_ai_batch_responses

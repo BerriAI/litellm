@@ -10,7 +10,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import can_block_current_thread
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
 from .common_utils import (
     APIKeyExpiredError,
@@ -195,7 +195,7 @@ class Authenticator:
         max_retries: Final = 3
         for attempt in range(max_retries):
             try:
-                sync_client = _get_httpx_client()
+                sync_client = get_httpx_client()
                 response = sync_client.get(api_key_url, headers=headers)
                 response.raise_for_status()
 
@@ -257,7 +257,7 @@ class Authenticator:
             GetDeviceCodeError: If unable to get a device code.
         """
         try:
-            sync_client: Final = _get_httpx_client()
+            sync_client: Final = get_httpx_client()
             device_code_url: Final = os.getenv("GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL)
             client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
             resp: Final = sync_client.post(
@@ -309,7 +309,7 @@ class Authenticator:
         Raises:
             GetAccessTokenError: If unable to get an access token.
         """
-        sync_client: Final = _get_httpx_client()
+        sync_client: Final = get_httpx_client()
         max_attempts: Final = 12  # 1 minute (12 * 5 seconds)
 
         access_token_url: Final = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL)

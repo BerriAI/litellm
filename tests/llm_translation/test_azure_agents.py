@@ -174,19 +174,15 @@ def test_azure_ai_agents_config_get_agent_id():
     config = AzureAIAgentsConfig()
 
     # Test with full model name
-    agent_id = config._get_agent_id("azure_ai/agents/asst_abc123", {})
+    agent_id = config.get_agent_id("azure_ai/agents/asst_abc123", {})
     assert agent_id == "asst_abc123"
 
     # Test with optional_params override
-    agent_id = config._get_agent_id(
-        "azure_ai/agents/asst_abc123", {"agent_id": "asst_override"}
-    )
+    agent_id = config.get_agent_id("azure_ai/agents/asst_abc123", {"agent_id": "asst_override"})
     assert agent_id == "asst_override"
 
     # Test with assistant_id in optional_params
-    agent_id = config._get_agent_id(
-        "azure_ai/agents/asst_abc123", {"assistant_id": "asst_assistant"}
-    )
+    agent_id = config.get_agent_id("azure_ai/agents/asst_abc123", {"assistant_id": "asst_assistant"})
     assert agent_id == "asst_assistant"
 
 

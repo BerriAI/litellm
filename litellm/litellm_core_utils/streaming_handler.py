@@ -1315,7 +1315,7 @@ class CustomStreamWrapper:
                 raise ValueError(f"chunk is not a string: {chunk}")
             response_obj = cast(
                 dict[str, object],
-                litellm.CodestralTextCompletionConfig()._chunk_parser(chunk),
+                litellm.CodestralTextCompletionConfig().chunk_parser(chunk),
             )
             completion_obj["content"] = response_obj["text"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
