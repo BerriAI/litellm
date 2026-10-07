@@ -8,3 +8,10 @@ pub struct TraceSQLResponse {
     )]
     pub data: Vec<serde_json::Map<String, serde_json::Value>>,
 }
+
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TraceAgentList {
+    pub data: Vec<String>,
+}
