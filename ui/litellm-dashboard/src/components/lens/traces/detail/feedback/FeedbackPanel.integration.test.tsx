@@ -49,10 +49,11 @@ describe("FeedbackPanel", () => {
     ]);
 
     const panel = await screen.findByRole("region", { name: "User feedback" });
-    expect(within(panel).getAllByTestId("feedback-entry").map((row) => row.textContent)).toEqual([
-      expect.stringContaining("customer-2"),
-      expect.stringContaining("customer-1"),
-    ]);
+    expect(
+      within(panel)
+        .getAllByTestId("feedback-entry")
+        .map((row) => row.textContent),
+    ).toEqual([expect.stringContaining("customer-2"), expect.stringContaining("customer-1")]);
     expect(panel).toHaveTextContent("6/10 avg from 2 users");
     expect(panel).toHaveAttribute("data-low", "true");
   });

@@ -55,7 +55,13 @@ const renderWindowed = (timeControls?: RelativeRangeState) =>
 
 type TraceKey = { trace_id: string; trace_ref?: string };
 const unrated = (traces: TraceKey[]): TraceFeedbackSummary[] =>
-  traces.map((trace) => ({ trace_id: trace.trace_id, trace_ref: trace.trace_ref ?? "", count: 0, average: null, lowest: null }));
+  traces.map((trace) => ({
+    trace_id: trace.trace_id,
+    trace_ref: trace.trace_ref ?? "",
+    count: 0,
+    average: null,
+    lowest: null,
+  }));
 
 /** Routes the shared POST mock: findings get `findings`, the feedback summary gets `feedback`. */
 const stubPost = (
