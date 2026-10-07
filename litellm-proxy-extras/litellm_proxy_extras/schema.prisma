@@ -1969,6 +1969,11 @@ model LiteLLM_LensWorker {
   data       Json
 }
 
+model LiteLLM_LensIngestionKey {
+  id   String @id
+  data Json
+}
+
 model LiteLLM_LensDataset {
   id         String
   revision   Int
@@ -1976,9 +1981,4 @@ model LiteLLM_LensDataset {
   data       Json
 
   @@id([id, revision])
-}
-
-model LiteLLM_LensIngestionKey {
-  id   String @id
-  data Json
 }
