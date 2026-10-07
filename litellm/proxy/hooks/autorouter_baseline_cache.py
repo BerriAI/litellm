@@ -37,6 +37,7 @@ from litellm.proxy.spend_tracking.savings import (
     _effective_model_info,  # pyright: ignore[reportPrivateUsage]  # existing deployment-price owner
     _proxy_llm_router,  # pyright: ignore[reportPrivateUsage]  # existing optional proxy-router owner
 )
+from litellm.router_strategy.complexity_router.context_compaction import compaction_applied
 from litellm.router_utils.baseline_request import baseline_request
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import BaselineRouteStamp
@@ -210,7 +211,9 @@ class AutoRouterBaselineCache(CustomLogger):
                 prepare_native_baseline_body(projected, target.model)
                 if projected is not None and isinstance(target, NativePredictionTarget)
                 else None,
-                _native_body_digest(selected_body) if selected_body is not None else None,
+                _native_body_digest(selected_body)
+                if selected_body is not None and not compaction_applied(kwargs)
+                else None,
             )
         except Exception:  # noqa: BLE001  # optional observation cannot fail inference
             verbose_proxy_logger.warning("Auto-router baseline observation could not be initialized")

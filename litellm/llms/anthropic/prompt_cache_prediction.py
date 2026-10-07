@@ -30,7 +30,6 @@ from litellm.llms.anthropic.pass_through.messages.utils import AnthropicMessages
 from litellm.router_utils.baseline_request import (
     BASELINE_PARAMETERS,
     capture_baseline_parameters,
-    within_baseline_budget,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
@@ -637,8 +636,6 @@ def prepare_native_baseline_body(request: Mapping[str, object], model: str) -> M
     if parameters is None:
         return None
     source: Final = {**parameters, "messages": request.get("messages"), "stream": request.get("stream", False)}
-    if not within_baseline_budget(source):
-        return None
     try:
         owned: Final = _JSON_OBJECT.validate_python(source)
         context: Final = {**{k: v for k, v in request.items() if k not in ("metadata", "litellm_metadata")}, **owned}

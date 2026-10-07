@@ -909,3 +909,102 @@ async def test_native_request_rewritten_after_capture_preserves_spend_without_gu
     assert observed.usage is not None
     actual: Final = payload["response_cost"]
     assert isinstance(actual, float) and actual > 0
+
+
+@pytest.mark.parametrize("history", ("long_session", "non_ascii"))
+async def test_native_baseline_models_long_and_non_ascii_history(monkeypatch: pytest.MonkeyPatch, history: str) -> None:
+    rounds: Final = tuple(
+        message
+        for index in range(1200)
+        for message in (
+            {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{index}", "name": "Read", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{index}", "content": "ok"}]},
+        )
+    )
+    prefix: Final = (
+        [{"role": "user", "content": "start"}, *rounds]
+        if history == "long_session"
+        else [{"role": "user", "content": "a" * 400_000 + "é"}, {"role": "assistant", "content": "ok"}]
+    )
+    messages: Final = json.dumps([*prefix, *_MESSAGES.validate_json(_MESSAGES_JSON)])
+    rig: Final = _Rig(monkeypatch)
+    with _transport(_upstream):
+        await _call(rig.router, rig.logging(), messages=messages)
+        observed: Final = _observation(await rig.capture.payload()).observation
+    assert observed.outcome == "complete" and observed.plan is not None
+
+
+async def test_native_baseline_abstains_after_selected_tier_compaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.router_strategy.complexity_router.context_compaction import compaction_executor
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "summary-fixture",
+        {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "max_input_tokens": 32000,
+            "max_output_tokens": 4096,
+            "supports_anthropic_compaction": True,
+        },
+    )
+    models: Final = _MESSAGES.validate_python(
+        [
+            {
+                "model_name": "test-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {"SIMPLE": "sonnet", "MEDIUM": "opus", "COMPLEX": "opus", "REASONING": "opus"},
+                        "keyword_tier_rules": [{"keywords": ["answer"], "tier": "SIMPLE"}],
+                        "session_affinity": False,
+                        "enable_context_window_escalation": False,
+                        "max_tokens_from_tier_model": False,
+                        "context_compaction": {"model": "compactor", "max_tokens": 512},
+                    },
+                },
+            },
+            {
+                "model_name": "sonnet",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "test-selected"},
+                "model_info": {"id": "selected", "max_input_tokens": 512, "max_output_tokens": 64},
+            },
+            {
+                "model_name": "opus",
+                "litellm_params": {"model": "anthropic/claude-opus-5", "api_key": "test-selected"},
+                "model_info": {"id": "baseline", "max_input_tokens": 200000, "max_output_tokens": 4096},
+            },
+            {
+                "model_name": "compactor",
+                "litellm_params": {"model": "anthropic/summary-fixture", "api_key": "test-compactor"},
+                "model_info": {"id": "compactor"},
+            },
+        ]
+    )
+
+    async def summarize(protocol: object, request: object, parent_model: object = None) -> Mapping[str, object]:
+        return {
+            "stop_reason": "compaction",
+            "content": [{"type": "compaction", "content": "compacted", "signature": "s"}],
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+
+    messages: Final = json.dumps(
+        [
+            {"role": "user", "content": "Background detail. " * 300},
+            {"role": "assistant", "content": "Recorded"},
+            {"role": "user", "content": "Answer briefly"},
+        ]
+    )
+    rig: Final = _Rig(monkeypatch, models=models)
+    token: Final = compaction_executor.set(summarize)
+    try:
+        with _transport(_upstream) as route:
+            await _call(rig.router, rig.logging(), messages=messages)
+            observed: Final = _observation(await rig.capture.payload()).observation
+            wire: Final = route.calls.last.request.content.decode()
+    finally:
+        compaction_executor.reset(token)
+    assert "compacted" in wire and "Background detail" not in wire
+    assert observed.reason == "unsupported_request_transformation" and observed.plan is None
+    assert observed.usage is not None
