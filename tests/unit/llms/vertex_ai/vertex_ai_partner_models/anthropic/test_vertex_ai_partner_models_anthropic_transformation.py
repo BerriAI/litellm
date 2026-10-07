@@ -875,3 +875,51 @@ def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_convers
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant", "user", "system"]
     assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("thinking_type", ("adaptive", "enabled"))
+@pytest.mark.parametrize("display", ("summarized", "omitted", "updates"))
+def test_chat_preserves_thinking_display_and_beta(thinking_type: str, display: str) -> None:
+    from typing import Final
+
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
+    from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+
+    config: Final = VertexAIAnthropicConfig()
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"thinking": {"type": thinking_type, "display": display, "budget_tokens": 2048}},
+        optional_params={},
+        model="claude-fable-5-1",
+        drop_params=False,
+    )
+    optional_params["extra_headers"] = {"anthropic-beta": "existing-beta"}
+    headers: Final = {}
+    result: Final = config.transform_request(
+        model="claude-fable-5-1",
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers,
+    )
+
+    assert result["thinking"]["type"] == "adaptive"
+    assert result["thinking"]["display"] == display
+    assert (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in headers["anthropic-beta"].split(",")) == (display == "updates")
+    assert "existing-beta" in headers["anthropic-beta"].split(",")
+
+
+@pytest.mark.parametrize("thinking", ("enabled", {"type": "bogus"}, {"type": "adaptive", "display": "future-mode"}))
+def test_beta_detection_preserves_unrecognized_thinking(thinking: object) -> None:
+    from typing import Final
+
+    from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+
+    headers: Final = {}
+    result: Final = VertexAIAnthropicConfig().transform_request(
+        model="claude-fable-5-1", messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"thinking": thinking}, litellm_params={}, headers=headers,
+    )
+
+    assert result["thinking"] == thinking
+    assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER not in headers.get("anthropic-beta", "").split(",")

@@ -46,10 +46,10 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
+    LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
-    AnthropicThinkingParam,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
@@ -478,7 +478,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         file_ids: Final = get_file_ids_from_messages(messages)
         return len(file_ids) > 0
 
-    def is_thinking_display_updates_used(self, thinking: AnthropicThinkingParam | None) -> bool:
+    def is_thinking_display_updates_used(self, thinking: object) -> bool:
         if not isinstance(thinking, dict):
             return False
         return thinking.get("type") in ("adaptive", "enabled") and thinking.get("display") == "updates"
@@ -908,7 +908,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
         existing_output_config: Final = optional_params.get("output_config")
         display: Final = thinking.get("display")
-        if display in ("summarized", "omitted"):
+        preserve_display: Final = display in ("summarized", "omitted")
+        preserve_updates: Final = (
+            display == "updates" and custom_llm_provider in LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS
+        )
+        if preserve_display or preserve_updates:
             optional_params["thinking"] = {"type": "adaptive", "display": display}
         else:
             optional_params["thinking"] = {"type": "adaptive"}

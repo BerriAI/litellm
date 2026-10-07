@@ -726,3 +726,79 @@ def test_vertex_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_f
         and info.get("supports_mid_conversation_system") is not True
     ]
     assert missing == []
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("feature", ("thinking", "output_config", "tool_addition", "tool_removal", "none"))
+@pytest.mark.parametrize("explicit_beta", (False, True))
+def test_messages_feature_beta_headers(feature: str, explicit_beta: bool) -> None:
+    from typing import Final
+    from unittest.mock import patch
+
+    from google.oauth2.credentials import Credentials
+    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import VertexAIPartnerModelsAnthropicMessagesConfig
+    from litellm.types.llms.anthropic import (
+        ANTHROPIC_BETA_HEADER_VALUES,
+        ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+        ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
+    )
+
+    beta: Final = (
+        ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+        if feature == "thinking"
+        else ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value
+        if feature == "output_config"
+        else ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    )
+    message: Final = (
+        {"role": "system", "content": [], "output_config": {"effort": "high"}}
+        if feature == "output_config"
+        else {"role": "system", "content": [{"type": feature, "tool": {"type": "tool_reference", "name": "ping"}}]}
+        if feature in ("tool_addition", "tool_removal")
+        else {"role": "user", "content": "Reply with OK"}
+    )
+    with patch(
+        "google.auth.default",
+        return_value=(MagicMock(spec=Credentials, token="test-token", expired=False), "test-project"),
+    ):
+        headers, _ = VertexAIPartnerModelsAnthropicMessagesConfig().validate_anthropic_messages_environment(
+            headers={"anthropic-beta": f"existing-beta,{beta}" if explicit_beta else "existing-beta"},
+            model="claude-fable-5-1",
+            messages=[{"role": "user", "content": "Hello"}, message],
+            optional_params={"thinking": {"type": "adaptive", "display": "updates"}} if feature == "thinking" else {},
+            litellm_params={"vertex_ai_project": "test-project", "vertex_ai_location": "us-east5"},
+            api_key="test-key",
+            api_base="https://example.com/anthropic",
+        )
+
+    betas: Final = headers["anthropic-beta"].split(",")
+    assert betas.count(beta) == int(feature != "none" or explicit_beta)
+    assert betas.count("existing-beta") == 1
+
+    if feature in ("tool_addition", "tool_removal"):
+        filtered_headers: Final = update_headers_with_filtered_beta(headers=headers, provider="vertex_ai")
+        assert filtered_headers.get("anthropic-beta", "").split(",").count(beta) == 1
+
+
+@pytest.mark.parametrize("thinking", ("enabled", {"type": "bogus"}, {"type": "adaptive", "display": "future-mode"}))
+def test_beta_detection_preserves_unrecognized_thinking(thinking: object) -> None:
+    from typing import Final
+    from unittest.mock import patch
+
+    from google.oauth2.credentials import Credentials
+    from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+
+    params: Final = {"thinking": thinking}
+    with patch(
+        "google.auth.default",
+        return_value=(MagicMock(spec=Credentials, token="test-token", expired=False), "test-project"),
+    ):
+        headers, _ = VertexAIPartnerModelsAnthropicMessagesConfig().validate_anthropic_messages_environment(
+            headers={}, model="claude-fable-5-1", messages=[], optional_params=params,
+            litellm_params={"vertex_ai_project": "test-project", "vertex_ai_location": "us-east5"},
+            api_key="test-key", api_base="https://example.com/anthropic",
+        )
+
+    assert params["thinking"] == thinking
+    assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER not in headers.get("anthropic-beta", "").split(",")

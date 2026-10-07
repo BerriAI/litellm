@@ -96,9 +96,14 @@ class AzureAnthropicConfig(AnthropicConfig):
             is_vertex_request=optional_params.get("is_vertex_request", False),
             user_anthropic_beta_headers=user_anthropic_beta_headers,
             mcp_server_used=mcp_server_used,
+            is_thinking_display_updates_used=self.is_thinking_display_updates_used(
+                optional_params.get("thinking"),  # pyright: ignore[reportUnknownArgumentType]  # detector accepts unvalidated input
+            ),
         )
         # Merge headers - Azure auth (api-key or Authorization) takes precedence
         headers = {**anthropic_headers, **headers}
+        if "anthropic-beta" in anthropic_headers:
+            headers["anthropic-beta"] = anthropic_headers["anthropic-beta"]
 
         # Ensure anthropic-version header is set
         if "anthropic-version" not in headers:

@@ -738,6 +738,9 @@ class AnthropicThinkingParam(TypedDict, total=False):
     display: ReadOnly[Literal["summarized", "omitted", "updates"]]
 
 
+LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS: Final = frozenset(("azure_ai", "vertex_ai"))
+
+
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     WEB_SEARCH = "web_search"
     BASH = "bash"
