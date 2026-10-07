@@ -3610,6 +3610,7 @@ dependencies = [
 name = "litellm-cache-response"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "litellm-cache",
  "litellm-cache-gcs",
  "litellm-cache-memory",
@@ -4134,6 +4135,7 @@ dependencies = [
  "litellm-tracing",
  "reqwest 0.12.28",
  "rstest",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite",

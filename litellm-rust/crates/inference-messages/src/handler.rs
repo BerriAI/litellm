@@ -4,6 +4,7 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use litellm_host::interceptors::{Interceptors, ProviderIdentity, RequestContext, WireRequest};
 use litellm_http::transport::Error as TransportError;
+use litellm_inference::{caching::CachePlan, context::CallContext, outbound::outbound_request};
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     messages::{
@@ -20,27 +21,22 @@ use super::{
     prepare::ProviderMessagesRequest,
 };
 use crate::constants::MESSAGES_TIMEOUT_SECS;
-use litellm_inference::{context::CallContext, outbound::outbound_request};
 
 pub(super) struct ProviderCall {
     pub identity: ProviderIdentity,
     pub wire: WireRequest,
+    pub cache: Option<CachePlan>,
     provider: super::common_utils::MessagesProvider,
     signer: Option<litellm_auth_aws::SigV4Signer>,
     timeout: Option<Duration>,
     stream: bool,
 }
 
-impl ProviderCall {
-    pub fn cacheable(&self) -> bool {
-        self.signer.is_none()
-    }
-}
-
 impl MessagesRoute {
     pub(super) async fn prepare_outbound(
         &self,
         request: ProviderMessagesRequest,
+        cache: Option<CachePlan>,
         context: &CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<ProviderCall, Error> {
         let ProviderMessagesRequest {
@@ -64,16 +60,15 @@ impl MessagesRoute {
             model: request_context.model.clone(),
             provider: request_context.custom_llm_provider.clone(),
         };
+        let outbound = WireRequest {
+            url,
+            headers: authenticated.headers,
+            body: serde_json::to_value(&body).map_err(serialize_failure)?,
+        };
+        let cache = cache.filter(|_| authenticated.signer.is_none());
         let wire = context
             .interceptors
-            .before_provider_request(
-                WireRequest {
-                    url,
-                    headers: authenticated.headers,
-                    body: serde_json::to_value(&body).map_err(serialize_failure)?,
-                },
-                request_context,
-            )
+            .before_provider_request(outbound, request_context)
             .await?;
         let stream = match wire.body.get("stream") {
             None | Some(Value::Null) => false,
@@ -90,6 +85,7 @@ impl MessagesRoute {
         };
         Ok(ProviderCall {
             identity,
+            cache,
             wire,
             provider,
             signer: authenticated.signer,
@@ -105,6 +101,7 @@ impl MessagesRoute {
     ) -> Result<MessagesCallResponse, Error> {
         let ProviderCall {
             identity,
+            cache: _,
             wire,
             provider,
             signer,

@@ -1,20 +1,25 @@
-use std::{future::Future, pin::Pin, time::Duration};
+use std::time::Duration;
 
+use futures_util::future::BoxFuture;
 use litellm_cache::Error;
 use litellm_cache_response::{
-    ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
+    CacheKey, CacheKeyInput, CacheScope, ResponseCacheService, ResponseEnvelope,
 };
 use litellm_host::{
     machine::{HostServices, MachineFault},
     protocol::{Protocol, Reply},
 };
-use litellm_inference::caching::CachedOutput;
+use litellm_inference::caching::{Cachable, CachedOutput};
+use litellm_inference_messages::route::Messages;
 use serde_json::Value;
 
 const STREAM_EVENTS_KEY: &str = "litellm_cached_anthropic_sse_events";
 
-fn from_python(value: Value) -> Result<Value, Error> {
-    let output = match value.get(STREAM_EVENTS_KEY) {
+fn from_python(value: Value, surface: &'static str) -> Result<Value, Error> {
+    let output = match value
+        .get(STREAM_EVENTS_KEY)
+        .filter(|_| surface == Messages::SURFACE)
+    {
         Some(events) => {
             let events: Vec<String> =
                 serde_json::from_value(events.clone()).map_err(|_| Error::InvalidEntry)?;
@@ -22,84 +27,114 @@ fn from_python(value: Value) -> Result<Value, Error> {
         }
         None => CachedOutput::Response(value),
     };
-    serde_json::to_value(ResponseEnvelope::new("messages", output)).map_err(|_| Error::InvalidEntry)
+    serde_json::to_value(ResponseEnvelope::new(surface, output)).map_err(|_| Error::InvalidEntry)
 }
 
-fn to_python(value: Value) -> Result<Value, Error> {
+fn to_python(value: Value, surface: &'static str) -> Result<Value, Error> {
     let envelope: ResponseEnvelope<CachedOutput<Value>> =
         serde_json::from_value(value).map_err(|_| Error::InvalidEntry)?;
-    match envelope.decode("messages").ok_or(Error::InvalidEntry)? {
+    match envelope.decode(surface).ok_or(Error::InvalidEntry)? {
         CachedOutput::Response(response) => Ok(response),
-        CachedOutput::Stream(text) => Ok(serde_json::json!({
-            STREAM_EVENTS_KEY: text.split_inclusive("\n\n").collect::<Vec<_>>()
-        })),
+        CachedOutput::Stream(text) if surface == Messages::SURFACE => {
+            let response = serde_json::Map::from_iter([(
+                STREAM_EVENTS_KEY.to_owned(),
+                Value::Array(
+                    text.split_inclusive("\n\n")
+                        .map(|block| Value::String(block.to_owned()))
+                        .collect(),
+                ),
+            )]);
+            Ok(Value::Object(response))
+        }
+        CachedOutput::Stream(_) => Err(Error::InvalidEntry),
     }
 }
 
 pub(crate) enum CacheCall {
+    GetCacheKey {
+        reply: Reply<Result<String, Error>>,
+    },
     Lookup {
+        key: String,
         reply: Reply<Result<Option<Value>, Error>>,
     },
     Store {
+        key: String,
         value: Value,
         reply: Reply<Result<(), Error>>,
     },
 }
 
-struct PythonCacheService<P: Protocol> {
+struct PythonResponseCache<P: Protocol> {
     services: HostServices<P>,
-    config: ResponseCacheConfig,
+    surface: &'static str,
 }
 
 pub(in crate::cache) fn service<P: Protocol<HostCall = CacheCall>>(
     services: HostServices<P>,
-    namespace: String,
+    surface: &'static str,
 ) -> std::sync::Arc<dyn ResponseCacheService>
 where
     P::Error: From<MachineFault>,
 {
-    std::sync::Arc::new(PythonCacheService {
-        services,
-        config: ResponseCacheConfig {
-            namespace,
-            ..Default::default()
-        },
-    })
+    std::sync::Arc::new(PythonResponseCache { services, surface })
 }
 
-impl<P: Protocol<HostCall = CacheCall>> ResponseCacheService for PythonCacheService<P>
+impl<P: Protocol<HostCall = CacheCall>> ResponseCacheService for PythonResponseCache<P>
 where
     P::Error: From<MachineFault>,
 {
-    fn config(&self) -> &ResponseCacheConfig {
-        &self.config
+    fn max_entry_bytes(&self) -> Option<usize> {
+        None
+    }
+
+    fn key<'a>(
+        &'a self,
+        _: &'a CacheKeyInput,
+        scope: &'a CacheScope,
+    ) -> BoxFuture<'a, Result<CacheKey, Error>> {
+        Box::pin(async move {
+            match scope.credential {
+                Some(_) => Err(Error::UnsupportedOperation),
+                None => self
+                    .services
+                    .call(|reply| CacheCall::GetCacheKey { reply })
+                    .await
+                    .map_err(|_| Error::Unavailable)?
+                    .map(CacheKey::Supplied),
+            }
+        })
     }
 
     fn lookup<'a>(
         &'a self,
-        _: &'a ResponseCacheRequest,
+        key: &'a CacheKey,
+        _: Option<Duration>,
         _: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, Error>> + Send + 'a>> {
+    ) -> BoxFuture<'a, Result<Option<Value>, Error>> {
+        let key = key.as_str().to_owned();
         Box::pin(async move {
             self.services
-                .call(|reply| CacheCall::Lookup { reply })
+                .call(|reply| CacheCall::Lookup { key, reply })
                 .await
                 .map_err(|_| Error::Unavailable)??
-                .map(from_python)
+                .map(|value| from_python(value, self.surface))
                 .transpose()
         })
     }
 
     fn store<'a>(
         &'a self,
-        _: &'a ResponseCacheRequest,
+        key: &'a CacheKey,
+        _: Option<Duration>,
         value: Value,
         _: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+    ) -> BoxFuture<'a, Result<(), Error>> {
+        let key = key.as_str().to_owned();
         Box::pin(async move {
-            let value = to_python(value)?;
+            let value = to_python(value, self.surface)?;
             self.services
-                .call(|reply| CacheCall::Store { value, reply })
+                .call(|reply| CacheCall::Store { key, value, reply })
                 .await
                 .map_err(|_| Error::Unavailable)?
         })

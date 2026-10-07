@@ -1,7 +1,12 @@
 use std::time::Duration;
 
 use bytes::Bytes;
+use litellm_cache_response::CacheKeyInput;
 use litellm_host::call::CallOutput;
+use litellm_inference::{
+    RouteError,
+    caching::{Cachable, CacheKeyProjection},
+};
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, responses::transformation::BaseResponsesApiConfig,
 };
@@ -34,4 +39,22 @@ pub(super) struct ProviderResponsesRequest {
     pub body: Value,
     pub context: litellm_host::interceptors::RequestContext,
     pub timeout: Option<Duration>,
+}
+
+impl CacheKeyProjection for ResponsesCall {
+    fn cache_key_input(&self) -> Result<CacheKeyInput, RouteError> {
+        Ok(CacheKeyInput::new(
+            <crate::route::Responses as Cachable>::SURFACE,
+            Value::Object(
+                self.optional_params
+                    .clone()
+                    .into_iter()
+                    .chain([
+                        ("model".into(), self.model.clone().into()),
+                        ("input".into(), self.input.clone()),
+                    ])
+                    .collect(),
+            ),
+        ))
+    }
 }

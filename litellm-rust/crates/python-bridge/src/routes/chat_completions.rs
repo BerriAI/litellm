@@ -1,15 +1,16 @@
 mod host;
 
-use pyo3::types::{PyDict, PyTuple};
-
-use crate::execution::{run_async, run_sync};
 use litellm_inference_chat::{ChatCompletionsRoute, Error, types::ChatCompletionsRequest};
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
-use pyo3::prelude::*;
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 use serde_json::{Map, Value};
 
 use crate::{
     errors::route_error_to_pyerr,
+    execution::{run_async, run_sync},
     marshal::{
         RouteOptions, extra_headers_argument, messages_argument, optional_params_argument,
         optional_timeout,
@@ -136,8 +137,9 @@ fn run_public(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    use super::inference::InferenceHost;
     use litellm_callbacks_legacy_python::LoggingOperation;
+
+    use super::inference::InferenceHost;
     let host = InferenceHost::new(
         request.clone().unbind(),
         "litellm.rust_bridge.chat_completions.route_host",
@@ -147,7 +149,6 @@ fn run_public(
     } else {
         "completion"
     };
-    crate::cache::admit_native(py, &kwargs, cache_call_type)?;
     let (arguments, hooks) = crate::routes::call_hooks(
         py,
         LoggingOperation::Completion,
@@ -166,18 +167,35 @@ fn run_public(
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );
-            let (cache, cache_options) =
-                crate::cache::configured_native(py, arguments, cache_call_type)?;
-            let route = match cache {
-                Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
-                    cache,
-                    litellm_cache_response::CacheScope::Shared,
-                )),
-                None => route,
-            };
-            Ok(route.machine(request, cache_options.policy))
+            Ok(litellm_host::call::hosted_call(
+                request,
+                None,
+                move |(call, selection): (
+                    litellm_inference_chat::types::ChatCompletionsCall,
+                    Option<crate::cache::PythonCacheSelection>,
+                ),
+                      services,
+                      interceptors,
+                      observers| async move {
+                    let (cache, options) = selection
+                        .map(|selection| selection.into_parts(services))
+                        .unzip();
+                    route
+                        .with_cache(cache)
+                        .execute(
+                            call,
+                            &interceptors,
+                            litellm_inference::CallOptions {
+                                cache: options,
+                                observers,
+                            },
+                        )
+                        .await
+                        .map(litellm_host::call::CallOutput::Complete)
+                },
+            ))
         },
-        host::ChatCompletionsPythonHost(host),
+        host::ChatCompletionsPythonHost::new(host, asynchronous, cache_call_type),
         hooks,
         asynchronous,
     )

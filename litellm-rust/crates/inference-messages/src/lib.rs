@@ -5,15 +5,17 @@ mod prepare;
 pub mod route;
 mod types;
 
+use std::sync::Arc;
+
 use futures_util::FutureExt;
 use litellm_auth::AuthServices;
 use litellm_host::interceptors::{ExecutionFacts, Interceptors, ResultSource};
-
-use litellm_inference::{caching::CallCache, context::CallContext};
-use litellm_secrets::source::SecretSource;
-use std::sync::Arc;
-
 pub use litellm_inference::RouteError as Error;
+use litellm_inference::{
+    caching::{CachePlan, CacheSession},
+    context::CallContext,
+};
+use litellm_secrets::source::SecretSource;
 pub use types::{MessagesCall, MessagesCallResponse, MessagesShaping, messages_body};
 
 #[derive(Clone)]
@@ -21,7 +23,7 @@ pub struct MessagesRoute {
     http: litellm_http::Client,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
-    cache: Option<litellm_cache_response::ScopedCache>,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
 }
 
 impl MessagesRoute {
@@ -39,9 +41,12 @@ impl MessagesRoute {
     }
 
     #[must_use]
-    pub fn with_cache(self, cache: litellm_cache_response::ScopedCache) -> Self {
+    pub fn with_cache(
+        self,
+        cache: impl Into<Option<Arc<dyn litellm_cache_response::ResponseCacheService>>>,
+    ) -> Self {
         Self {
-            cache: Some(cache),
+            cache: cache.into(),
             ..self
         }
     }
@@ -71,20 +76,19 @@ impl MessagesRoute {
         context: CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<MessagesCallResponse, Error> {
         litellm_inference::diagnostic::call(async {
+            let cache = CachePlan::for_request(self.cache.as_ref(), context.cache.clone(), &call)?;
             let prepared = prepare::prepare(call, self.secrets.as_ref()).await?;
             litellm_inference::diagnostic::provider(
                 &prepared.body.model,
                 prepared.provider.as_str(),
             );
-            let request = self.prepare_outbound(prepared, &context).boxed().await?;
-            let cache = CallCache::<route::Messages>::from_wire(
-                self.cache.as_ref().filter(|_| request.cacheable()),
-                context.cache,
-                &request.identity,
-                &request.wire,
-            );
+            let mut request = self
+                .prepare_outbound(prepared, cache, &context)
+                .boxed()
+                .await?;
+            let session = CacheSession::<route::Messages>::open(request.cache.take()).await;
             let identity = request.identity.clone();
-            let (output, source) = match cache.lookup().await {
+            let (output, source) = match CacheSession::replay(session.as_ref()).await {
                 Some(hit) => hit,
                 None => (
                     self.call_provider(request, &context).await?,
@@ -97,7 +101,7 @@ impl MessagesRoute {
                     source: source.clone(),
                 })
                 .await?;
-            Ok(cache.finish(output, &source).await)
+            Ok(CacheSession::finish(session, output, &source).await)
         })
         .await
     }

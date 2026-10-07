@@ -1,7 +1,12 @@
 use std::time::Duration;
 
 use bytes::Bytes;
+use litellm_cache_response::CacheKeyInput;
 use litellm_host::call::CallOutput;
+use litellm_inference::{
+    RouteError,
+    caching::{Cachable, CacheKeyProjection},
+};
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::{
     formats::messages::{MessagesRequest, MessagesResponse},
@@ -44,6 +49,17 @@ pub struct MessagesShaping {
     pub reasoning_auto_summary: bool,
     #[serde(default)]
     pub additional_drop_params: Vec<String>,
+}
+
+impl CacheKeyProjection for MessagesCall {
+    fn cache_key_input(&self) -> Result<CacheKeyInput, RouteError> {
+        let body = serde_json::to_value(&self.body)
+            .map_err(|error| RouteError::InvalidRequest(error.to_string().into()))?;
+        Ok(CacheKeyInput::new(
+            <crate::route::Messages as Cachable>::SURFACE,
+            body,
+        ))
+    }
 }
 
 #[cfg(test)]

@@ -19,8 +19,9 @@ fn run_public(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    use super::inference::InferenceHost;
     use litellm_callbacks_legacy_python::LoggingOperation;
+
+    use super::inference::InferenceHost;
     let host = InferenceHost::new(
         request.clone().unbind(),
         "litellm.rust_bridge.responses.route_host",
@@ -68,7 +69,6 @@ fn run_public(
     } else {
         "responses"
     };
-    crate::cache::admit_native(py, &kwargs, cache_call_type)?;
     let (arguments, hooks) = crate::routes::call_hooks(
         py,
         LoggingOperation::Responses,
@@ -87,18 +87,31 @@ fn run_public(
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );
-            let (cache, cache_options) =
-                crate::cache::configured_native(py, arguments, cache_call_type)?;
-            let route = match cache {
-                Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
-                    cache,
-                    litellm_cache_response::CacheScope::Shared,
-                )),
-                None => route,
-            };
-            Ok(route.machine(request, cache_options.policy))
+            Ok(litellm_host::call::hosted_call(
+                request,
+                None,
+                move |(call, selection): (_, Option<crate::cache::PythonCacheSelection>),
+                      services,
+                      interceptors,
+                      observers| async move {
+                    let (cache, options) = selection
+                        .map(|selection| selection.into_parts(services))
+                        .unzip();
+                    route
+                        .with_cache(cache)
+                        .execute(
+                            call,
+                            &interceptors,
+                            litellm_inference::CallOptions {
+                                cache: options,
+                                observers,
+                            },
+                        )
+                        .await
+                },
+            ))
         },
-        host::ResponsesPythonHost(host),
+        host::ResponsesPythonHost::new(host, asynchronous, cache_call_type),
         hooks,
         asynchronous,
     )

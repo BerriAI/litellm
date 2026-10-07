@@ -1,8 +1,7 @@
-use crate::cache::{CacheCall, Cached, PythonCache, Selection};
-use litellm_host_python::{PythonHostCalls, PythonOwned};
-
 use bytes::Bytes;
-use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
+use litellm_host_python::{
+    InvokeError, PythonBinding, PythonHostCalls, PythonOwned, from_py, lookup, to_py,
+};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesShaping, messages_body,
@@ -18,6 +17,7 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use crate::{
+    cache::{CacheCall, PythonCache, PythonCacheSelection, PythonCached},
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{optional_timeout, python_timeout_seconds},
 };
@@ -227,17 +227,21 @@ impl MessagesPythonHost {
 }
 
 impl PythonBinding for MessagesPythonHost {
-    type Protocol = Cached<Messages>;
+    type Protocol = PythonCached<Messages>;
     type Failure = PyErr;
 
     fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<(MessagesCall, Selection), InvokeError<Error>> {
-        let selection =
-            crate::cache::configure(&mut self.cache, py, arguments, "anthropic_messages")
-                .map_err(InvokeError::Python)?;
+    ) -> Result<(MessagesCall, Option<PythonCacheSelection>), InvokeError<Error>> {
+        let selection = crate::cache::select_python_cache::<Messages>(
+            &mut self.cache,
+            py,
+            arguments,
+            "anthropic_messages",
+        )
+        .map_err(InvokeError::Python)?;
         self.projection(py, arguments)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
             .map_err(InvokeError::Native)
@@ -284,7 +288,7 @@ impl PythonBinding for MessagesPythonHost {
     }
 }
 
-impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
+impl PythonHostCalls<PythonCached<Messages>> for MessagesPythonHost {
     fn handle_host_call(
         &mut self,
         py: Python<'_>,

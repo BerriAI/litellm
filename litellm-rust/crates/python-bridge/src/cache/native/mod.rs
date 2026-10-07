@@ -1,3 +1,3 @@
-pub(super) mod v2;
+mod handle;
 
-pub(crate) use v2::NativeCacheHandle;
+pub(crate) use handle::NativeCacheHandle;

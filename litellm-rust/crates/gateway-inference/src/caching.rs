@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope};
+use litellm_cache_response::{CacheAccess, CacheCredential, CacheOptions, CachePolicy, CacheScope};
 use litellm_gateway_auth::AuthenticatedRequest;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -30,29 +30,30 @@ pub(crate) fn prepare(
             .map_err(|error| Error::InvalidBody(error.to_string()))?,
         None => Controls::default(),
     };
-    let caching: Option<bool> = body
+    let active = body
         .get("caching")
         .filter(|value| !value.is_null())
-        .map(|value| serde_json::from_value(value.clone()))
+        .map(|value| serde_json::from_value::<bool>(value.clone()))
         .transpose()
-        .map_err(|error| Error::InvalidBody(error.to_string()))?;
+        .map_err(|error| Error::InvalidBody(error.to_string()))?
+        .unwrap_or(true);
     let caller = identity.caller();
     let options = CacheOptions {
         policy: CachePolicy {
-            caching,
-            no_cache: controls.no_cache,
-            no_store: controls.no_store,
+            access: CacheAccess {
+                reads: active && !controls.no_cache,
+                writes: active && !controls.no_store,
+            },
             ttl: controls.ttl.map(duration).transpose()?,
             max_age: controls.max_age.map(duration).transpose()?,
         },
-        scope: CacheScope::Isolated(
-            serde_json::json!([
+        scope: CacheScope {
+            credential: Some(CacheCredential::new(
                 caller.principal().authority(),
                 caller.principal().subject(),
-                caller.authentication().credential_id
-            ])
-            .to_string(),
-        ),
+                &caller.authentication().credential_id,
+            )),
+        },
     };
     Ok((
         body.into_iter()

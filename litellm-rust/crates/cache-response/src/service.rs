@@ -1,41 +1,48 @@
-use std::{future::Future, pin::Pin, time::Duration};
+use std::time::Duration;
 
-use litellm_cache::{BaseCache, Error, ExactCacheContext};
+use futures_util::{StreamExt, TryStreamExt, future::BoxFuture};
+use litellm_cache::{BaseCache, BatchCache, Error, ExactCacheContext};
 use serde_json::Value;
 
-use crate::{
-    CacheControls, CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheRequest,
-};
+use crate::{BatchLookup, CacheEntry, CacheKey, CacheKeyInput, CacheScope, ResponseCache};
 
-type CacheFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
-
-#[derive(Clone)]
-pub struct ResponseCacheConfig {
-    pub namespace: String,
-    pub max_entry_bytes: usize,
-}
-
-impl Default for ResponseCacheConfig {
-    fn default() -> Self {
-        Self {
-            namespace: String::new(),
-            max_entry_bytes: usize::MAX,
-        }
-    }
-}
+type CacheFuture<'a, T> = BoxFuture<'a, Result<T, Error>>;
 
 pub trait ResponseCacheService: Send + Sync {
-    fn config(&self) -> &ResponseCacheConfig;
+    fn max_entry_bytes(&self) -> Option<usize>;
+
+    fn key<'a>(
+        &'a self,
+        input: &'a CacheKeyInput,
+        scope: &'a CacheScope,
+    ) -> CacheFuture<'a, CacheKey>;
 
     fn lookup<'a>(
         &'a self,
-        request: &'a ResponseCacheRequest,
+        key: &'a CacheKey,
+        max_age: Option<Duration>,
         now: Duration,
     ) -> CacheFuture<'a, Option<Value>>;
 
+    fn lookup_batch<'a>(
+        &'a self,
+        keys: &'a [CacheKey],
+        max_age: Option<Duration>,
+        now: Duration,
+    ) -> CacheFuture<'a, BatchLookup<Value>> {
+        Box::pin(async move {
+            let values = futures_util::stream::iter(keys)
+                .then(|key| self.lookup(key, max_age, now))
+                .try_collect()
+                .await?;
+            Ok(BatchLookup { values })
+        })
+    }
+
     fn store<'a>(
         &'a self,
-        request: &'a ResponseCacheRequest,
+        key: &'a CacheKey,
+        ttl: Option<Duration>,
         response: Value,
         now: Duration,
     ) -> CacheFuture<'a, ()>;
@@ -43,143 +50,51 @@ pub trait ResponseCacheService: Send + Sync {
 
 impl<B> ResponseCacheService for ResponseCache<B>
 where
-    B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>,
+    B: BaseCache<Value = CacheEntry, Context = ExactCacheContext> + BatchCache,
 {
-    fn config(&self) -> &ResponseCacheConfig {
-        self.config()
+    fn max_entry_bytes(&self) -> Option<usize> {
+        ResponseCache::max_entry_bytes(self)
+    }
+
+    fn key<'a>(
+        &'a self,
+        input: &'a CacheKeyInput,
+        scope: &'a CacheScope,
+    ) -> CacheFuture<'a, CacheKey> {
+        Box::pin(async move { Ok(ResponseCache::key(self, input, scope)) })
     }
 
     fn lookup<'a>(
         &'a self,
-        request: &'a ResponseCacheRequest,
+        key: &'a CacheKey,
+        max_age: Option<Duration>,
         now: Duration,
     ) -> CacheFuture<'a, Option<Value>> {
-        Box::pin(self.async_lookup(request, now))
+        Box::pin(async move {
+            self.async_lookup(key, &ExactCacheContext::default(), max_age, now)
+                .await
+        })
+    }
+
+    fn lookup_batch<'a>(
+        &'a self,
+        keys: &'a [CacheKey],
+        max_age: Option<Duration>,
+        now: Duration,
+    ) -> CacheFuture<'a, BatchLookup<Value>> {
+        Box::pin(async move {
+            self.async_lookup_batch(keys, &ExactCacheContext::default(), max_age, now)
+                .await
+        })
     }
 
     fn store<'a>(
         &'a self,
-        request: &'a ResponseCacheRequest,
+        key: &'a CacheKey,
+        ttl: Option<Duration>,
         response: Value,
         now: Duration,
     ) -> CacheFuture<'a, ()> {
-        Box::pin(self.async_store(request, response, now))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CacheScope {
-    Shared,
-    Isolated(String),
-}
-
-#[derive(Clone, Copy, Default)]
-pub struct CachePolicy {
-    pub caching: Option<bool>,
-    pub no_cache: bool,
-    pub no_store: bool,
-    pub ttl: Option<Duration>,
-    pub max_age: Option<Duration>,
-}
-
-impl CachePolicy {
-    pub fn enabled(&self) -> bool {
-        self.caching != Some(false) && !(self.no_cache && self.no_store)
-    }
-}
-
-#[derive(Clone)]
-pub struct CacheOptions {
-    pub policy: CachePolicy,
-    pub scope: CacheScope,
-}
-
-impl CacheOptions {
-    pub fn new(scope: CacheScope) -> Self {
-        Self {
-            policy: CachePolicy::default(),
-            scope,
-        }
-    }
-
-    pub fn request(self, namespace: &str, surface: &str, mut input: Value) -> ResponseCacheRequest {
-        input.sort_all_objects();
-        let scope = match self.scope {
-            CacheScope::Shared => String::new(),
-            CacheScope::Isolated(scope) => serde_json::json!(["isolated", scope]).to_string(),
-        };
-        ResponseCacheRequest {
-            key: CacheKeyInput {
-                namespace: Some(format!("{namespace}:inference-v2")),
-                fields: [
-                    ("surface", surface.to_owned()),
-                    ("scope", scope),
-                    ("request", input.to_string()),
-                ]
-                .into_iter()
-                .map(|(name, value)| CacheKeyField {
-                    name: name.into(),
-                    value: Some(value),
-                    api_parameter: true,
-                    internal_parameter: false,
-                })
-                .collect(),
-                ..Default::default()
-            },
-            controls: CacheControls {
-                configured: true,
-                supported_call_type: true,
-                native_backend: true,
-                default_on: true,
-                caching: self.policy.caching,
-                no_cache: self.policy.no_cache,
-                no_store: self.policy.no_store,
-                ..Default::default()
-            },
-            context: ExactCacheContext {
-                ttl: self.policy.ttl,
-            },
-            max_age: self.policy.max_age,
-        }
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct ResponseEnvelope<T> {
-    version: u32,
-    surface: String,
-    output: T,
-}
-
-impl<T> ResponseEnvelope<T> {
-    pub fn new(surface: &str, output: T) -> Self {
-        Self {
-            version: 1,
-            surface: surface.into(),
-            output,
-        }
-    }
-
-    pub fn decode(self, surface: &str) -> Option<T> {
-        (self.version == 1 && self.surface == surface).then_some(self.output)
-    }
-}
-
-#[derive(Clone)]
-pub struct ScopedCache {
-    pub service: std::sync::Arc<dyn ResponseCacheService>,
-    pub scope: CacheScope,
-}
-
-impl ScopedCache {
-    pub fn new(service: std::sync::Arc<dyn ResponseCacheService>, scope: CacheScope) -> Self {
-        Self { service, scope }
-    }
-
-    pub fn options(&self, policy: Option<CachePolicy>) -> CacheOptions {
-        CacheOptions {
-            policy: policy.unwrap_or_default(),
-            scope: self.scope.clone(),
-        }
+        Box::pin(self.async_store(key, ExactCacheContext { ttl }, response, now))
     }
 }

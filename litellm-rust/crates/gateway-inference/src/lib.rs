@@ -15,6 +15,7 @@ mod responses;
 use std::sync::Arc;
 
 use axum::{Router, routing::post};
+pub use error::Error;
 use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
 use litellm_inference::resources::CoreResources;
 use litellm_inference_chat::ChatCompletionsRoute;
@@ -23,14 +24,11 @@ use litellm_inference_ocr::OcrRoute;
 use litellm_inference_responses::ResponsesRoute;
 use litellm_inference_transcription::AudioTranscriptionRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
-use litellm_secrets::source::SecretSource;
-
-pub use error::Error;
 pub use litellm_router::{Deployment, Router as ModelRouter};
+use litellm_secrets::source::SecretSource;
 pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
-    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
     pub messages: MessagesRoute,
@@ -45,7 +43,9 @@ pub struct Gateway {
 impl Gateway {
     pub fn with_cache(self, cache: Arc<dyn litellm_cache_response::ResponseCacheService>) -> Self {
         Self {
-            cache: Some(cache),
+            chat_completions: self.chat_completions.with_cache(cache.clone()),
+            messages: self.messages.with_cache(cache.clone()),
+            responses: self.responses.with_cache(cache),
             ..self
         }
     }
@@ -59,7 +59,6 @@ impl Gateway {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
         let auth = resources.auth.clone();
         Ok(Self {
-            cache: None,
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),
                 auth.clone(),
