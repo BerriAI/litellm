@@ -5,10 +5,10 @@ import {
   type ColumnDef,
   type TableOptions,
 } from "@tanstack/react-table";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { Inspector } from "./Inspector";
 import { InspectorTable } from "./InspectorTable";
@@ -156,5 +156,56 @@ describe("InspectorTable.SkeletonRow", () => {
     render(<SkeletonTree visibility={{ size: false }} />);
     const [row] = screen.getAllByTestId("skeleton-row");
     expect(within(row).getAllByRole("cell", { hidden: true })).toHaveLength(1);
+  });
+});
+
+const MANY: Node[] = Array.from({ length: 100 }, (_, i) => ({ id: `r${i}` }));
+
+function VisibleRows({ onVisibleRowsChange }: { onVisibleRowsChange: (ids: string[]) => void }) {
+  const tableOptions: TableOptions<Node> = {
+    data: MANY,
+    columns: COLUMNS,
+    getRowId: (node) => node.id,
+    getCoreRowModel: getCoreRowModel(),
+  };
+  const table = useReactTable(tableOptions);
+  return (
+    <Inspector.Root
+      items={MANY}
+      itemKey={(node: Node) => node.id}
+      selected={null}
+      onSelectedChange={() => {}}
+      noun="node"
+      storageKey="inspector-visible-test"
+    >
+      <InspectorTable.Root table={table} data-testid="scroller">
+        <InspectorTable.Grid aria-label="Nodes">
+          <InspectorTable.Body<Node>
+            rowHeight={() => 36}
+            onVisibleRowsChange={(rows) => onVisibleRowsChange(rows.map((row) => row.id))}
+          >
+            {(row) => <InspectorTable.Row row={row} item={row.original} aria-label={row.id} />}
+          </InspectorTable.Body>
+        </InspectorTable.Grid>
+      </InspectorTable.Root>
+    </Inspector.Root>
+  );
+}
+
+const ids = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => `r${from + i}`);
+
+describe("InspectorTable.Body onVisibleRowsChange", () => {
+  it("reports only the rows inside the viewport, and the new ones once scrolling settles", async () => {
+    const onVisible = vi.fn();
+    render(<VisibleRows onVisibleRowsChange={onVisible} />);
+    expect(rowNames().length).toBeGreaterThan(20);
+    expect(onVisible.mock.calls).toEqual([[ids(0, 20)]]);
+
+    const scroller = screen.getByTestId("scroller");
+    scroller.scrollTop = 36 * 40;
+    fireEvent.scroll(scroller);
+    expect(onVisible).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onVisible).toHaveBeenCalledTimes(2));
+    expect(onVisible).toHaveBeenLastCalledWith(ids(40, 60));
   });
 });
