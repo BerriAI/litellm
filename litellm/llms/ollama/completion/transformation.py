@@ -1,11 +1,11 @@
 import json
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Final, TypedDict
+from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
-from typing_extensions import NotRequired, ReadOnly
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger

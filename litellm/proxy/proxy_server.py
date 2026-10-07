@@ -39,7 +39,6 @@ from typing import (
     Optional,
     Protocol,
     TypeAlias,
-    TypedDict,
     Union,
     cast,
     get_args,
@@ -52,7 +51,7 @@ import websockets
 import websockets.exceptions
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
-from typing_extensions import NotRequired, ReadOnly, assert_never
+from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
 from litellm.constants import (

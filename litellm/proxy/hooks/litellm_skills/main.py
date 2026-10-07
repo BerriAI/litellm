@@ -27,10 +27,10 @@ Usage:
 import base64
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
