@@ -82,6 +82,13 @@ impl From<LlmError> for RouteError {
             LlmError::InvalidType { expected, actual } => Self::InvalidType { expected, actual },
             LlmError::MissingField(field) => Self::MissingField(field),
             LlmError::InvalidRequest(message) => Self::InvalidRequest(message),
+            LlmError::InvalidResponse(litellm_llms::ErrorDetail::Http { status, message }) => {
+                Self::Transport(TransportError::Http {
+                    request_url: None,
+                    status,
+                    body: message,
+                })
+            }
             LlmError::InvalidResponse(message) => Self::InvalidResponse(message),
             LlmError::Unsupported(reason) => Self::Unsupported(reason),
             LlmError::Auth(error) => Self::Auth(error),
@@ -118,6 +125,25 @@ mod tests {
     use super::RouteError;
     use litellm_llms::{Error as LlmError, ErrorDetail};
     use rstest::rstest;
+
+    #[rstest]
+    #[case::client_status(400)]
+    #[case::rate_limit_status(429)]
+    fn decoded_upstream_failures_preserve_their_http_status(#[case] status: u16) {
+        let error = RouteError::from(LlmError::InvalidResponse(ErrorDetail::Http {
+            status,
+            message: "upstream failure".into(),
+        }));
+        assert!(!error.is_request());
+        assert_eq!(
+            error,
+            RouteError::Transport(litellm_http::transport::Error::Http {
+                request_url: None,
+                status,
+                body: "upstream failure".into(),
+            })
+        );
+    }
 
     #[test]
     fn a_missing_api_key_is_the_environment_not_the_request() {

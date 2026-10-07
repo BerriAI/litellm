@@ -11,12 +11,10 @@ use litellm_llms_types::{
 use litellm_python_compat::{json::from_json, repr::repr, truthy::truthy};
 use serde_json::Value;
 
-use crate::base_llm::messages::context::{
-    MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
-};
 use crate::{
     Error,
     anthropic::common_utils::{accepts_effort, supports_effort_param},
+    base_llm::messages::context::{MessagesModelCapabilities, ThinkingBudgets, ThinkingContext},
 };
 
 pub const ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: u64 = 1024;
@@ -245,9 +243,20 @@ fn translate_legacy_thinking_for_adaptive_model(
         .copied()
         .unwrap_or(0);
     let level = effort_for_budget(&context.budgets, budget, capabilities);
+    let display = enabled
+        .display
+        .as_ref()
+        .and_then(Recognized::known)
+        .copied()
+        .filter(|display| {
+            matches!(
+                display,
+                ThinkingDisplay::Summarized | ThinkingDisplay::Omitted
+            )
+        });
     MessagesRequest {
         params: MessagesOptionalParams {
-            thinking: Some(Recognized::Known(ThinkingConfig::adaptive(None))),
+            thinking: Some(Recognized::Known(ThinkingConfig::adaptive(display))),
             output_config: with_default_effort(request.params.output_config, level),
             ..request.params
         },
@@ -461,6 +470,50 @@ mod tests {
             supports_adaptive_thinking: true,
             ..Default::default()
         }
+    }
+
+    #[rstest]
+    #[case::summarized(Some(ThinkingDisplay::Summarized), Some(ThinkingDisplay::Summarized))]
+    #[case::omitted(Some(ThinkingDisplay::Omitted), Some(ThinkingDisplay::Omitted))]
+    #[case::updates(Some(ThinkingDisplay::Updates), None)]
+    #[case::absent(None, None)]
+    fn shared_legacy_thinking_translation_preserves_supported_display(
+        opus_4_7: MessagesModelCapabilities,
+        #[case] display: Option<ThinkingDisplay>,
+        #[case] expected_display: Option<ThinkingDisplay>,
+    ) {
+        use litellm_llms_types::formats::messages::EnabledThinking;
+
+        let request = MessagesRequest {
+            params: MessagesOptionalParams {
+                thinking: Some(Recognized::Known(ThinkingConfig::Enabled(
+                    EnabledThinking {
+                        budget_tokens: Some(Recognized::Known(2048)),
+                        display: display.map(Recognized::Known),
+                        ..EnabledThinking::default()
+                    },
+                ))),
+                ..MessagesOptionalParams::default()
+            },
+            ..request(serde_json::json!({}))
+        };
+        let transformed = translate_legacy_thinking_for_adaptive_model(request, &context(opus_4_7));
+        assert_eq!(
+            transformed.params.thinking,
+            Some(Recognized::Known(ThinkingConfig::adaptive(
+                expected_display
+            )))
+        );
+        assert_eq!(
+            transformed
+                .params
+                .output_config
+                .unwrap()
+                .known()
+                .unwrap()
+                .effort,
+            Some(Recognized::Known(EffortLevel::Medium))
+        );
     }
 
     #[rstest]
@@ -1239,6 +1292,32 @@ mod tests {
         assert_eq!(
             translate_thinking(request(input), &context),
             Ok(request(expected))
+        );
+    }
+
+    #[rstest]
+    fn legacy_thinking_becomes_adaptive_before_small_max_tokens_fitting(
+        opus_4_7: MessagesModelCapabilities,
+    ) {
+        use litellm_llms_types::formats::messages::EnabledThinking;
+
+        let input = MessagesRequest {
+            params: MessagesOptionalParams {
+                max_tokens: Some(100),
+                thinking: Some(Recognized::Known(ThinkingConfig::Enabled(
+                    EnabledThinking {
+                        budget_tokens: Some(Recognized::Known(24000)),
+                        ..Default::default()
+                    },
+                ))),
+                ..Default::default()
+            },
+            ..request(serde_json::json!({}))
+        };
+        let transformed = translate_thinking(input, &context(opus_4_7)).unwrap();
+        assert_eq!(
+            serde_json::to_value(transformed.params).unwrap(),
+            serde_json::json!({"max_tokens":100,"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"}}),
         );
     }
 }

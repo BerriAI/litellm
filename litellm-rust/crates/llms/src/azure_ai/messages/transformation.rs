@@ -1,17 +1,18 @@
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_http::request::{has_bearer_auth, has_header};
-use litellm_llms_types::formats::messages::{
-    CacheControl, ContentBlock, Message, MessageContent, MessagesOptionalParams, MessagesRequest,
-    SystemPrompt,
-};
+use litellm_llms_types::{formats::messages::MessagesRequest, providers::anthropic::BetaProvider};
 
 use crate::{
     Error,
     anthropic::{
+        beta_headers::BetaPolicy,
         common_utils::DEFAULT_ANTHROPIC_HEADERS,
         messages::{
             handler::shape_anthropic_messages_request,
-            transformation::{transform_messages_request, update_headers_with_anthropic_beta},
+            transformation::{
+                PARTNER_HOST_REQUEST_POLICY, transform_messages_request_with,
+                update_headers_with_anthropic_beta,
+            },
         },
     },
     azure_ai::common_utils::{
@@ -21,7 +22,7 @@ use crate::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
             context::MessagesTransformContext,
-            normalization::fold_system_role_messages,
+            normalization::normalize_system_role_messages,
             transformation::{BaseMessagesConfig, MESSAGES_PATH_SUFFIX},
         },
     },
@@ -58,21 +59,16 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        let request = fold_system_role_messages(request);
-        transform_messages_request(
-            MessagesRequest {
-                messages: request
-                    .messages
-                    .into_iter()
-                    .map(strip_scope_from_message)
-                    .collect(),
-                params: MessagesOptionalParams {
-                    system: request.params.system.map(strip_scope_from_system),
-                    ..request.params
-                },
-                ..request
-            },
+        transform_messages_request_with(
+            normalize_system_role_messages(
+                request,
+                context
+                    .thinking
+                    .capabilities
+                    .supports_mid_conversation_system,
+            ),
             context,
+            PARTNER_HOST_REQUEST_POLICY,
         )
     }
 
@@ -89,6 +85,16 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         _model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
+        let has_messages_key = has_header(&headers, API_KEY_PLACEMENT.header_name());
+        let headers: Headers = headers
+            .into_iter()
+            .filter_map(|(name, value)| {
+                if name.eq_ignore_ascii_case("api-key") {
+                    return (!has_messages_key).then(|| ("x-api-key".to_string(), value));
+                }
+                Some((name, value))
+            })
+            .collect();
         if has_header(&headers, API_KEY_PLACEMENT.header_name()) || has_bearer_auth(&headers) {
             return Ok(ValidatedEnvironment {
                 headers,
@@ -107,7 +113,8 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        update_headers_with_anthropic_beta(headers, request)
+        BetaPolicy::Filter(BetaProvider::AzureAi)
+            .apply(update_headers_with_anthropic_beta(headers, request))
     }
 }
 
@@ -130,51 +137,12 @@ pub fn complete_azure_anthropic_url(
     Ok(format!("{with_anthropic}{MESSAGES_PATH_SUFFIX}"))
 }
 
-fn strip_scope_from_block(block: ContentBlock) -> ContentBlock {
-    ContentBlock {
-        cache_control: block
-            .cache_control
-            .map(|cache_control| match cache_control {
-                litellm_llms_types::serde_compat::Nullable::Value(cache_control) => {
-                    litellm_llms_types::serde_compat::Nullable::Value(CacheControl {
-                        scope: None,
-                        ..cache_control
-                    })
-                }
-                other => other,
-            }),
-        ..block
-    }
-}
-
-fn strip_scope_from_system(system: SystemPrompt) -> SystemPrompt {
-    match system {
-        SystemPrompt::Blocks(blocks) => {
-            SystemPrompt::Blocks(blocks.into_iter().map(strip_scope_from_block).collect())
-        }
-        text => text,
-    }
-}
-
-fn strip_scope_from_message(message: Message) -> Message {
-    Message {
-        content: match message.content {
-            MessageContent::Blocks(blocks) => {
-                MessageContent::Blocks(blocks.into_iter().map(strip_scope_from_block).collect())
-            }
-            text => text,
-        },
-        ..message
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use litellm_auth::CredentialPlacement;
     use litellm_llms_types::formats::messages::MessagesResponse;
     use rstest::rstest;
     use serde_json::json;
-
-    use litellm_auth::CredentialPlacement;
 
     use super::*;
     use crate::base_llm::messages::context::MessagesModelCapabilities;
@@ -368,8 +336,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn transform_request_is_idempotent_and_preserves_string_system() {
+    #[rstest::rstest]
+    fn transform_request_is_idempotent_and_normalizes_string_system() {
         let request = request_from(json!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 16,
@@ -386,10 +354,13 @@ mod tests {
             )
             .expect("request transforms");
         assert_eq!(once, twice);
-        assert_eq!(to_value(once)["system"], json!("plain string system"));
+        assert_eq!(
+            to_value(once)["system"],
+            json!([{"type": "text", "text": "plain string system"}])
+        );
     }
 
-    #[test]
+    #[rstest::rstest]
     fn transform_request_preserves_all_supported_params() {
         let body = json!({
             "model": "claude-sonnet-4-5",
@@ -432,11 +403,25 @@ mod tests {
                 .transform_anthropic_messages_request(request_from(body.clone()), &context)
                 .expect("request transforms"),
         );
-        assert_eq!(transformed, body);
+        assert_eq!(
+            transformed,
+            serde_json::Value::Object(
+                body.as_object()
+                    .unwrap()
+                    .iter()
+                    .filter(|(key, _)| key.as_str() != "system")
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .chain([(
+                        "system".into(),
+                        json!([{"type": "text", "text": "be terse"}])
+                    )])
+                    .collect()
+            )
+        );
     }
 
-    #[test]
-    fn transform_request_folds_system_role_message_into_top_level_system() {
+    #[rstest::rstest]
+    fn transform_request_converts_mid_conversation_system_with_existing_prefix() {
         let request = request_from(json!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 256,
@@ -455,19 +440,24 @@ mod tests {
 
         assert_eq!(
             transformed["messages"],
-            json!([{"role": "user", "content": "fix the bug"}])
+            json!([
+                {"role": "user", "content": "fix the bug"},
+                {"role": "user", "content": [
+                    {"type": "text", "text": crate::base_llm::messages::normalization::CONVERTED_SYSTEM_NOTE},
+                    {"type": "text", "text": "Available agent types: claude"}
+                ]}
+            ])
         );
         assert_eq!(
             transformed["system"],
             json!([
-                {"type": "text", "text": "base system"},
-                {"type": "text", "text": "Available agent types: claude"}
+                {"type": "text", "text": "base system"}
             ])
         );
     }
 
-    #[test]
-    fn transform_request_folds_system_role_when_no_top_level_system() {
+    #[rstest::rstest]
+    fn transform_request_converts_mid_conversation_system_without_changing_prefix() {
         let request = request_from(json!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 256,
@@ -485,16 +475,19 @@ mod tests {
 
         assert_eq!(
             transformed["messages"],
-            json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
+            json!([
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                {"role": "user", "content": [
+                    {"type": "text", "text": crate::base_llm::messages::normalization::CONVERTED_SYSTEM_NOTE},
+                    {"type": "text", "text": "sys block"}
+                ]}
+            ])
         );
-        assert_eq!(
-            transformed["system"],
-            json!([{"type": "text", "text": "sys block"}])
-        );
+        assert!(transformed.get("system").is_none());
     }
 
-    #[test]
-    fn transform_request_leaves_requests_without_system_role_untouched() {
+    #[rstest::rstest]
+    fn transform_request_normalizes_system_without_changing_conversation() {
         let body = json!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 256,
@@ -521,7 +514,21 @@ mod tests {
                 .transform_anthropic_messages_request(request_from(body.clone()), &context)
                 .expect("request transforms"),
         );
-        assert_eq!(transformed, body);
+        assert_eq!(
+            transformed,
+            serde_json::Value::Object(
+                body.as_object()
+                    .unwrap()
+                    .iter()
+                    .filter(|(key, _)| key.as_str() != "system")
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .chain([(
+                        "system".into(),
+                        json!([{"type": "text", "text": "be terse"}])
+                    )])
+                    .collect()
+            )
+        );
     }
 
     #[test]
@@ -535,7 +542,7 @@ mod tests {
     #[case::compact_context_management_edit(
         json!({"context_management": {"edits": [{"type": "compact_20260112"}]}}),
         &[],
-        &[("x-api-key", "k"), ("anthropic-beta", "compact-2026-01-12")]
+        &[("x-api-key", "k")]
     )]
     #[case::forwarded_beta_merged_with_structured_output(
         json!({"output_config": {"format": {"type": "json_schema"}}}),
@@ -580,6 +587,56 @@ mod tests {
             ),
             pairs(expected)
         );
+    }
+
+    #[rstest]
+    #[case::known_and_unknown(
+        &[("anthropic-beta", "web-search-2025-03-05,unknown-beta")],
+        Some("web-search-2025-03-05")
+    )]
+    #[case::rejected_and_unknown(
+        &[("anthropic-beta", "compact-2026-01-12,unknown-beta")], None
+    )]
+    #[case::case_and_blank(
+        &[("AnThRoPiC-BeTa", "  "), ("ANTHROPIC-BETA", " web-search-2025-03-05 ")],
+        Some("web-search-2025-03-05")
+    )]
+    #[case::blank(&[("Anthropic-Beta", "  ,  ")], None)]
+    fn request_headers_filter_azure_betas(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] expected: Option<&str>,
+    ) {
+        use litellm_llms_types::formats::messages::{
+            Message, MessageContent, MessageRole, MessagesOptionalParams,
+        };
+        let request = MessagesRequest {
+            model: "model".into(),
+            messages: vec![Message {
+                role: MessageRole::User,
+                content: MessageContent::Text("hi".into()),
+                extra: Default::default(),
+            }],
+            params: MessagesOptionalParams {
+                max_tokens: Some(16),
+                ..Default::default()
+            },
+        };
+        let headers = AZURE_ANTHROPIC_MESSAGES_CONFIG.request_headers(
+            [("x-api-key".into(), "key".into())]
+                .into_iter()
+                .chain(
+                    forwarded
+                        .iter()
+                        .map(|(name, value)| (name.to_string(), value.to_string())),
+                )
+                .collect(),
+            &request,
+        );
+        let expected: Headers = [("x-api-key".into(), "key".into())]
+            .into_iter()
+            .chain(expected.map(|beta| ("anthropic-beta".into(), beta.into())))
+            .collect();
+        assert_eq!(headers, expected);
     }
 
     #[test]
@@ -629,5 +686,175 @@ mod tests {
             })
             .collect();
         assert_eq!(undeclared, Vec::<&String>::new());
+    }
+    #[rstest]
+    #[case::supported_mid_conversation(true, false, true)]
+    #[case::supported_leading_run(true, true, true)]
+    #[case::unsupported_mid_conversation(false, false, false)]
+    #[case::unsupported_leading_run(false, true, false)]
+    fn test_messages_preserve_mid_conversation_system_by_capability(
+        #[case] supports_mid_conversation_system: bool,
+        #[case] leading_system: bool,
+        #[case] expected_system_role: bool,
+    ) {
+        use litellm_llms_types::formats::messages::{
+            ContentBlock, Message, MessageContent, MessageRole, MessagesOptionalParams,
+            SystemPrompt,
+        };
+        let message = |role, text: &str| Message {
+            role,
+            content: MessageContent::Text(text.into()),
+            extra: Default::default(),
+        };
+        let messages = leading_system
+            .then(|| {
+                [
+                    message(MessageRole::System, "leading"),
+                    message(MessageRole::System, "second leading"),
+                ]
+            })
+            .into_iter()
+            .flatten()
+            .chain([
+                message(MessageRole::User, "first"),
+                message(MessageRole::Assistant, "answer"),
+                message(MessageRole::System, "later"),
+                message(MessageRole::User, "last"),
+            ])
+            .collect();
+        let request = MessagesRequest {
+            model: "test-model".into(),
+            messages,
+            params: MessagesOptionalParams {
+                max_tokens: Some(4096),
+                ..Default::default()
+            },
+        };
+        let context = MessagesTransformContext::with_lookup(
+            MessagesModelCapabilities {
+                supports_mid_conversation_system,
+                ..Default::default()
+            },
+            false,
+            &|_: &str| None,
+        );
+        let result = AZURE_ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request, &context)
+            .unwrap();
+        assert_eq!(result.messages.len(), 4);
+        assert_eq!(result.messages[0], message(MessageRole::User, "first"));
+        assert_eq!(
+            result.messages[1],
+            message(MessageRole::Assistant, "answer")
+        );
+        assert_eq!(result.messages[3], message(MessageRole::User, "last"));
+        assert_eq!(
+            result.messages[2].role,
+            if expected_system_role {
+                MessageRole::System
+            } else {
+                MessageRole::User
+            }
+        );
+        assert_eq!(
+            result.messages[2].content,
+            if expected_system_role {
+                MessageContent::Text("later".into())
+            } else {
+                MessageContent::Blocks(vec![
+                    ContentBlock::text(
+                        "Operator note (not from the user): the following was originally a mid-conversation system-role reminder.",
+                    ),
+                    ContentBlock::text("later"),
+                ])
+            }
+        );
+        assert_eq!(
+            result.params.system,
+            leading_system.then(|| SystemPrompt::Blocks(vec![
+                ContentBlock::text("leading"),
+                ContentBlock::text("second leading")
+            ]))
+        );
+    }
+
+    #[rstest]
+    #[case::lowercase("api-key")]
+    #[case::mixed_case("Api-Key")]
+    fn test_validate_environment_converts_api_key_to_x_api_key(#[case] header_name: &str) {
+        let validated = AZURE_ANTHROPIC_MESSAGES_CONFIG
+            .validate_environment(
+                vec![
+                    (header_name.into(), "forwarded-key".into()),
+                    ("anthropic-version".into(), "caller-version".into()),
+                ],
+                Some("explicit-key"),
+                "claude",
+                &|_| Some("environment-key".into()),
+            )
+            .unwrap();
+        assert!(matches!(validated.auth, AuthScheme::Forwarded));
+        assert_eq!(
+            validated.headers,
+            vec![
+                ("x-api-key".into(), "forwarded-key".into()),
+                ("anthropic-version".into(), "caller-version".into())
+            ]
+        );
+    }
+    #[rstest]
+    #[case::adaptive_entry(true)]
+    #[case::entry_override_disables_adaptive(false)]
+    fn test_messages_thinking_shape_follows_injected_provider_entry_flag(#[case] adaptive: bool) {
+        use litellm_llms_types::formats::messages::MessagesOptionalParams;
+        use litellm_llms_types::formats::{
+            chat_completions::ReasoningEffort,
+            messages::{
+                EffortLevel, Message, MessageContent, MessageRole, OutputConfig, ThinkingConfig,
+                ThinkingDisplay,
+            },
+        };
+        use litellm_llms_types::recognized::Recognized;
+        let request = MessagesRequest {
+            model: "same-model".into(),
+            messages: vec![Message {
+                role: MessageRole::User,
+                content: MessageContent::Text("hello".into()),
+                extra: Default::default(),
+            }],
+            params: MessagesOptionalParams {
+                max_tokens: Some(4096),
+                reasoning_effort: Some(Recognized::Known(ReasoningEffort::Medium)),
+                ..Default::default()
+            },
+        };
+        let context = MessagesTransformContext::with_lookup(
+            crate::base_llm::messages::context::MessagesModelCapabilities {
+                supports_adaptive_thinking: adaptive,
+                supports_reasoning: true,
+                supports_legacy_thinking: true,
+                ..Default::default()
+            },
+            false,
+            &|_: &str| None,
+        );
+        let result = AZURE_ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request, &context)
+            .unwrap();
+        assert_eq!(
+            result.params.thinking,
+            Some(Recognized::Known(if adaptive {
+                ThinkingConfig::adaptive(Some(ThinkingDisplay::Summarized))
+            } else {
+                ThinkingConfig::enabled(2048)
+            }))
+        );
+        assert_eq!(
+            result.params.output_config,
+            adaptive.then(|| Recognized::Known(OutputConfig {
+                effort: Some(Recognized::Known(EffortLevel::Medium)),
+                ..Default::default()
+            }))
+        );
     }
 }

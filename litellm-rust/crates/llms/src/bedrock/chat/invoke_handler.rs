@@ -23,7 +23,39 @@ struct InvokeChunkPayload {
     bytes: String,
 }
 
+fn bedrock_stream_error(message: &Message) -> Option<crate::ErrorDetail> {
+    let header = |name: &str| {
+        message
+            .headers()
+            .iter()
+            .find(|header| header.name().as_str() == name)
+            .and_then(|header| header.value().as_string().ok())
+            .map(|value| value.as_str())
+    };
+    if !matches!(header(":message-type"), Some("error" | "exception")) {
+        return None;
+    }
+    let exception = header(":exception-type");
+    let status = match exception {
+        Some("internalServerException") => 500,
+        Some("modelStreamErrorException") => 424,
+        Some("modelTimeoutException") => 408,
+        Some("serviceUnavailableException") => 503,
+        Some("throttlingException") => 429,
+        Some("validationException") | Some(_) | None => 400,
+    };
+    let payload = String::from_utf8_lossy(message.payload());
+    let message = match exception {
+        Some(exception) => format!("{exception} {payload}"),
+        None => payload.into_owned(),
+    };
+    Some(crate::ErrorDetail::Http { status, message })
+}
+
 pub fn decode_invoke_chunk(message: Message) -> Result<Value, Error> {
+    if let Some(error) = bedrock_stream_error(&message) {
+        return Err(Error::InvalidResponse(error));
+    }
     let payload: InvokeChunkPayload =
         serde_json::from_slice(message.payload()).map_err(|error| {
             Error::InvalidResponse(crate::ErrorDetail::invalid("Bedrock event payload", error))
@@ -152,5 +184,82 @@ mod tests {
             }]
         );
         assert_eq!(from_aws, from_sse);
+    }
+    #[rstest::rstest]
+    #[case::error("error", None, 400, "{\"message\":\"upstream failed\"}")]
+    #[case::unknown(
+        "exception",
+        Some("somethingNotModeled"),
+        400,
+        "somethingNotModeled {\"message\":\"upstream failed\"}"
+    )]
+    // AWS InvokeModelWithResponseStream response elements, https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModelWithResponseStream.html, verified 2026-10-07
+    #[case::throttled(
+        "exception",
+        Some("throttlingException"),
+        429,
+        "throttlingException {\"message\":\"upstream failed\"}"
+    )]
+    #[case::internal(
+        "exception",
+        Some("internalServerException"),
+        500,
+        "internalServerException {\"message\":\"upstream failed\"}"
+    )]
+    #[case::stream_failure(
+        "exception",
+        Some("modelStreamErrorException"),
+        424,
+        "modelStreamErrorException {\"message\":\"upstream failed\"}"
+    )]
+    #[case::timeout(
+        "exception",
+        Some("modelTimeoutException"),
+        408,
+        "modelTimeoutException {\"message\":\"upstream failed\"}"
+    )]
+    #[case::unavailable(
+        "exception",
+        Some("serviceUnavailableException"),
+        503,
+        "serviceUnavailableException {\"message\":\"upstream failed\"}"
+    )]
+    #[case::validation(
+        "exception",
+        Some("validationException"),
+        400,
+        "validationException {\"message\":\"upstream failed\"}"
+    )]
+    #[tokio::test]
+    async fn test_build_bedrock_stream_error_resolves_status_from_the_exception_type(
+        #[case] message_type: &str,
+        #[case] exception: Option<&str>,
+        #[case] status: u16,
+        #[case] text: &str,
+    ) {
+        let message = Message::new(Bytes::from_static(b"{\"message\":\"upstream failed\"}"))
+            .add_header(Header::new(
+                ":message-type",
+                HeaderValue::String(message_type.to_string().into()),
+            ));
+        let message = match exception {
+            Some(exception) => message.add_header(Header::new(
+                ":exception-type",
+                HeaderValue::String(exception.to_string().into()),
+            )),
+            None => message,
+        };
+        let mut wire = Vec::new();
+        write_message_to(&message, &mut wire).unwrap();
+        let events = invoke_chunk_stream(in_pieces(&wire))
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(
+            events,
+            vec![Err(Error::InvalidResponse(crate::ErrorDetail::Http {
+                status,
+                message: text.into()
+            }))]
+        );
     }
 }

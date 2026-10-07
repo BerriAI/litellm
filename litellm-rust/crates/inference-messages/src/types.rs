@@ -37,6 +37,12 @@ pub type MessagesCallResponse =
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {
     #[serde(default)]
+    pub bedrock_connection:
+        Option<litellm_llms::bedrock::messages::connection::BedrockMessagesConnection>,
+    #[serde(default)]
+    pub bedrock_request_metadata:
+        Option<litellm_llms::bedrock::request_metadata::BedrockRequestMetadataInput>,
+    #[serde(default)]
     pub capabilities: MessagesModelCapabilities,
     #[serde(flatten)]
     pub settings: MessagesSettings,
@@ -127,10 +133,6 @@ mod tests {
                 supports_sampling_params: false,
                 supports_speed: true,
                 supports_mid_conversation_system: false,
-                supports_cache_control_ttl: false,
-                supports_native_structured_output: false,
-                supports_tool_search: false,
-                effort_ceiling: None,
                 effort_tiers: SupportedEffortTiers {
                     minimal: false,
                     low: true,
@@ -139,7 +141,9 @@ mod tests {
                     xhigh: true,
                     max: false,
                 },
+                ..MessagesModelCapabilities::default()
             },
+            ..MessagesShaping::default()
         },
     )]
     fn shaping_deserializes_with_defaults_for_absent_fields(

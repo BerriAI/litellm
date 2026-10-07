@@ -169,10 +169,20 @@ pub fn complete_anthropic_url(
 
 pub fn existing_betas(headers: &[(String, String)]) -> BetaSet {
     header_values(headers, BETA_HEADER)
-        .flat_map(|value| {
-            value
+        .flat_map(|value| match serde_json::from_str::<Vec<String>>(value) {
+            Ok(values) => values
+                .iter()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(|value| {
+                    value
+                        .parse::<AnthropicBeta>()
+                        .unwrap_or_else(|never| match never {})
+                })
+                .collect::<BetaSet>(),
+            Err(_) => value
                 .parse::<BetaSet>()
-                .unwrap_or_else(|never| match never {})
+                .unwrap_or_else(|never| match never {}),
         })
         .collect()
 }
@@ -920,6 +930,22 @@ mod tests {
     }
 
     #[rstest]
+    #[case::pipes("call|with|pipes", "call_with_pipes")]
+    #[case::dots("call:ok.dots", "call_ok_dots")]
+    #[case::long_id(format!("call_{}", "x".repeat(100)), format!("call_{}", "x".repeat(100)))]
+    #[case::valid("toolu_01AbC-xyz", "toolu_01AbC-xyz")]
+    #[case::empty("", "tool_use_id")]
+    fn anthropic_tool_use_id_keeps_pattern_only_rewrite_with_no_cap_or_hash(
+        #[case] raw: impl AsRef<str>,
+        #[case] expected: impl AsRef<str>,
+    ) {
+        assert_eq!(
+            normalize_anthropic_tool_use_id(raw.as_ref()),
+            expected.as_ref()
+        );
+    }
+
+    #[rstest]
     #[case::tool_use_and_its_result(
         json!([
             {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]},
@@ -1027,6 +1053,125 @@ mod tests {
     #[case::tag_not_at_start(json!({"type": "thinking", "thinking": "x", "signature": format!("x{}", tagged("g"))}), false)]
     fn encrypted_reasoning_block_detection(#[case] input: Value, #[case] expected: bool) {
         assert_eq!(is_encrypted_reasoning_block(&block(input)), expected);
+    }
+
+    mod encrypted_reasoning_replay {
+        use litellm_llms_types::formats::messages::MessageRole;
+
+        use super::*;
+
+        fn thinking(text: &str, signature: &str) -> ContentBlock {
+            ContentBlock {
+                block_type: Some(Nullable::Value(ContentBlockType::Thinking)),
+                payload: ContentBlockPayload {
+                    thinking: Some(Nullable::Value(text.into())),
+                    signature: Some(Nullable::Value(signature.into())),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        }
+
+        fn message(role: MessageRole, content: MessageContent) -> Message {
+            Message {
+                role,
+                content,
+                extra: Default::default(),
+            }
+        }
+
+        #[fixture]
+        fn signed_native_thinking() -> ContentBlock {
+            thinking("minted by Anthropic", "ErcBCkgIValid")
+        }
+
+        #[rstest]
+        #[case::tagged_thinking(thinking("x", "litellm_encrypted_reasoning:g"), true)]
+        #[case::bare_tag_thinking(thinking("x", "litellm_encrypted_reasoning:"), true)]
+        #[case::native_thinking(thinking("x", "ErcBCkgIValid"), false)]
+        #[case::tag_in_text(ContentBlock::text("litellm_encrypted_reasoning:g"), false)]
+        fn recognizes_stored_replay_signature(#[case] input: ContentBlock, #[case] expected: bool) {
+            assert_eq!(is_encrypted_reasoning_block(&input), expected);
+        }
+
+        #[rstest]
+        #[case::tagged("litellm_encrypted_reasoning:g", true)]
+        #[case::bare_tag("litellm_encrypted_reasoning:", true)]
+        #[case::native("EmwKAhgBEgy", false)]
+        fn recognizes_stored_redacted_replay(#[case] data: &str, #[case] expected: bool) {
+            let input = ContentBlock {
+                block_type: Some(Nullable::Value(ContentBlockType::RedactedThinking)),
+                payload: ContentBlockPayload {
+                    data: Some(Nullable::Value(data.into())),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            assert_eq!(is_encrypted_reasoning_block(&input), expected);
+        }
+
+        #[rstest]
+        fn strips_every_tagged_block_preserving_native_reasoning_and_follow_up(
+            signed_native_thinking: ContentBlock,
+        ) {
+            let answer = ContentBlock::text("answer");
+            let question = message(MessageRole::User, MessageContent::Text("question".into()));
+            let follow_up = message(
+                MessageRole::User,
+                MessageContent::Blocks(vec![ContentBlock::text("follow-up")]),
+            );
+            let redacted = ContentBlock {
+                block_type: Some(Nullable::Value(ContentBlockType::RedactedThinking)),
+                payload: ContentBlockPayload {
+                    data: Some(Nullable::Value("litellm_encrypted_reasoning:g2".into())),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let original = vec![
+                question.clone(),
+                message(
+                    MessageRole::Assistant,
+                    MessageContent::Blocks(vec![
+                        signed_native_thinking.clone(),
+                        thinking("packed by the bridge", "litellm_encrypted_reasoning:g1"),
+                        redacted,
+                        thinking("", "litellm_encrypted_reasoning:g3"),
+                        answer.clone(),
+                    ]),
+                ),
+                follow_up.clone(),
+            ];
+            assert_eq!(
+                strip_encrypted_reasoning_blocks(original),
+                vec![
+                    question,
+                    message(
+                        MessageRole::Assistant,
+                        MessageContent::Blocks(vec![signed_native_thinking, answer]),
+                    ),
+                    follow_up,
+                ]
+            );
+        }
+
+        #[rstest]
+        #[case::plain_string(message(MessageRole::User, MessageContent::Text("plain string".into())))]
+        #[case::native_signed_thinking(message(MessageRole::Assistant, MessageContent::Blocks(vec![thinking("x", "ErcBCkgIValid")])))]
+        fn leaves_history_without_bridge_reasoning_untouched(#[case] input: Message) {
+            assert_eq!(
+                strip_encrypted_reasoning_blocks(vec![input.clone()]),
+                vec![input]
+            );
+        }
+
+        #[rstest]
+        fn signed_whitespace_thinking_is_unsignable() {
+            assert!(is_empty_thinking_block(&thinking(
+                "   \n\t  ",
+                "sig_abc123_looks_valid"
+            )));
+        }
     }
 
     #[rstest]
@@ -1440,6 +1585,7 @@ mod tests {
     #[rstest]
     #[case::with_results(json!([{"type": "web_search_result", "url": "u", "title": "Rome", "snippet": "s", "page_age": null}]))]
     #[case::without_results(json!([]))]
+    #[case::failed_search(json!({"type":"web_search_tool_result_error","error_code":"max_uses_exceeded"}))]
     fn flatten_unencrypted_web_search_results_is_idempotent(#[case] results: Value) {
         let input = replayed_search_turn(results);
         let once = apply(flatten_unencrypted_web_search_results, input.clone());
@@ -1455,6 +1601,11 @@ mod tests {
     const BROWSER_ACCESS: (&str, &str) = ("anthropic-dangerous-direct-browser-access", "true");
 
     #[rstest]
+    #[case::repeated_list_values(
+        &[("anthropic-beta", "skills-2025-10-02"), ("anthropic-beta", "files-api-2025-04-14")],
+        &["oauth-2025-04-20"],
+        &[("anthropic-beta", "files-api-2025-04-14,oauth-2025-04-20,skills-2025-10-02")],
+    )]
     #[case::no_beta_header(&[("x-api-key", "k")], &[], &[("x-api-key", "k")])]
     #[case::blank_beta_header(&[("Anthropic-Beta", " , "), ("x-api-key", "k")], &[], &[("Anthropic-Beta", " , "), ("x-api-key", "k")])]
     #[case::added_to_no_header(&[("x-api-key", "k")], &["b"], &[("x-api-key", "k"), ("anthropic-beta", "b")])]
@@ -1483,6 +1634,34 @@ mod tests {
     }
 
     #[rstest]
+    #[case::valid_array(
+        "[\"interleaved-thinking-2025-05-14\", \"claude-code-20250219\"]",
+        vec![AnthropicBeta::InterleavedThinking20250514, AnthropicBeta::ClaudeCode20250219],
+    )]
+    #[case::trimmed_array(" [\" context-1m-2025-08-07 \"] ", vec![AnthropicBeta::Context1m20250807])]
+    #[case::empty_array("[]", vec![])]
+    #[case::malformed_array("[not-json]", vec![AnthropicBeta::Other("[not-json]".into())])]
+    fn existing_betas_reads_a_json_array_header(
+        #[case] value: &str,
+        #[case] expected: Vec<AnthropicBeta>,
+    ) {
+        assert_eq!(
+            existing_betas(&headers(&[("anthropic-beta", value)])),
+            BetaSet::from_iter(expected)
+        );
+    }
+
+    #[rstest]
+    #[case::repeated_headers(&[("anthropic-beta", "a"), ("anthropic-beta", "b")])]
+    #[case::comma_string(&[("anthropic-beta", "a,b")])]
+    fn beta_list_and_comma_string_forms_agree(#[case] configured: &[(&str, &str)]) {
+        assert_eq!(
+            merge_beta_headers(headers(configured), betas(&["c"])),
+            headers(&[("anthropic-beta", "a,b,c")])
+        );
+    }
+
+    #[rstest]
     #[case::raw_token(OAUTH_TOKEN, Some(OAUTH_TOKEN))]
     #[case::bare_prefix(ANTHROPIC_OAUTH_TOKEN_PREFIX, Some(ANTHROPIC_OAUTH_TOKEN_PREFIX))]
     #[case::bearer_token(OAUTH_BEARER, None)]
@@ -1496,7 +1675,9 @@ mod tests {
 
     #[rstest]
     #[case::raw_token(OAUTH_TOKEN, Some(OAUTH_TOKEN))]
+    #[case::second_token_version("sk-ant-oat02-xyz789", Some("sk-ant-oat02-xyz789"))]
     #[case::bearer_token(OAUTH_BEARER, Some(OAUTH_TOKEN))]
+    #[case::bearer_second_token_version("Bearer sk-ant-oat02-xyz789", Some("sk-ant-oat02-xyz789"))]
     #[case::api_key(REGULAR_KEY, None)]
     #[case::bearer_api_key("Bearer sk-ant-api01-abc123", None)]
     #[case::empty("", None)]
@@ -1532,6 +1713,11 @@ mod tests {
     }
 
     #[rstest]
+    #[case::lowercase_authorization(&[("authorization", OAUTH_BEARER)], None, &[])]
+    #[case::titlecase_authorization(&[("Authorization", OAUTH_BEARER)], None, &[])]
+    #[case::uppercase_authorization(&[("AUTHORIZATION", OAUTH_BEARER)], None, &[])]
+    #[case::lowercase_api_key_removed(&[("x-api-key", REGULAR_KEY), ("Authorization", OAUTH_BEARER)], None, &[])]
+    #[case::titlecase_api_key_removed(&[("X-Api-Key", REGULAR_KEY), ("Authorization", OAUTH_BEARER)], None, &[])]
     #[case::forwarded_bearer_drops_forwarded_and_deployment_keys(
         &[("X-Api-Key", REGULAR_KEY), ("Authorization", OAUTH_BEARER)],
         Some(REGULAR_KEY),
@@ -1607,6 +1793,7 @@ mod tests {
     }
 
     #[rstest]
+    #[case::regular_api_key(&[], Some(REGULAR_KEY))]
     #[case::x_api_key(&[("x-api-key", "caller-key")], Some("sk-other"))]
     #[case::non_oauth_bearer(&[("Authorization", "Bearer some-proxy-token")], Some(REGULAR_KEY))]
     #[case::oauth_token_without_the_bearer_scheme(&[("authorization", OAUTH_TOKEN)], None)]
@@ -1623,6 +1810,64 @@ mod tests {
     }
 
     #[rstest]
+    #[case::configured(&[("ANTHROPIC_AUTH_TOKEN", "sk-ant-aut01-fake-auth-token")], Some("sk-ant-aut01-fake-auth-token"))]
+    #[case::absent(&[], None)]
+    fn auth_token_is_read_from_injected_environment(
+        #[case] vars: &'static [(&'static str, &'static str)],
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(get_auth_token(&env(vars)).as_deref(), expected);
+    }
+
+    #[rstest]
+    fn client_beta_survives_env_auth_injection() {
+        use crate::{
+            anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
+            base_llm::messages::transformation::BaseMessagesConfig,
+        };
+
+        let result = ANTHROPIC_MESSAGES_CONFIG
+            .validate_environment(
+                headers(&[("anthropic-beta", "context-1m-2025-08-07")]),
+                None,
+                "claude",
+                &env(&[("ANTHROPIC_API_KEY", OAUTH_TOKEN)]),
+            )
+            .unwrap();
+        assert_eq!(
+            credential(Some(result.auth)),
+            Some(("Authorization", OAUTH_TOKEN.into()))
+        );
+        assert_eq!(
+            result.headers,
+            headers(&[("anthropic-beta", "context-1m-2025-08-07,oauth-2025-04-20")]),
+        );
+    }
+
+    #[rstest]
+    #[case::lowercase("x-api-key")]
+    #[case::titlecase("X-Api-Key")]
+    #[case::uppercase("X-API-KEY")]
+    fn passthrough_client_api_key_header_is_kept(#[case] header_name: &str) {
+        use crate::{
+            anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
+            base_llm::messages::transformation::BaseMessagesConfig,
+        };
+
+        let result = ANTHROPIC_MESSAGES_CONFIG
+            .validate_environment(
+                headers(&[(header_name, REGULAR_KEY)]),
+                None,
+                "claude",
+                &env(&[]),
+            )
+            .unwrap();
+        assert_eq!(result.headers, headers(&[(header_name, REGULAR_KEY)]));
+        assert!(matches!(result.auth, AuthScheme::Forwarded));
+    }
+
+    #[rstest]
+    #[case::regular_anthropic_key(Some(REGULAR_KEY), &[], Some(("x-api-key", REGULAR_KEY)))]
     #[case::api_key_param(Some("sk-param"), &[], Some(("x-api-key", "sk-param")))]
     #[case::api_key_param_over_env_key_and_auth_token(
         Some("sk-param"),
@@ -1926,11 +2171,8 @@ mod tests {
                 supports_sampling_params: true,
                 supports_speed: false,
                 supports_mid_conversation_system: false,
-                supports_cache_control_ttl: false,
-                supports_native_structured_output: false,
-                supports_tool_search: false,
-                effort_ceiling: None,
                 effort_tiers: tiers(false, false, false, false, false, false),
+                ..MessagesModelCapabilities::default()
             }
         );
         assert_eq!(
