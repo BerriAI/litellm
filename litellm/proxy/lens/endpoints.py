@@ -1,5 +1,6 @@
 import hashlib
 import secrets
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from functools import reduce
 from itertools import chain
@@ -71,6 +72,7 @@ from litellm.proxy.tracing_runtime import provide_storage
 from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"])
+CLAIM_CANDIDATES: Final = 20
 _bearer: Final = HTTPBearer()
 Auth: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 StorageDep: TypeAlias = Annotated[Storage | None, Depends(provide_storage)]
@@ -501,12 +503,23 @@ async def claim(worker: WorkerAuth, protocol_version: int = 1, worker_release: s
     if worker.analysis_key_id is None:
         raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
     now: Final = datetime.now(timezone.utc)
-    await repository().heartbeat(worker.id, now.isoformat())
-    for candidate in await repository().lenses():
+    lens_repository: Final = repository()
+    await lens_repository.heartbeat(worker.id, now.isoformat())
+    return await claim_due(worker, now, lens_repository)
+
+
+async def claim_due(
+    worker: Worker,
+    now: datetime,
+    lens_repository: LensRepository,
+    supports_model: Callable[[Worker, LensSettings], Awaitable[bool]] = worker_supports_model,
+) -> Claim | None:
+    for candidate in await lens_repository.due(worker.scope, now, CLAIM_CANDIDATES):
         if not can_access(worker.scope, candidate.scope):
             continue
-        if claimed := await claim_candidate(candidate, worker, now):
+        if claimed := await claim_candidate(candidate, worker, now, lens_repository, supports_model):
             return claimed
+        await lens_repository.sync_due(candidate)
     return None
 
 
@@ -752,9 +765,15 @@ async def heartbeat(lens_id: str, job_id: str, worker: WorkerAuth) -> bool:
     return await progress(lens_id, job_id, Progress(), worker)
 
 
-async def claim_candidate(candidate: Lens, worker: Worker, now: datetime) -> Claim | None:
+async def claim_candidate(
+    candidate: Lens,
+    worker: Worker,
+    now: datetime,
+    lens_repository: LensRepository,
+    supports_model: Callable[[Worker, LensSettings], Awaitable[bool]] = worker_supports_model,
+) -> Claim | None:
     active: Final = current_job(candidate)
-    if not await worker_supports_model(worker, active.settings if active else candidate.settings):
+    if not await supports_model(worker, active.settings if active else candidate.settings):
         return None
     job_id: Final = str(uuid4())
 
@@ -765,7 +784,7 @@ async def claim_candidate(candidate: Lens, worker: Worker, now: datetime) -> Cla
             return e
         return claim_job(scheduled, worker, now)
 
-    updated: Final = await repository().update(candidate.id, schedule, changed_only=True)
+    updated: Final = await lens_repository.update(candidate.id, schedule, attempts=1, changed_only=True)
     if updated is None:
         return None
     job: Final = current_job(updated)

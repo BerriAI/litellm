@@ -24,7 +24,7 @@ from litellm.proxy.lens.models import (
     Worker,
 )
 from litellm.proxy.lens.reviews import criteria_key
-from litellm.proxy.lens.state import apply_progress, current_job, replace_job
+from litellm.proxy.lens.state import apply_progress, current_job, due_at, replace_job
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -146,6 +146,27 @@ class LensRepository:
         rows: Final = _ROWS.validate_python(await self.db.query_raw('SELECT data FROM "LiteLLM_Lens" ORDER BY id'))
         return tuple(Lens.model_validate(row.data) for row in rows)
 
+    async def due(self, scope: Scope, now: datetime, limit: int) -> tuple[Lens, ...]:
+        rows: Final = _ROWS.validate_python(
+            await self.db.query_raw(
+                """SELECT data FROM "LiteLLM_Lens"
+                WHERE due_at IS NOT NULL AND due_at <= ($4::timestamptz AT TIME ZONE 'UTC')
+                AND ($1::boolean OR (
+                    COALESCE((data->'scope'->>'all_teams')::boolean, false) IS NOT TRUE
+                    AND COALESCE(data->'scope'->>'team_id', '')=$2
+                    AND ($2 <> '' OR COALESCE(data->'scope'->>'api_key_hash', '')=$3)
+                ))
+                ORDER BY due_at, id
+                LIMIT $5""",
+                scope.all_teams,
+                scope.team_id,
+                scope.api_key_hash,
+                now.isoformat(),
+                limit,
+            )
+        )
+        return tuple(Lens.model_validate(row.data) for row in rows)
+
     async def get(self, lens_id: str) -> Lens | None:
         rows: Final = _ROWS.validate_python(
             await self.db.query_raw(
@@ -157,11 +178,24 @@ class LensRepository:
 
     async def create(self, lens: Lens) -> Lens:
         await self.db.execute_raw(
-            'INSERT INTO "LiteLLM_Lens" (id, version, data) VALUES ($1,0,$2::jsonb)',
+            """INSERT INTO "LiteLLM_Lens" (id, version, data, due_at)
+            VALUES ($1,0,$2::jsonb,($3::timestamptz AT TIME ZONE 'UTC'))""",
             lens.id,
             lens.model_dump_json(),
+            scheduled_at.isoformat() if (scheduled_at := due_at(lens)) else None,
         )
         return lens
+
+    async def sync_due(self, lens: Lens) -> None:
+        await self.db.execute_raw(
+            """UPDATE "LiteLLM_Lens"
+            SET due_at=($3::timestamptz AT TIME ZONE 'UTC')
+            WHERE id=$1 AND version=$2
+              AND due_at IS DISTINCT FROM ($3::timestamptz AT TIME ZONE 'UTC')""",
+            lens.id,
+            lens.version,
+            scheduled_at.isoformat() if (scheduled_at := due_at(lens)) else None,
+        )
 
     async def update(
         self,
@@ -193,7 +227,8 @@ class LensRepository:
                 """WITH previous AS MATERIALIZED (
                 SELECT data FROM "LiteLLM_Lens" WHERE id=$2 AND version=$3 FOR UPDATE
             ), updated AS (
-                UPDATE "LiteLLM_Lens" SET data=$1::jsonb, version=version+1
+                UPDATE "LiteLLM_Lens" SET data=$1::jsonb, version=version+1,
+                    due_at=($4::timestamptz AT TIME ZONE 'UTC')
                 WHERE id=$2 AND version=$3 AND EXISTS (SELECT 1 FROM previous) RETURNING id
             )
             , archived AS (INSERT INTO "LiteLLM_LensRun" (id, lens_id, created_at, data)
@@ -207,6 +242,7 @@ class LensRepository:
                 updated.model_dump_json(),
                 lens_id,
                 previous.version,
+                scheduled_at.isoformat() if (scheduled_at := due_at(updated)) else None,
             )
         )
         return bool(rows and rows[0].data == 1), updated

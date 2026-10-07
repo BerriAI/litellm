@@ -1939,6 +1939,7 @@ model LiteLLM_Lens {
   id      String @id
   version Int @default(0)
   data    Json
+  due_at  DateTime? @default(now())
 }
 
 model LiteLLM_LensRun {
