@@ -9,16 +9,16 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 ChoiceValue: TypeAlias = str | bool
 
 
-class DecisionsModel(LiteLLMPydanticObjectBase):
+class DecisionsObjectBase(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
-class DecisionInputText(DecisionsModel):
+class DecisionInputText(DecisionsObjectBase):
     type: Literal["input_text"]
     text: str
 
 
-class DecisionInputImage(DecisionsModel):
+class DecisionInputImage(DecisionsObjectBase):
     type: Literal["input_image"]
     image_url: str
     detail: Literal["low", "high", "auto", "original"] | None = None
@@ -27,7 +27,7 @@ class DecisionInputImage(DecisionsModel):
 DecisionInputPart: TypeAlias = Annotated[DecisionInputText | DecisionInputImage, Field(discriminator="type")]
 
 
-class DecisionInputMessage(DecisionsModel):
+class DecisionInputMessage(DecisionsObjectBase):
     role: Literal["user"]
     content: str | Sequence[DecisionInputPart]
     type: Literal["message"] | None = None
@@ -36,30 +36,30 @@ class DecisionInputMessage(DecisionsModel):
 DecisionsInput: TypeAlias = str | Sequence[DecisionInputMessage]
 
 
-class DecisionChoice(DecisionsModel):
+class DecisionChoice(DecisionsObjectBase):
     value: ChoiceValue
     description: str | None = None
 
 
-class DecisionLevel(DecisionsModel):
+class DecisionLevel(DecisionsObjectBase):
     label: str
     description: str | None = None
 
 
-class PredicateQuestion(DecisionsModel):
+class PredicateQuestion(DecisionsObjectBase):
     type: Literal["predicate"]
     instructions: str
     name: str | None = None
 
 
-class ChoiceQuestion(DecisionsModel):
+class ChoiceQuestion(DecisionsObjectBase):
     type: Literal["choice"]
     instructions: str
     choices: Annotated[Sequence[DecisionChoice], Field(min_length=1)]
     name: str | None = None
 
 
-class ScoreQuestion(DecisionsModel):
+class ScoreQuestion(DecisionsObjectBase):
     type: Literal["score"]
     instructions: str
     levels: Annotated[Sequence[DecisionLevel], Field(min_length=1)]
@@ -74,7 +74,7 @@ DecisionQuestion: TypeAlias = Annotated[
 DecisionQuestions: TypeAlias = Annotated[Sequence[DecisionQuestion], Field(min_length=1)]
 
 
-class DecisionsRequestBody(DecisionsModel):
+class DecisionsRequestBody(DecisionsObjectBase):
     input: DecisionsInput
     questions: DecisionQuestions
     safety_identifier: str | None = None
@@ -97,18 +97,18 @@ class DecisionsCallParams(TypedDict, total=False):
     extra_headers: ReadOnly[Mapping[str, str] | None]
 
 
-class PredicateAnswer(DecisionsModel):
+class PredicateAnswer(DecisionsObjectBase):
     type: Literal["predicate"]
     name: str | None = None
     probability: float
 
 
-class ChoiceProbability(DecisionsModel):
+class ChoiceProbability(DecisionsObjectBase):
     value: ChoiceValue
     probability: float
 
 
-class ChoiceAnswer(DecisionsModel):
+class ChoiceAnswer(DecisionsObjectBase):
     type: Literal["choice"]
     name: str | None = None
     choice: ChoiceValue
@@ -116,13 +116,13 @@ class ChoiceAnswer(DecisionsModel):
     confidence: float
 
 
-class ScoreProbability(DecisionsModel):
+class ScoreProbability(DecisionsObjectBase):
     value: int
     label: str
     probability: float
 
 
-class ScoreAnswer(DecisionsModel):
+class ScoreAnswer(DecisionsObjectBase):
     type: Literal["score"]
     name: str | None = None
     score: float
@@ -130,7 +130,7 @@ class ScoreAnswer(DecisionsModel):
     confidence: float
 
 
-class RefusalAnswer(DecisionsModel):
+class RefusalAnswer(DecisionsObjectBase):
     type: Literal["refusal"]
     name: str | None = None
 
@@ -141,16 +141,16 @@ DecisionAnswer: TypeAlias = Annotated[
 ]
 
 
-class DecisionsInputTokensDetails(DecisionsModel):
+class DecisionsInputTokensDetails(DecisionsObjectBase):
     cached_tokens: int
     cache_write_tokens: int
 
 
-class DecisionsOutputTokensDetails(DecisionsModel):
+class DecisionsOutputTokensDetails(DecisionsObjectBase):
     reasoning_tokens: int
 
 
-class DecisionsUsage(DecisionsModel):
+class DecisionsUsage(DecisionsObjectBase):
     input_tokens: int
     input_tokens_details: DecisionsInputTokensDetails
     output_tokens: int
@@ -158,7 +158,7 @@ class DecisionsUsage(DecisionsModel):
     total_tokens: int
 
 
-class DecisionsResponse(DecisionsModel):
+class DecisionsResponse(DecisionsObjectBase):
     model: str
     answers: Sequence[DecisionAnswer]
     usage: DecisionsUsage
