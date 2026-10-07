@@ -422,11 +422,10 @@ pub(super) fn event_payload(events: &[(bool, Value)], output: bool) -> Option<St
     (!values.is_empty()).then(|| canonical(&encode(&values)))
 }
 
-/// The latest user message with text.
+/// The first user message with text.
 pub(super) fn preview(messages: &[Message]) -> String {
     messages
         .iter()
-        .rev()
         .find(|message| message.role == "user" && !message.content.is_empty())
         .map_or("", |message| message.content.as_str())
         .chars()
@@ -434,7 +433,7 @@ pub(super) fn preview(messages: &[Message]) -> String {
         .collect()
 }
 
-/// The latest user message when `input` is a conversation, else the input itself.
+/// The first user message when `input` is a conversation, else the input itself.
 pub(super) fn input_preview(input: &str) -> String {
     match serde_json::from_str::<Value>(input)
         .ok()
@@ -597,7 +596,7 @@ mod tests {
     use serde_json::Value;
 
     #[rstest]
-    #[case::latest_user(r#"{"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"reply"},{"role":"user","content":"last"}]}"#, Some("last"))]
+    #[case::first_user(r#"{"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"reply"},{"role":"user","content":"last"}]}"#, Some("first"))]
     #[case::malformed("not-json", None)]
     #[case::missing("{}", None)]
     #[case::not_messages(r#"{"messages":[{"role":"user"}]}"#, None)]

@@ -13,7 +13,7 @@ class TestBedrockTestSuite(BaseLLMChatTest):
         pass
 
     def get_base_completion_call_args(self) -> dict:
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         return {
             "model": "bedrock/converse/us.meta.llama3-3-70b-instruct-v1:0",
         }

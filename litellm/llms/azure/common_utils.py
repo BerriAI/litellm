@@ -22,7 +22,7 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import _add_path_to_api_base
+from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
 
@@ -818,7 +818,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         # Add the path to the base URL
         if route not in api_base:
-            new_url = _add_path_to_api_base(api_base=api_base, ending_path=route)
+            new_url = add_path_to_api_base(api_base=api_base, ending_path=route)
         else:
             new_url = api_base
 

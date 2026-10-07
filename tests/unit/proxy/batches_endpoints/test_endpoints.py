@@ -41,7 +41,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
 import litellm
 import litellm.proxy.batches_endpoints.endpoints as endpoints
@@ -1166,7 +1166,7 @@ async def test_create__uses_acreate_batch_route_type(harness, openai_env_creds):
 
 def install_managed_files_hook(harness: Harness) -> AsyncMock:
     prisma_client = AsyncMock()
-    managed_files = _PROXY_LiteLLMManagedFiles(MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client)
+    managed_files = PROXY_LiteLLMManagedFiles(MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client)
     harness.logging.post_call_success_hook = AsyncMock(side_effect=managed_files.async_post_call_success_hook)
     harness.router.model_list = []
     return prisma_client

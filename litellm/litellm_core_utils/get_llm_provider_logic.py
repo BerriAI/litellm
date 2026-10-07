@@ -53,7 +53,7 @@ def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
     return url_path == endpoint_path or url_path.startswith(endpoint_path + "/")
 
 
-def _is_non_openai_azure_model(model: str) -> bool:
+def is_non_openai_azure_model(model: str) -> bool:
     try:
         model_name: Final = model.split("/", 1)[1]
         if model_name in litellm.cohere_chat_models or f"mistral/{model_name}" in litellm.mistral_chat_models:
@@ -61,6 +61,9 @@ def _is_non_openai_azure_model(model: str) -> bool:
     except Exception:
         return False
     return False
+
+
+_is_non_openai_azure_model = is_non_openai_azure_model
 
 
 def _is_azure_claude_model(model: str) -> bool:
@@ -195,7 +198,7 @@ def get_llm_provider(
         # AZURE AI-Studio Logic - Azure AI Studio supports AZURE/Cohere
         # If User passes azure/command-r-plus -> we should send it to cohere_chat/command-r-plus
         if model.split("/", 1)[0] == "azure":
-            if _is_non_openai_azure_model(model):
+            if is_non_openai_azure_model(model):
                 custom_llm_provider = "openai"
                 return model, custom_llm_provider, dynamic_api_key, api_base
 
