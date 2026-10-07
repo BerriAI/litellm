@@ -25,7 +25,7 @@ mod _native {
     #[pymodule_export]
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
-    use crate::logger::NativeDiagnosticProcessor;
+    use crate::logger::{NativeDiagnosticLogger, NativeDiagnosticProcessor};
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -109,6 +109,7 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "NativeDiagnosticLogger",
                 "NativeTraceConfig",
                 "NativeTraceStorage",
                 "trace_encode_error",

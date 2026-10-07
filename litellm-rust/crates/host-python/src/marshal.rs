@@ -8,6 +8,10 @@ use pyo3::types::PyBytes;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+pub fn from_json_argument<T: DeserializeOwned>(document: &str) -> PyResult<T> {
+    serde_json::from_str(document).map_err(|_| PyValueError::new_err("invalid JSON argument"))
+}
+
 /// Converts a `#[pyo3(from_py_with = ...)]` argument, reporting failures as `ValueError`
 /// so a bad argument reads as a bad argument rather than as whatever the conversion hit.
 pub fn from_py_argument<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
@@ -77,6 +81,19 @@ mod tests {
     use serde::Serializer;
 
     use super::*;
+
+    #[rstest::rstest]
+    #[case::malformed("{\"secret\": \"synthetic-key\"")]
+    #[case::wrong_shape("[\"synthetic-key\"]")]
+    fn json_argument_errors_preserve_type_without_exposing_input(#[case] document: &str) {
+        crate::initialize_python();
+        Python::attach(|py| {
+            let error = from_json_argument::<std::collections::BTreeMap<String, String>>(document)
+                .unwrap_err();
+            assert!(error.is_instance_of::<PyValueError>(py));
+            assert_eq!(error.to_string(), "ValueError: invalid JSON argument");
+        });
+    }
 
     struct PanickingSerializer;
 

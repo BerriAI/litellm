@@ -2310,11 +2310,12 @@ def client(original_function):
     get_coroutine_checker: Final = litellm_utils.get_coroutine_checker
     is_coroutine: Final = get_coroutine_checker().is_async_callable(original_function)
 
-    # Return the appropriate wrapper based on the original function type
+    from litellm.analytics import track_async, track_sync
+
     if is_coroutine:
-        return wrapper_async
+        return track_async(wrapper_async, original_function.__name__)
     else:
-        return wrapper
+        return track_sync(wrapper, original_function.__name__)
 
 
 def _is_async_request(
