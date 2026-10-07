@@ -1922,6 +1922,23 @@ def test_has_default_fallbacks(model_list, has_default_fallbacks, expected_resul
     assert router._has_default_fallbacks() is expected_result
 
 
+def test_default_fallbacks_do_not_mutate_input_fallbacks(model_list):
+    fallbacks = [{"gpt-5-mini": ["gpt-5.5"]}]
+
+    first_router = Router(model_list=model_list, fallbacks=fallbacks, default_fallbacks=["gpt-5.5"])
+    second_router = Router(model_list=model_list, fallbacks=fallbacks, default_fallbacks=["gpt-image-1"])
+
+    assert fallbacks == [{"gpt-5-mini": ["gpt-5.5"]}]
+    assert first_router.fallbacks == [
+        {"gpt-5-mini": ["gpt-5.5"]},
+        {"*": ["gpt-5.5"]},
+    ]
+    assert second_router.fallbacks == [
+        {"gpt-5-mini": ["gpt-5.5"]},
+        {"*": ["gpt-image-1"]},
+    ]
+
+
 def test_add_optional_pre_call_checks(model_list):
     router = Router(model_list=model_list)
 
