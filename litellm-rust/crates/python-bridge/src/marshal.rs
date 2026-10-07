@@ -308,10 +308,14 @@ def lookup(name):
 
         Python::initialize();
         Python::attach(|py| {
+            let module_name = if factory {
+                "bridge_response_conversion_test_factory"
+            } else {
+                "bridge_response_conversion_test_lookup"
+            };
             let locals = eval(
                 py,
                 c"
-import sys
 import types
 failure = LookupError('response failed')
 cause = ValueError('cause')
@@ -323,9 +327,14 @@ def response(value):
     return fail('response')
 module = types.ModuleType('bridge_response_conversion_test')
 module.__getattr__ = fail
-sys.modules[module.__name__] = module
 ",
             );
+            py.import("sys")
+                .unwrap()
+                .getattr("modules")
+                .unwrap()
+                .set_item(module_name, locals.get_item("module").unwrap().unwrap())
+                .unwrap();
             if factory {
                 locals
                     .get_item("module")
@@ -335,12 +344,7 @@ sys.modules[module.__name__] = module
                     .unwrap();
             }
             let serialized = std::cell::Cell::new(false);
-            let error = public_response(
-                py,
-                "bridge_response_conversion_test",
-                &Observed(&serialized),
-            )
-            .unwrap_err();
+            let error = public_response(py, module_name, &Observed(&serialized)).unwrap_err();
             assert_eq!(serialized.get(), factory);
             assert!(
                 error
@@ -368,7 +372,7 @@ sys.modules[module.__name__] = module
                 .unwrap()
                 .getattr("modules")
                 .unwrap()
-                .del_item("bridge_response_conversion_test")
+                .del_item(module_name)
                 .unwrap();
         });
     }
