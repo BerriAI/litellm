@@ -1249,7 +1249,7 @@ class TestLegacyRefsFailClosedWithoutIds:
                 {"anthropic_federation_rule_id": "fdrl_1", "anthropic_identity_token_file": str(tmp_path / "token")}
             )
 
-        message = exc_info.value.message
+        message: Final = exc_info.value.message
         assert "anthropic_identity_token_file is set, but anthropic_organization_id is not set. Copy" in message
         assert "Settings > Workload identity" in message
         assert "ANTHROPIC_FEDERATION_RULE_ID" in message
@@ -1285,15 +1285,15 @@ class TestLegacyRefsFailClosedWithoutIds:
         assert resolve_anthropic_wif_params({"anthropic_federation_rule_id": "fdrl_1"}) is None
 
     def test_disabling_federation_wins_over_the_gate(self, tmp_path: Path):
-        litellm_params = {
+        litellm_params: Final = {
             "anthropic_disable_workload_identity_federation": True,
             "anthropic_identity_token_file": str(tmp_path / "token"),
         }
         assert resolve_anthropic_wif_params(litellm_params) is None
 
     def test_facade_raises_without_an_engine_call(self):
-        poster = ScriptedPoster([token_response()])
-        engine = make_engine(poster)
+        poster: Final = ScriptedPoster([token_response()])
+        engine: Final = make_engine(poster)
         with pytest.raises(litellm.AuthenticationError, match="anthropic_identity_token is set, but"):
             get_anthropic_wif_token(
                 {"anthropic_organization_id": "org-1", "anthropic_identity_token": "oidc/env/TOK"},

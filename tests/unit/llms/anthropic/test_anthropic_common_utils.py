@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
@@ -2535,7 +2536,7 @@ class TestWifZeroBehaviorChange:
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" in exc_info.value.message
         assert "ANTHROPIC_IDENTITY_TOKEN_FILE" in exc_info.value.message
 
-    def test_a_token_file_credential_missing_an_id_names_the_id_not_the_key(self, clean_anthropic_env, tmp_path):
+    def test_a_token_file_credential_missing_an_id_names_the_id_not_the_key(self, clean_anthropic_env: None, tmp_path: Path):
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
