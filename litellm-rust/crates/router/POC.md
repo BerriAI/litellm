@@ -31,7 +31,16 @@ Facade surface: **provisional decision, expected to change.** For now the facade
 
 Rust drives the loop: resolve, filter, pick, retry, fallback, cooldown
 
-Each attempt goes out as an `Invoke { deployment, operation, kwargs }` host op on the existing `coroutine` protocol. Python answers it inline in the caller's task by calling `litellm.<op>(**kwargs)`. kwargs cross as opaque Python objects; the router only reads the model, the stream flag and the metadata it writes. Native dispatch (`Operation -> Native | Invoke`) is part of the design but nothing uses it yet: every operation is an Invoke in the POC
+Each attempt goes out as an `Invoke { deployment, operation, kwargs }` host op on the existing `coroutine` protocol. Python answers it inline in the caller's task by calling `litellm.<op>(**kwargs)`. kwargs cross as opaque Python objects; the router only reads the model, the stream flag and the metadata it writes
+
+### Scope boundary: Rust replaces routing, never inference
+
+Every router operation today has three layers. For embeddings:
+1. `PythonRouter.aembedding`: the public entry point, which hands off to the retry and fallback loop (`async_function_with_fallbacks`)
+2. `PythonRouter._aembedding`: one attempt, which picks a deployment, merges its `litellm_params` into the kwargs, counts the call and calls layer 3
+3. `litellm.aembedding` (`litellm/main.py`): the inference code, meaning provider request formatting, the HTTP call, response parsing, logging and cost tracking. It does not know a router exists
+
+The Rust backend takes over layers 1 and 2 only. Layer 3 stays exactly as it is, and replacing or reimplementing any inference code (`litellm.<op>`, provider transformations, `litellm/responses/streaming_iterator.py`, the Anthropic adapters, ...) is out of scope for this POC. Rust reaches layer 3 only through the approach this branch established: an `Invoke` host op, answered by the Python helper in `litellm/router_backends/rust_call.py`, which calls the same `litellm.<op>(**kwargs)` with the same kwargs `PythonRouter` builds. `Dispatch::Native` stays in the `Operation` design as a seam but is never used in the POC
 
 The coroutine is driven by an async Python driver and a sync Python driver, so sync methods (`router.completion`, ...) are supported too
 
@@ -53,12 +62,70 @@ Rust returns a typed per-call outcome (deployment, model id, attempted targets, 
 
 Decided at construction. The Rust backend checks the config up front. If anything unsupported is configured, `RUST_OPT_IN` declines to the Python backend for the whole instance (logged) and `RUST_REQUIRED` raises. Raw members that aren't emulated yet raise `NotImplementedError` naming the member
 
-## First increment
+## POC scope (revised 2026-10-07)
 
-- Core loop: multiple deployments per group, simple-shuffle, retries with backoff, generic fallbacks, cooldowns (memory + Redis), usage counters, non-streaming and streaming calls
+The POC is the four increments below. Everything else is in the backlog and is not part of the POC
+
+### Increment 1: the basic load balancer for chat, Responses API and Anthropic messages
+
+- Core loop: multiple deployments per group, simple-shuffle, retries with backoff, generic fallbacks, cooldowns (memory + Redis), usage counters, non-streaming and streaming calls on both drivers
 - Typed fallbacks and streams: context-window and content-policy fallbacks, retry policies, mid-stream retry before the first content chunk
+- Operations: `completion`/`acompletion`, `aresponses` and `aanthropic_messages`
 
-Later: other strategies, routing groups, filters (aliases, patterns, access groups, tags, health checks), update_settings, native operations
+The Responses API and Anthropic messages reuse the same loop, but each has its own rules for a stream that fails partway (spec section 9):
+- Responses API: no same-group retry. Fallback is allowed even after content was sent, by building a continuation input from the text generated so far. Opening lifecycle events (`response.created` and friends, at most 200) are held and replayed only if no fallback takes over
+- Anthropic messages: the stream commits at the first `content_block_delta` or after 200 buffered frames, and pings pass through live. A recoverable error frame first gets a same-group retry loop with its own budget, then the fallback chain. Metadata lives under `litellm_metadata` instead of `metadata`
+
+What that work touches:
+- the Rust crate: the engine learns the two extra stream-failure rules (fall back after content with a continuation, and retry in the group before falling back on a recoverable frame) and the per-operation retry budget
+- `litellm/router_backends/rust_call.py`: the attempt bodies that mirror `_ageneric_api_call_with_fallbacks_helper` and its `_responses_attempt` / `_anthropic_messages_attempt` variants, and per-format stream buffering and classification
+- `litellm/router_backends/rust_router.py`: the `aresponses` and `aanthropic_messages` methods
+- maybe `python-bridge`, if the classified record needs new fields
+
+What it reuses without changes: the `PythonRouter` helpers for continuation input, partial usage and fallback headers (`_build_responses_continuation_input`, `_combine_responses_fallback_usage`, `_adopt_fallback_response_headers`, ...) and `litellm/router_utils`. Neither the facade (`litellm/router.py`) nor any inference code changes. If an Anthropic stream rule turns out to be tangled inside a `PythonRouter` method, it gets extracted into a shared function both backends call rather than copied
+
+### Increment 2: changing the model list while running
+
+The proxy builds one `Router` at startup and then syncs it with the database on a timer (`ProxyConfig._update_llm_router`): `delete_deployment(id)` for models that are gone, `upsert_deployment(deployment)` for new or edited ones, and `update_settings(**router_settings)` for settings stored in the database. Model management endpoints call `delete_deployment` directly
+
+The Rust backend serves these by building a new `Snapshot` and swapping it in with `Registry::replace`. Calls already running keep the snapshot they started with:
+- `upsert_deployment`: Python normalizes the deployment and sets its id as today, then Rust replaces the snapshot. It returns `None` when the deployment is unchanged, like Python. An edited deployment is removed and appended at the end, as Python does, because list order decides seeded picks
+- `delete_deployment`: returns the removed deployment or `None`
+- `update_settings`: only the keys in `RUNTIME_UPDATABLE_ROUTER_SETTINGS`, with Python's int casting and `RetryPolicy` validation
+- the Python side (the discarded `PythonRouter` used for normalization and attempt kwargs, and its OpenAI client cache) is updated in the same call, so both sides stay in step
+
+Open question: the backend is chosen once, at construction. An upsert or settings update can add something the Rust backend declines (a deployment with `tpm`, a wildcard model, a non-shuffle `routing_strategy`, tag filtering, ...). It cannot decline the whole instance at that point. Options: reject the change and keep the old config (the call raises), or swap the instance to `PythonRouter` (Redis state carries over, in-memory counters do not)
+
+### Increment 3: Python-only features, called from Rust
+
+Rust keeps running the loop and asks Python at fixed points, with one host op per point. Python answers by calling the existing implementation on the `PythonRouter` instance it already keeps. Rust only sends a host op when the config uses the feature, so a plain call still crosses once per attempt:
+- before picking: the pre-routing hook (`async_pre_routing_hook`), which drives the auto, complexity, adaptive and quality routers and the session router. It can change the model, the messages and the tier's `litellm_params`
+- narrowing the candidates: routing plugins (the `plugins` argument) and CustomLogger `async_filter_deployments` / `async_pre_call_check`. Rust sends the candidate ids and gets back the subset
+- picking: a custom routing strategy (`set_custom_routing_strategy`). Rust sends the candidates and gets back the chosen deployment instead of shuffling
+- before each cross-group fallback: the proxy's `fallback_access_check` and `fallback_budget_check`. Rust asks whether the target is allowed and skips it if not
+- notifications: the CustomLogger fallback events and `router_cooldown_event_callback`. Rust tells Python after a hop or a cooldown and does not wait for an answer
+
+Some of these features read the model list (the auto router looks up its tier groups), so they depend on increment 2 keeping the Python side in step with the snapshot
+
+### Increment 4: what the proxy needs to switch over
+
+Today the proxy always gets `PythonRouter`, because it builds `Router(...)` with arguments the Rust backend declines (`router_general_settings`, `search_tools`, `ignore_invalid_deployments`, `fallback_access_check`, `fallback_budget_check`, `auto_router_capability_limit`). Switching over needs three things:
+- accept the proxy's constructor arguments. The two fallback checks come from increment 3. The others are settings the Rust backend has to honor or can safely pass to the Python side
+- serve the proxy's reads. 116 proxy files use about 109 distinct router members, about 386 times. Most uses read the model list (`get_model_list`, `get_deployment`, `model_list`, `get_model_names`, `get_model_group_info`, `get_model_access_groups`, `get_deployment_credentials_with_provider`, ...), and those become views of the snapshot. The rest reach into live internals (`cache`, `pattern_router`, `adaptive_routers`, `deployment_latency_map`, `health_state_cache`, `model_name_to_deployment_indices`, ...). Each of those gets a stand-in, or becomes a typed method on the facade, which is where the provisional full-surface decision gets settled
+- serve the request path. `route_llm_request` calls `getattr(llm_router, route_type)(**data)` for every operation, so one instance serves chat, embeddings, files, batches, passthrough and the rest
+
+Open question: the backlog keeps every operation except chat, Responses API and Anthropic messages on Python, but the proxy sends all of them to one router instance. Either a Rust-backed instance hands backlogged operations to an inner `PythonRouter` that shares its registry and Redis state (this relaxes "one backend per instance"), or the proxy only switches over once the backlogged operations are done
+
+## Backlog (not part of the POC)
+
+- the one-shot operations: embeddings, text completion, image generation and editing, transcription, speech, rerank, moderation
+- operations on stored objects: files, batches, fine-tuning jobs, assistants, vector stores, realtime sessions, passthrough routes
+- fan-out operations: `abatch_completion` and the fastest-response variants
+- the other routing strategies (least busy, latency, usage, cost) and per-deployment limits (`tpm`, `rpm`, `max_parallel_requests`, `order`)
+- deployment filters: aliases, wildcard patterns, access groups, tags, team models, routing groups, pre-call checks, health checks
+- request options that raise `NotImplementedError` today: `priority`, `specific_deployment`, request-level `model_group_retry_policy`, `include_fallback_errors`, `_router_weights`, client-side credentials
+
+Out of scope entirely: Rust calling providers itself (see Scope boundary)
 
 ## Parity testing
 
@@ -85,12 +152,13 @@ Later: other strategies, routing groups, filters (aliases, patterns, access grou
 
 - 2026-10-06: design agreed, branch created
 - 2026-10-07: facade verified, steps 2, 3 and 4 landed, step 5 started (parametrized suites, Redis parity)
+- 2026-10-07: scope revised: Rust replaces routing only, never inference. The POC is increments 1 to 4 (basic load balancer for chat, Responses API and Anthropic messages, runtime model list changes, Python-only features as host ops, proxy switchover); the rest is backlog
 
 ## Checkpoint 2026-10-07
 
 Done:
 - Step 1 verification: done. tests/unit, tests/router_unit_tests and tests/local_testing/test_router_fallbacks.py were run on the branch and on its base `cb76270b`; the branch-only failures were the facade identity issue (fixed in `71120e1f`) and two router_unit_tests that patched the facade instead of the backend (fixed). `make check` found an isort issue and an unformatted `python_router.py`, LIT010/LIT008 and four ANN204 in `router.py`, and a moved LIT013 suppression, all fixed. In this container `make check`'s dependency sync and the basedpyright gate cannot provision (a private git dependency returns 403) and the dashboard has no node_modules, so those steps were run per file instead
-- Step 2: `Route.ROUTER` (`RUST_OPT_IN`) in `litellm/rust_bridge/catalog.py`. `litellm/router_backends/selection.py::select_backend` runs in `Router.__init__`; `rust_support.py` decides what the Rust backend can serve (declines to `PythonRouter` under opt-in, raises under `RUST_REQUIRED`). `RustRouter` is still a stub, so everything declines
+- Step 2: `Route.ROUTER` (`RUST_OPT_IN`) in `litellm/rust_bridge/catalog.py`. `litellm/router_backends/selection.py::select_backend` runs in `Router.__init__`; `rust_support.py` decides what the Rust backend can serve (declines to `PythonRouter` under opt-in, raises under `RUST_REQUIRED`).
 - Step 3: the Rust crate. `engine::Engine::route` runs fallbacks -> retries -> attempt against a `host::RouterHost` (`invoke`, `sleep`). Modules: `snapshot` (registry), `settings`, `failure` (`Classified` record, `Rejection` for router-raised errors), `selection` (resolve, cooldown filter, retry skip, `simple_shuffle`), `retry` (`should_retry_this_error`, backoff), `fallback` (chain lookup), `cooldown` (failure callbacks), `store` (memory + Redis with Python's encodings), `pyrepr` (Python `str()` of dicts), `random` (CPython MT19937), `operation` (`Operation`, `Dispatch`, all `Invoke` today)
 
 Design notes made while implementing:
@@ -101,7 +169,7 @@ Design notes made while implementing:
 - Python's shared-logging behavior is kept: with `litellm_logging_obj` passed, only the first failure runs the failure callbacks and fallback-hop failures cool down through `_trigger_cooldown_for_failed_deployment`
 
 - Step 4: `python-bridge` exports `Router` (`src/routes/router/`): `Router(deployments, settings, providers, redis_url, seed)` holds the `Engine`; `route(call, driver, asynchronous)` runs one call through `host-python::run_call` with `HookChain::new()`. `Invoke` and `Sleep` are host ops on `RouterHostCall`; async answers await the driver's coroutine inline, sync answers call `invoke_sync`/`sleep_sync`. `map_error` asks the driver for the exception to raise (ops applied, rejections materialized once per id), `encode_response` asks it for the final response (ops applied, retry/fallback headers added)
-- Python: `RustRouter` (`litellm/router_backends/rust_router.py`) builds a `PythonRouter` from the same arguments minus Redis and `discard()`s it, so normalization, `generate_model_id` and attempt kwargs building stay Python and no router callbacks are registered. It projects deployments and resolved settings to the native router. `acompletion`/`completion` are served; streaming, `priority`, `specific_deployment`, request-level `model_group_retry_policy`, `include_fallback_errors`, `_router_weights`, `mock_timeout`, `mock_testing_rate_limit_error` and client-side credentials raise `NotImplementedError`. Other members raise `NotImplementedError` naming the member, except the read views `model_list`, `model_names`, `get_model_names`
+- Python: `RustRouter` (`litellm/router_backends/rust_router.py`) builds a `PythonRouter` from the same arguments minus Redis and `discard()`s it, so normalization, `generate_model_id` and attempt kwargs building stay Python and no router callbacks are registered. It projects deployments and resolved settings to the native router. `acompletion`/`completion` are served, including async streaming; sync streaming, `priority`, `specific_deployment`, request-level `model_group_retry_policy`, `include_fallback_errors`, `_router_weights`, and client-side credentials raise `NotImplementedError`. Other members raise `NotImplementedError` naming the member, except the read views `model_list`, `model_names`, `get_model_names`
 - `litellm/router_backends/rust_call.py::RoutedCall` is the per-call driver: it mirrors `_acompletion`/`_completion`'s body after selection (same `PythonRouter` helpers through a typed `AttemptRouter` protocol), classifies exceptions, and applies the router's ops to numbered metadata buckets
 - Tests: `tests/unit/router_backends/test_rust_call.py` (classification, buckets, rejections, debug text), `tests/test_litellm_rust/router/test_rust_router.py` (native; same config and seed through both backends: identical pick sequences, headers, error text, cooldown-then-reject sequence, sync path, facade selection)
 
@@ -109,6 +177,6 @@ Design notes made while implementing:
 
 Streaming (async chat): `RoutedCall` reads the stream until the first chunk with content (Python's `_stream_chunks_have_generated_content`) and returns a `ReplayStream` (a `FallbackAwareStreamWrapper`) that replays the buffered chunks. A `MidStreamFallbackError` before content is classified `stream_failure: before_content` and goes straight to the fallback chain without in-group retries, matching Python's chat wrapper (spec section 9) rather than retrying in the group; any other pre-content stream error is `terminal` and raised as is; after content a mid-stream fallback error surfaces as its original exception. Not done: the sync stream path, and combining the failed attempt's partial usage into the fallback's
 
-Next: opt more suites into `router_backend` (`tests/unit/test_router_order_fallback.py` and the fallback/cooldown tests in `tests/unit/router_utils` that go through `Router(...)`), then sync streaming, then the generic operations (`aresponses`, `aanthropic_messages`, `aimage_generation`), then `upsert_deployment`/`delete_deployment`/`update_settings` through `Registry::replace`
+Next, following the revised POC scope: finish increment 1 (sync streaming, partial usage on fallback, `aresponses`, `aanthropic_messages`, and more suites opted into `router_backend`, starting with `tests/unit/test_router_order_fallback.py` and the fallback/cooldown tests in `tests/unit/router_utils` that go through `Router(...)`), then increments 2, 3 and 4. The two open questions under increments 2 and 4 need an answer before those increments start
 
-Known gaps to close or decline: `include_fallback_errors`, request-level `model_group_retry_policy`/`specific_deployment`/`priority`, CustomLogger fallback-event hooks, `router_cooldown_event_callback`, the 200-key `InMemoryCache` eviction, fallback keys containing `/` (provider-prefixed matching needs the cost map)
+Known gaps to close or decline: CustomLogger fallback-event hooks and `router_cooldown_event_callback` (increment 3), the 200-key `InMemoryCache` eviction, fallback keys containing `/` (provider-prefixed matching needs the cost map)
