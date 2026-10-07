@@ -1977,3 +1977,20 @@ model LiteLLM_LensDataset {
 
   @@id([id, revision])
 }
+
+model LiteLLM_LensSignalConfig {
+  id   String @id
+  data Json
+}
+
+model LiteLLM_LensTraceSignal {
+  trace_id      String
+  trace_ref     String @default("")
+  config_key    String
+  span_count    Int
+  claimed_until DateTime?
+  classified_at DateTime?
+  data          Json
+
+  @@id([trace_id, trace_ref])
+}
