@@ -17,6 +17,7 @@ from typing import Final, Literal
 import pytest
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import (
     AnthropicContentBlock,
@@ -55,6 +56,16 @@ class TestWebSearchInterceptionSession:
     @pytest.mark.covers(
         "quota_management.spend_tracking.websearch_interception.bills_under_request_session",
         exercised_on=("messages",),
+    )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK, Provider.PERPLEXITY),
+            models=(BEDROCK_INVOKE_BACKEND,),
+            capabilities=(Capability.WEB_SEARCH,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_intercepted_search_is_billed_under_the_request_session(
         self, proxy: ProxyClient, resources: ResourceManager

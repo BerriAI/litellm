@@ -36,6 +36,7 @@ from pydantic import BaseModel, RootModel
 
 from e2e_config import unique_marker
 from e2e_http import Success
+from e2e_metadata import step
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, SpendLogsParams
 from proxy_client import ProxyClient
@@ -133,6 +134,7 @@ def assert_fresh_tokens_billed_at(row: CostRow, input_rate: float) -> None:
     )
 
 
+@step("Wait for the request's cost breakdown in /spend/logs")
 def poll_cost_row(proxy: ProxyClient, request_id: str) -> CostRow | None:
     """Poll /spend/logs for the call's row until it lands with a cost breakdown
     (rows flush ~60s behind the call via proxy_batch_write_at); None on timeout."""
@@ -156,6 +158,7 @@ def poll_cost_row(proxy: ProxyClient, request_id: str) -> CostRow | None:
     return None
 
 
+@step("Wait for a matching cost breakdown in the key's /spend/logs")
 def poll_cost_row_where(
     proxy: ProxyClient, api_key: str, predicate: Callable[[CostRow], bool]
 ) -> CostRow | None:
@@ -182,6 +185,7 @@ def poll_cost_row_where(
     return None
 
 
+@step("Add a deployment with custom rates that calls {litellm_params.model}")
 def register_priced_model(
     proxy: ProxyClient,
     resources: ResourceManager,

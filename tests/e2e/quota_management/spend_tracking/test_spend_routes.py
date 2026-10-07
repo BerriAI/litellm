@@ -163,6 +163,12 @@ def test_schema_listed_spend_routes_are_responsive(client: SpendClient) -> None:
     assert not offenders, "non-responsive schema spend routes:\n" + "\n".join(offenders)
 
 
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.SPEND_REPORTING,
+    )
+)
 def test_capture_rate_reports_or_names_the_missing_billing_key(client: SpendClient) -> None:
     result: Final = client.probe(_CAPTURE_RATE_ROUTE, params=_date_range())
     print(f"{_CAPTURE_RATE_ROUTE} -> {result.status_code}\n{result.body[:600]}")
