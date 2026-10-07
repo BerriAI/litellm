@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 from litellm.proxy.common_utils.callback_config_validation import (
@@ -270,12 +272,12 @@ def test_capture_message_content_is_accepted_on_every_otel_v2_destination(callba
 
 @pytest.mark.parametrize("callback_name", ["langfuse", "datadog", "otel", "arize_phoenix", None])
 def test_capture_message_content_is_rejected_where_it_would_never_take_effect(callback_name: str | None) -> None:
-    error = callback_config_error(callback_name, {"capture_message_content": "no_content"})
+    error: Final = callback_config_error(callback_name, {"capture_message_content": "no_content"})
     assert error is not None and "capture_message_content" in error and "langfuse_otel" in error
 
 
 def test_an_unsupported_capture_message_content_is_rejected_on_key_logging_metadata() -> None:
-    error = logging_metadata_config_error(
+    error: Final = logging_metadata_config_error(
         {
             "logging": [
                 {
@@ -290,7 +292,7 @@ def test_an_unsupported_capture_message_content_is_rejected_on_key_logging_metad
 
 
 def test_each_entry_keeps_its_own_capture_message_content() -> None:
-    error = logging_metadata_config_error(
+    error: Final = logging_metadata_config_error(
         {
             "logging": [
                 {
@@ -310,7 +312,7 @@ def test_each_entry_keeps_its_own_capture_message_content() -> None:
 
 
 def test_a_failure_only_entry_rejects_capture_message_content() -> None:
-    error = callback_config_error("langfuse_otel", {"capture_message_content": "no_content"}, "failure")
+    error: Final = callback_config_error("langfuse_otel", {"capture_message_content": "no_content"}, "failure")
     assert error is not None and "capture_message_content" in error and "success_and_failure" in error
 
 
@@ -327,7 +329,7 @@ def test_entries_for_one_backend_share_one_capture_message_content(
     stored: list[tuple[str, dict[str, str]]], rejected: bool
 ) -> None:
     """The backend's entries merge into one destination, so a second value would silently win or lose."""
-    error = conflicting_capture_error("langfuse_otel", {"capture_message_content": "span_only"}, stored)
+    error: Final = conflicting_capture_error("langfuse_otel", {"capture_message_content": "span_only"}, stored)
     assert (error is not None) is rejected
 
 
@@ -339,7 +341,7 @@ def test_key_logging_entries_for_one_backend_may_not_disagree_on_capture_message
             "callback_vars": {"capture_message_content": capture},
         }
 
-    error = logging_metadata_config_error(
+    error: Final = logging_metadata_config_error(
         {"logging": [entry("success", "no_content"), entry("success_and_failure", "span_only")]}
     )
     assert error is not None and "already set to 'no_content' by another langfuse_otel entry" in error

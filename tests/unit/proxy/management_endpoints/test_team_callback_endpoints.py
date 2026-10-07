@@ -1716,7 +1716,7 @@ def test_add_team_callback_accepts_arize_sampling_rate_vars():
 
 @pytest.mark.asyncio
 async def test_add_team_callbacks_rejects_capture_message_content_on_a_non_otel_v2_callback(patched_prisma):
-    data = AddTeamCallback(
+    data: Final = AddTeamCallback(
         callback_name="langfuse",
         callback_type="success",
         callback_vars={

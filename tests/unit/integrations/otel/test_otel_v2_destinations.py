@@ -4243,9 +4243,9 @@ class TestTenantHostSsrfGuard:
         assert sum("provider_url_destination_allowed_hosts" in record.message for record in caplog.records) == 1
 
 
-_ALL_MAPPERS = ("genai", "legacy", "openinference", "langfuse", "weave", "langtrace")
-_SECRET = "SECRET-MARKER"
-_MODEL_CALL_WITH_CONTENT = LLMCallSpanData(
+_ALL_MAPPERS: Final = ("genai", "legacy", "openinference", "langfuse", "weave", "langtrace")
+_SECRET: Final = "SECRET-MARKER"
+_MODEL_CALL_WITH_CONTENT: Final = LLMCallSpanData(
     operation=GenAIOperation.CHAT,
     provider="openai",
     request_model="gpt-4o",
@@ -4280,8 +4280,8 @@ _MODEL_CALL_WITH_CONTENT = LLMCallSpanData(
         },
     ),
 )
-_MODEL_CALL_WITHOUT_CONTENT = replace(_MODEL_CALL_WITH_CONTENT, messages_in=(), choices_out=())
-_TOOL_CALL_WITH_CONTENT = MCPToolCallSpanData(
+_MODEL_CALL_WITHOUT_CONTENT: Final = replace(_MODEL_CALL_WITH_CONTENT, messages_in=(), choices_out=())
+_TOOL_CALL_WITH_CONTENT: Final = MCPToolCallSpanData(
     operation=GenAIOperation.EXECUTE_TOOL,
     method="tools/call",
     tool_name="lookup",
@@ -4295,7 +4295,7 @@ _TOOL_CALL_WITH_CONTENT = MCPToolCallSpanData(
     response_cost=None,
     identity=RequestIdentity(call_id="c2", team_id="t1"),
 )
-_TOOL_CALL_WITHOUT_CONTENT = replace(_TOOL_CALL_WITH_CONTENT, arguments_json=None, result_json=None)
+_TOOL_CALL_WITHOUT_CONTENT: Final = replace(_TOOL_CALL_WITH_CONTENT, arguments_json=None, result_json=None)
 
 NO_CONTENT_DEST = OtelDestination(
     endpoint="http://team-a.local/api/public/otel",
@@ -4321,7 +4321,7 @@ def recorded(attributes: Mapping[str, object]) -> dict[str, object]:
 
 
 def model_call_tree(provider: TracerProvider, attributes: Mapping[str, object]) -> None:
-    tracer = get_tracer(provider, "litellm")
+    tracer: Final = get_tracer(provider, "litellm")
     with tracer.start_as_current_span("POST /v1/chat/completions"):
         with tracer.start_as_current_span("chat gpt-4o") as llm:
             llm.set_attributes(attributes)
@@ -4345,7 +4345,7 @@ class TestCaptureMessageContent:
         exporters: Mapping[str, InMemorySpanExporter],
         default_capture: CaptureMessageContent = CaptureMessageContent.SPAN_ONLY,
     ) -> TracerProvider:
-        provider = TracerProvider()
+        provider: Final = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(operator))
         provider.add_span_processor(
             TenantFanOutSpanProcessor(
@@ -4378,8 +4378,8 @@ class TestCaptureMessageContent:
     def test_a_destination_setting_controls_its_copy_and_omission_uses_the_global_default(
         self, setting: str | None, content_exported: bool
     ) -> None:
-        attributes = mapped(_MODEL_CALL_WITH_CONTENT)
-        destination = OtelDestination(
+        attributes: Final = mapped(_MODEL_CALL_WITH_CONTENT)
+        destination: Final = OtelDestination(
             endpoint="http://team.local/api/public/otel",
             headers=MappingProxyType({"Authorization": "Basic dA=="}),
             callback_name="langfuse_otel",
@@ -4389,7 +4389,7 @@ class TestCaptureMessageContent:
 
         self._run(self._fan_out(operator, {destination.endpoint: tenant}), (destination,), attributes)
 
-        exported = by_name(tenant)["chat gpt-4o"]
+        exported: Final = by_name(tenant)["chat gpt-4o"]
         assert carries_content(exported) is content_exported
         assert carries_content(by_name(operator)["chat gpt-4o"])
         assert exported.attributes["gen_ai.request.model"] == "gpt-4o"
@@ -4402,20 +4402,20 @@ class TestCaptureMessageContent:
             InMemorySpanExporter(),
             InMemorySpanExporter(),
         )
-        kind = "lit8244_global_no_content_capture"
+        kind: Final = "lit8244_global_no_content_capture"
         register_exporter_factory(kind, lambda _spec: operator_exporter)
-        config = OpenTelemetryV2Config(
+        config: Final = OpenTelemetryV2Config(
             capture_message_content=CaptureMessageContent.NO_CONTENT,
             exporters=[ExporterSpec(kind=kind)],
         )
-        provider = build_tracer_provider(config, use_simple_processor=True, tenant_overrides=True)
-        team = OtelDestination(
+        provider: Final = build_tracer_provider(config, use_simple_processor=True, tenant_overrides=True)
+        team: Final = OtelDestination(
             endpoint="http://team.local/api/public/otel",
             headers=MappingProxyType({"Authorization": "Basic dA=="}),
             callback_name="langfuse_otel",
             capture_message_content="span_only",
         )
-        sibling = INHERITING_DEST
+        sibling: Final = INHERITING_DEST
         provider.add_span_processor(
             TenantFanOutSpanProcessor(
                 processor_factory=lambda destination: SimpleSpanProcessor(
@@ -4454,20 +4454,20 @@ class TestCaptureMessageContent:
 
         self._run(self._fan_out(operator, {NO_CONTENT_DEST.endpoint: tenant}), (NO_CONTENT_DEST,), captured)
 
-        exported = by_name(tenant)["chat gpt-4o"]
+        exported: Final = by_name(tenant)["chat gpt-4o"]
         assert dict(exported.attributes) == recorded(uncaptured), "only content goes, every other attribute stays"
         assert not carries_content(exported)
 
     def test_restricting_one_destination_leaves_the_original_span_and_the_other_destination_alone(self) -> None:
-        attributes = mapped(_MODEL_CALL_WITH_CONTENT)
+        attributes: Final = mapped(_MODEL_CALL_WITH_CONTENT)
         operator, restricted, inheriting = InMemorySpanExporter(), InMemorySpanExporter(), InMemorySpanExporter()
-        exporters = {NO_CONTENT_DEST.endpoint: restricted, INHERITING_DEST.endpoint: inheriting}
+        exporters: Final = {NO_CONTENT_DEST.endpoint: restricted, INHERITING_DEST.endpoint: inheriting}
 
         self._run(self._fan_out(operator, exporters), (NO_CONTENT_DEST, INHERITING_DEST), attributes)
 
-        original = by_name(operator)
-        kept = by_name(inheriting)
-        stripped = by_name(restricted)
+        original: Final = by_name(operator)
+        kept: Final = by_name(inheriting)
+        stripped: Final = by_name(restricted)
         assert dict(original["chat gpt-4o"].attributes) == recorded(attributes)
         assert dict(kept["chat gpt-4o"].attributes) == recorded(attributes)
         assert not carries_content(stripped["chat gpt-4o"])
@@ -4478,8 +4478,10 @@ class TestCaptureMessageContent:
             assert [e.name for e in copy["chat gpt-4o"].events] == [e.name for e in original["chat gpt-4o"].events]
 
     def test_an_omitted_setting_and_span_only_export_the_same_span(self) -> None:
-        attributes = mapped(_MODEL_CALL_WITH_CONTENT)
-        span_only = INHERITING_DEST.model_copy(update={"capture_message_content": CaptureMessageContent.SPAN_ONLY})
+        attributes: Final = mapped(_MODEL_CALL_WITH_CONTENT)
+        span_only: Final = INHERITING_DEST.model_copy(
+            update={"capture_message_content": CaptureMessageContent.SPAN_ONLY}
+        )
         omitted_exporter, span_only_exporter = InMemorySpanExporter(), InMemorySpanExporter()
 
         for destination, exporter in ((INHERITING_DEST, omitted_exporter), (span_only, span_only_exporter)):
@@ -4510,8 +4512,8 @@ class TestCaptureMessageContent:
         """The fan-out skips a destination the operator already writes to, so the operator's
         copy is the one that account receives and must not bypass the team's restriction."""
         monkeypatch.setattr(litellm, "otel_tenant_destination_mode", "additive", raising=False)
-        shared = InMemorySpanExporter()
-        provider = TracerProvider()
+        shared: Final = InMemorySpanExporter()
+        provider: Final = TracerProvider()
         provider.add_span_processor(
             _OverriddenBackendFilter(
                 SimpleSpanProcessor(shared),
@@ -4527,7 +4529,7 @@ class TestCaptureMessageContent:
                 operator_sinks=MappingProxyType({TestRoutingMode.OPERATOR_SINK: "full"}),
             )
         )
-        destination = OtelDestination(
+        destination: Final = OtelDestination(
             endpoint=TestRoutingMode.SAME_ACCOUNT_ENDPOINT,
             headers=MappingProxyType({"Authorization": "Basic op"}),
             callback_name="langfuse_otel",
@@ -4536,7 +4538,7 @@ class TestCaptureMessageContent:
 
         self._run(provider, (destination,), mapped(_MODEL_CALL_WITH_CONTENT))
 
-        model_calls = [s for s in shared.get_finished_spans() if s.name == "chat gpt-4o"]
+        model_calls: Final = [s for s in shared.get_finished_spans() if s.name == "chat gpt-4o"]
         assert len(model_calls) == 1, "the same account received the span twice"
         assert carries_content(model_calls[0]) is content_exported
 
@@ -4545,10 +4547,10 @@ class TestCaptureMessageContent:
         self, monkeypatch: pytest.MonkeyPatch, mode: str
     ) -> None:
         monkeypatch.setattr(litellm, "otel_tenant_destination_mode", mode, raising=False)
-        shared = InMemorySpanExporter()
-        kind = f"lit8244_collector_{mode}"
+        shared: Final = InMemorySpanExporter()
+        kind: Final = f"lit8244_collector_{mode}"
         register_exporter_factory(kind, lambda _spec: shared)
-        config = OpenTelemetryV2Config(
+        config: Final = OpenTelemetryV2Config(
             exporters=[
                 ExporterSpec(
                     kind=kind,
@@ -4557,14 +4559,14 @@ class TestCaptureMessageContent:
                 )
             ]
         )
-        provider = build_tracer_provider(config, use_simple_processor=True, tenant_overrides=True)
+        provider: Final = build_tracer_provider(config, use_simple_processor=True, tenant_overrides=True)
         provider.add_span_processor(
             TenantFanOutSpanProcessor(
                 processor_factory=lambda _d: SimpleSpanProcessor(shared),
                 operator_sinks=operator_sink_scopes(config),
             )
         )
-        destination = OtelDestination(
+        destination: Final = OtelDestination(
             endpoint=TestRoutingMode.SAME_ACCOUNT_ENDPOINT,
             headers=MappingProxyType({"Authorization": "Basic op"}),
             callback_name="langfuse_otel",
@@ -4573,7 +4575,7 @@ class TestCaptureMessageContent:
 
         self._run(provider, (destination,), mapped(_MODEL_CALL_WITH_CONTENT))
 
-        model_calls = [s for s in shared.get_finished_spans() if s.name == "chat gpt-4o"]
+        model_calls: Final = [s for s in shared.get_finished_spans() if s.name == "chat gpt-4o"]
         assert model_calls, "the account must receive the model call before its content can be judged absent"
         assert not any(carries_content(span) for span in model_calls)
 
@@ -4587,9 +4589,9 @@ class TestCaptureMessageContent:
         """A sibling destination's span_only makes the logger collect content, and a request
         routed to this callback's team credentials must not carry it under a global no_content."""
         exporters: dict[ExporterOwner | None, InMemorySpanExporter] = {}
-        kind = f"lit8244_routed_{global_capture.value}"
+        kind: Final = f"lit8244_routed_{global_capture.value}"
         register_exporter_factory(kind, lambda spec: exporters.setdefault(spec.owner, InMemorySpanExporter()))
-        config = OpenTelemetryV2Config(
+        config: Final = OpenTelemetryV2Config(
             capture_message_content=global_capture,
             exporters=[
                 ExporterSpec(
@@ -4601,9 +4603,9 @@ class TestCaptureMessageContent:
                 ExporterSpec(kind=kind),
             ],
         )
-        cache = TenantTracerCache(config, "langfuse_otel", "litellm")
+        cache: Final = TenantTracerCache(config, "langfuse_otel", "litellm")
 
-        route = cache.route_for(
+        route: Final = cache.route_for(
             get_tracer(TracerProvider(), "litellm"),
             {"langfuse_public_key": "pk-team", "langfuse_secret_key": "sk-team"},
         )
@@ -4622,19 +4624,19 @@ class TestCaptureMessageContent:
         self, monkeypatch: pytest.MonkeyPatch, first: str
     ) -> None:
         monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
-        tenant = InMemorySpanExporter()
+        tenant: Final = InMemorySpanExporter()
         monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, "otlp_http", lambda _spec: tenant)
-        langfuse = OpenTelemetryV2Config(
+        langfuse: Final = OpenTelemetryV2Config(
             capture_message_content=CaptureMessageContent.SPAN_ONLY,
             exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.LANGFUSE_OTEL)],
         )
-        newrelic = OpenTelemetryV2Config(
+        newrelic: Final = OpenTelemetryV2Config(
             capture_message_content=CaptureMessageContent.NO_CONTENT,
             exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.NEWRELIC)],
         )
-        provider = TracerProvider()
+        provider: Final = TracerProvider()
         attach_tenant_fan_out(provider, *((newrelic, langfuse) if first == "newrelic" else (langfuse, newrelic)))
-        destination = OtelDestination(
+        destination: Final = OtelDestination(
             endpoint="http://team.local/api/public/otel",
             headers=MappingProxyType({"Authorization": "Basic dA=="}),
             callback_name="langfuse_otel",
@@ -4652,14 +4654,14 @@ class TestCaptureMessageContent:
     ) -> None:
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         is_otel_v2_enabled.cache_clear()
-        callback_vars = {
+        callback_vars: Final = {
             "langfuse_public_key": "pk-team",
             "langfuse_secret_key": "sk-team",
             "langfuse_host": "http://team.local",
         }
         if setting is not None:
             callback_vars["capture_message_content"] = setting
-        auth = UserAPIKeyAuth(
+        auth: Final = UserAPIKeyAuth(
             team_metadata={
                 "logging": [
                     {"callback_name": "langfuse_otel", "callback_type": "success", "callback_vars": callback_vars},
@@ -4672,7 +4674,7 @@ class TestCaptureMessageContent:
             }
         )
 
-        destinations = {d.callback_name: d for d in resolve_tenant_otel_destinations(auth)}
+        destinations: Final = {d.callback_name: d for d in resolve_tenant_otel_destinations(auth)}
 
         assert destinations["langfuse_otel"].capture_message_content == setting
         assert destinations["arize"].capture_message_content is None, "the setting stays on its own callback"
@@ -4695,7 +4697,7 @@ class TestCaptureMessageContent:
 
     @pytest.mark.parametrize("value", ["no_content", "span_only", "event_only", "span_and_event"])
     def test_a_supported_value_is_stored_as_given(self, value: str) -> None:
-        saved = AddTeamCallback(
+        saved: Final = AddTeamCallback(
             callback_name="langfuse_otel",
             callback_type="success",
             callback_vars={"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "capture_message_content": value},
@@ -4711,7 +4713,7 @@ class TestCaptureMessageContent:
             )
 
     def test_flattening_the_entries_leaves_the_setting_on_its_own_entry(self) -> None:
-        flattened = convert_key_logging_metadata_to_callback(
+        flattened: Final = convert_key_logging_metadata_to_callback(
             AddTeamCallback(
                 callback_name="langfuse_otel",
                 callback_type="success",
