@@ -39,7 +39,11 @@ from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
-from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.hidden_params import (
+    get_hidden_params,
+    get_hidden_params_storage,
+    set_hidden_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
@@ -2491,13 +2495,17 @@ class LiteLLMCompletionResponsesConfig:
             user=echoed.get("user"),
             store=echoed.get("store"),
         )
-        chat_completion_hidden_params: Final = get_hidden_params(chat_completion_response)
-        responses_api_response.hidden_params = (
-            chat_completion_hidden_params if chat_completion_hidden_params is not None else {}
+        chat_completion_hidden_params: Final = get_hidden_params_storage(chat_completion_response)
+        set_hidden_params(
+            responses_api_response,
+            chat_completion_hidden_params if chat_completion_hidden_params is not None else {},
         )
 
         # Surface provider-specific fields (generic passthrough from any provider)
-        provider_fields: Final = responses_api_response.hidden_params.get("provider_specific_fields")
+        response_hidden_params: Final = get_hidden_params(responses_api_response)
+        provider_fields: Final = (
+            response_hidden_params.get("provider_specific_fields") if response_hidden_params is not None else None
+        )
         if provider_fields:
             setattr(responses_api_response, "provider_specific_fields", provider_fields)
 

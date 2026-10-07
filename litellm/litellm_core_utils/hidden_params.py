@@ -43,6 +43,17 @@ def _get_hidden_params_storage(obj: object) -> object | None:
     return obj.get(_HIDDEN_PARAMS_ATTR) if isinstance(obj, dict) else getattr(obj, _HIDDEN_PARAMS_ATTR, None)
 
 
+def get_hidden_params_storage(obj: object) -> dict[str, object] | HiddenParams | None:
+    hidden_params: Final[object | None] = _get_hidden_params_storage(obj)
+    if isinstance(hidden_params, dict):
+        return cast(  # cast-ok: runtime dict validation preserves dynamically typed legacy storage
+            dict[str, object], hidden_params
+        )
+    if isinstance(hidden_params, HiddenParams):
+        return hidden_params
+    return None
+
+
 def _as_hidden_params_mapping(hidden_params: object | None) -> MutableMapping[str, object] | None:
     if isinstance(hidden_params, dict):
         return cast(  # cast-ok: runtime dict validation preserves dynamically typed legacy storage
@@ -58,7 +69,7 @@ def get_hidden_params(obj: object) -> MutableMapping[str, object] | None:
     return _as_hidden_params_mapping(hidden_params)
 
 
-def set_hidden_params(obj: object, hidden_params: dict[str, object]) -> None:
+def set_hidden_params(obj: object, hidden_params: dict[str, object] | HiddenParams) -> None:
     if isinstance(obj, dict):
         obj[_HIDDEN_PARAMS_ATTR] = hidden_params
     else:
