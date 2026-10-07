@@ -916,62 +916,62 @@ class TestValidateModelCostMap:
             is True
         )
 
+def _fetch_with_single_outcome(monkeypatch, outcome):
+    from litellm.litellm_core_utils import get_model_cost_map as module
+
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+    source_info = module._cost_map_source_info
+    for name in ("source", "url", "is_env_forced", "fallback_reason", "loaded_at", "source_revision", "etag"):
+        monkeypatch.setattr(source_info, name, getattr(source_info, name))
+    client, calls = _mock_client([outcome], client_cls=httpx.Client)
+    result = get_model_cost_map(url=_URL, max_attempts=1, client=client)
+    return result, calls["count"], get_model_cost_map_source_info()
+
+
+def _backup_keys():
+    return _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map()).keys()
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestGetModelCostMapFallback:
     """Tests for get_model_cost_map fallback behavior with bad upstream."""
 
-    def test_should_fallback_to_backup_on_invalid_json(self):
+    def test_should_fallback_to_backup_on_invalid_json(self, monkeypatch):
         """When upstream returns invalid JSON, should fall back to local backup."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.side_effect = json.JSONDecodeError("bad json", "", 0)
+        result, fetches, source = _fetch_with_single_outcome(monkeypatch, httpx.Response(200, content=b"not json"))
 
-        with patch("httpx.get", return_value=mock_response):
-            result = get_model_cost_map("https://fake-url.com/model_prices.json")
+        assert fetches == 1
+        assert result.keys() == _backup_keys()
+        assert source["source"] == "local"
+        assert source["fallback_reason"].startswith("Remote fetch failed")
 
-        # Should have fallen back to backup — backup always has models
-        assert isinstance(result, dict)
-        assert len(result) > 0
-
-    def test_should_fallback_to_backup_on_network_error(self):
+    def test_should_fallback_to_backup_on_network_error(self, monkeypatch):
         """When upstream is unreachable, should fall back to local backup."""
-        with patch(
-            "httpx.get",
-            side_effect=httpx.ConnectError(
-                "Connection refused",
-                request=httpx.Request("GET", "https://fake-url.com/model_prices.json"),
-            ),
-        ):
-            result = get_model_cost_map("https://fake-url.com/model_prices.json")
+        result, fetches, source = _fetch_with_single_outcome(monkeypatch, httpx.ConnectError("Connection refused"))
 
-        assert isinstance(result, dict)
-        assert len(result) > 0
+        assert fetches == 1
+        assert result.keys() == _backup_keys()
+        assert source["source"] == "local"
+        assert source["fallback_reason"].startswith("Remote fetch failed")
 
-    def test_should_fallback_when_fetched_map_is_empty(self):
+    def test_should_fallback_when_fetched_map_is_empty(self, monkeypatch):
         """When upstream returns valid JSON but empty dict, should fall back."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {}  # empty map
+        result, fetches, source = _fetch_with_single_outcome(monkeypatch, httpx.Response(200, content=b"{}"))
 
-        with patch("httpx.get", return_value=mock_response):
-            result = get_model_cost_map("https://fake-url.com/model_prices.json")
+        assert fetches == 1
+        assert result.keys() == _backup_keys()
+        assert source["source"] == "local"
 
-        # Should have fallen back to backup since empty map fails validation
-        assert isinstance(result, dict)
-        assert len(result) > 0
-
-    def test_should_fallback_when_fetched_map_shrinks_dramatically(self):
+    def test_should_fallback_when_fetched_map_shrinks_dramatically(self, monkeypatch):
         """When upstream returns far fewer models than backup, should fall back."""
         tiny_map = {f"model-{i}": {"litellm_provider": "test"} for i in range(11)}
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = tiny_map
+        result, fetches, source = _fetch_with_single_outcome(
+            monkeypatch, httpx.Response(200, content=json.dumps(tiny_map).encode())
+        )
 
-        with patch("httpx.get", return_value=mock_response):
-            result = get_model_cost_map("https://fake-url.com/model_prices.json")
-
-        # Backup has thousands of models; 11 is a massive shrinkage → fallback
-        assert len(result) > 11
+        assert fetches == 1
+        assert result.keys() == _backup_keys()
+        assert source == {**source, "source": "local", "fallback_reason": "Remote data failed integrity validation"}
 
     def test_should_use_local_map_when_env_var_set(self):
         """LITELLM_LOCAL_MODEL_COST_MAP=True should skip remote fetch entirely."""
