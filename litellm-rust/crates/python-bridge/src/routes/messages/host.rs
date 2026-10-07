@@ -206,7 +206,7 @@ impl MessagesPythonHost {
     fn provider(&self, py: Python<'_>) -> String {
         self.request
             .bind(py)
-            .getattr("custom_llm_provider")
+            .get_item("custom_llm_provider")
             .and_then(|value| value.extract::<Option<String>>())
             .ok()
             .flatten()

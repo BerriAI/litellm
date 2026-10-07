@@ -12,7 +12,8 @@ import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
 from litellm.rust_bridge import settings
-from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES, LiteLLMMessagesRequest
+from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES
+from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
 from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
@@ -48,16 +49,20 @@ class _ManagedSecrets(CustomSecretManager):
         return self.values.get(secret_name)
 
 
-def _native_request() -> LiteLLMMessagesRequest:
-    return LiteLLMMessagesRequest(
-        model=MESSAGES_MODEL,
-        messages=MESSAGES,
-        max_tokens=8,
-        stream=None,
-        api_key=None,
-        api_base=None,
-        custom_llm_provider=None,
+def _native_request() -> NativeCall:
+    return NativeCall(
+        args=(),
         kwargs=MappingProxyType({}),
+        bound={
+            "model": MESSAGES_MODEL,
+            "messages": MESSAGES,
+            "max_tokens": 8,
+            "stream": None,
+            "api_key": None,
+            "api_base": None,
+            "custom_llm_provider": None,
+            **MappingProxyType({}),
+        },
     )
 
 
@@ -72,13 +77,13 @@ async def _python_messages() -> object:
 async def _rust_messages() -> object:
     route: Final = NATIVE_MESSAGES.load()
     assert route is not None
-    return route(_native_request(), (), _public_kwargs())
+    return route(_native_request())
 
 
 async def _rust_amessages() -> object:
     route: Final = NATIVE_AMESSAGES.load()
     assert route is not None
-    return await route(_native_request(), (), _public_kwargs())
+    return await route(_native_request())
 
 
 @pytest.fixture(

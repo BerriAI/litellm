@@ -12,7 +12,7 @@ from litellm.models.credentials import CredentialItem
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge import _native
 from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompletionsRequest
-from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
+from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import CallTypes, ModelResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
@@ -78,10 +78,21 @@ def native_call(
         "max_output_tokens": 32,
         **options,
     }
-    response_request: Final = LiteLLMResponsesRequest(
-        RESPONSES_MODEL, "hello", None, "test-key", server.base_url, "openai", None, response_kwargs
+    response_request: Final = NativeCall(
+        args=(),
+        kwargs=response_kwargs,
+        bound={
+            "model": RESPONSES_MODEL,
+            "input": "hello",
+            "stream": None,
+            "api_key": "test-key",
+            "api_base": server.base_url,
+            "custom_llm_provider": "openai",
+            "extra_headers": None,
+            **response_kwargs,
+        },
     )
-    return (_native.aresponses if asynchronous else _native.responses)(response_request, (), response_kwargs)
+    return (_native.aresponses if asynchronous else _native.responses)(response_request)
 
 
 async def execute(route: Route, asynchronous: bool, server: RecordingServer, options: Mapping[str, object]) -> object:
@@ -290,7 +301,7 @@ async def test_native_projection_reads_positional_parameters(route: Route, recor
         response_args: Final = ("hello", RESPONSES_MODEL, None, "Be brief", 16)
         response_request: Final = responses_dispatch.request(response_args, kwargs)
         assert response_request is not None
-        await asyncio.to_thread(_native.responses, response_request, response_args, kwargs)
+        await asyncio.to_thread(_native.responses, response_request)
         body: Final = _OBJECT.validate_python(recording_server.requests[0].body)
         assert body["instructions"] == "Be brief"
         assert body["max_output_tokens"] == 16

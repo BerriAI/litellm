@@ -14,8 +14,34 @@ use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol}
 use litellm_host_python::{HookChain, PythonBinding, PythonCallHooks, PythonHostCalls};
 use pyo3::{
     prelude::*,
-    types::{PyDict, PyTuple},
+    types::{PyDict, PyMapping, PyTuple},
 };
+
+struct NativeCall<'py> {
+    args: Bound<'py, PyTuple>,
+    kwargs: Bound<'py, PyDict>,
+    bound: Bound<'py, PyDict>,
+}
+
+impl<'py> NativeCall<'py> {
+    fn extract(call: &Bound<'py, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            args: call.getattr("args")?.cast_into()?,
+            kwargs: mapping_dict(&call.getattr("kwargs")?)?,
+            bound: mapping_dict(&call.getattr("bound")?)?,
+        })
+    }
+}
+
+fn mapping_dict<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
+    if let Ok(dict) = value.cast::<PyDict>() {
+        return Ok(dict.clone());
+    }
+    let mapping = value.cast::<PyMapping>()?;
+    let dict = PyDict::new(value.py());
+    dict.update(mapping)?;
+    Ok(dict)
+}
 
 fn call_hooks(
     py: Python<'_>,
