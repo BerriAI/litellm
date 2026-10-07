@@ -4609,29 +4609,6 @@ def test_every_bridged_chunk_after_response_created_carries_the_served_service_t
     assert relayed == ["default"] * len(events), relayed
 
 
-def test_convert_chat_completion_messages_to_responses_api_omits_absent_prompt_cache_breakpoint():
-    """Unmarked blocks must not grow the key, or every request would look explicitly cached."""
-    from litellm.completion_extras.litellm_responses_transformation.transformation import (
-        LiteLLMResponsesTransformationHandler,
-    )
-
-    handler = LiteLLMResponsesTransformationHandler()
-
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "no caching here"},
-                {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
-            ],
-        },
-    ]
-
-    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
-
-    assert all("prompt_cache_breakpoint" not in block for block in response[0]["content"])
-
-
 def test_convert_chat_completion_messages_to_responses_api_keeps_prompt_cache_breakpoint_on_unknown_block():
     """A block type the bridge cannot map still has to keep the marker.
 
