@@ -25,7 +25,7 @@ from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
 from litellm.rust_bridge import loader
 from litellm.rust_bridge.trace.errors import TraceChanged
 from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
-from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
+from litellm.rust_bridge.trace.generated.responses import TraceAgentList, TraceSQLResponse
 from litellm.rust_bridge.trace.generated.types import AllQueryScope, TraceScope
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
@@ -172,10 +172,14 @@ def test_trace_read_and_write_permissions(
 
     read: Final = client.get("/v1/traces?start_ms=1&end_ms=2")
     assert read.status_code == (403 if scope is None else 200), read.text
+    agents: Final = client.get("/v1/traces/agents?start_ms=1&end_ms=2")
+    assert agents.status_code == (403 if scope is None else 200), agents.text
     if scope is None:
         receiver.list_traces.assert_not_awaited()
+        receiver.list_agents.assert_not_awaited()
     else:
-        receiver.list_traces.assert_awaited_once_with(scope=scope, start_ms=1, end_ms=2, cursor=None)
+        receiver.list_traces.assert_awaited_once_with(scope=scope, start_ms=1, end_ms=2, cursor=None, agent="")
+        receiver.list_agents.assert_awaited_once_with(scope=scope, start_ms=1, end_ms=2)
 
     write: Final = client.post("/v1/traces", json={})
     assert write.status_code == (200 if can_write else 403), write.text
@@ -196,6 +200,7 @@ def receiver(client) -> MagicMock:
     fake = MagicMock()
     fake.ingest = AsyncMock(return_value=1)
     fake.list_traces = AsyncMock(return_value={"data": [], "next_cursor": None})
+    fake.list_agents = AsyncMock(return_value=TraceAgentList(data=("claude-code", "research_agent")))
     fake.get_trace = AsyncMock(return_value=None)
     fake.get_span = AsyncMock(return_value=None)
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: fake
@@ -288,6 +293,7 @@ def test_list_traces_passes_scope_window_and_cursor(client, receiver):
         start_ms=1,
         end_ms=2,
         cursor="abc",
+        agent="",
     )
 
 
@@ -321,7 +327,57 @@ def test_list_traces_resolves_default_bounds_from_injected_clock(
         start_ms=expected_start_ms,
         end_ms=expected_end_ms,
         cursor=None,
+        agent="",
     )
+
+
+@pytest.mark.parametrize(
+    ("params", "expected_start_ms", "expected_end_ms"),
+    (
+        ({}, NOW_MS - tracing_endpoints.MS_PER_DAY, NOW_MS),
+        ({"start_ms": 123, "end_ms": 456}, 123, 456),
+    ),
+)
+def test_trace_agents_lists_names_for_the_callers_scope_and_window(
+    client: TestClient,
+    receiver: MagicMock,
+    params: Mapping[str, int],
+    expected_start_ms: int,
+    expected_end_ms: int,
+) -> None:
+    client.app.dependency_overrides[tracing_endpoints.current_time_ms] = lambda: NOW_MS
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="member", token="member-key", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    response: Final = client.get("/v1/traces/agents", params=params)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"data": ["claude-code", "research_agent"]}
+    receiver.list_agents.assert_awaited_once_with(
+        scope={"all_teams": 0, "user_id": "member", "team_ids": ()},
+        start_ms=expected_start_ms,
+        end_ms=expected_end_ms,
+    )
+    receiver.get_trace.assert_not_awaited()
+
+
+def test_list_traces_forwards_the_agent_filter(client: TestClient, receiver: MagicMock) -> None:
+    response: Final = client.get("/v1/traces", params={"start_ms": 1, "end_ms": 2, "agent": "claude-code"})
+    assert response.status_code == 200, response.text
+    receiver.list_traces.assert_awaited_once_with(
+        scope={"all_teams": 0, "user_id": "user", "team_ids": ()},
+        start_ms=1,
+        end_ms=2,
+        cursor=None,
+        agent="claude-code",
+    )
+
+
+def test_list_traces_rejects_unbounded_agent_names(client: TestClient, receiver: MagicMock) -> None:
+    response: Final = client.get("/v1/traces", params={"agent": "x" * 257})
+    _assert_validation_error(response, "string_too_long", ("query", "agent"))
+    receiver.list_traces.assert_not_awaited()
 
 
 def test_list_traces_forwards_large_and_negative_bounds_unchanged(client: TestClient, receiver: MagicMock) -> None:
@@ -332,6 +388,7 @@ def test_list_traces_forwards_large_and_negative_bounds_unchanged(client: TestCl
         start_ms=2**63,
         end_ms=-1,
         cursor="next",
+        agent="",
     )
 
 
@@ -404,6 +461,7 @@ def test_trace_read_routes_accept_and_forward_512_character_cursors(client: Test
         start_ms=NOW_MS - tracing_endpoints.MS_PER_DAY,
         end_ms=NOW_MS,
         cursor=cursor,
+        agent="",
     )
     receiver.get_trace.assert_awaited_once_with(
         "t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one", cursor, None
@@ -449,8 +507,20 @@ def test_trace_read_routes_ignore_unknown_query_parameters(client: TestClient, r
     assert error_unknown_response.status_code == 200, error_unknown_response.text
     receiver.list_traces.assert_has_awaits(
         (
-            call(scope={"all_teams": 0, "user_id": "user", "team_ids": ()}, start_ms=1, end_ms=2, cursor="list-cursor"),
-            call(scope={"all_teams": 0, "user_id": "user", "team_ids": ()}, start_ms=1, end_ms=2, cursor="list-cursor"),
+            call(
+                scope={"all_teams": 0, "user_id": "user", "team_ids": ()},
+                start_ms=1,
+                end_ms=2,
+                cursor="list-cursor",
+                agent="",
+            ),
+            call(
+                scope={"all_teams": 0, "user_id": "user", "team_ids": ()},
+                start_ms=1,
+                end_ms=2,
+                cursor="list-cursor",
+                agent="",
+            ),
         )
     )
     receiver.get_trace.assert_has_awaits(
@@ -477,6 +547,7 @@ def test_trace_read_routes_ignore_unknown_query_parameters(client: TestClient, r
     "path,method",
     (
         ("/v1/traces", "list_traces"),
+        ("/v1/traces/agents", "list_agents"),
         ("/v1/traces/t1", "get_trace"),
         ("/v1/traces/t1/spans/s1", "get_span"),
         ("/v1/traces/t1/spans/s1/error", "get_span_error"),
@@ -556,6 +627,7 @@ def test_key_without_user_cannot_read_traces(client: TestClient, auth: UserAPIKe
     client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
     for path in (
         "/v1/traces",
+        "/v1/traces/agents",
         "/v1/traces/t1",
         "/v1/traces/t1/spans/s1",
         "/v1/traces/t1/spans/s1/error",
@@ -565,7 +637,13 @@ def test_key_without_user_cannot_read_traces(client: TestClient, auth: UserAPIKe
         assert response.status_code == 403, response.text
     query: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
     assert query.status_code == 403, query.text
-    for read in (storage.list_traces, storage.get_trace, storage.get_span, storage.get_span_error):
+    for read in (
+        storage.list_traces,
+        storage.trace_agents,
+        storage.get_trace,
+        storage.get_span,
+        storage.get_span_error,
+    ):
         read.assert_not_called()
     storage.query_sql.assert_not_called()
     storage.query_help.assert_not_called()
