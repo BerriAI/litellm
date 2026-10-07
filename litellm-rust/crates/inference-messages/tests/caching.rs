@@ -88,8 +88,13 @@ async fn messages_cache_identity_includes_provider_native_parameters(
             .unwrap();
         assert_eq!(response.id, expected_call.to_string());
         assert_eq!(
-            response.content[0]["text"],
-            format!("answer {expected_call}")
+            response.content[0]
+                .known()
+                .unwrap()
+                .text
+                .as_ref()
+                .and_then(litellm_llms_types::serde_compat::Nullable::as_deref),
+            Some(format!("answer {expected_call}").as_str())
         );
     }
     assert_eq!(calls.load(Ordering::SeqCst), 2);

@@ -102,3 +102,69 @@ fn response_serialization_preserves_extensions_and_native_presence(
     assert_eq!(decoded.provider_native_response, native);
     assert_eq!(decoded.into_json(), serialized);
 }
+
+#[rstest]
+fn geometry_tables_and_key_value_pairs_expose_fields_without_changing_native_data() {
+    let wire = json!({"model":"model","pages":[{"index":0,"markdown":"","images":[{"image_base64":null,"bbox":{"x":1,"y":0.5,"width":null,"future":[1,null]}}],"dimensions":null}],
+        "document_annotation":{"schema_defined":[1,null]},"usage_info":null,"content":null,
+        "tables":[{"rowCount":2,"columnCount":1,"cells":[{"rowIndex":0,"columnIndex":0,"content":"cell","boundingRegions":[{"pageNumber":1,"polygon":[0,0.5,1,1]}],"spans":[{"offset":0,"length":4}]}],"future":null}],
+        "keyValuePairs":[{"key":{"content":"name"},"value":{"content":"value"},"confidence":1}],"object":"ocr"
+    });
+    let parsed: LiteLLMOcrResponse = serde_json::from_value(wire.clone()).unwrap();
+    let bbox = parsed.pages[0].images.as_ref().unwrap()[0]
+        .bbox
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        bbox.x,
+        Some(litellm_llms_types::recognized::Recognized::Known(
+            serde_json::Number::from(1)
+        ))
+    );
+    let table = &parsed.tables.as_ref().unwrap()[0];
+    assert_eq!(
+        table.row_count,
+        Some(litellm_llms_types::recognized::Recognized::Known(2))
+    );
+    let cell = table.cells.as_ref().unwrap().known().unwrap()[0]
+        .known()
+        .unwrap();
+    assert_eq!(
+        cell.content,
+        Some(litellm_llms_types::recognized::Recognized::Known(
+            "cell".into()
+        ))
+    );
+    assert_eq!(
+        cell.spans.as_ref().unwrap().known().unwrap()[0]
+            .known()
+            .unwrap()
+            .length,
+        Some(litellm_llms_types::recognized::Recognized::Known(4))
+    );
+    assert_eq!(
+        parsed.key_value_pairs.as_ref().unwrap()[0]
+            .value
+            .as_ref()
+            .unwrap()
+            .known()
+            .unwrap()
+            .content,
+        Some(litellm_llms_types::recognized::Recognized::Known(
+            "value".into()
+        ))
+    );
+    assert_eq!(parsed.into_json(), wire);
+}
+
+#[rstest]
+fn partially_typed_ocr_objects_keep_malformed_and_unknown_fields() {
+    let fields = json!({"bbox":{"x":"unknown","width":null,"future":true},"tables":[{"cells":false,"rowCount":null}],"keyValuePairs":[{"key":17,"confidence":"unknown"}]});
+    let response: LiteLLMOcrResponse = serde_json::from_value(json!({"model":"model","pages":[],"tables":fields["tables"],"keyValuePairs":fields["keyValuePairs"]})).unwrap();
+    let serialized = response.into_json();
+    assert_eq!(serialized["tables"], fields["tables"]);
+    assert_eq!(serialized["keyValuePairs"], fields["keyValuePairs"]);
+    let image: litellm_llms_types::formats::ocr::OcrPageImage =
+        serde_json::from_value(json!({"bbox":fields["bbox"]})).unwrap();
+    assert_eq!(serde_json::to_value(image).unwrap()["bbox"], fields["bbox"]);
+}

@@ -38,9 +38,8 @@ pub fn encode_anthropic_sse(event: &MessagesStreamEvent) -> Result<Bytes, Error>
 #[cfg(test)]
 mod tests {
     use futures_util::{StreamExt, TryStreamExt, stream};
-    use litellm_llms_types::formats::messages::streaming::{
-        MessagesContentBlockDelta, MessagesStreamUsage,
-    };
+    use litellm_llms_types::formats::messages::MessagesUsage;
+    use litellm_llms_types::formats::messages::streaming::MessagesContentBlockDelta;
     use serde_json::json;
 
     use super::*;
@@ -67,7 +66,9 @@ mod tests {
                 index: 0,
                 delta: MessagesContentBlockDelta::TextDelta {
                     text: "hello".into(),
+                    extra: Default::default(),
                 },
+                extra: Default::default(),
             }]
         );
     }
@@ -95,17 +96,27 @@ mod tests {
 
     fn events() -> Vec<MessagesStreamEvent> {
         vec![
-            MessagesStreamEvent::Ping,
+            MessagesStreamEvent::Ping {
+                extra: Default::default(),
+            },
             MessagesStreamEvent::ContentBlockDelta {
                 index: 1,
-                delta: MessagesContentBlockDelta::TextDelta { text: "hi".into() },
+                delta: MessagesContentBlockDelta::TextDelta {
+                    text: "hi".into(),
+                    extra: Default::default(),
+                },
+                extra: Default::default(),
             },
-            MessagesStreamEvent::ContentBlockStop { index: 1 },
+            MessagesStreamEvent::ContentBlockStop {
+                index: 1,
+                extra: Default::default(),
+            },
             MessagesStreamEvent::MessageStop {
-                usage: Some(MessagesStreamUsage {
-                    output_tokens: Some(7),
-                    ..MessagesStreamUsage::default()
-                }),
+                usage: Some(Box::new(MessagesUsage {
+                    output_tokens: Some(litellm_llms_types::serde_compat::Nullable::Value(7)),
+                    ..MessagesUsage::default()
+                })),
+                extra: Default::default(),
             },
         ]
     }
@@ -128,8 +139,11 @@ mod tests {
 
     #[test]
     fn an_event_is_named_by_its_type() {
-        let encoded =
-            encode_anthropic_sse(&MessagesStreamEvent::MessageStop { usage: None }).unwrap();
+        let encoded = encode_anthropic_sse(&MessagesStreamEvent::MessageStop {
+            usage: None,
+            extra: Default::default(),
+        })
+        .unwrap();
 
         assert_eq!(
             encoded,
