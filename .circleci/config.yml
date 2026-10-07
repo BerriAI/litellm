@@ -3144,9 +3144,13 @@ jobs:
       parallelism:
         type: integer
         default: 1
+      resource_class:
+        type: enum
+        enum: [large, xlarge]
+        default: large
     machine:
       image: ubuntu-2204:2024.04.1
-    resource_class: large
+    resource_class: << parameters.resource_class >>
     working_directory: ~/project
     parallelism: << parameters.parallelism >>
     steps:
@@ -3489,7 +3493,11 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, mcp, sdk, cost, security, browser]
+              suite: [management, accounting, database, providers, sdk, cost, security, browser]
+      - integration_contracts:
+          name: integration-mcp
+          suite: mcp
+          resource_class: xlarge
       - integration_contracts:
           name: integration-extensions
           suite: extensions
