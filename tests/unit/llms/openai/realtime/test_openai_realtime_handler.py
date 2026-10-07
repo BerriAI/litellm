@@ -7,15 +7,12 @@ import pytest
 from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
 
-
-@pytest.mark.parametrize(
-    "api_base", ["https://api.openai.com/v1", "https://api.openai.com"]
-)
+@pytest.mark.parametrize("api_base", ["https://api.openai.com/v1", "https://api.openai.com"])
 def test_openai_realtime_handler_url_construction(api_base):
     from litellm.llms.openai.realtime.handler import OpenAIRealtime
 
     handler = OpenAIRealtime()
-    url = handler._construct_url(
+    url = handler.construct_url(
         api_base=api_base,
         query_params={
             "model": "gpt-4o-realtime-preview-2024-10-01",
@@ -36,7 +33,7 @@ def test_openai_realtime_handler_url_with_extra_params():
         "model": "gpt-4o-realtime-preview-2024-10-01",
         "intent": "chat",
     }
-    url = handler._construct_url(api_base=api_base, query_params=query_params)
+    url = handler.construct_url(api_base=api_base, query_params=query_params)
     # Both 'model' and other params should be included in the query string
     assert url.startswith("wss://api.openai.com/v1/realtime?")
     assert "model=gpt-4o-realtime-preview-2024-10-01" in url
@@ -59,12 +56,8 @@ def test_openai_realtime_handler_model_parameter_inclusion():
     api_base = "https://api.openai.com/"
 
     # Test with just model parameter
-    query_params_model_only: RealtimeQueryParams = {
-        "model": "gpt-4o-mini-realtime-preview"
-    }
-    url = handler._construct_url(
-        api_base=api_base, query_params=query_params_model_only
-    )
+    query_params_model_only: RealtimeQueryParams = {"model": "gpt-4o-mini-realtime-preview"}
+    url = handler.construct_url(api_base=api_base, query_params=query_params_model_only)
 
     # Verify the URL structure
     assert url.startswith("wss://api.openai.com/v1/realtime?")
@@ -75,9 +68,7 @@ def test_openai_realtime_handler_model_parameter_inclusion():
         "model": "gpt-4o-mini-realtime-preview",
         "intent": "chat",
     }
-    url_with_extras = handler._construct_url(
-        api_base=api_base, query_params=query_params_with_extras
-    )
+    url_with_extras = handler.construct_url(api_base=api_base, query_params=query_params_with_extras)
 
     # Verify both parameters are included
     assert url_with_extras.startswith("wss://api.openai.com/v1/realtime?")

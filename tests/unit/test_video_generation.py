@@ -553,7 +553,7 @@ class TestVideoGeneration:
                     mock_client.post.return_value = mock_response
 
                     with patch(
-                        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                        "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
                         return_value=mock_client,
                     ):
                         result = handler.video_generation_handler(
@@ -1113,7 +1113,7 @@ def test_video_content_handler_passes_variant_to_url():
     mock_client.get.return_value = mock_response
 
     with patch(
-        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+        "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
         return_value=mock_client,
     ):
         result = handler.video_content_handler(
@@ -1158,11 +1158,9 @@ def test_video_content_handler_uses_get_for_openai():
     mock_response.status_code = 200
     mock_client.get.return_value = mock_response
 
-    # Patch _get_httpx_client to ensure no real HTTP client is created
+    # Patch get_httpx_client to ensure no real HTTP client is created
     # This prevents test isolation issues where isinstance check might fail
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client"
-    ) as mock_get_client:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client") as mock_get_client:
         mock_get_client.return_value = mock_client
 
         result = handler.video_content_handler(
@@ -1789,7 +1787,7 @@ def test_video_remix_handler_uses_api_key_from_litellm_params():
                 mock_client.post.return_value = MagicMock(status_code=200)
 
                 with patch(
-                    "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                    "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
                     return_value=mock_client,
                 ):
                     handler.video_remix_handler(
@@ -1876,7 +1874,7 @@ def test_video_remix_handler_prefers_explicit_api_key():
                 mock_client.post.return_value = MagicMock(status_code=200)
 
                 with patch(
-                    "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                    "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
                     return_value=mock_client,
                 ):
                     handler.video_remix_handler(

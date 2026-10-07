@@ -23,7 +23,7 @@ class TestGCSBucketBase:
 
             with (
                 patch(
-                    "litellm.vertex_chat_completion._ensure_access_token"
+                    "litellm.vertex_chat_completion.ensure_access_token"
                 ) as mock_ensure_token,
                 patch(
                     "litellm.vertex_chat_completion._get_token_and_url"
@@ -66,7 +66,7 @@ class TestGCSBucketBase:
 
         with (
             patch(
-                "litellm.vertex_chat_completion._ensure_access_token"
+                "litellm.vertex_chat_completion.ensure_access_token"
             ) as mock_ensure_token,
             patch(
                 "litellm.vertex_chat_completion._get_token_and_url"

@@ -2979,7 +2979,7 @@ def test_vector_store_search_handler_direct_config_sync_skips_http():
     config = _make_stub_direct_vector_store_config(stub_response)
     logging_obj = Mock()
 
-    with patch("litellm.llms.custom_httpx.llm_http_handler._get_httpx_client") as mock_get_client:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client") as mock_get_client:
         result = handler.vector_store_search_handler(
             vector_store_id="vs_direct",
             query="q",

@@ -14,8 +14,8 @@ from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.llms.gigachat.utils import get_api_base
 from litellm.types.utils import LlmProviders
@@ -60,7 +60,7 @@ def _content_type_or_default(headers: Mapping[str, str]) -> str:
 
 def _download_image_sync(url: str) -> tuple[bytes, str, str]:
     """Download image from URL synchronously."""
-    client: Final = _get_httpx_client(params={"ssl_verify": False})
+    client: Final = get_httpx_client(params={"ssl_verify": False})
     response: Final = client.get(url)
     response.raise_for_status()
 
@@ -128,7 +128,7 @@ def upload_file_sync(
         base_url: Final = get_api_base(api_base)
         upload_url: Final = f"{base_url}/files"
 
-        client: Final = _get_httpx_client(params={"ssl_verify": False})
+        client: Final = get_httpx_client(params={"ssl_verify": False})
         response: Final = client.post(
             upload_url,
             headers={"Authorization": f"Bearer {access_token}"},

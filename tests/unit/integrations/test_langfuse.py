@@ -1399,13 +1399,12 @@ def test_langfuse_rest_client_survives_httpx_cache_eviction(monkeypatch):
     import weakref
 
     from litellm.caching.llm_caching_handler import LLMClientCache
-
-    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
     logger = _build_langfuse_logger(monkeypatch)
 
-    cached_handler = _get_httpx_client()
+    cached_handler = get_httpx_client()
     handler_ref = weakref.ref(cached_handler)
 
     assert logger.langfuse_client is cached_handler.client

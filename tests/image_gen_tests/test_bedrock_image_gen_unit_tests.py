@@ -50,7 +50,7 @@ from litellm.llms.bedrock.common_utils import BedrockError
     ],
 )
 def test_is_stability_3_model(model, expected):
-    result = AmazonStability3Config._is_stability_3_model(model)
+    result = AmazonStability3Config.is_stability_3_model(model)
     assert result == expected
 
 
@@ -69,7 +69,7 @@ def test_is_stability_3_model(model, expected):
     ],
 )
 def test_is_nova_canvas_model(model, expected):
-    result = AmazonNovaCanvasConfig._is_nova_model(model)
+    result = AmazonNovaCanvasConfig.is_nova_model(model)
     assert result == expected
 
 
@@ -292,9 +292,7 @@ def test_transform_request_body_with_invalid_task_type():
     optional_params = {"taskType": "INVALID_TASK"}
 
     with pytest.raises(NotImplementedError) as exc_info:
-        AmazonNovaCanvasConfig.transform_request_body(
-            text=text, optional_params=optional_params
-        )
+        AmazonNovaCanvasConfig.transform_request_body(text=text, optional_params=optional_params)
     assert "Task type INVALID_TASK is not supported" in str(exc_info.value)
 
 

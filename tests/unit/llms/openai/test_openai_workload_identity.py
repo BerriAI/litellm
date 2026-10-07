@@ -184,19 +184,19 @@ class TestTokenExchange:
 
 class TestClientConstruction:
     def test_sync_client_uses_workload_identity(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
-        client: Final = OpenAIChatCompletion()._get_openai_client(is_async=False, api_key=None, api_base=None)
+        client: Final = OpenAIChatCompletion().get_openai_client(is_async=False, api_key=None, api_base=None)
         assert isinstance(client, OpenAI)
         assert client.api_key == "workload-identity-auth"
         assert client._workload_identity_auth is not None
 
     def test_async_client_uses_workload_identity(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
-        client: Final = OpenAIChatCompletion()._get_openai_client(is_async=True, api_key=None, api_base=None)
+        client: Final = OpenAIChatCompletion().get_openai_client(is_async=True, api_key=None, api_base=None)
         assert isinstance(client, AsyncOpenAI)
         assert client.api_key == "workload-identity-auth"
         assert client._workload_identity_auth is not None
 
     def test_privatelink_client_uses_workload_identity(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
-        client: Final = OpenAIChatCompletion()._get_openai_client(
+        client: Final = OpenAIChatCompletion().get_openai_client(
             is_async=False, api_key=None, api_base="https://southcentralus.privatelink.api.openai.com/v1"
         )
         assert isinstance(client, OpenAI)
@@ -204,7 +204,7 @@ class TestClientConstruction:
         assert client._workload_identity_auth is not None
 
     def test_static_key_client_unaffected(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
-        client: Final = OpenAIChatCompletion()._get_openai_client(is_async=False, api_key="sk-static", api_base=None)
+        client: Final = OpenAIChatCompletion().get_openai_client(is_async=False, api_key="sk-static", api_base=None)
         assert isinstance(client, OpenAI)
         assert client.api_key == "sk-static"
         assert client._workload_identity_auth is None
@@ -246,7 +246,7 @@ class TestClientConstruction:
                 },
             )
         )
-        client = OpenAIChatCompletion()._get_openai_client(is_async=False, api_key=None, api_base=None)
+        client = OpenAIChatCompletion().get_openai_client(is_async=False, api_key=None, api_base=None)
         assert isinstance(client, OpenAI)
         client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}])
         auth_header: Final = completion_route.calls.last.request.headers["Authorization"]
@@ -420,7 +420,7 @@ class TestResolveConfigFromDeployment:
 
 class TestDeploymentClientConstruction:
     def test_sync_client_from_deployment_params(self, deployment_wif: dict[str, str]) -> None:
-        client: Final = OpenAIChatCompletion()._get_openai_client(
+        client: Final = OpenAIChatCompletion().get_openai_client(
             is_async=False, api_key=None, api_base=None, litellm_params=deployment_wif
         )
         assert isinstance(client, OpenAI)
@@ -428,7 +428,7 @@ class TestDeploymentClientConstruction:
         assert client._workload_identity_auth is not None
 
     def test_async_client_from_deployment_params(self, deployment_wif: dict[str, str]) -> None:
-        client: Final = OpenAIChatCompletion()._get_openai_client(
+        client: Final = OpenAIChatCompletion().get_openai_client(
             is_async=True, api_key=None, api_base=None, litellm_params=deployment_wif
         )
         assert isinstance(client, AsyncOpenAI)
@@ -437,13 +437,13 @@ class TestDeploymentClientConstruction:
     def test_distinct_deployments_get_distinct_cached_clients(self, deployment_wif: dict[str, str]) -> None:
         other_deployment: Final = {**deployment_wif, "openai_service_account_id": "user-other"}
         handler: Final = OpenAIChatCompletion()
-        first: Final = handler._get_openai_client(
+        first: Final = handler.get_openai_client(
             is_async=False, api_key=None, api_base=None, litellm_params=deployment_wif
         )
-        second: Final = handler._get_openai_client(
+        second: Final = handler.get_openai_client(
             is_async=False, api_key=None, api_base=None, litellm_params=other_deployment
         )
-        again: Final = handler._get_openai_client(
+        again: Final = handler.get_openai_client(
             is_async=False, api_key=None, api_base=None, litellm_params=dict(deployment_wif)
         )
         assert first is not second

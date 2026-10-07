@@ -40,9 +40,12 @@ SUPPORTED_EMBEDDING_MIME_TYPES: Final = {
 }
 
 
-def _is_file_reference(s: str) -> bool:
+def is_file_reference(s: str) -> bool:
     """Check if string is a Gemini file reference (files/...)."""
     return isinstance(s, str) and s.startswith("files/")
+
+
+_is_file_reference = is_file_reference
 
 
 def _is_gcs_url(s: str) -> bool:
@@ -152,7 +155,7 @@ def _is_multimodal_element(element: str) -> bool:
     """Check if a single string element is multimodal."""
     if element.startswith("data:") and ";base64," in element:
         return True
-    if _is_file_reference(element):
+    if is_file_reference(element):
         return True
     if _is_gcs_url(element):
         return True
@@ -180,7 +183,7 @@ def _build_part_for_input(
             "file_uri": element,
         }
         return PartType(file_data=file_data)
-    elif _is_file_reference(element):
+    elif is_file_reference(element):
         if element not in resolved_files:
             raise ValueError(f"File reference {element} not resolved")
         file_info: Final = resolved_files[element]
@@ -331,7 +334,7 @@ def _is_image_element(
             return _infer_mime_type_from_gcs_url(element) in _IMAGE_MIME_TYPES
         except ValueError:
             return False
-    if _is_file_reference(element):
+    if is_file_reference(element):
         file_info: Final = resolved_files.get(element)
         return file_info is not None and file_info.get("mime_type") in _IMAGE_MIME_TYPES
     return False

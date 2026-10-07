@@ -67,7 +67,7 @@ def test_deepinfra_tool_message_content_transformation():
         },
     ]
 
-    transformed_messages = config._transform_messages(
+    transformed_messages = config.transform_messages(
         messages=messages_with_array_content, model="deepinfra/Qwen/Qwen3-235B-A22B"
     )
 
@@ -101,7 +101,7 @@ def test_deepinfra_tool_message_content_transformation():
         },
     ]
 
-    transformed_messages_complex = config._transform_messages(
+    transformed_messages_complex = config.transform_messages(
         messages=messages_with_complex_content, model="deepinfra/Qwen/Qwen3-235B-A22B"
     )
 
@@ -134,7 +134,7 @@ def test_deepinfra_tool_message_content_transformation():
         },
     ]
 
-    transformed_messages_string = config._transform_messages(
+    transformed_messages_string = config.transform_messages(
         messages=messages_with_string_content, model="deepinfra/Qwen/Qwen3-235B-A22B"
     )
 
@@ -186,7 +186,7 @@ async def test_deepinfra_tool_message_content_transformation_async():
     ]
 
     # Call with is_async=True
-    transformed_messages = await config._transform_messages(
+    transformed_messages = await config.transform_messages(
         messages=messages_with_array_content,
         model="deepinfra/Qwen/Qwen3-235B-A22B",
         is_async=True,

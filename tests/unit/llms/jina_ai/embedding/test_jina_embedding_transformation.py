@@ -81,7 +81,7 @@ class TestJinaAIEmbeddingTransform:
         sentinel = f"resolved-via-{env_name.lower()}"
         monkeypatch.setenv(env_name, sentinel)
 
-        _, _, dynamic_api_key = self.config._get_openai_compatible_provider_info(api_base=None, api_key=None)
+        _, _, dynamic_api_key = self.config.get_openai_compatible_provider_info(api_base=None, api_key=None)
 
         assert dynamic_api_key == sentinel
 
@@ -95,7 +95,7 @@ class TestJinaAIEmbeddingTransform:
             monkeypatch.setenv(name, f"resolved-via-{name.lower()}")
 
         for expected_name in JINA_KEY_ENV_NAMES:
-            _, _, dynamic_api_key = self.config._get_openai_compatible_provider_info(api_base=None, api_key=None)
+            _, _, dynamic_api_key = self.config.get_openai_compatible_provider_info(api_base=None, api_key=None)
             assert dynamic_api_key == f"resolved-via-{expected_name.lower()}"
             monkeypatch.delenv(expected_name)
 
@@ -108,7 +108,7 @@ class TestJinaAIEmbeddingTransform:
         for name in JINA_KEY_ENV_NAMES:
             monkeypatch.setenv(name, f"resolved-via-{name.lower()}")
 
-        _, _, dynamic_api_key = self.config._get_openai_compatible_provider_info(
+        _, _, dynamic_api_key = self.config.get_openai_compatible_provider_info(
             api_base=None, api_key="passed-in-by-caller"
         )
 

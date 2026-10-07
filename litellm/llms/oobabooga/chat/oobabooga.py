@@ -3,7 +3,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 
 from ..common_utils import OobaboogaError
@@ -65,7 +65,7 @@ def completion(
         additional_args={"complete_input_dict": data},
     )
     ## COMPLETION CALL
-    client: Final = _get_httpx_client()
+    client: Final = get_httpx_client()
     response: Final = client.post(
         completion_url,
         headers=headers,

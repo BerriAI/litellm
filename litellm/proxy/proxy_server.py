@@ -1233,7 +1233,7 @@ async def _initialize_shared_aiohttp_session():
         from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 
         from litellm.llms.custom_httpx.http_handler import (
-            _build_aiohttp_keepalive_socket_factory,
+            build_aiohttp_keepalive_socket_factory,
         )
 
         connector_kwargs: Final[_AiohttpConnectorKwargs] = {
@@ -1246,7 +1246,7 @@ async def _initialize_shared_aiohttp_session():
             connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
             connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
-        socket_factory: Final = _build_aiohttp_keepalive_socket_factory()
+        socket_factory: Final = build_aiohttp_keepalive_socket_factory()
         if socket_factory is not None:
             connector_kwargs["socket_factory"] = socket_factory
 

@@ -95,7 +95,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     input_texts = request_body.get("input", [])
 
                 # Transform the response
-                litellm_model_response = cohere_embed_config._transform_response(
+                litellm_model_response = cohere_embed_config.transform_response(
                     response=httpx_response,
                     api_key="",
                     logging_obj=logging_obj,

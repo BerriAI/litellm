@@ -55,7 +55,7 @@ async def test_cyberark_write_secret_rejects_yaml_injection():
 
         with (
             patch(
-                "litellm.secret_managers.cyberark_secret_manager._get_httpx_client",
+                "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
                 return_value=mock_sync_client,
             ),
             patch(
@@ -106,7 +106,7 @@ async def test_cyberark_ensure_variable_exists_escapes_yaml_metacharacters(secre
         mock_async_client.client.post.side_effect = _capture_post
 
         with patch(
-            "litellm.secret_managers.cyberark_secret_manager._get_httpx_client",
+            "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
             return_value=mock_sync_client,
         ):
             cyberark_manager = CyberArkSecretManager()
@@ -131,26 +131,20 @@ async def test_cyberark_write_and_read_secret():
         secret_value = f"test-value-{uuid.uuid4()}"
 
         # Mock sync httpx client (for auth, ensure variable exists, sync read)
-        # The _get_httpx_client returns an HTTPHandler with a .client property
+        # The get_httpx_client returns an HTTPHandler with a .client property
         mock_sync_client = MagicMock()
         # Auth response - note: the actual client is accessed via .client property
-        mock_sync_client.client.post.return_value = create_mock_response(
-            status_code=200, text="mock-token"
-        )
+        mock_sync_client.client.post.return_value = create_mock_response(status_code=200, text="mock-token")
         # Sync read response
-        mock_sync_client.client.get.return_value = create_mock_response(
-            status_code=200, text=secret_value
-        )
+        mock_sync_client.client.get.return_value = create_mock_response(status_code=200, text=secret_value)
 
         # Mock async httpx client (for async write)
         mock_async_client = AsyncMock()
-        mock_async_client.post.return_value = create_mock_response(
-            status_code=201, text=""
-        )
+        mock_async_client.post.return_value = create_mock_response(status_code=201, text="")
 
         with (
             patch(
-                "litellm.secret_managers.cyberark_secret_manager._get_httpx_client",
+                "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
                 return_value=mock_sync_client,
             ),
             patch(
@@ -205,7 +199,7 @@ async def test_cyberark_rotate_secret():
         current_value = {"value": initial_key_value}
 
         # Mock sync httpx client (for auth, ensure variable exists, sync reads)
-        # The _get_httpx_client returns an HTTPHandler with a .client property
+        # The get_httpx_client returns an HTTPHandler with a .client property
         mock_sync_client = MagicMock()
         # Auth response - note: the actual client is accessed via .client property
         mock_sync_client.client.post.return_value = create_mock_response(
@@ -238,7 +232,7 @@ async def test_cyberark_rotate_secret():
 
         with (
             patch(
-                "litellm.secret_managers.cyberark_secret_manager._get_httpx_client",
+                "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
                 return_value=mock_sync_client,
             ),
             patch(
@@ -316,7 +310,7 @@ async def test_cyberark_rotate_secret_with_new_alias():
         secrets_store = {}
 
         # Mock sync httpx client (for auth, ensure variable exists, sync reads)
-        # The _get_httpx_client returns an HTTPHandler with a .client property
+        # The get_httpx_client returns an HTTPHandler with a .client property
         mock_sync_client = MagicMock()
         # Auth response - note: the actual client is accessed via .client property
         mock_sync_client.client.post.return_value = create_mock_response(
@@ -365,7 +359,7 @@ async def test_cyberark_rotate_secret_with_new_alias():
 
         with (
             patch(
-                "litellm.secret_managers.cyberark_secret_manager._get_httpx_client",
+                "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
                 return_value=mock_sync_client,
             ),
             patch(

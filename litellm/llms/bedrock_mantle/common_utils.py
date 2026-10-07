@@ -48,7 +48,7 @@ def split_mantle_region_prefix(model: str) -> tuple[str | None, str]:
 def resolve_mantle_region(params: Mapping[str, object]) -> str:
     region: Final = params.get("aws_region_name")
     if isinstance(region, str) and region:
-        BaseAWSLLM._validate_aws_region_name(region)
+        BaseAWSLLM.validate_aws_region_name(region)
         return region
     api_base: Final = params.get("api_base")
     base: Final = (api_base if isinstance(api_base, str) else None) or get_secret_str("BEDROCK_MANTLE_API_BASE")

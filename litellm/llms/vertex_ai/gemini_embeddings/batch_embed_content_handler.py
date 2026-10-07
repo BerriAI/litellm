@@ -22,7 +22,7 @@ from litellm.types.utils import EmbeddingResponse
 
 from ..gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .batch_embed_content_transformation import (
-    _is_file_reference,
+    is_file_reference,
     process_embed_content_response,
     process_response,
     transform_openai_input_gemini_content,
@@ -43,7 +43,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         flat_elements: Final = [
             e for item in input_list for e in (item if isinstance(item, list) else [item]) if isinstance(e, str)
         ]
-        has_file_refs: Final = any(_is_file_reference(e) for e in flat_elements)
+        has_file_refs: Final = any(is_file_reference(e) for e in flat_elements)
         return flat_elements, has_file_refs
 
     def _resolve_file_references(
@@ -67,7 +67,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         resolved_files: Final[dict[str, dict[str, str]]] = {}
 
         for element in input_list:
-            if isinstance(element, str) and _is_file_reference(element):
+            if isinstance(element, str) and is_file_reference(element):
                 url = f"https://generativelanguage.googleapis.com/v1beta/{element}"
                 headers = {"x-goog-api-key": api_key}
                 response = sync_handler.get(url=url, headers=headers)
@@ -104,7 +104,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         resolved_files: Final[dict[str, dict[str, str]]] = {}
 
         for element in input_list:
-            if isinstance(element, str) and _is_file_reference(element):
+            if isinstance(element, str) and is_file_reference(element):
                 url = f"https://generativelanguage.googleapis.com/v1beta/{element}"
                 headers = {"x-goog-api-key": api_key}
                 response = await async_handler.get(url=url, headers=headers)

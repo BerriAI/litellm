@@ -16,7 +16,7 @@ else:
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import HuggingFaceError, _fetch_inference_provider_mapping
+from ..common_utils import HuggingFaceError, fetch_inference_provider_mapping
 
 logger: Final = logging.getLogger(__name__)
 
@@ -138,7 +138,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         if "/" in remaining:
             provider: Final = first_part
             model_id: Final = remaining
-            provider_mapping = _fetch_inference_provider_mapping(model_id)
+            provider_mapping = fetch_inference_provider_mapping(model_id)
             if provider not in provider_mapping:
                 raise HuggingFaceError(
                     message=f"Model {model_id} is not supported for provider {provider}",

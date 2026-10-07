@@ -20,7 +20,7 @@ from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.common_utils import (
-    _convert_vertex_datetime_to_openai_datetime,
+    convert_vertex_datetime_to_openai_datetime,
     get_vertex_base_url,
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -537,7 +537,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         create_time_str: Final = response_data.get("metadata", {}).get("createTime")
         if create_time_str:
             try:
-                created_at = _convert_vertex_datetime_to_openai_datetime(create_time_str)
+                created_at = convert_vertex_datetime_to_openai_datetime(create_time_str)
             except Exception:
                 created_at = int(time.time())
         else:

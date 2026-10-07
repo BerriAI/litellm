@@ -81,7 +81,7 @@ class TestChatGPTAuthenticator:
         client.post.return_value = response
 
         with patch(  # test-quality-ok: requested seam for asserting timeout propagation
-            "litellm.llms.chatgpt.authenticator._get_httpx_client", return_value=client
+            "litellm.llms.chatgpt.authenticator.get_httpx_client", return_value=client
         ):
             refreshed = authenticator._refresh_tokens("refresh-123")
 

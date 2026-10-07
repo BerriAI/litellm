@@ -23,7 +23,7 @@ from litellm.types.rerank import (
     RerankTokens,
 )
 
-from ..common_utils import IBMWatsonXMixin, _generate_watsonx_token, _get_api_params
+from ..common_utils import IBMWatsonXMixin, generate_watsonx_token, get_api_params
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
@@ -91,7 +91,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         elif zen_api_key:
             headers["Authorization"] = f"ZenApiKey {zen_api_key}"
         else:
-            token = _generate_watsonx_token(api_key=api_key, token=token)
+            token = generate_watsonx_token(api_key=api_key, token=token)
             # build auth headers
             headers["Authorization"] = f"Bearer {token}"
         return {**default_headers, **headers}
@@ -146,7 +146,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         """
         Transform request to IBM watsonx.ai rerank format
         """
-        watsonx_api_params: Final = _get_api_params(params=optional_rerank_params, model=model)
+        watsonx_api_params: Final = get_api_params(params=optional_rerank_params, model=model)
         watsonx_auth_payload: Final = self._prepare_payload(
             model=model,
             api_params=watsonx_api_params,

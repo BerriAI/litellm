@@ -16,7 +16,7 @@ This happens for any OpenAI-style history with that shape, independent of provid
 import pytest
 
 from litellm.llms.vertex_ai.gemini.transformation import (
-    _gemini_convert_messages_with_history,
+    gemini_convert_messages_with_history,
 )
 
 
@@ -44,7 +44,7 @@ def test_tool_result_matches_tool_call_with_text_assistant_in_between():
     messages = _messages_with_text_assistant_between_tool_call_and_result()
 
     # Should not raise "Missing corresponding tool call for tool response message".
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = gemini_convert_messages_with_history(messages=messages)
 
     # The function response must be present and carry the correct tool name.
     function_responses = [

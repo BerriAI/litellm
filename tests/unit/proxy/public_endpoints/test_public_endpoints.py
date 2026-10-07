@@ -499,7 +499,7 @@ def test_google_ai_studio_provider_fields_expose_api_base():
     assert api_base_field["field_type"] == "text"
     # default_value MUST be null (not the canonical URL): saving it as the
     # default would persist v1beta into every credential record and bypass
-    # `_get_gemini_url`'s automatic v1alpha routing for Gemini 3+ models. The
+    # `get_gemini_url`'s automatic v1alpha routing for Gemini 3+ models. The
     # placeholder shows the canonical URL so users still get the visual hint.
     # (See greptileai threads on PR #30419.)
     assert api_base_field["default_value"] is None

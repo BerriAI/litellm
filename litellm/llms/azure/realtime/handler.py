@@ -130,6 +130,16 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         qs: Final = "&".join(query_parts)
         return f"{api_base}{path}?{qs}" if qs else f"{api_base}{path}"
 
+    def construct_url(
+        self,
+        api_base: str,
+        model: str,
+        api_version: str | None,
+        realtime_protocol: str | None = None,
+        query_params: RealtimeQueryParams | None = None,
+    ) -> str:
+        return self._construct_url(api_base, model, api_version, realtime_protocol, query_params)
+
     async def async_realtime(
         self,
         model: str,

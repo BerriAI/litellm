@@ -30,6 +30,13 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         dynamic_api_key = api_key or get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str("PERPLEXITY_API_KEY")
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Perplexity supports a subset of OpenAI params

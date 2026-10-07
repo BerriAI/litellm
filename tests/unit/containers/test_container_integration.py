@@ -58,9 +58,7 @@ class TestContainerIntegration:
         mock_client.post.return_value = mock_response
         mock_http_handler.return_value = mock_client
 
-        with patch(
-            "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client") as mock_get_client:
             mock_get_client.return_value = mock_client
 
             # Execute
@@ -114,15 +112,11 @@ class TestContainerIntegration:
         mock_client.get.return_value = mock_response
         mock_http_handler.return_value = mock_client
 
-        with patch(
-            "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client") as mock_get_client:
             mock_get_client.return_value = mock_client
 
             # Execute
-            response = list_containers(
-                limit=10, order="desc", custom_llm_provider="openai"
-            )
+            response = list_containers(limit=10, order="desc", custom_llm_provider="openai")
 
             # Verify
             assert isinstance(response, ContainerListResponse)
@@ -154,15 +148,11 @@ class TestContainerIntegration:
         mock_client.get.return_value = mock_response
         mock_http_handler.return_value = mock_client
 
-        with patch(
-            "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client") as mock_get_client:
             mock_get_client.return_value = mock_client
 
             # Execute
-            response = retrieve_container(
-                container_id=container_id, custom_llm_provider="openai"
-            )
+            response = retrieve_container(container_id=container_id, custom_llm_provider="openai")
 
             # Verify
             assert isinstance(response, ContainerObject)
@@ -188,15 +178,11 @@ class TestContainerIntegration:
         mock_client.delete.return_value = mock_response
         mock_http_handler.return_value = mock_client
 
-        with patch(
-            "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client") as mock_get_client:
             mock_get_client.return_value = mock_client
 
             # Execute
-            response = delete_container(
-                container_id=container_id, custom_llm_provider="openai"
-            )
+            response = delete_container(container_id=container_id, custom_llm_provider="openai")
 
             # Verify
             assert isinstance(response, DeleteContainerResult)

@@ -817,7 +817,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             non_default_params=non_default_params,
             optional_params={},
         )
-        return dict(titan_config._transform_request(input=input_text, inference_params=inference_params))
+        return dict(titan_config.transform_request(input=input_text, inference_params=inference_params))
 
     @staticmethod
     def _transform_text_completion_body_to_chat_body(
@@ -1023,6 +1023,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
             bedrock_jsonl_content.append(bedrock_record)
         return bedrock_jsonl_content
+
+    def transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        self,
+        openai_jsonl_content: Sequence[_OpenAIBatchRecord],
+        target_model: str = "",
+    ) -> list[_BedrockBatchRecord]:  # mutable-ok: mirrors override contract
+        return self._transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content, target_model)
 
     def transform_create_file_request(
         self,
@@ -1535,7 +1542,7 @@ class BedrockJsonlFilesTransformation:
         Delegate to the main BedrockFilesConfig transformation method
         """
         config: Final = BedrockFilesConfig()
-        return config._transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content)
+        return config.transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content)
 
     def _get_s3_object_name(
         self,

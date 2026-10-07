@@ -373,12 +373,12 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         """Get a CustomStreamWrapper for synchronous streaming."""
         from litellm.llms.custom_httpx.http_handler import (
             HTTPHandler,
-            _get_httpx_client,
+            get_httpx_client,
         )
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         # Avoid logging sensitive api_base directly
         verbose_logger.debug("Making sync streaming request to Vertex AI endpoint.")

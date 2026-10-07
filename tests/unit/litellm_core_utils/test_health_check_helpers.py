@@ -462,7 +462,7 @@ async def test_realtime_health_check_uses_model_level_vertex_params():
 
     fake_vertex_base = MagicMock()
     fake_vertex_base.get_vertex_region = MagicMock(return_value="us-central1")
-    fake_vertex_base._ensure_access_token_async = AsyncMock(return_value=("model-level-token", "model-level-project"))
+    fake_vertex_base.ensure_access_token_async = AsyncMock(return_value=("model-level-token", "model-level-project"))
     connect_calls = []
 
     with (
@@ -491,7 +491,7 @@ async def test_realtime_health_check_uses_model_level_vertex_params():
     fake_vertex_base.get_vertex_region.assert_called_once_with(
         vertex_region="us-central1", model="gemini-live-2.5-flash-native-audio"
     )
-    fake_vertex_base._ensure_access_token_async.assert_called_once_with(
+    fake_vertex_base.ensure_access_token_async.assert_called_once_with(
         credentials='{"type":"service_account"}',
         project_id="model-level-project",
         custom_llm_provider="vertex_ai",

@@ -27,7 +27,7 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 FIREWORKS_RESPONSES_URL: Final = "https://api.fireworks.ai/inference/v1/responses"
-HTTPX_CLIENT_FACTORY: Final = "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client"
+HTTPX_CLIENT_FACTORY: Final = "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client"
 NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 NO_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 

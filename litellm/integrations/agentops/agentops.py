@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
 
 @dataclass
@@ -99,7 +99,7 @@ class AgentOps(OpenTelemetry):
             "Connection": "keep-alive",
         }
 
-        client: Final = _get_httpx_client()
+        client: Final = get_httpx_client()
         try:
             response: Final = client.post(
                 url=auth_endpoint,

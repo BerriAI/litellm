@@ -71,6 +71,13 @@ class LangGraphConfig(BaseConfig):
 
         return api_base, api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         """
         LangGraph supports minimal OpenAI params since it's an agent runtime.
@@ -295,12 +302,12 @@ class LangGraphConfig(BaseConfig):
         """
         from litellm.llms.custom_httpx.http_handler import (
             HTTPHandler,
-            _get_httpx_client,
+            get_httpx_client,
         )
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         verbose_logger.debug("Making sync streaming request to: %s", api_base)
 

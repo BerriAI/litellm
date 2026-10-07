@@ -133,7 +133,7 @@ def test_nova_invoke_streaming_chunk_parsing():
             "contentBlockIndex": 0,
         }
     }
-    result = decoder._chunk_parser(nova_text_chunk)
+    result = decoder.chunk_parser(nova_text_chunk)
     assert result.choices[0].delta.content == "Hello, how can I help?"
     assert result.choices[0].index == 0
     assert not result.choices[0].finish_reason
@@ -146,7 +146,7 @@ def test_nova_invoke_streaming_chunk_parsing():
             "contentBlockIndex": 1,
         }
     }
-    result = decoder._chunk_parser(nova_tool_start_chunk)
+    result = decoder.chunk_parser(nova_tool_start_chunk)
     assert result.choices[0].delta.content == ""
     assert result.choices[0].index == 0
     assert result.choices[0].delta.tool_calls is not None
@@ -161,14 +161,11 @@ def test_nova_invoke_streaming_chunk_parsing():
             "contentBlockIndex": 2,
         }
     }
-    result = decoder._chunk_parser(nova_tool_args_chunk)
+    result = decoder.chunk_parser(nova_tool_args_chunk)
     assert result.choices[0].delta.content == ""
     assert result.choices[0].index == 0
     assert result.choices[0].delta.tool_calls is not None
-    assert (
-        result.choices[0].delta.tool_calls[0].function.arguments
-        == '{"location": "New York"}'
-    )
+    assert result.choices[0].delta.tool_calls[0].function.arguments == '{"location": "New York"}'
 
     # Test case 4: Stop reason in contentBlockDelta
     nova_stop_chunk = {
@@ -176,6 +173,6 @@ def test_nova_invoke_streaming_chunk_parsing():
             "stopReason": "tool_use",
         }
     }
-    result = decoder._chunk_parser(nova_stop_chunk)
+    result = decoder.chunk_parser(nova_stop_chunk)
     print(result)
     assert result.choices[0].finish_reason == "tool_calls"

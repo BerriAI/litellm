@@ -21,8 +21,8 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
@@ -155,7 +155,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, AsyncHTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         try:
             response: Final = client.post(

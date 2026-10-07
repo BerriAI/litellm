@@ -790,6 +790,14 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         self._validate_aws_region_name(aws_region_name)
         return aws_region_name
 
+    def get_aws_region_name(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        model: str | None = None,
+        model_id: str | None = None,
+    ) -> str:
+        return self._get_aws_region_name(optional_params, model, model_id)
+
     @staticmethod
     def _validate_aws_region_name(aws_region_name: str | None) -> None:
         """
@@ -803,6 +811,13 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 f"Invalid AWS region format: {aws_region_name!r}. "
                 "Region names must contain only lowercase letters, digits, and hyphens."
             )
+
+    @classmethod
+    def validate_aws_region_name(
+        cls,
+        aws_region_name: str | None,
+    ) -> None:
+        return cls._validate_aws_region_name(aws_region_name)
 
     @staticmethod
     def _parse_sts_region_from_endpoint(

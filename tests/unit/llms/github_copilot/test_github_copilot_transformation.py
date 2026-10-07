@@ -47,7 +47,7 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
         api_base,
         dynamic_api_key,
         custom_llm_provider,
-    ) = config._get_openai_compatible_provider_info(
+    ) = config.get_openai_compatible_provider_info(
         model=model,
         api_base=None,
         api_key=None,
@@ -64,7 +64,7 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
         api_base,
         dynamic_api_key,
         custom_llm_provider,
-    ) = config._get_openai_compatible_provider_info(
+    ) = config.get_openai_compatible_provider_info(
         model=model,
         api_base=None,
         api_key=None,
@@ -79,7 +79,7 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
     )
 
     with pytest.raises(AuthenticationError) as excinfo:
-        config._get_openai_compatible_provider_info(
+        config.get_openai_compatible_provider_info(
             model=model,
             api_base=None,
             api_key=None,
@@ -158,25 +158,19 @@ def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
             {"role": "system", "content": "System message."},
             {"role": "user", "content": "User message."},
         ]
-        out = config._transform_messages(
-            [m.copy() for m in messages], model="github_copilot/gpt-4"
-        )
+        out = config.transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
         assert out[0]["role"] == "assistant"
         assert out[1]["role"] == "user"
 
         # Case 2: Flag is True (conversion does not happen)
         litellm.disable_copilot_system_to_assistant = True
-        out = config._transform_messages(
-            [m.copy() for m in messages], model="github_copilot/gpt-4"
-        )
+        out = config.transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
         assert out[0]["role"] == "system"
         assert out[1]["role"] == "user"
 
         # Case 3: Flag is False again (conversion happens)
         litellm.disable_copilot_system_to_assistant = False
-        out = config._transform_messages(
-            [m.copy() for m in messages], model="github_copilot/gpt-4"
-        )
+        out = config.transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
         assert out[0]["role"] == "assistant"
         assert out[1]["role"] == "user"
     finally:

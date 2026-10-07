@@ -44,8 +44,8 @@ from litellm.integrations.datadog.datadog_mock_client import (
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
@@ -180,7 +180,7 @@ class DataDogLogger(
             dd_base_url: Final = get_datadog_base_url_from_env()
             if dd_base_url:
                 self.intake_url = f"{dd_base_url}/api/v2/logs"
-            self.sync_client = _get_httpx_client()
+            self.sync_client = get_httpx_client()
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             super().__init__(

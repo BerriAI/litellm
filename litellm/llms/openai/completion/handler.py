@@ -181,7 +181,7 @@ class OpenAITextCompletion(BaseLLM):
                 openai_aclient = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=BaseOpenAILLM._get_async_http_client(),
+                    http_client=BaseOpenAILLM.get_async_http_client(),
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,

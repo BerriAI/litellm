@@ -66,6 +66,13 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
         dynamic_api_key: Final = api_key or get_secret_str("MODELSCOPE_API_KEY")
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     @override
     def get_complete_url(
         self,

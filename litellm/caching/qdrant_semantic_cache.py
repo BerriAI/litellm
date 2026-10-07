@@ -68,8 +68,8 @@ class QdrantSemanticCache(BaseCache):
         embedding_timeout: float | None = None,
     ):
         from litellm.llms.custom_httpx.http_handler import (
-            _get_httpx_client,
             get_async_httpx_client,
+            get_httpx_client,
             httpxSpecialProvider,
         )
         from litellm.secret_managers.main import get_secret_str
@@ -112,7 +112,7 @@ class QdrantSemanticCache(BaseCache):
 
         self.headers = headers
 
-        self.sync_client = _get_httpx_client()
+        self.sync_client = get_httpx_client()
         self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Caching)
 
         if quantization_config is None:

@@ -56,14 +56,10 @@ def test_vertex_ai_cancel_batch():
         "state": "JOB_STATE_CANCELLING",
         "createTime": "2024-03-17T10:00:00.000000Z",
         "inputConfig": {"gcsSource": {"uris": ["gs://test-bucket/input.jsonl"]}},
-        "outputConfig": {
-            "gcsDestination": {"outputUriPrefix": "gs://test-bucket/output"}
-        },
+        "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://test-bucket/output"}},
     }
 
-    with patch(
-        "litellm.llms.vertex_ai.batches.handler._get_httpx_client"
-    ) as mock_client:
+    with patch("litellm.llms.vertex_ai.batches.handler.get_httpx_client") as mock_client:
         mock_client.return_value.post.return_value = mock_response
         mock_client.return_value.get.return_value = mock_response
 
@@ -101,14 +97,10 @@ def test_vertex_ai_cancel_batch_encodes_batch_id():
         "state": "JOB_STATE_CANCELLING",
         "createTime": "2024-03-17T10:00:00.000000Z",
         "inputConfig": {"gcsSource": {"uris": ["gs://test-bucket/input.jsonl"]}},
-        "outputConfig": {
-            "gcsDestination": {"outputUriPrefix": "gs://test-bucket/output"}
-        },
+        "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://test-bucket/output"}},
     }
 
-    with patch(
-        "litellm.llms.vertex_ai.batches.handler._get_httpx_client"
-    ) as mock_client:
+    with patch("litellm.llms.vertex_ai.batches.handler.get_httpx_client") as mock_client:
         mock_client.return_value.post.return_value = mock_response
         mock_client.return_value.get.return_value = mock_response
 
@@ -154,14 +146,10 @@ def test_vertex_ai_cancel_batch_custom_proxy_retrieve_url():
         "state": "JOB_STATE_CANCELLING",
         "createTime": "2024-03-17T10:00:00.000000Z",
         "inputConfig": {"gcsSource": {"uris": ["gs://test-bucket/input.jsonl"]}},
-        "outputConfig": {
-            "gcsDestination": {"outputUriPrefix": "gs://test-bucket/output"}
-        },
+        "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://test-bucket/output"}},
     }
 
-    with patch(
-        "litellm.llms.vertex_ai.batches.handler._get_httpx_client"
-    ) as mock_client:
+    with patch("litellm.llms.vertex_ai.batches.handler.get_httpx_client") as mock_client:
         mock_client.return_value.post.return_value = mock_response
         mock_client.return_value.get.return_value = mock_response
 

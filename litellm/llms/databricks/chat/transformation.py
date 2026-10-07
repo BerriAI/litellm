@@ -729,7 +729,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     # 6. Set tool_calls to None
                     from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
                     from litellm.llms.base_llm.base_utils import (
-                        _convert_tool_response_to_message,
+                        convert_tool_response_to_message,
                     )
 
                     # Check if this chunk has a function name
@@ -744,7 +744,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                         or function_name == RESPONSE_FORMAT_TOOL_NAME
                     ):
                         # Convert tool calls to message format
-                        message = _convert_tool_response_to_message(tool_calls)
+                        message = convert_tool_response_to_message(tool_calls)
                         if message is not None:
                             if message.content == "{}":  # empty json
                                 message.content = ""

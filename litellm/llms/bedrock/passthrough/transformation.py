@@ -74,7 +74,7 @@ def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelR
     )
     from litellm.types.utils import GenericStreamingChunk
 
-    translated_chunk: Final = decoder._chunk_parser(chunk_data=json.loads(message))
+    translated_chunk: Final = decoder.chunk_parser(chunk_data=json.loads(message))
     if isinstance(translated_chunk, ModelResponseStream):
         return translated_chunk
     if generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):

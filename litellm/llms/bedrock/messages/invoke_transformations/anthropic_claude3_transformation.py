@@ -226,7 +226,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         Returns:
             True if the model supports extended thinking on Bedrock
         """
-        if AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock"):
+        if AnthropicModelInfo.is_adaptive_thinking_model(model, "bedrock"):
             return True
 
         model_lower: Final = model.lower()
@@ -276,7 +276,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if not self._supports_extended_thinking_on_bedrock(model):
             return False
 
-        is_adaptive_thinking_model: Final = AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock")
+        is_adaptive_thinking_model: Final = AnthropicModelInfo.is_adaptive_thinking_model(model, "bedrock")
 
         thinking: Final = anthropic_messages_request.get("thinking")
         if isinstance(thinking, dict):
@@ -664,7 +664,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         path degrades ``xhigh`` -> ``max`` rather than 400-ing. Non-adaptive models
         and models without a ceiling are left untouched.
         """
-        if not AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock"):
+        if not AnthropicModelInfo.is_adaptive_thinking_model(model, "bedrock"):
             return
         effort: Final = optional_params.get("reasoning_effort")
         if not isinstance(effort, str):
@@ -778,7 +778,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             litellm.drop_params is True
             and isinstance(remaining_output_config, dict)
             and any(key != "format" for key in remaining_output_config)
-            and not AnthropicConfig._model_supports_effort_param(model, "bedrock")
+            and not AnthropicConfig.model_supports_effort_param(model, "bedrock")
         ):
             verbose_logger.warning(
                 DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,

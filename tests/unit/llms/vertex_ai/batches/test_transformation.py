@@ -24,7 +24,7 @@ from litellm.llms.vertex_ai.batches.transformation import (  # noqa: E402
 )
 from litellm.llms.vertex_ai.common_utils import (  # noqa: E402
     VertexAIError,
-    _convert_vertex_datetime_to_openai_datetime,
+    convert_vertex_datetime_to_openai_datetime,
 )
 from litellm.types.utils import LiteLLMBatch  # noqa: E402
 
@@ -145,7 +145,7 @@ def test_transform_vertex_response_full_mapping():
     # created_at is parsed via the shared helper (uses local tz); assert the
     # transform forwards createTime through that helper rather than a hardcoded
     # epoch that would be tz-dependent
-    assert batch.created_at == _convert_vertex_datetime_to_openai_datetime("2024-12-04T21:53:12.120184Z")
+    assert batch.created_at == convert_vertex_datetime_to_openai_datetime("2024-12-04T21:53:12.120184Z")
     assert batch.endpoint == ""
     assert batch.object == "batch"
     assert batch.input_file_id == "gs://bucket/in.jsonl"
@@ -202,24 +202,24 @@ def test_status_mapping_unknown_state_raises_keyerror():
 
 
 # =========================================================================== #
-# _get_batch_id_from_vertex_ai_batch_response
+# get_batch_id_from_vertex_ai_batch_response
 # =========================================================================== #
 
 
 def test_get_batch_id_splits_path():
     assert (
-        T._get_batch_id_from_vertex_ai_batch_response({"name": "projects/p/locations/l/batchPredictionJobs/999"})
+        T.get_batch_id_from_vertex_ai_batch_response({"name": "projects/p/locations/l/batchPredictionJobs/999"})
         == "999"
     )
 
 
 def test_get_batch_id_no_slash_returns_name():
-    assert T._get_batch_id_from_vertex_ai_batch_response({"name": "abc"}) == "abc"
+    assert T.get_batch_id_from_vertex_ai_batch_response({"name": "abc"}) == "abc"
 
 
 def test_get_batch_id_empty_name_returns_empty():
-    assert T._get_batch_id_from_vertex_ai_batch_response({"name": ""}) == ""
-    assert T._get_batch_id_from_vertex_ai_batch_response({}) == ""
+    assert T.get_batch_id_from_vertex_ai_batch_response({"name": ""}) == ""
+    assert T.get_batch_id_from_vertex_ai_batch_response({}) == ""
 
 
 # =========================================================================== #

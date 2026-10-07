@@ -207,14 +207,14 @@ def test_azure_construct_url_encodes_model_and_api_version():
     from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
 
     h = AzureOpenAIRealtime()
-    url = h._construct_url(
+    url = h.construct_url(
         "https://x.openai.azure.com",
         "deploy&evil=1",
         "2024-10-01-preview",
     )
     assert "evil=1" not in url.split("?", 1)[1]
 
-    url_ga = h._construct_url(
+    url_ga = h.construct_url(
         "https://x.openai.azure.com",
         "deploy&evil=1",
         None,

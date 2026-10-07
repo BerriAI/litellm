@@ -1994,7 +1994,7 @@ class TestClaudeOpus48AdaptiveThinking:
     def test_adaptive_thinking_detected_for_opus_4_8(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True
 
     @pytest.mark.parametrize(
         "model",
@@ -2009,7 +2009,7 @@ class TestClaudeOpus48AdaptiveThinking:
     def test_adaptive_thinking_detected_for_fable_5(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True
 
     @pytest.mark.parametrize(
         "model",
@@ -2042,7 +2042,7 @@ class TestClaudeOpus48AdaptiveThinking:
         version (``4.6`` -> ``4-6``)."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True
 
     @pytest.mark.parametrize(
         "model",
@@ -2061,7 +2061,7 @@ class TestClaudeOpus48AdaptiveThinking:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert model not in litellm.model_cost
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is False
 
     @pytest.mark.parametrize(
         "model",
@@ -2087,7 +2087,7 @@ class TestClaudeOpus48AdaptiveThinking:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert model not in litellm.model_cost
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True
 
     @pytest.mark.parametrize(
         "model",
@@ -2108,7 +2108,7 @@ class TestClaudeOpus48AdaptiveThinking:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert model not in litellm.model_cost
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is False
 
     @pytest.mark.parametrize(
         "model",
@@ -2117,7 +2117,7 @@ class TestClaudeOpus48AdaptiveThinking:
     def test_non_adaptive_models_not_detected(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is False
 
 
 class TestDefaultSuffixAdaptiveThinking:
@@ -2140,7 +2140,7 @@ class TestDefaultSuffixAdaptiveThinking:
     def test_default_suffix_models_are_adaptive_thinking(self, local_model_cost_map, model: str) -> None:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True, (
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True, (
             f"{model} not classified as adaptive thinking. Check _model_map_lookup_candidates strips @default suffix."
         )
 
@@ -2172,12 +2172,12 @@ class TestCapabilityProbeUsesCallerProvider:
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is True
+        assert AnthropicModelInfo.is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is True
 
         monkeypatch.setitem(litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False)
         litellm.get_model_info.cache_clear()
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is False
+        assert AnthropicModelInfo.is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is False
 
 
 def test_create_anthropic_model_list_response_shape():

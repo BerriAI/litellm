@@ -90,7 +90,7 @@ def test_chat_config_uses_xai_key_fallback(monkeypatch):
     monkeypatch.setattr(litellm, "api_key", None)
     monkeypatch.delenv("XAI_API_KEY", raising=False)
 
-    _, api_key = XAIChatConfig()._get_openai_compatible_provider_info(None, None)
+    _, api_key = XAIChatConfig().get_openai_compatible_provider_info(None, None)
 
     assert api_key == "xai_key_value"
 
@@ -100,7 +100,7 @@ def test_chat_config_uses_environment_key_fallback(monkeypatch):
     monkeypatch.setattr(litellm, "api_key", None)
     monkeypatch.setenv("XAI_API_KEY", "env_api_key")
 
-    _, api_key = XAIChatConfig()._get_openai_compatible_provider_info(None, None)
+    _, api_key = XAIChatConfig().get_openai_compatible_provider_info(None, None)
 
     assert api_key == "env_api_key"
 
@@ -110,7 +110,7 @@ def test_chat_config_does_not_use_generic_key_fallback(monkeypatch):
     monkeypatch.setattr(litellm, "api_key", "common_api_key")
     monkeypatch.delenv("XAI_API_KEY", raising=False)
 
-    _, api_key = XAIChatConfig()._get_openai_compatible_provider_info(None, None)
+    _, api_key = XAIChatConfig().get_openai_compatible_provider_info(None, None)
 
     assert api_key is None
 
@@ -120,9 +120,7 @@ def test_chat_config_prefers_explicit_api_key(monkeypatch):
     monkeypatch.setattr(litellm, "api_key", "common_api_key")
     monkeypatch.setenv("XAI_API_KEY", "env_api_key")
 
-    _, api_key = XAIChatConfig()._get_openai_compatible_provider_info(
-        None, "param_api_key"
-    )
+    _, api_key = XAIChatConfig().get_openai_compatible_provider_info(None, "param_api_key")
 
     assert api_key == "param_api_key"
 

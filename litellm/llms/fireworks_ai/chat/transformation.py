@@ -787,6 +787,13 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         )
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def get_models(self, api_key: str | None = None, api_base: str | None = None):
         api_base, api_key = self._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
         if api_base is None or api_key is None:

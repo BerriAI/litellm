@@ -1,35 +1,27 @@
 import json
 import os
 from datetime import datetime
-from unittest.mock import AsyncMock
-
-
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from base_llm_unit_tests import BaseLLMChatTest, BaseReasoningLLMTests
 
-from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
-from litellm import completion
-from unittest.mock import patch
-from litellm.llms.xai.chat.transformation import XAIChatConfig, XAI_API_BASE
-from base_llm_unit_tests import BaseReasoningLLMTests, BaseLLMChatTest
+from litellm import Choices, EmbeddingResponse, Message, ModelResponse, Usage, completion
+from litellm.llms.xai.chat.transformation import XAI_API_BASE, XAIChatConfig
 
 
 def test_xai_chat_config_get_openai_compatible_provider_info():
     config = XAIChatConfig()
 
     # Test with default values
-    api_base, api_key = config._get_openai_compatible_provider_info(
-        api_base=None, api_key=None
-    )
+    api_base, api_key = config.get_openai_compatible_provider_info(api_base=None, api_key=None)
     assert api_base == XAI_API_BASE
     assert api_key == os.environ.get("XAI_API_KEY")
 
     # Test with custom API key
     custom_api_key = "test_api_key"
-    api_base, api_key = config._get_openai_compatible_provider_info(
-        api_base=None, api_key=custom_api_key
-    )
+    api_base, api_key = config.get_openai_compatible_provider_info(api_base=None, api_key=custom_api_key)
     assert api_base == XAI_API_BASE
     assert api_key == custom_api_key
 
@@ -38,7 +30,7 @@ def test_xai_chat_config_get_openai_compatible_provider_info():
         "os.environ",
         {"XAI_API_BASE": "https://env.x.ai/v1", "XAI_API_KEY": "env_api_key"},
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://env.x.ai/v1"
         assert api_key == "env_api_key"
 

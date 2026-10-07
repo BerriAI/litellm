@@ -23,8 +23,8 @@ from litellm.llms.bedrock.image_edit.stability_transformation import (
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ImageResponse
@@ -56,9 +56,9 @@ class BedrockImageEdit(BaseAWSLLM):
 
     @classmethod
     def get_config_class(cls, model: str | None):
-        if BedrockStabilityImageEditConfig._is_stability_edit_model(model):
+        if BedrockStabilityImageEditConfig.is_stability_edit_model(model):
             return BedrockStabilityImageEditConfig
-        if BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(model):
+        if BedrockAmazonNovaCanvasImageEditConfig.is_nova_canvas_image_edit_model(model):
             return BedrockAmazonNovaCanvasImageEditConfig
         raise ValueError(
             f"Unsupported Bedrock image-edit model: {model!r}. "
@@ -104,7 +104,7 @@ class BedrockImageEdit(BaseAWSLLM):
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client()
+            client = get_httpx_client()
         try:
             response: Final = client.post(
                 url=prepared_request.endpoint_url,

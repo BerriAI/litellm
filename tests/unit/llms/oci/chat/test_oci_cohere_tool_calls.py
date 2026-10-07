@@ -940,16 +940,16 @@ class TestCohereMessageAdaptationEdgeCases:
         assert history[0].toolCalls[0].parameters == {}
 
     def test_extract_text_content_list_with_non_dict_items(self):
-        from litellm.llms.oci.chat.cohere import _extract_text_content
+        from litellm.llms.oci.chat.cohere import extract_text_content
 
         # List with a non-dict item — should be silently skipped
-        result = _extract_text_content([{"type": "text", "text": "hello"}, "bad_item"])
+        result = extract_text_content([{"type": "text", "text": "hello"}, "bad_item"])
         assert result == "hello"
 
     def test_extract_text_content_non_string_non_list(self):
-        from litellm.llms.oci.chat.cohere import _extract_text_content
+        from litellm.llms.oci.chat.cohere import extract_text_content
 
-        result = _extract_text_content(12345)
+        result = extract_text_content(12345)
         assert result == "12345"
 
 

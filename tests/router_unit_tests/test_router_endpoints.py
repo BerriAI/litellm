@@ -369,7 +369,7 @@ async def test_moderation_endpoint_with_api_base():
 
     # Mock the OpenAI client to verify api_base is passed
     with patch(
-        "litellm.main.openai_chat_completions._get_openai_client"
+        "litellm.main.openai_chat_completions.get_openai_client"
     ) as mock_get_client:
         mock_client = AsyncMock()
         mock_response = MagicMock()
@@ -392,7 +392,7 @@ async def test_moderation_endpoint_with_api_base():
             model="openai/omni-moderation-latest", input="hello this is a test"
         )
 
-        # Verify that _get_openai_client was called with the custom api_base
+        # Verify that get_openai_client was called with the custom api_base
         mock_get_client.assert_called()
         call_kwargs = mock_get_client.call_args.kwargs
         assert (

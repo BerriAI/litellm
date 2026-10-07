@@ -5,6 +5,7 @@ import pytest
 
 
 from typing import List
+from unittest.mock import MagicMock, patch
 
 # from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 import litellm
@@ -26,10 +27,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
 )
 from litellm.llms.vertex_ai.gemini.transformation import (
-    _gemini_convert_messages_with_history,
+    gemini_convert_messages_with_history,
 )
 from litellm.types.llms.openai import AllMessageValues
-from unittest.mock import MagicMock, patch
 
 
 def test_llama_3_prompt():
@@ -562,9 +562,7 @@ def test_vertex_only_image_user_message():
         },
     ]
 
-    response = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-1.5-pro"
-    )
+    response = gemini_convert_messages_with_history(messages=messages, model="gemini-1.5-pro")
 
     expected_response = [
         {
@@ -597,7 +595,7 @@ def test_no_messages_yields_user_text():
     """
     messages: List[AllMessageValues] = []
 
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = gemini_convert_messages_with_history(messages=messages)
 
     expected_output = [{"role": "user", "parts": [{"text": " "}]}]
 

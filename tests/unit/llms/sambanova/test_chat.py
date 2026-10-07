@@ -32,7 +32,7 @@ class TestSambanovaContentListHandling:
             }
         ]
 
-        transformed_messages = config._transform_messages(
+        transformed_messages = config.transform_messages(
             messages=messages, model="sambanova/gpt-oss-120b", is_async=False
         )
 
@@ -57,7 +57,7 @@ class TestSambanovaContentListHandling:
             }
         ]
 
-        transformed_messages = config._transform_messages(
+        transformed_messages = config.transform_messages(
             messages=messages, model="sambanova/gpt-oss-120b", is_async=False
         )
 
@@ -71,7 +71,7 @@ class TestSambanovaContentListHandling:
 
         messages = [{"role": "user", "content": "Hello, how are you?"}]
 
-        transformed_messages = config._transform_messages(
+        transformed_messages = config.transform_messages(
             messages=messages, model="sambanova/gpt-oss-120b", is_async=False
         )
 
@@ -99,7 +99,7 @@ class TestSambanovaContentListHandling:
             },
         ]
 
-        transformed_messages = config._transform_messages(
+        transformed_messages = config.transform_messages(
             messages=messages, model="sambanova/gpt-oss-120b", is_async=False
         )
 

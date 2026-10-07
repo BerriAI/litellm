@@ -20,7 +20,7 @@ def test_process_candidates_unbound_local_error_fix():
 
     # Execution
     try:
-        VertexGeminiConfig._process_candidates(
+        VertexGeminiConfig.process_candidates(
             _candidates=candidates,
             model_response=model_response,
             standard_optional_params={},

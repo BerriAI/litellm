@@ -1184,9 +1184,7 @@ def test_encoding_format_explicit_value_preserved():
     When user provides encoding_format='float' or 'base64', it should be
     sent as-is to the OpenAI SDK.
     """
-    with patch(
-        "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
-    ) as mock_get_client:
+    with patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client") as mock_get_client:
         # Create a mock client instance
         mock_client_instance = MagicMock()
         mock_get_client.return_value = mock_client_instance

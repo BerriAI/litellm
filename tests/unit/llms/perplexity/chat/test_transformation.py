@@ -145,7 +145,7 @@ class TestPerplexityReasoning:
         from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
 
         config = PerplexityChatConfig()
-        api_base, _ = config._get_openai_compatible_provider_info(api_base=None, api_key="test-key")
+        api_base, _ = config.get_openai_compatible_provider_info(api_base=None, api_key="test-key")
 
         assert api_base == expected_api_base
 

@@ -3,8 +3,8 @@
 The dispatch picks one of two Bedrock handlers depending on the ARN
 family in ``batch_id``:
 
-* ``:async-invoke/<id>``        -> ``_handle_async_invoke_status`` (data plane)
-* ``:model-invocation-job/<id>`` -> ``_handle_model_invocation_job_status``
+* ``:async-invoke/<id>``        -> ``handle_async_invoke_status`` (data plane)
+* ``:model-invocation-job/<id>`` -> ``handle_model_invocation_job_status``
                                     (control plane, added in this PR)
 
 Anything else falls through to the generic ``provider_config`` retrieve
@@ -37,11 +37,11 @@ def mock_handlers():
     fake_batch = MagicMock(name="LiteLLMBatch")
     with (
         patch(
-            "litellm.batches.main.BedrockBatchesHandler._handle_async_invoke_status",
+            "litellm.batches.main.BedrockBatchesHandler.handle_async_invoke_status",
             return_value=fake_batch,
         ) as async_invoke,
         patch(
-            "litellm.batches.main.BedrockBatchesHandler._handle_model_invocation_job_status",
+            "litellm.batches.main.BedrockBatchesHandler.handle_model_invocation_job_status",
             return_value=fake_batch,
         ) as mij,
     ):

@@ -11,7 +11,7 @@ from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUser
 from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionResponse
 
 from ..chat.gpt_transformation import OpenAIGPTConfig
-from .utils import _transform_prompt
+from .utils import transform_prompt
 
 
 class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
@@ -154,7 +154,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        prompt: Final = _transform_prompt(messages)
+        prompt: Final = transform_prompt(messages)
         return {
             "model": model,
             "prompt": prompt,

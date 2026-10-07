@@ -32,7 +32,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
 from litellm.litellm_core_utils.url_utils import safe_get
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
@@ -232,7 +232,7 @@ def get_image_dimensions(
     img_data = None
     if data.startswith(("http://", "https://")):
         try:
-            client: Final = _get_httpx_client()
+            client: Final = get_httpx_client()
             response: Final[httpx.Response] = safe_get(client, data)
             max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
             content_length: Final[str | None] = response.headers.get("Content-Length")

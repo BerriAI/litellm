@@ -450,7 +450,7 @@ def test_get_aws_region_name_boto3_fallback():
             mock_boto3_session.return_value = mock_session
 
             optional_params = {}
-            result = base_aws_llm._get_aws_region_name(optional_params)
+            result = base_aws_llm.get_aws_region_name(optional_params)
 
             assert result == "us-east-1"
             mock_boto3_session.assert_called_once()
@@ -465,7 +465,7 @@ def test_get_aws_region_name_boto3_fallback():
             mock_boto3_session.return_value = mock_session
 
             optional_params = {}
-            result = base_aws_llm._get_aws_region_name(optional_params)
+            result = base_aws_llm.get_aws_region_name(optional_params)
 
             assert result == "us-west-2"
             mock_boto3_session.assert_called_once()
@@ -478,7 +478,7 @@ def test_get_aws_region_name_boto3_fallback():
             mock_boto3_session.side_effect = Exception("boto3 not available")
 
             optional_params = {}
-            result = base_aws_llm._get_aws_region_name(optional_params)
+            result = base_aws_llm.get_aws_region_name(optional_params)
 
             assert result == "us-west-2"
             mock_boto3_session.assert_called_once()
@@ -486,7 +486,7 @@ def test_get_aws_region_name_boto3_fallback():
     # Test case 4: aws_region_name is provided in optional_params (should not use boto3)
     with patch("boto3.Session") as mock_boto3_session:
         optional_params = {"aws_region_name": "eu-west-1"}
-        result = base_aws_llm._get_aws_region_name(optional_params)
+        result = base_aws_llm.get_aws_region_name(optional_params)
 
         assert result == "eu-west-1"
         mock_boto3_session.assert_not_called()
@@ -503,7 +503,7 @@ def test_get_aws_region_name_boto3_fallback():
 
         with patch("boto3.Session") as mock_boto3_session:
             optional_params = {}
-            result = base_aws_llm._get_aws_region_name(optional_params)
+            result = base_aws_llm.get_aws_region_name(optional_params)
 
             assert result == "ap-southeast-1"
             mock_boto3_session.assert_not_called()
@@ -534,9 +534,7 @@ def test_get_aws_region_name_rejects_malformed_region(bad_region):
     base_aws_llm = BaseAWSLLM()
 
     with pytest.raises(ValueError, match="Invalid AWS region format"):
-        base_aws_llm._get_aws_region_name(
-            optional_params={"aws_region_name": bad_region}
-        )
+        base_aws_llm.get_aws_region_name(optional_params={"aws_region_name": bad_region})
 
 
 @pytest.mark.parametrize(
@@ -553,9 +551,7 @@ def test_get_aws_region_name_rejects_malformed_region(bad_region):
 def test_get_aws_region_name_accepts_valid_regions(valid_region):
     """Real AWS region formats must continue to work after the format guard."""
     base_aws_llm = BaseAWSLLM()
-    result = base_aws_llm._get_aws_region_name(
-        optional_params={"aws_region_name": valid_region}
-    )
+    result = base_aws_llm.get_aws_region_name(optional_params={"aws_region_name": valid_region})
     assert result == valid_region
 
 
@@ -576,7 +572,7 @@ def test_get_aws_region_name_rejects_malformed_region_from_env():
         mock_get_secret.side_effect = side_effect
 
         with pytest.raises(ValueError, match="Invalid AWS region format"):
-            base_aws_llm._get_aws_region_name(optional_params={})
+            base_aws_llm.get_aws_region_name(optional_params={})
 
 
 def test_get_aws_region_name_for_non_llm_api_calls_rejects_malformed_param():
@@ -2704,29 +2700,19 @@ def test_converse_handler_external_id_extraction():
         mock_credentials.token = "test-session-token"
         return mock_credentials
 
-    with patch.object(
-        converse_llm, "get_credentials", side_effect=mock_get_credentials
-    ):
-        with patch.object(
-            converse_llm, "_get_aws_region_name", return_value="us-west-2"
-        ):
+    with patch.object(converse_llm, "get_credentials", side_effect=mock_get_credentials):
+        with patch.object(converse_llm, "_get_aws_region_name", return_value="us-west-2"):
             with patch.object(
                 converse_llm,
                 "get_runtime_endpoint",
                 return_value=("https://test", "https://test"),
             ):
                 with patch("litellm.AmazonConverseConfig") as mock_config:
-                    mock_config.return_value._transform_request.return_value = {
-                        "test": "data"
-                    }
-                    with patch.object(
-                        converse_llm, "get_request_headers"
-                    ) as mock_headers:
+                    mock_config.return_value._transform_request.return_value = {"test": "data"}
+                    with patch.object(converse_llm, "get_request_headers") as mock_headers:
                         mock_headers.return_value = MagicMock()
                         mock_headers.return_value.headers = {"Authorization": "test"}
-                        with patch(
-                            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-                        ) as mock_client:
+                        with patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_client:
                             mock_http_client = MagicMock()
                             mock_response = MagicMock()
                             mock_response.raise_for_status.return_value = None
@@ -2734,9 +2720,7 @@ def test_converse_handler_external_id_extraction():
                             mock_client.return_value = mock_http_client
 
                             # Mock the transform_response method
-                            mock_config.return_value._transform_response.return_value = (
-                                MagicMock()
-                            )
+                            mock_config.return_value._transform_response.return_value = MagicMock()
 
                             # Call completion with aws_external_id in optional_params
                             optional_params = {

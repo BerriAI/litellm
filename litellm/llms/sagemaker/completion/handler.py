@@ -12,8 +12,8 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import (
@@ -253,7 +253,7 @@ class SagemakerLLM(BaseAWSLLM):
 
             ## LOGGING
             timeout = 300.0
-            sync_handler: Final = _get_httpx_client()
+            sync_handler: Final = get_httpx_client()
             ## LOGGING
             logging_obj.pre_call(
                 input=[],
@@ -317,7 +317,7 @@ class SagemakerLLM(BaseAWSLLM):
         client=None,
     ):
         if client is None:
-            client = _get_httpx_client()
+            client = get_httpx_client()
         sync_response: Final = client.post(
             api_base,
             headers=headers,

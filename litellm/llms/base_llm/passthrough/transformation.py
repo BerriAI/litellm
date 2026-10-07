@@ -122,7 +122,7 @@ class RawBytesStreamCollector:
         self._raw_bytes.append(chunk)
 
     def build_logged_response(self, litellm_logging_obj: LiteLLMLoggingObj) -> LoggedRelayResponse | None:
-        all_chunks: Final = self._provider_config._convert_raw_bytes_to_str_lines(self._raw_bytes)
+        all_chunks: Final = self._provider_config.convert_raw_bytes_to_str_lines(self._raw_bytes)
         return self._provider_config.handle_logging_collected_chunks(
             all_chunks=all_chunks,
             litellm_logging_obj=litellm_logging_obj,
@@ -258,3 +258,9 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         lines: Final = [line.strip() for line in combined_str.split("\n") if line.strip()]
 
         return lines
+
+    def convert_raw_bytes_to_str_lines(
+        self,
+        raw_bytes: list[bytes],  # mutable-ok: mirrors override contract
+    ) -> list[str]:  # mutable-ok: mirrors override contract
+        return self._convert_raw_bytes_to_str_lines(raw_bytes)

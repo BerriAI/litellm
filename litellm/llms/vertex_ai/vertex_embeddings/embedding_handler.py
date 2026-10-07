@@ -7,8 +7,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.llms.vertex_ai.vertex_ai_non_gemini import VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -100,7 +100,7 @@ class VertexEmbedding(VertexBase):
         if timeout:
             _client_params["timeout"] = timeout
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client(params=_client_params)
+            client = get_httpx_client(params=_client_params)
         else:
             client = client
         ## LOGGING

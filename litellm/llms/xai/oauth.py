@@ -18,7 +18,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 from litellm.secret_managers.main import get_secret_str
 
 XAI_OAUTH_ISSUER: Final = "https://auth.x.ai"
@@ -204,7 +204,7 @@ class XAIOAuthAuthenticator:
         return auth_data
 
     def _client(self) -> httpx.Client | HTTPHandler:
-        return self.http_client or _get_httpx_client()
+        return self.http_client or get_httpx_client()
 
     def _ensure_token_dir(self) -> None:
         os.makedirs(self.token_dir, mode=0o700, exist_ok=True)
