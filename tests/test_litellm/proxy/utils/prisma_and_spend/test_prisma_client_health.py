@@ -22,6 +22,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm.proxy.db.health_check_latest import (
+    LATEST_HEALTH_CHECKS_FOR_MODELS_SQL,
+    LATEST_HEALTH_CHECKS_SQL,
+)
 from litellm.proxy.utils import PrismaClient
 
 
@@ -261,36 +265,49 @@ async def test_get_health_check_history_db_error_returns_empty_list(
     assert await prisma_client.get_health_check_history() == []
 
 
+def _raw_health_check_row(model_name: str = "gpt-4", model_id: str | None = "deployment-abc") -> dict[str, Any]:
+    return {
+        "health_check_id": f"hc-{model_name}",
+        "model_name": model_name,
+        "model_id": model_id,
+        "status": "healthy",
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+        "error_message": None,
+        "response_time_ms": 12.5,
+        "details": None,
+        "checked_by": "pod-1",
+        "checked_at": "2026-08-25T00:00:00+00:00",
+        "created_at": "2026-08-25T00:00:00+00:00",
+        "updated_at": "2026-08-25T00:00:00+00:00",
+    }
+
+
 @pytest.mark.asyncio
-async def test_get_all_latest_health_checks_uses_distinct(
+async def test_get_all_latest_health_checks_dedups_in_postgres(
     prisma_client: PrismaClient,
 ) -> None:
-    rows = [MagicMock(name=f"row-{i}") for i in range(3)]
-    prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(return_value=rows)
+    """A revert to prisma find_many(distinct=...) streams the whole history table; the SQL must own the DISTINCT."""
+    prisma_client.db.query_raw = AsyncMock(return_value=[_raw_health_check_row()])
     result = await prisma_client.get_all_latest_health_checks()
-    kwargs = prisma_client.db.litellm_healthchecktable.find_many.await_args.kwargs
     actual = {
-        "len": len(result),
-        "distinct": kwargs["distinct"],
-        "order_len": len(kwargs["order"]),
-        "first_order": kwargs["order"][0],
+        "query": prisma_client.db.query_raw.await_args.args,
+        "rows": [(row.model_id, row.model_name, row.status) for row in result],
+        "row_type": type(result[0]).__name__,
     }
     assert actual == {
-        "len": 3,
-        "distinct": ["model_id", "model_name"],
-        "order_len": 3,
-        "first_order": {"model_id": "asc"},
+        "query": (LATEST_HEALTH_CHECKS_SQL,),
+        "rows": [("deployment-abc", "gpt-4", "healthy")],
+        "row_type": "LatestHealthCheckRow",
     }
 
 
 @pytest.mark.asyncio
-async def test_get_all_latest_health_checks_db_error_returns_empty_list(
+async def test_get_all_latest_health_checks_db_error_returns_no_rows(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(
-        side_effect=RuntimeError("oops")
-    )
-    assert await prisma_client.get_all_latest_health_checks() == []
+    prisma_client.db.query_raw = AsyncMock(side_effect=RuntimeError("oops"))
+    assert await prisma_client.get_all_latest_health_checks() == ()
 
 
 @pytest.mark.asyncio
@@ -298,18 +315,15 @@ async def test_get_latest_health_checks_for_models_bounds_the_query_to_those_mod
     prisma_client: PrismaClient,
 ) -> None:
     """A paged caller reads health for its page; an unbounded read is the bug this exists to avoid."""
-    prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(return_value=[])
-    await prisma_client.get_latest_health_checks_for_models(["gpt-5", "claude-opus"])
-    kwargs = prisma_client.db.litellm_healthchecktable.find_many.await_args.kwargs
+    prisma_client.db.query_raw = AsyncMock(return_value=[_raw_health_check_row(model_name="gpt-5")])
+    result = await prisma_client.get_latest_health_checks_for_models(["gpt-5", "claude-opus"])
     actual = {
-        "where": kwargs["where"],
-        "distinct": kwargs["distinct"],
-        "order": kwargs["order"],
+        "query": prisma_client.db.query_raw.await_args.args,
+        "rows": [row.model_name for row in result],
     }
     assert actual == {
-        "where": {"model_name": {"in": ["gpt-5", "claude-opus"]}},
-        "distinct": ["model_id", "model_name"],
-        "order": [{"model_id": "asc"}, {"model_name": "asc"}, {"checked_at": "desc"}],
+        "query": (LATEST_HEALTH_CHECKS_FOR_MODELS_SQL, ["gpt-5", "claude-opus"]),
+        "rows": ["gpt-5"],
     }
 
 
@@ -317,14 +331,14 @@ async def test_get_latest_health_checks_for_models_bounds_the_query_to_those_mod
 async def test_get_latest_health_checks_for_models_does_not_query_for_an_empty_page(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.query_raw = AsyncMock(return_value=[])
     assert await prisma_client.get_latest_health_checks_for_models([]) == ()
-    assert prisma_client.db.litellm_healthchecktable.find_many.await_count == 0
+    assert prisma_client.db.query_raw.await_count == 0
 
 
 @pytest.mark.asyncio
-async def test_get_latest_health_checks_for_models_db_error_returns_empty_list(
+async def test_get_latest_health_checks_for_models_db_error_returns_no_rows(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.litellm_healthchecktable.find_many = AsyncMock(side_effect=RuntimeError("oops"))
+    prisma_client.db.query_raw = AsyncMock(side_effect=RuntimeError("oops"))
     assert await prisma_client.get_latest_health_checks_for_models(["gpt-5"]) == ()

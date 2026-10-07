@@ -19,6 +19,7 @@ from typing_extensions import NotRequired, TypedDict
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -54,6 +55,7 @@ FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 _SYNC_ITER_EXHAUSTED: Final = object()
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
+_USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
 
 
 def _next_sync_or_exhausted(it: Any) -> object:
@@ -111,39 +113,12 @@ class _PredibaseStreamData(TypedDict):
     error: str | None
 
 
-class _Ai21StreamData(TypedDict):
-    completions: Sequence[Mapping[str, Mapping[str, str]]]
-
-
-class _MaritalkStreamData(TypedDict):
-    answer: str
-
-
 class _NlpCloudStreamData(TypedDict):
     generated_text: str
 
 
 class _AlephAlphaStreamData(TypedDict):
     completions: Sequence[Mapping[str, str]]
-
-
-class _AzureStreamChoice(TypedDict):
-    delta: Mapping[str, str] | None
-    finish_reason: str | None
-
-
-class _AzureStreamData(TypedDict):
-    choices: Sequence[_AzureStreamChoice]
-
-
-class _BasetenModelOutput(TypedDict):
-    data: NotRequired[Sequence[str]]
-
-
-class _BasetenStreamData(TypedDict):
-    token: NotRequired[Mapping[str, str]]
-    model_output: NotRequired["_BasetenModelOutput | str"]
-    completion: NotRequired[object]
 
 
 class _DeltaDumpDict(TypedDict):
@@ -235,9 +210,11 @@ class CustomStreamWrapper:
         stream_options=None,
         make_call: Callable | None = None,
         _response_headers: dict | httpx.Headers | None = None,
+        count_prompt_tokens: Callable[[], int] | None = None,
     ):
         self.model = model
         self.make_call = make_call
+        self.count_prompt_tokens = count_prompt_tokens
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream
@@ -568,36 +545,6 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_ai21_chunk(self, chunk):  # fake streaming
-        chunk = chunk.decode("utf-8")
-        data_json: Final[_Ai21StreamData] = json.loads(chunk)
-        try:
-            text: Final = data_json["completions"][0]["data"]["text"]
-            is_finished: Final = True
-            finish_reason: Final = "stop"
-            return {
-                "text": text,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-            }
-        except Exception:
-            raise ValueError(f"Unable to parse response. Original response: {chunk}")
-
-    def handle_maritalk_chunk(self, chunk):  # fake streaming
-        chunk = chunk.decode("utf-8")
-        data_json: Final[_MaritalkStreamData] = json.loads(chunk)
-        try:
-            text: Final = data_json["answer"]
-            is_finished: Final = True
-            finish_reason: Final = "stop"
-            return {
-                "text": text,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-            }
-        except Exception:
-            raise ValueError(f"Unable to parse response. Original response: {chunk}")
-
     def handle_nlp_cloud_chunk(self, chunk):
         text = ""
         is_finished = False
@@ -635,46 +582,6 @@ class CustomStreamWrapper:
             }
         except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
-
-    def handle_azure_chunk(self, chunk):
-        is_finished = False
-        finish_reason = ""
-        text = ""
-        print_verbose(f"chunk: {chunk}")
-        if "data: [DONE]" in chunk:
-            text = ""
-            is_finished = True
-            finish_reason = "stop"
-            return {
-                "text": text,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-            }
-        elif chunk.startswith("data:"):
-            data_json: Final[_AzureStreamData] = json.loads(chunk[5:])  # chunk.startswith("data:"):
-            try:
-                if len(data_json["choices"]) > 0:
-                    delta: Final = data_json["choices"][0]["delta"]
-                    text = "" if delta is None else delta.get("content", "")
-                    if data_json["choices"][0].get("finish_reason", None):
-                        is_finished = True
-                        finish_reason = data_json["choices"][0]["finish_reason"]
-                print_verbose(f"text: {text}; is_finished: {is_finished}; finish_reason: {finish_reason}")
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
-            except Exception:
-                raise ValueError(f"Unable to parse response. Original response: {chunk}")
-        elif "error" in chunk:
-            raise ValueError(f"Unable to parse response. Original response: {chunk}")
-        else:
-            return {
-                "text": text,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-            }
 
     def handle_replicate_chunk(self, chunk):
         try:
@@ -778,38 +685,6 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_baseten_chunk(self, chunk) -> str:
-        try:
-            chunk = chunk.decode("utf-8")
-            if len(chunk) > 0:
-                if chunk.startswith("data:"):
-                    data_json: _BasetenStreamData = json.loads(chunk[5:])
-                    if "token" in data_json and "text" in data_json["token"]:
-                        return data_json["token"]["text"]
-                    else:
-                        return ""
-                data_json = json.loads(chunk)
-                if "model_output" in data_json:
-                    if (
-                        isinstance(data_json["model_output"], dict)
-                        and "data" in data_json["model_output"]
-                        and isinstance(data_json["model_output"]["data"], list)
-                    ):
-                        return data_json["model_output"]["data"][0]
-                    elif isinstance(data_json["model_output"], str):
-                        return data_json["model_output"]
-                    elif "completion" in data_json and isinstance(data_json["completion"], str):
-                        return data_json["completion"]
-                    else:
-                        raise ValueError(f"Unable to parse response. Original response: {chunk}")
-                else:
-                    return ""
-            else:
-                return ""
-        except Exception as e:
-            verbose_logger.exception("litellm.CustomStreamWrapper.handle_baseten_chunk(): Exception occured - %s", e)
-            return ""
-
     def handle_triton_stream(self, chunk):
         try:
             if isinstance(chunk, dict):
@@ -862,6 +737,8 @@ class CustomStreamWrapper:
         model_response: Final = ModelResponseStream(**args)
         if self.response_id is not None:
             model_response.id = self.response_id
+        elif model_response.id:
+            self.response_id = model_response.id
         if self.system_fingerprint is not None:
             model_response.system_fingerprint = self.system_fingerprint
 
@@ -1299,18 +1176,6 @@ class CustomStreamWrapper:
             completion_obj["content"] = response_obj["text"]
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
-        elif self.custom_llm_provider and self.custom_llm_provider == "baseten":  # baseten doesn't provide streaming
-            completion_obj["content"] = self.handle_baseten_chunk(chunk)
-        elif self.custom_llm_provider and self.custom_llm_provider == "ai21":  # ai21 doesn't provide streaming
-            response_obj = self.handle_ai21_chunk(chunk)
-            completion_obj["content"] = response_obj["text"]
-            if response_obj["is_finished"]:
-                self.received_finish_reason = response_obj["finish_reason"]
-        elif self.custom_llm_provider and self.custom_llm_provider == "maritalk":
-            response_obj = self.handle_maritalk_chunk(chunk)
-            completion_obj["content"] = response_obj["text"]
-            if response_obj["is_finished"]:
-                self.received_finish_reason = response_obj["finish_reason"]
         elif self.custom_llm_provider and self.custom_llm_provider == "vllm":
             completion_obj["content"] = chunk[0].outputs[0].text
         elif (
@@ -1404,19 +1269,6 @@ class CustomStreamWrapper:
             new_chunk = stream[:chunk_size]
             completion_obj["content"] = new_chunk
             self.completion_stream = stream[chunk_size:]
-        elif self.custom_llm_provider == "palm":
-            # fake streaming
-            response_obj = {}
-            if self.completion_stream is None or len(self.completion_stream) == 0:
-                if self.received_finish_reason is not None:
-                    raise StopIteration
-                else:
-                    self.received_finish_reason = "stop"
-            chunk_size = 30
-            stream = cast(Any, self.completion_stream)
-            new_chunk = stream[:chunk_size]
-            completion_obj["content"] = new_chunk
-            self.completion_stream = stream[chunk_size:]
         elif self.custom_llm_provider == "triton":
             response_obj = self.handle_triton_stream(chunk)
             completion_obj["content"] = response_obj["text"]
@@ -1470,17 +1322,14 @@ class CustomStreamWrapper:
                 self.received_finish_reason = response_obj["finish_reason"]
         elif self.custom_llm_provider == "cached_response":
             cached_chunk: Final = cast(ModelResponseStream, chunk)
-            chunk_finish_reason: Final = cached_chunk.choices[0].finish_reason
+            cached_choice: Final = cached_chunk.choices[0] if cached_chunk.choices else None
+            chunk_finish_reason: Final = cached_choice.finish_reason if cached_choice is not None else None
             response_obj = {
-                "text": cached_chunk.choices[0].delta.content,
+                "text": cached_choice.delta.content if cached_choice is not None else None,
                 "is_finished": chunk_finish_reason is not None,
                 "finish_reason": chunk_finish_reason,
                 "original_chunk": cached_chunk,
-                "tool_calls": (
-                    cached_chunk.choices[0].delta.tool_calls
-                    if hasattr(cached_chunk.choices[0].delta, "tool_calls")
-                    else None
-                ),
+                "tool_calls": (getattr(cached_choice.delta, "tool_calls", None) if cached_choice is not None else None),
             }
 
             completion_obj["content"] = response_obj["text"]
@@ -1641,7 +1490,7 @@ class CustomStreamWrapper:
                         except Exception:
                             model_response.choices[0].delta = Delta()
                 else:
-                    if self.stream_options is not None and self.stream_options["include_usage"] is True:
+                    if self.send_stream_usage is True:
                         model_response.choices = []
                         return model_response
                     self._record_usage_only_chunk(model_response=model_response)
@@ -1884,8 +1733,8 @@ class CustomStreamWrapper:
     @staticmethod
     def _resolve_provider_reported_cost(usage_cost: object) -> float | None:
         """
-        Providers report usage.cost either as a number or, for Perplexity, as a
-        breakdown object whose total lives under ``total_cost``.
+        Providers report usage.cost either as a number or as a breakdown object
+        whose total lives under ``total_cost``.
         """
         if isinstance(usage_cost, bool):
             return None
@@ -1898,12 +1747,10 @@ class CustomStreamWrapper:
     @staticmethod
     def _propagate_usage_cost_to_hidden_params(
         response: "ModelResponse",
+        custom_llm_provider: str | None,
     ) -> None:
-        """
-        If the assembled response carries a provider-reported cost on
-        usage.cost, copy it into _hidden_params so litellm's cost
-        calculator uses it instead of a token-based estimate.
-        """
+        if custom_llm_provider not in _USAGE_COST_HEADER_PROVIDERS:
+            return
         _usage: Final[Usage | None] = getattr(response, "usage", None)
         _cost: Final = CustomStreamWrapper._resolve_provider_reported_cost(getattr(_usage, "cost", None))
         if _cost is not None:
@@ -1998,6 +1845,7 @@ class CustomStreamWrapper:
                         chunks=self.chunks,
                         messages=self.messages,
                         logging_obj=self.logging_obj,
+                        count_prompt_tokens=self.count_prompt_tokens,
                     )
                 except Exception as e:
                     # stream_chunk_builder can re-raise (as APIError) on large agentic
@@ -2018,7 +1866,7 @@ class CustomStreamWrapper:
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
-                    self._propagate_usage_cost_to_hidden_params(complete_streaming_response)
+                    self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
 
                     setattr(
                         response,
@@ -2246,10 +2094,11 @@ class CustomStreamWrapper:
         if self.sent_last_chunk is True:
             # log the final chunk with accurate streaming values
             try:
-                complete_streaming_response = litellm.stream_chunk_builder(
+                complete_streaming_response = await asyncify(litellm.stream_chunk_builder)(
                     chunks=self.chunks,
                     messages=self.messages,
                     logging_obj=self.logging_obj,
+                    count_prompt_tokens=self.count_prompt_tokens,
                 )
             except Exception as e:
                 # see sync __next__: a raise from stream_chunk_builder inside this
@@ -2268,7 +2117,7 @@ class CustomStreamWrapper:
 
             response: Final = self.model_response_creator()
             if complete_streaming_response is not None:
-                self._propagate_usage_cost_to_hidden_params(complete_streaming_response)
+                self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
 
                 setattr(
                     response,
@@ -2336,6 +2185,9 @@ class CustomStreamWrapper:
         else:
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
+            if self.stream_options is None:
+                usage: Final = calculate_total_usage(chunks=self.chunks)
+                processed_chunk._hidden_params["usage"] = usage  # pyright: ignore[reportPrivateUsage]  # sync parity
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log
@@ -2370,6 +2222,7 @@ class CustomStreamWrapper:
                 chunks=self.chunks,
                 messages=self.messages if isinstance(self.messages, list) else None,
                 logging_obj=self.logging_obj,
+                count_prompt_tokens=self.count_prompt_tokens,
             )
             if partial_response is None:
                 return

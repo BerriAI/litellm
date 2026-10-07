@@ -159,6 +159,22 @@ def test_assemblyai_region_matching():
     assert passthrough_router.get_credentials(custom_llm_provider="assemblyai", region_name=None) == "sk-us"
 
 
+def test_azure_speech_dashboard_credential_resolves_through_flagged_deployment(monkeypatch):
+    monkeypatch.delenv("AZURE_SPEECH_API_KEY", raising=False)
+    CredentialAccessor.upsert_credentials([_credential("azure-speech-prod", "azure-subscription-key")])
+    llm_router = litellm.Router(
+        model_list=[
+            _flagged_deployment("azure_speech/short-audio", litellm_credential_name="azure-speech-prod"),
+        ]
+    )
+    passthrough_router = _passthrough_router(llm_router)
+
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="azure_speech", region_name=None)
+        == "azure-subscription-key"
+    )
+
+
 def test_env_fallback_when_no_router(monkeypatch):
     passthrough_router = _passthrough_router(None)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")

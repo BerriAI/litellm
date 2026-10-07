@@ -1,11 +1,14 @@
+import asyncio
 import os
-from unittest.mock import MagicMock, patch
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 
 import litellm
 from litellm.integrations.langsmith import LangsmithLogger
+from litellm.types.integrations.langsmith import LangsmithQueueObject
 
 
 @pytest.fixture
@@ -154,24 +157,22 @@ class TestLangsmithLoggerInit:
         assert logger._start_periodic_flush_task() is None
         mock_get_running_loop.assert_called_once()
 
-    @patch("asyncio.get_running_loop")
-    def test_langsmith_init_starts_periodic_flush_with_running_loop(
-        self, mock_get_running_loop
-    ):
+    @pytest.mark.asyncio
+    async def test_langsmith_init_starts_periodic_flush_with_running_loop(self):
         """Test that init schedules periodic flush when a running loop exists."""
-        mock_loop = MagicMock()
-        mock_task = MagicMock()
-        mock_loop.create_task.return_value = mock_task
-        mock_get_running_loop.return_value = mock_loop
-
         logger = LangsmithLogger(
-            langsmith_api_key="test-key", langsmith_project="test-project"
+            langsmith_api_key="test-key", langsmith_project="test-project", flush_interval=0.01
         )
+        batch_sent = asyncio.Event()
+        logger.async_send_batch = AsyncMock(side_effect=batch_sent.set)
+        logger.log_queue.append({"id": "run-id"})
 
-        assert logger._flush_task == mock_task
-        mock_loop.create_task.assert_called_once()
-        scheduled_coro = mock_loop.create_task.call_args.args[0]
-        scheduled_coro.close()
+        flush_task = logger._flush_task
+        assert isinstance(flush_task, asyncio.Task)
+        await asyncio.wait_for(batch_sent.wait(), timeout=5)
+        flush_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await flush_task
 
     @pytest.mark.asyncio
     async def test_async_log_success_event_lazily_starts_periodic_flush(self):
@@ -532,3 +533,44 @@ class TestLangsmithRootRunIdConsistency:
 
         assert data["trace_id"] == "trace-1"
         assert data["dotted_order"] == dotted
+
+
+@pytest.mark.asyncio
+async def test_events_appended_during_flush_are_not_dropped():
+    logger = LangsmithLogger(langsmith_api_key="test-key", langsmith_project="test-project")
+    try:
+        sent_batches: Final[list[list[dict[str, str]]]] = []
+        late_event: Final = LangsmithQueueObject(
+            credentials=logger.default_credentials, data={"id": "late"}
+        )
+
+        async def fake_post(
+            url: str, json: dict[str, list[dict[str, str]]], headers: dict[str, str]
+        ) -> MagicMock:
+            if not sent_batches:
+                logger.log_queue.append(late_event)
+            sent_batches.append(json["post"])
+            response = MagicMock()
+            response.status_code = 200
+            response.raise_for_status = MagicMock()
+            return response
+
+        logger.async_httpx_client = MagicMock(post=AsyncMock(side_effect=fake_post))
+        logger.log_queue = [
+            LangsmithQueueObject(credentials=logger.default_credentials, data={"id": "a"}),
+            LangsmithQueueObject(credentials=logger.default_credentials, data={"id": "b"}),
+        ]
+
+        await logger.flush_queue()
+
+        assert [e["id"] for e in sent_batches[0]] == ["a", "b"]
+        assert logger.log_queue == [late_event]
+
+        await logger.flush_queue()
+
+        assert [e["id"] for e in sent_batches[1]] == ["late"]
+        assert logger.log_queue == []
+    finally:
+        if logger._flush_task is not None:
+            logger._flush_task.cancel()
+            await asyncio.gather(logger._flush_task, return_exceptions=True)

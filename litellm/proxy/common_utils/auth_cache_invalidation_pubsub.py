@@ -196,9 +196,7 @@ class AuthCacheInvalidationSubscriber:
             for additional_cache in self._additional_in_memory_caches:
                 additional_cache.set_cache(parsed.cache_key, parsed.new_value, ttl=parsed.ttl)
             return
-        in_memory_cache: Final = self._user_api_key_cache.in_memory_cache
-        if in_memory_cache is not None:
-            in_memory_cache.delete_cache(parsed.cache_key)
+        self._user_api_key_cache.in_memory_cache_for(parsed.cache_key).delete_cache(parsed.cache_key)
         for additional_cache in self._additional_in_memory_caches:
             additional_cache.delete_cache(parsed.cache_key)
 

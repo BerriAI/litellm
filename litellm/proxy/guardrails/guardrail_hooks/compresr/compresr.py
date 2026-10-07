@@ -22,7 +22,7 @@ import json
 import time
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeGuard
+from typing import TYPE_CHECKING, Final, Literal, TypeGuard
 from urllib.parse import urlparse
 
 import httpx
@@ -63,6 +63,9 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObj,
+    )
+    from litellm.llms.base_llm.anthropic_messages.transformation import (
+        BaseAnthropicMessagesConfig,
     )
     from litellm.types.proxy.guardrails.guardrail_hooks.base import (
         GuardrailConfigModel,
@@ -916,9 +919,10 @@ class CompresrGuardrail(CustomGuardrail):
     def _mirror_texts_channel(input_texts: object, applied: _CompressionResult) -> list[object] | None:
         """Compressed content mirrored into the Responses `texts` channel.
 
-        The chat/Anthropic handlers round-trip ``structured_messages``; the
-        Responses translation cannot rebuild its input from chat messages and
-        instead writes back through ``texts``. This matches by value, so a
+        The chat/Anthropic/Responses handlers round-trip
+        ``structured_messages``; translations without that round-trip write
+        back through ``texts``, so the compressed content is mirrored there
+        too. This matches by value, so a
         replacement is applied only when it is unambiguous: one compression per
         text, and every occurrence in ``texts`` accounted for by a compressed
         target. Anything else is left uncompressed rather than risk a wrong or
@@ -1048,7 +1052,7 @@ class CompresrGuardrail(CustomGuardrail):
 
     async def async_should_run_agentic_loop(
         self,
-        response: Any,
+        response: object,
         model: str,
         messages: list[dict],
         tools: list[dict] | None,
@@ -1068,8 +1072,8 @@ class CompresrGuardrail(CustomGuardrail):
         tools: dict,
         model: str,
         messages: list[dict],
-        response: Any,
-        anthropic_messages_provider_config: Any,
+        response: object,
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None,
         anthropic_messages_optional_request_params: dict,
         logging_obj: LiteLLMLoggingObj | None,
         stream: bool,

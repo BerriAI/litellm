@@ -7,6 +7,7 @@ const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
   const state = {
     plugins: [] as { name: string; display_name: string; url: string }[],
     enableChatUI: false,
+    pathname: "/ui/logs",
   };
   return {
     state,
@@ -17,8 +18,7 @@ const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
 
 vi.mock("@/contexts/PluginModeContext", () => ({ usePluginMode: mockUsePluginMode }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({ useUISettings: mockUseUISettings }));
-vi.mock("next/navigation", () => ({ usePathname: () => "/ui/" }));
-vi.mock("@/utils/migratedPages", () => ({ migratedHref: (seg: string) => `/ui/${seg}` }));
+vi.mock("next/navigation", () => ({ usePathname: () => state.pathname }));
 vi.mock("@/hooks/useWorker", () => ({ useWorker: () => ({ isControlPlane: false, selectedWorker: null }) }));
 vi.mock("@/app/(dashboard)/hooks/useDisableShowPrompts", () => ({ useDisableShowPrompts: () => false }));
 vi.mock("@/components/Navbar/BlogDropdown/BlogDropdown", () => ({ BlogDropdown: () => null }));
@@ -32,11 +32,26 @@ describe("DashboardHeader breadcrumb", () => {
   afterEach(() => {
     state.plugins = [];
     state.enableChatUI = false;
+    state.pathname = "/ui/logs";
+  });
+
+  it("titles the breadcrumb from the current route, not from a sidebar page id", () => {
+    state.pathname = "/ui/models-and-endpoints";
+    render(<DashboardHeader />);
+
+    expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
+  });
+
+  it("titles the dashboard root as Virtual Keys", () => {
+    state.pathname = "/ui/";
+    render(<DashboardHeader />);
+
+    expect(screen.getByText("Virtual Keys")).toBeInTheDocument();
   });
 
   it("roots the breadcrumb in the AI Gateway selector (with a Chat option) and drops the static section crumb when the selector is available", async () => {
     state.enableChatUI = true;
-    render(<DashboardHeader page="logs" />);
+    render(<DashboardHeader />);
 
     expect(screen.getByText("Logs")).toBeInTheDocument();
     expect(screen.queryByText("Observability")).not.toBeInTheDocument();
@@ -49,7 +64,7 @@ describe("DashboardHeader breadcrumb", () => {
   });
 
   it("keeps the AI Gateway selector at the root even when there is nothing to switch to (discovery)", () => {
-    render(<DashboardHeader page="logs" />);
+    render(<DashboardHeader />);
 
     expect(screen.getByRole("button", { name: /AI Gateway/i })).toBeInTheDocument();
     expect(screen.getByText("Logs")).toBeInTheDocument();
@@ -57,7 +72,7 @@ describe("DashboardHeader breadcrumb", () => {
   });
 
   it("styles Docs with the shared product-link class instead of a muted toolbar button", () => {
-    render(<DashboardHeader page="logs" />);
+    render(<DashboardHeader />);
 
     const docs = screen.getByRole("link", { name: "Docs" });
     for (const cls of NAV_PRODUCT_LINK_CLASS.trim().split(/\s+/)) {
@@ -67,7 +82,7 @@ describe("DashboardHeader breadcrumb", () => {
   });
 
   it("renders the tools divider centered rather than stretched to the top of the row", () => {
-    const { container } = render(<DashboardHeader page="logs" />);
+    const { container } = render(<DashboardHeader />);
 
     const separators = container.querySelectorAll('[data-slot="separator"][data-orientation="vertical"]');
     expect(separators).toHaveLength(1);

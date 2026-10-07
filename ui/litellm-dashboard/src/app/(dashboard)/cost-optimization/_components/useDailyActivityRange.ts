@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import { userDailyActivityAggregatedCall, userDailyActivityCall } from "@/components/networking";
+import { ApiKeyTruncation, getApiKeyTruncation } from "@/components/EntityUsageExport/exportBlockedReason";
 import { DailyData } from "@/components/UsagePage/types";
 import { spendScopeUserId } from "@/utils/roles";
 import { usePaginatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity";
@@ -20,7 +21,9 @@ export interface DailyActivityRange {
   isFetchingMore: boolean;
   progress: { currentPage: number; totalPages: number };
   cancelled: boolean;
+  failed: boolean;
   cancel: () => void;
+  apiKeyTruncation?: ApiKeyTruncation;
 }
 
 /**
@@ -37,14 +40,20 @@ export interface DailyActivityScope {
   apiKey?: string | null;
 }
 
-export const useScopedDailyActivityRange = (
-  accessToken: string | null,
-  scope: DailyActivityScope,
-): DailyActivityRange => {
+export type ActivityDateRange = Pick<DailyActivityRange, "dateValue" | "onDateChange">;
+
+export const useActivityDateRange = (): ActivityDateRange => {
   const initialFrom = useMemo(() => new Date(new Date().getTime() - THIRTY_DAYS_MS), []);
   const initialTo = useMemo(() => new Date(), []);
   const [dateValue, setDateValue] = useState<DateRange>({ from: initialFrom, to: initialTo });
+  return { dateValue, onDateChange: setDateValue };
+};
 
+export const useScopedDailyActivityRange = (
+  accessToken: string | null,
+  scope: DailyActivityScope,
+  { dateValue, onDateChange }: ActivityDateRange,
+): DailyActivityRange => {
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
   const { userId, apiKey = null } = scope;
@@ -58,18 +67,22 @@ export const useScopedDailyActivityRange = (
     args: [accessToken, startTime, endTime, userId, true, apiKey],
     enabled: !!accessToken && !!startTime && !!endTime,
   };
-  const { data, loading, isFetchingMore, progress, cancelled, cancel } =
+  const { data, loading, isFetchingMore, progress, cancelled, failed, coversRange, cancel } =
     usePaginatedDailyActivity(activityQueryOptions);
+  const readUnavailable = failed || cancelled;
+  const waitingForRange = activityQueryOptions.enabled && !coversRange && !readUnavailable;
 
   return {
     dateValue,
-    onDateChange: setDateValue,
+    onDateChange,
     results: data.results as DailyData[],
-    loading,
+    loading: loading || waitingForRange,
     isFetchingMore,
     progress,
     cancelled,
+    failed,
     cancel,
+    apiKeyTruncation: getApiKeyTruncation(data.metadata?.api_key_limit, data.metadata?.total_api_keys),
   };
 };
 
@@ -77,7 +90,7 @@ export const useDailyActivityRange = (
   accessToken: string | null,
   userId: string | null,
   userRole: string,
-): DailyActivityRange =>
-  useScopedDailyActivityRange(accessToken, {
-    userId: spendScopeUserId(userRole, userId),
-  });
+): DailyActivityRange => {
+  const dateRange = useActivityDateRange();
+  return useScopedDailyActivityRange(accessToken, { userId: spendScopeUserId(userRole, userId) }, dateRange);
+};

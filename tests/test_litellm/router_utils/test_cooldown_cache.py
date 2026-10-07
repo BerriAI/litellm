@@ -268,12 +268,12 @@ class TestCooldownCacheTTLCorrection:
             "timestamp": time.time() - 120.0,
             "cooldown_time": 60.0,
         }
-        cc.cache.in_memory_cache.set_cache(key, expired_value, ttl=600)
+        cc.in_memory_cache.set_cache(key, expired_value, ttl=600)
 
         active = cc.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
 
         assert active == [], "Expired cooldown entry must not appear in active cooldowns"
-        assert cc.cache.in_memory_cache.get_cache(key) is None, "Expired entry must be evicted from in-memory cache"
+        assert cc.in_memory_cache.get_cache(key) is None, "Expired entry must be evicted from in-memory cache"
 
     def test_active_entry_is_returned(self):
         """
@@ -289,7 +289,7 @@ class TestCooldownCacheTTLCorrection:
             "timestamp": time.time(),
             "cooldown_time": 60.0,
         }
-        cc.cache.in_memory_cache.set_cache(key, active_value, ttl=60)
+        cc.in_memory_cache.set_cache(key, active_value, ttl=60)
 
         active = cc.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
 
@@ -312,14 +312,14 @@ class TestCooldownCacheTTLCorrection:
             "timestamp": time.time() - (60.0 - remaining),
             "cooldown_time": 60.0,
         }
-        cc.cache.in_memory_cache.set_cache(key, value, ttl=600)
+        cc.in_memory_cache.set_cache(key, value, ttl=600)
 
-        before_expiry = cc.cache.in_memory_cache.ttl_dict.get(key)
+        before_expiry = cc.in_memory_cache.ttl_dict.get(key)
         assert before_expiry is not None
 
         cc.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
 
-        after_expiry = cc.cache.in_memory_cache.ttl_dict.get(key)
+        after_expiry = cc.in_memory_cache.ttl_dict.get(key)
         assert after_expiry is not None
         corrected_remaining = after_expiry - time.time()
         assert corrected_remaining <= 60.0, "Corrected TTL must not exceed 60s"
@@ -340,12 +340,12 @@ class TestCooldownCacheTTLCorrection:
             "timestamp": time.time() - 120.0,
             "cooldown_time": 60.0,
         }
-        cc.cache.in_memory_cache.set_cache(key, expired_value, ttl=600)
+        cc.in_memory_cache.set_cache(key, expired_value, ttl=600)
 
         active = await cc.async_get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
 
         assert active == [], "Expired entry must not appear in async active cooldowns"
-        assert cc.cache.in_memory_cache.get_cache(key) is None
+        assert cc.in_memory_cache.get_cache(key) is None
 
     @pytest.mark.asyncio
     async def test_async_active_entry_is_returned(self):
@@ -363,7 +363,7 @@ class TestCooldownCacheTTLCorrection:
             "timestamp": time.time(),
             "cooldown_time": 60.0,
         }
-        cc.cache.in_memory_cache.set_cache(key, active_value, ttl=60)
+        cc.in_memory_cache.set_cache(key, active_value, ttl=60)
 
         active = await cc.async_get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
 
@@ -389,18 +389,18 @@ class TestCorrectedActiveCooldown:
         cc = self._make_cooldown_cache()
         key = "deployment:expired-dep:cooldown"
         entry = self._entry(timestamp=time.time() - 120.0, cooldown_time=60.0)
-        cc.cache.in_memory_cache.set_cache(key, dict(entry), ttl=600)
+        cc.in_memory_cache.set_cache(key, dict(entry), ttl=600)
 
         result = cc._corrected_active_cooldown(key, dict(entry), current_time=time.time())
 
         assert result is None
-        assert cc.cache.in_memory_cache.get_cache(key) is None
+        assert cc.in_memory_cache.get_cache(key) is None
 
     def test_active_entry_within_window_returns_value(self):
         cc = self._make_cooldown_cache()
         key = "deployment:active-dep:cooldown"
         entry = self._entry(timestamp=time.time(), cooldown_time=60.0)
-        cc.cache.in_memory_cache.set_cache(key, dict(entry), ttl=60)
+        cc.in_memory_cache.set_cache(key, dict(entry), ttl=60)
 
         result = cc._corrected_active_cooldown(key, dict(entry), current_time=time.time())
 
@@ -412,12 +412,12 @@ class TestCorrectedActiveCooldown:
         key = "deployment:backfilled-dep:cooldown"
         remaining = 30.0
         entry = self._entry(timestamp=time.time() - (60.0 - remaining), cooldown_time=60.0)
-        cc.cache.in_memory_cache.set_cache(key, dict(entry), ttl=600)
+        cc.in_memory_cache.set_cache(key, dict(entry), ttl=600)
 
         result = cc._corrected_active_cooldown(key, dict(entry), current_time=time.time())
 
         assert result is not None
-        corrected_expiry = cc.cache.in_memory_cache.ttl_dict.get(key)
+        corrected_expiry = cc.in_memory_cache.ttl_dict.get(key)
         assert corrected_expiry is not None
         assert corrected_expiry - time.time() <= 60.0
 
@@ -425,10 +425,160 @@ class TestCorrectedActiveCooldown:
         cc = self._make_cooldown_cache()
         key = "deployment:normal-dep:cooldown"
         entry = self._entry(timestamp=time.time(), cooldown_time=60.0)
-        cc.cache.in_memory_cache.set_cache(key, dict(entry), ttl=60)
-        original_expiry = cc.cache.in_memory_cache.ttl_dict.get(key)
+        cc.in_memory_cache.set_cache(key, dict(entry), ttl=60)
+        original_expiry = cc.in_memory_cache.ttl_dict.get(key)
 
         cc._corrected_active_cooldown(key, dict(entry), current_time=time.time())
 
-        after_expiry = cc.cache.in_memory_cache.ttl_dict.get(key)
+        after_expiry = cc.in_memory_cache.ttl_dict.get(key)
         assert after_expiry == original_expiry
+
+
+class SharedRedisDouble:
+    """
+    In-process stand-in for RedisCache, shared by several DualCache instances so that
+    tests can model two proxy replicas talking to one Redis.
+    """
+
+    def __init__(self) -> None:
+        self.store: dict = {}  # mutable-ok: stands in for Redis' own mutable keyspace
+
+    def set_cache(self, key, value, **kwargs):
+        self.store[key] = value
+
+    async def async_set_cache(self, key, value, **kwargs):
+        self.store[key] = value
+
+    def batch_get_cache(self, key_list, parent_otel_span=None, **kwargs):
+        return {key: self.store.get(key) for key in key_list}
+
+    async def async_batch_get_cache(self, key_list, parent_otel_span=None, **kwargs):
+        return {key: self.store.get(key) for key in key_list}
+
+
+class TestCooldownPropagationBetweenReplicas:
+    """
+    A cooldown written by one replica has to reach its siblings quickly. The router's own
+    DualCache re-reads a key that is missing from memory only every 10s, so cooldown reads
+    get their own cache with a much shorter Redis read interval.
+    """
+
+    def _make_replica(self, redis: SharedRedisDouble, read_interval: float | None = None) -> CooldownCache:
+        router_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis)
+        if read_interval is None:
+            return CooldownCache(cache=router_cache, default_cooldown_time=60.0)
+        return CooldownCache(
+            cache=router_cache,
+            default_cooldown_time=60.0,
+            redis_read_interval_seconds=read_interval,
+        )
+
+    @pytest.mark.asyncio
+    async def test_sibling_replica_sees_cooldown_within_configured_read_interval(self):
+        redis = SharedRedisDouble()
+        replica_a = self._make_replica(redis, read_interval=0.25)
+        replica_b = self._make_replica(redis, read_interval=0.25)
+        model_id = "shared-deployment"
+
+        assert await replica_b.async_get_active_cooldowns([model_id], parent_otel_span=None) == []
+
+        replica_a.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=Exception("Internal server error"),
+            exception_status=500,
+            cooldown_time=60.0,
+        )
+
+        time.sleep(0.3)
+
+        active = await replica_b.async_get_active_cooldowns([model_id], parent_otel_span=None)
+        assert [model_id] == [entry[0] for entry in active], (
+            "sibling replica must pick up a cooldown written by another replica within the read interval"
+        )
+
+    @pytest.mark.asyncio
+    async def test_sibling_replica_sees_cooldown_within_default_read_interval(self):
+        redis = SharedRedisDouble()
+        replica_a = self._make_replica(redis)
+        replica_b = self._make_replica(redis)
+        model_id = "default-interval-deployment"
+
+        assert await replica_b.async_get_active_cooldowns([model_id], parent_otel_span=None) == []
+
+        replica_a.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=Exception("Internal server error"),
+            exception_status=500,
+            cooldown_time=60.0,
+        )
+
+        time.sleep(1.2)
+
+        active = await replica_b.async_get_active_cooldowns([model_id], parent_otel_span=None)
+        assert [model_id] == [entry[0] for entry in active], (
+            "the shipped default read interval must let a sibling replica see a cooldown about a second later"
+        )
+
+    def test_sync_read_path_sees_sibling_cooldown_within_read_interval(self):
+        redis = SharedRedisDouble()
+        replica_a = self._make_replica(redis, read_interval=0.25)
+        replica_b = self._make_replica(redis, read_interval=0.25)
+        model_id = "sync-shared-deployment"
+
+        assert replica_b.get_active_cooldowns([model_id], parent_otel_span=None) == []
+
+        replica_a.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=Exception("Internal server error"),
+            exception_status=500,
+            cooldown_time=60.0,
+        )
+
+        time.sleep(0.3)
+
+        active = replica_b.get_active_cooldowns([model_id], parent_otel_span=None)
+        assert [model_id] == [entry[0] for entry in active]
+
+    @pytest.mark.asyncio
+    async def test_redis_attached_after_construction_is_still_used(self):
+        redis = SharedRedisDouble()
+        router_cache = DualCache(in_memory_cache=InMemoryCache())
+        writer = CooldownCache(cache=router_cache, default_cooldown_time=60.0, redis_read_interval_seconds=0.25)
+        router_cache.attach_redis_cache(redis)
+        reader = self._make_replica(redis, read_interval=0.25)
+        model_id = "late-redis-deployment"
+
+        writer.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=Exception("Internal server error"),
+            exception_status=500,
+            cooldown_time=60.0,
+        )
+
+        active = await reader.async_get_active_cooldowns([model_id], parent_otel_span=None)
+        assert [model_id] == [entry[0] for entry in active], (
+            "a router that wires Redis after building its cooldown cache must still publish cooldowns to it"
+        )
+
+
+class TestCooldownSurvivesUnrelatedCacheTraffic:
+    @pytest.mark.asyncio
+    async def test_unrelated_router_cache_writes_do_not_evict_active_cooldown(self):
+        router_cache = DualCache(in_memory_cache=InMemoryCache())
+        cc = CooldownCache(cache=router_cache, default_cooldown_time=60.0)
+        model_id = "busy-router-deployment"
+
+        cc.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=Exception("Internal server error"),
+            exception_status=500,
+            cooldown_time=30.0,
+        )
+
+        for i in range(400):
+            router_cache.set_cache(key=f"unrelated-router-key-{i}", value={"n": i})
+
+        active = await cc.async_get_active_cooldowns([model_id], parent_otel_span=None)
+        assert [model_id] == [entry[0] for entry in active], (
+            "unrelated router cache traffic must not evict a cooldown that is still running"
+        )

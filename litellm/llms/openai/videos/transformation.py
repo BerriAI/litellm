@@ -237,7 +237,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video remix request for OpenAI API.
@@ -252,7 +252,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         url: Final = f"{api_base.rstrip('/')}/{encoded_video_id}/remix"
 
         # Prepare the request data
-        data: Final = {"prompt": prompt}
+        data: Final[dict[str, object]] = {"prompt": prompt}
 
         # Add any extra body parameters
         if extra_body:
@@ -305,7 +305,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, Any] | None = None,
+        extra_query: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video list request for OpenAI API.
@@ -571,8 +571,8 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
     def _add_image_to_files(
         self,
-        files_list: list[tuple[str, Any]],
-        image: Any,
+        files_list: list[tuple[str, FileTypes]],
+        image: FileContent,
         field_name: str,
     ) -> None:
         """Add an image to the files list with appropriate content type"""

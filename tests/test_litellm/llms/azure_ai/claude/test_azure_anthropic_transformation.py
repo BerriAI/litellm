@@ -362,8 +362,8 @@ class TestAzureAnthropicConfig:
             )
         assert "xhigh" in str(exc_info.value)
 
-    def test_extra_body_promotion_does_not_clobber_top_level(self):
-        """Top-level ``optional_params`` wins over duplicates in ``extra_body``."""
+    def test_extra_body_promotion_overrides_mapped_top_level(self):
+        """The caller's ``extra_body`` wins over a mapped top-level duplicate, like the native ``anthropic`` passthrough."""
         config = AzureAnthropicConfig()
 
         messages = [{"role": "user", "content": "Hello"}]
@@ -383,7 +383,31 @@ class TestAzureAnthropicConfig:
             headers=headers,
         )
 
-        assert result["output_config"] == {"effort": "low"}
+        assert result["output_config"] == {"effort": "high"}
+
+    def test_legacy_thinking_upgrade_keeps_caller_effort_from_extra_body(self, local_model_cost_map):
+        config = AzureAnthropicConfig()
+
+        mapped = config.map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 1024}, "max_tokens": 100},
+            optional_params={},
+            model="claude-opus-4-8",
+            drop_params=False,
+        )
+        assert mapped["thinking"] == {"type": "adaptive"}
+        assert mapped["output_config"] == {"effort": "low"}
+
+        result = config.transform_request(
+            model="claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={**mapped, "extra_body": {"output_config": {"effort": "high"}}},
+            litellm_params={"api_key": "test-key"},
+            headers={"api-key": "test-key", "anthropic-version": "2023-06-01"},
+        )
+
+        assert result["thinking"] == {"type": "adaptive"}
+        assert result["output_config"] == {"effort": "high"}
+        assert "extra_body" not in result
 
     def test_context_management_mixed_edits_beta_headers(self):
         """Test that context_management with both compact and other edits adds both beta headers"""

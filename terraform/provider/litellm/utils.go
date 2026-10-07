@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -202,6 +203,23 @@ func isCredentialNotFoundError(errResp ErrorResponse) bool {
 	return false
 }
 
+var errCredentialConflict = errors.New("credential_conflict")
+
+func isLegacyCredentialConflictError(errResp ErrorResponse) bool {
+	isConflict := func(msg string) bool {
+		return strings.Contains(msg, "Unique constraint failed") && strings.Contains(msg, "credential_name")
+	}
+	if msg, ok := errResp.Error.Message.(string); ok && isConflict(msg) {
+		return true
+	}
+	if msgMap, ok := errResp.Error.Message.(map[string]interface{}); ok {
+		if errStr, ok := msgMap["error"].(string); ok && isConflict(errStr) {
+			return true
+		}
+	}
+	return isConflict(errResp.Detail.Error)
+}
+
 // handleCredentialAPIResponse handles API responses specifically for credential operations
 func handleCredentialAPIResponse(resp *http.Response, result interface{}, client *Client) error {
 	bodyBytes, err := io.ReadAll(resp.Body)
@@ -213,11 +231,18 @@ func handleCredentialAPIResponse(resp *http.Response, result interface{}, client
 		return fmt.Errorf("credential_not_found")
 	}
 
+	if resp.StatusCode == http.StatusConflict {
+		return errCredentialConflict
+	}
+
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			if isCredentialNotFoundError(errResp) {
 				return fmt.Errorf("credential_not_found")
+			}
+			if isLegacyCredentialConflictError(errResp) {
+				return errCredentialConflict
 			}
 		}
 		return fmt.Errorf("API request failed: Status: %s, Response: %s",

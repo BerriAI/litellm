@@ -1,23 +1,11 @@
-from tokenizers import AddedToken, Tokenizer
-from tokenizers.models import WordLevel
-from tokenizers.pre_tokenizers import Whitespace
-from tokenizers.processors import TemplateProcessing
-
 from litellm import decode, encode
+from tokenizers import Tokenizer
+
+TOKENIZER_JSON = """{"version":"1.0","truncation":null,"padding":null,"added_tokens":[{"id":3,"content":"[BOS]","single_word":false,"lstrip":false,"rstrip":false,"normalized":false,"special":true}],"normalizer":null,"pre_tokenizer":{"type":"Whitespace"},"post_processor":{"type":"TemplateProcessing","single":[{"SpecialToken":{"id":"[BOS]","type_id":0}},{"Sequence":{"id":"A","type_id":0}}],"pair":[{"Sequence":{"id":"A","type_id":0}},{"Sequence":{"id":"B","type_id":1}}],"special_tokens":{"[BOS]":{"id":"[BOS]","ids":[3],"tokens":["[BOS]"]}}},"decoder":null,"model":{"type":"WordLevel","vocab":{"[UNK]":0,"Hello":1,"World":2},"unk_token":"[UNK]"}}"""
 
 
 def _create_custom_tokenizer():
-    tokenizer = Tokenizer(
-        WordLevel({"[UNK]": 0, "Hello": 1, "World": 2}, unk_token="[UNK]")
-    )
-    tokenizer.pre_tokenizer = Whitespace()
-    tokenizer.add_special_tokens([AddedToken("[BOS]", special=True)])
-    bos_token_id = tokenizer.token_to_id("[BOS]")
-    assert bos_token_id is not None
-    tokenizer.post_processor = TemplateProcessing(
-        single="[BOS] $A",
-        special_tokens=[("[BOS]", bos_token_id)],
-    )
+    tokenizer = Tokenizer.from_str(TOKENIZER_JSON)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 

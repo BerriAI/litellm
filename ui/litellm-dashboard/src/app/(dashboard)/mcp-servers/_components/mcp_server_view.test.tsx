@@ -1,7 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MCPServerView } from "./mcp_server_view";
+import * as networking from "@/components/networking";
+import { setSecureItem } from "@/utils/secureStorage";
+import { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import type { MCPServer } from "@/components/mcp_tools/types";
 
 vi.mock(".", () => ({
@@ -11,6 +15,12 @@ vi.mock(".", () => ({
 vi.mock("./mcp_server_edit", () => ({
   default: () => <div>edit form</div>,
   EDIT_OAUTH_UI_STATE_KEY: "litellm-mcp-oauth-edit-state",
+}));
+
+vi.mock("@/components/networking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/networking")>()),
+  fetchMCPServerUserCredentials: vi.fn(),
+  revokeMCPServerUserCredential: vi.fn(),
 }));
 
 const baseServer = {
@@ -25,22 +35,42 @@ const baseServer = {
 
 const renderView = (overrides: Partial<MCPServer> = {}, props: Record<string, unknown> = {}) =>
   render(
-    <MCPServerView
-      mcpServer={{ ...baseServer, ...overrides } as MCPServer}
-      onBack={vi.fn()}
-      isProxyAdmin
-      isEditing={false}
-      accessToken="tok"
-      userRole="Admin"
-      userID="u1"
-      availableAccessGroups={[]}
-      {...props}
-    />,
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
+      <MCPServerView
+        mcpServer={{ ...baseServer, ...overrides } as MCPServer}
+        onBack={vi.fn()}
+        isProxyAdmin
+        isEditing={false}
+        accessToken="tok"
+        userRole="Admin"
+        userID="u1"
+        availableAccessGroups={[]}
+        {...props}
+      />
+    </QueryClientProvider>,
   );
+
+const openUserCredentials = async (props: Record<string, unknown>) => {
+  vi.mocked(networking.fetchMCPServerUserCredentials).mockResolvedValue([
+    {
+      user_id: "alice",
+      credential_type: "byok",
+      expires_at: null,
+      connected_at: null,
+      updated_at: "2026-01-01T00:00:00+00:00",
+    },
+  ]);
+  renderView({}, props);
+  await userEvent.click(screen.getByRole("tab", { name: "User Credentials" }));
+  return within(await screen.findByRole("region", { name: "Stored user credentials" })).getByRole("row", {
+    name: /alice/,
+  });
+};
 
 describe("MCPServerView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear();
   });
 
   // Name, alias and description each label the header and a Settings row, so
@@ -119,6 +149,37 @@ describe("MCPServerView", () => {
     expect(screen.queryByRole("button", { name: "Edit Settings" })).not.toBeInTheDocument();
   });
 
+  it.each([false, true])("keeps config settings read-only with isEditing=%s", async (isEditing) => {
+    renderView({ is_config: true }, { isEditing });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+
+    expect(screen.getByRole("button", { name: "Edit Settings" })).toBeDisabled();
+    expect(screen.getByText("Defined in config. Edit your YAML configuration to make changes")).toBeVisible();
+    expect(screen.queryByText("edit form")).not.toBeInTheDocument();
+  });
+
+  it.each([true, false])("honors config read-only state on OAuth return: %s", async (isConfig) => {
+    setSecureItem(EDIT_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId: "srv-1" }));
+    renderView({ is_config: isConfig });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+
+    if (isConfig) {
+      expect(screen.queryByText("edit form")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Edit Settings" })).toBeDisabled();
+    } else {
+      expect(screen.getByText("edit form")).toBeVisible();
+    }
+  });
+
+  it("does not open the editor for a view-only admin", async () => {
+    renderView({}, { isViewOnly: true, isEditing: true });
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(screen.getByRole("button", { name: "Edit Settings" })).toBeDisabled();
+    expect(screen.queryByText("edit form")).not.toBeInTheDocument();
+  });
+
   it("opens on the tab named by initialTabIndex", async () => {
     renderView({}, { initialTabIndex: 1 });
 
@@ -148,5 +209,16 @@ describe("MCPServerView", () => {
     await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
 
     expect(await screen.findByText("All tools enabled")).toBeInTheDocument();
+  });
+
+  it("lets a full admin revoke a stored user credential", async () => {
+    const row = await openUserCredentials({});
+    expect(within(row).getByRole("button", { name: "Revoke credential for user alice" })).toBeInTheDocument();
+  });
+
+  it("shows stored credentials to a view-only admin session without a revoke control", async () => {
+    const row = await openUserCredentials({ isViewOnly: true });
+    expect(row).toHaveTextContent("BYOK API key");
+    expect(within(row).queryByRole("button", { name: /^Revoke credential/ })).not.toBeInTheDocument();
   });
 });

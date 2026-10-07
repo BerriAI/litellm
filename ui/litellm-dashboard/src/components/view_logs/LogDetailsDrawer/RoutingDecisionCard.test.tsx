@@ -1,7 +1,13 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { RoutingDecisionCard, type RoutingDecision } from "./RoutingDecisionCard";
+
+vi.mock("@/components/ui/badge", () => ({
+  Badge: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+}));
+
+vi.mock("lucide-react", () => ({ Waypoints: () => null }));
 
 const heuristic: RoutingDecision = {
   router_model_name: "smart-router",
@@ -12,6 +18,13 @@ const heuristic: RoutingDecision = {
   score: 0.82,
   signals: ["long (900 tokens)", "code (python, function)"],
   tier_boundaries: { simple_medium: 0.15, medium_complex: 0.35, complex_reasoning: 0.6 },
+};
+
+const forecast = {
+  probabilities: { MEDIUM: 0.69321, SIMPLE: 0, COMPLEX: 0.81234, REASONING: 0.92345 },
+  threshold: 0.69,
+  predicted_tier: "MEDIUM",
+  request_type: "code_generation",
 };
 
 describe("RoutingDecisionCard", () => {
@@ -30,6 +43,216 @@ describe("RoutingDecisionCard", () => {
     expect(screen.getByText("(at or above 0.6, REASONING)")).toBeInTheDocument();
     expect(screen.getByText("claude-sonnet")).toBeInTheDocument();
     expect(screen.getByText("long (900 tokens)")).toBeInTheDocument();
+    expect(screen.queryByText("Heuristic v2 estimates")).not.toBeInTheDocument();
+  });
+
+  it("shows recorded v2 success estimates, including zero, when signals were redacted", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          cause: "heuristic_v2",
+          tier: "MEDIUM",
+          tier_label: "Balanced",
+          heuristic_v2_forecast: forecast,
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Heuristic v2 estimates")).toBeInTheDocument();
+    expect(screen.getByText("Success by tier")).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/^(SIMPLE|MEDIUM|COMPLEX|REASONING) \d+\.\d%$/).map((badge) => badge.textContent),
+    ).toEqual(["SIMPLE 0.0%", "MEDIUM 69.3%", "COMPLEX 81.2%", "REASONING 92.3%"]);
+    expect(screen.getByText("Threshold")).toBeInTheDocument();
+    expect(screen.getByText("69.0%")).toBeInTheDocument();
+    expect(screen.getByText("Predicted tier")).toBeInTheDocument();
+    expect(screen.getByText("MEDIUM")).toBeInTheDocument();
+    expect(screen.getByText("Balanced")).toBeInTheDocument();
+    expect(screen.getByText("code_generation")).toBeInTheDocument();
+    expect(screen.queryByText("Score")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { threshold: 0, predicted_tier: "SIMPLE", expectedThreshold: "0.0%" },
+    { threshold: 0.99, predicted_tier: "REASONING", expectedThreshold: "99.0%" },
+  ])("keeps the prediction separate from an overridden tier at threshold $threshold", (scenario) => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          cause: "modality_escalation",
+          tier: "REASONING",
+          tier_label: "Vision",
+          signals: ["modality:image"],
+          heuristic_v2_forecast: {
+            ...forecast,
+            threshold: scenario.threshold,
+            predicted_tier: scenario.predicted_tier,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Vision")).toBeInTheDocument();
+    expect(screen.getByText("Escalated for image input")).toBeInTheDocument();
+    expect(screen.getByText("Predicted tier")).toBeInTheDocument();
+    expect(screen.getByText(scenario.predicted_tier)).toBeInTheDocument();
+    expect(screen.getByText(scenario.expectedThreshold)).toBeInTheDocument();
+    expect(screen.getByText("modality:image")).toBeInTheDocument();
+  });
+
+  it.each([undefined, ["request-type:code_generation", "tier-probability:simple=0.100000"]])(
+    "preserves legacy v2 rows without inventing a forecast when signals are %j",
+    (signals) => {
+      render(<RoutingDecisionCard decision={{ cause: "heuristic_v2", tier: "SIMPLE", signals }} />);
+
+      expect(screen.getByText("Heuristic v2")).toBeInTheDocument();
+      expect(screen.getByText("SIMPLE")).toBeInTheDocument();
+      expect(screen.queryByText("Heuristic v2 estimates")).not.toBeInTheDocument();
+      expect(screen.queryByText("Threshold")).not.toBeInTheDocument();
+      for (const signal of signals ?? []) expect(screen.getByText(signal)).toBeInTheDocument();
+    },
+  );
+
+  it.each(["capability_classifier", "modality_escalation"])(
+    "shows the recorded Capability forecast for %s",
+    (cause) => {
+      render(
+        <RoutingDecisionCard
+          decision={{
+            cause,
+            tier: "COMPLEX",
+            tier_label: "Deep",
+            classifier_p_solve: 0,
+            classifier_calibrated_p_solve: 0.864,
+            classifier_threshold: 0.82,
+            classifier_capability_boundary: "uncertain",
+            classifier_primary_rule: "UNC-2",
+            classifier_calibration_version: "calibration-1",
+          }}
+        />,
+      );
+
+      expect(screen.getByText("Capability estimates")).toBeInTheDocument();
+      expect(screen.getByText("Efficient model solve chance")).toBeInTheDocument();
+      expect(screen.getAllByText(/^\d+\.\d%$/).map((value) => value.textContent)).toEqual(["0.0%", "86.4%", "82.0%"]);
+      expect(screen.getByText("Raw")).toBeInTheDocument();
+      expect(screen.getByText("Calibrated")).toBeInTheDocument();
+      expect(screen.getByText("Threshold")).toBeInTheDocument();
+      expect(screen.getByText("uncertain")).toBeInTheDocument();
+      expect(screen.getByText("UNC-2")).toBeInTheDocument();
+      expect(screen.getByText("calibration-1")).toBeInTheDocument();
+      expect(screen.getByText("Deep")).toBeInTheDocument();
+      expect(screen.queryByText("FUSE v2 estimates")).not.toBeInTheDocument();
+    },
+  );
+
+  it("omits absent Capability fields while preserving a recorded zero threshold", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ cause: "capability_classifier", classifier_p_solve: 0.25, classifier_threshold: 0 }}
+      />,
+    );
+
+    expect(screen.getAllByText(/^\d+\.\d%$/).map((value) => value.textContent)).toEqual(["25.0%", "0.0%"]);
+    for (const label of ["Calibrated", "Calibration", "Boundary", "Rule"]) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+  });
+
+  it.each(["llm_v2_classifier", "default_fallback"])(
+    "shows the original calibrated FUSE v2 forecast for %s",
+    (cause) => {
+      render(
+        <RoutingDecisionCard
+          decision={{
+            cause,
+            routed_model: "fallback-model",
+            classifier_efficient_p_solve: 0.25,
+            classifier_capable_p_solve: 0.91,
+            classifier_calibrated_efficient_p_solve: 0.75,
+            classifier_calibrated_capable_p_solve: 0.8,
+            classifier_max_quality_gap: 0.1,
+            classifier_calibration_version: "calibration-2",
+            signals: ["llm-v2:verification=tests"],
+          }}
+        />,
+      );
+
+      expect(screen.getByText("FUSE v2 estimates")).toBeInTheDocument();
+      expect(screen.getAllByText(/^\d+\.\d%$/).map((value) => value.textContent)).toEqual([
+        "25.0%",
+        "91.0%",
+        "75.0%",
+        "80.0%",
+      ]);
+      expect(screen.getByText("Efficient (raw)")).toBeInTheDocument();
+      expect(screen.getByText("Capable (raw)")).toBeInTheDocument();
+      expect(screen.getByText("Efficient (calibrated)")).toBeInTheDocument();
+      expect(screen.getByText("Capable (calibrated)")).toBeInTheDocument();
+      expect(screen.getAllByText(/percentage points$/).map((value) => value.textContent)).toEqual([
+        "5.0 percentage points",
+        "10.0 percentage points",
+      ]);
+      expect(screen.getByText("Applied gap")).toBeInTheDocument();
+      expect(screen.getByText("Allowed gap")).toBeInTheDocument();
+      expect(screen.getByText("calibration-2")).toBeInTheDocument();
+      expect(screen.getByText("llm-v2:verification=tests")).toBeInTheDocument();
+      expect(screen.getByText("fallback-model")).toBeInTheDocument();
+      expect(screen.queryByText("Capability estimates")).not.toBeInTheDocument();
+    },
+  );
+
+  it("uses raw FUSE v2 probabilities without calibration and preserves negative and zero gaps", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          cause: "llm_v2_classifier",
+          classifier_efficient_p_solve: 0.5,
+          classifier_capable_p_solve: 0,
+          classifier_max_quality_gap: 0,
+        }}
+      />,
+    );
+
+    expect(screen.getAllByText(/^\d+\.\d%$/).map((value) => value.textContent)).toEqual(["50.0%", "0.0%"]);
+    expect(screen.getAllByText(/percentage points$/).map((value) => value.textContent)).toEqual([
+      "-50.0 percentage points",
+      "0.0 percentage points",
+    ]);
+    expect(screen.queryByText(/calibrated|Calibration/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { classifier_efficient_p_solve: 0, classifier_max_quality_gap: 0.2 },
+    {
+      classifier_efficient_p_solve: 0.4,
+      classifier_capable_p_solve: 0.9,
+      classifier_calibrated_efficient_p_solve: 0,
+      classifier_calibration_version: "partial-calibration",
+      classifier_max_quality_gap: 0.2,
+    },
+  ])("shows partial FUSE v2 estimates without inventing an applied gap: %j", (fields) => {
+    render(<RoutingDecisionCard decision={{ cause: "llm_v2_classifier", ...fields }} />);
+
+    expect(screen.getByText("FUSE v2 estimates")).toBeInTheDocument();
+    expect(screen.getByText("0.0%")).toBeInTheDocument();
+    expect(screen.getByText("20.0 percentage points")).toBeInTheDocument();
+    expect(screen.queryByText("Applied gap")).not.toBeInTheDocument();
+    expect(screen.queryByText("Capable (calibrated)")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["capability_classifier", "Capability"],
+    ["llm_v2_classifier", "FUSE v2"],
+    ["capability_classifier_fallback", "Capable tier, Capability classifier failed"],
+    ["llm_v2_fallback", "Capable tier, FUSE v2 classifier failed"],
+    ["session_affinity_pin", "Pinned to session"],
+  ])("labels %s without inventing a missing forecast", (cause, label) => {
+    render(<RoutingDecisionCard decision={{ cause, tier: "MEDIUM" }} />);
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getByText("MEDIUM")).toBeInTheDocument();
+    expect(screen.queryByText(/estimates/)).not.toBeInTheDocument();
   });
 
   it("uses the persisted boundary snapshot, not today's defaults", () => {
@@ -103,7 +326,7 @@ describe("RoutingDecisionCard", () => {
         }}
       />,
     );
-    expect(screen.getByText("Default model, LLM classifier failed")).toBeInTheDocument();
+    expect(screen.getByText("Default model, classifier failed")).toBeInTheDocument();
     expect(screen.queryByText("Tier")).not.toBeInTheDocument();
   });
 
@@ -120,7 +343,7 @@ describe("RoutingDecisionCard", () => {
         }}
       />,
     );
-    expect(screen.getByText("Fallback tier, LLM classifier failed")).toBeInTheDocument();
+    expect(screen.getByText("Fallback tier, classifier failed")).toBeInTheDocument();
     expect(screen.getByText("SECURITY_REVIEW")).toBeInTheDocument();
   });
 
@@ -184,6 +407,18 @@ describe("RoutingDecisionCard", () => {
     render(<RoutingDecisionCard decision={{ ...heuristic, cause: "housekeeping", score: undefined }} />);
     expect(screen.getByText("Client housekeeping call, classifier skipped")).toBeInTheDocument();
     expect(screen.queryByText("housekeeping")).not.toBeInTheDocument();
+  });
+
+  it("labels a modality pin override instead of showing the raw cause token", () => {
+    render(<RoutingDecisionCard decision={{ ...heuristic, cause: "modality_pin_override" }} />);
+    expect(screen.getByText("Overrode session pin for image input")).toBeInTheDocument();
+    expect(screen.queryByText("modality_pin_override")).not.toBeInTheDocument();
+  });
+
+  it("labels a modality escalation instead of showing the raw cause token", () => {
+    render(<RoutingDecisionCard decision={{ ...heuristic, cause: "modality_escalation" }} />);
+    expect(screen.getByText("Escalated for image input")).toBeInTheDocument();
+    expect(screen.queryByText("modality_escalation")).not.toBeInTheDocument();
   });
 
   it("shows the escalation keyword", () => {

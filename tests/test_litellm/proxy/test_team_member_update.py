@@ -14,7 +14,10 @@ from litellm.proxy._types import (
     TeamMemberUpdateRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.management_endpoints.team_endpoints import team_member_update
+from litellm.proxy.management_endpoints.team_endpoints import (
+    TEAM_ADVISORY_LOCK_SQL,
+    team_member_update,
+)
 
 
 @pytest.mark.asyncio
@@ -65,13 +68,20 @@ def happy_path_upsert(monkeypatch):
     prisma_client.db.litellm_teamtable.update = AsyncMock()
 
     class _FakeTx:
+        litellm_teamtable = prisma_client.db.litellm_teamtable
+
         async def __aenter__(self):
             return self
 
         async def __aexit__(self, *args):
             return False
 
-    prisma_client.db.tx = MagicMock(return_value=_FakeTx())
+        async def query_raw(self, sql, team_id):
+            if sql == TEAM_ADVISORY_LOCK_SQL:
+                return []
+            return [{"members_with_roles": team_row.model_dump()["members_with_roles"]}]
+
+    prisma_client.tx = MagicMock(return_value=_FakeTx())
 
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "premium_user", False)

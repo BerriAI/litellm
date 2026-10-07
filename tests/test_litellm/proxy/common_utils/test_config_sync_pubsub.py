@@ -824,7 +824,7 @@ class _StopFailingSubscriber(ConfigSyncSubscriber):
         raise RuntimeError("stop failed")
 
 
-async def test_proxy_config_subscriber_resyncs_deployments_and_credentials() -> None:
+async def test_proxy_config_subscriber_resyncs_deployments_only() -> None:
     from litellm.proxy.proxy_server import ProxyConfig
 
     cache = _FakeRedisCache(_ScriptedPubSubRedisClient([_QueuePubSub()]))
@@ -852,10 +852,7 @@ async def test_proxy_config_subscriber_resyncs_deployments_and_credentials() -> 
         await callback()
     await config.stop_config_sync_subscriber()
 
-    assert calls == [
-        ("add_deployment", prisma_client, proxy_logging_obj),
-        ("get_credentials", prisma_client, None),
-    ]
+    assert calls == [("add_deployment", prisma_client, proxy_logging_obj)]
     assert config.config_sync_subscriber is None
     assert subscriber._task is None
 

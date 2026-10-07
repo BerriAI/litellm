@@ -2,7 +2,6 @@ import type { RoutingGroup } from "./types";
 
 export const STRATEGIES_WITH_ARGS = new Set<string>(["latency-based-routing", "usage-based-routing"]);
 
-export const GROUP_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 export const GROUP_NAME_MAX_LENGTH = 64;
 
 export interface RoutingGroupFormValues {

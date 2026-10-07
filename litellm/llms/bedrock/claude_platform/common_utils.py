@@ -1,7 +1,10 @@
 from typing import Final
 
+import httpx
+
 import litellm
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.secret_managers.main import get_secret_str
 
 CLAUDE_PLATFORM_SERVICE_NAME: Final = "aws-external-anthropic"
@@ -15,6 +18,14 @@ def strip_claude_platform_route(model: str) -> str:
 
 
 class BedrockClaudePlatformMixin(BaseAWSLLM):
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: base passes response headers as a dict
+    ) -> BedrockError:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
+
     @staticmethod
     def _get_workspace_id(optional_params: dict, litellm_params: dict) -> str | None:
         workspace_id = (

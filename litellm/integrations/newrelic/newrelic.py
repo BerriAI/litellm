@@ -47,6 +47,8 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any, Final
 
 import litellm
@@ -408,8 +410,8 @@ class NewRelicLogger(CustomLogger):
     def _get_duration(
         self,
         kwargs: dict,
-        start_time: Any,
-        end_time: Any,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
         standard_logging_object: StandardLoggingPayload | None = None,
     ) -> float | None:
         """
@@ -438,7 +440,7 @@ class NewRelicLogger(CustomLogger):
         self,
         kwargs: dict,
         standard_logging_object: StandardLoggingPayload | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Extract request parameters like temperature and max_tokens, preferring
         StandardLoggingPayload.model_parameters.
@@ -450,7 +452,7 @@ class NewRelicLogger(CustomLogger):
         else:
             source_params = kwargs.get("optional_params") or {}
 
-        params: Final = {}
+        params: Final[dict[str, object]] = {}
 
         temperature: Final = source_params.get("temperature")
         if temperature is not None:
@@ -502,7 +504,7 @@ class NewRelicLogger(CustomLogger):
         response_model: str,
         vendor: str,
         standard_logging_object: StandardLoggingPayload | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> Sequence[Mapping[str, object]]:
         """
         Extract all messages (request + response) with sequence numbers and timestamps.
 
@@ -512,7 +514,7 @@ class NewRelicLogger(CustomLogger):
         Adds timestamps from StandardLoggingPayload (preferred) or kwargs if available
         (converted to epoch milliseconds).
         """
-        messages: Final = []
+        messages: Final[list[dict[str, object]]] = []
         sequence = 0
 
         # Extract timestamps, preferring StandardLoggingPayload
@@ -544,7 +546,7 @@ class NewRelicLogger(CustomLogger):
         else:
             request_messages = kwargs.get("messages") or []
         for msg in request_messages:
-            message_data = {
+            message_data: dict[str, object] = {
                 "role": msg.get("role") or "user",
                 "sequence": sequence,
                 "response.model": response_model,
@@ -599,11 +601,11 @@ class NewRelicLogger(CustomLogger):
         num_messages: int,
         usage: dict[str, int],
         duration: float | None = None,
-        request_params: dict[str, Any] | None = None,
+        request_params: Mapping[str, object] | None = None,
     ):
         """Record LlmChatCompletionSummary event to New Relic."""
         try:
-            event_data: Final = {
+            event_data: Final[dict[str, object]] = {
                 "id": request_id,
                 "request_id": request_id,
                 "request.model": request_model,
@@ -647,7 +649,7 @@ class NewRelicLogger(CustomLogger):
         request_id: str,
         llm_response_id: str,
         trace_id: str | None,
-        messages: list[dict[str, Any]],
+        messages: Sequence[Mapping[str, object]],
     ):
         """Record LlmChatCompletionMessage events to New Relic.
 
@@ -666,7 +668,7 @@ class NewRelicLogger(CustomLogger):
 
             for message in messages:
                 sequence = message["sequence"]
-                event_data = {
+                event_data: dict[str, object] = {
                     "id": f"{llm_response_id}-{sequence}",
                     "request_id": request_id,
                     "completion_id": request_id,

@@ -19,7 +19,6 @@ def _txn(
     spend: float,
     duration: str = "30d",
     entity_type: str = "key",
-    request_id: str | None = None,
     started_at: datetime | None = None,
 ):
     return build_window_spend_transaction(
@@ -28,7 +27,6 @@ def _txn(
         window_duration=duration,
         window_start=window_start,
         spend=spend,
-        request_id=request_id,
         started_at=started_at,
     )
 
@@ -38,13 +36,12 @@ def test_build_window_spend_transaction_stores_naive_utc_iso():
     TIMESTAMP(3) column, so a non-UTC input must be converted, not truncated."""
     non_utc = datetime(2026, 8, 1, 20, 0, tzinfo=timezone(timedelta(hours=-4)))
 
-    assert _txn("k1", non_utc, 1.0, request_id="req-1") == {
+    assert _txn("k1", non_utc, 1.0) == {
         "entity_type": "key",
         "entity_id": "k1",
         "window_duration": "30d",
         "window_start": "2026-08-02T00:00:00.000000",
         "spend": 1.0,
-        "request_ids": ("req-1",),
         "started_at": None,
     }
 
@@ -59,19 +56,19 @@ def test_build_window_spend_transaction_stores_started_at_as_naive_utc_iso():
 
 @pytest.mark.asyncio
 async def test_aggregation_keeps_the_earliest_started_at_of_the_batch():
-    """The seed bounds its request-id exclusion at the batch's earliest start,
-    so a later start must never win the merge."""
+    """The seed stops at the batch's earliest start, so a later start must never
+    win the merge: it would push the cutoff forward and count a request the
+    increments already cover."""
     queue = WindowSpendUpdateQueue()
     earliest = datetime(2026, 8, 10, 12, 0, 0, tzinfo=timezone.utc)
-    await queue.add_update(_txn("k1", WINDOW_A, 1.0, request_id="req-2", started_at=earliest + timedelta(seconds=5)))
-    await queue.add_update(_txn("k1", WINDOW_A, 1.0, request_id="req-1", started_at=earliest))
-    await queue.add_update(_txn("k1", WINDOW_A, 1.0, request_id="req-3"))
+    await queue.add_update(_txn("k1", WINDOW_A, 1.0, started_at=earliest + timedelta(seconds=5)))
+    await queue.add_update(_txn("k1", WINDOW_A, 1.0, started_at=earliest))
+    await queue.add_update(_txn("k1", WINDOW_A, 1.0))
 
     aggregated = await queue.flush_and_get_aggregated_window_spend_transactions()
 
     assert len(aggregated) == 1
     assert aggregated[0]["started_at"] == "2026-08-10T12:00:00.000000"
-    assert aggregated[0]["request_ids"] == ("req-1", "req-2", "req-3")
 
 
 def test_to_naive_utc_leaves_naive_values_alone():
@@ -208,62 +205,12 @@ def test_aggregation_survives_the_redis_json_round_trip():
     assert reloaded == aggregated
 
 
-@pytest.mark.asyncio
-async def test_aggregation_unions_the_request_ids_of_merged_increments():
-    """The seed excludes exactly the requests its batch already covers, so every
-    merged increment's id has to survive aggregation."""
-    queue = WindowSpendUpdateQueue()
-    await queue.add_update(_txn("k1", WINDOW_A, 1.0, request_id="req-1"))
-    await queue.add_update(_txn("k1", WINDOW_A, 2.0, request_id="req-2"))
-
-    aggregated = await queue.flush_and_get_aggregated_window_spend_transactions()
-
-    assert len(aggregated) == 1
-    assert aggregated[0]["request_ids"] == ("req-1", "req-2")
-
-
-@pytest.mark.asyncio
-async def test_request_ids_stay_with_their_own_window():
-    queue = WindowSpendUpdateQueue()
-    await queue.add_update(_txn("k1", WINDOW_A, 1.0, request_id="req-a"))
-    await queue.add_update(_txn("k1", WINDOW_B, 2.0, request_id="req-b"))
-
-    aggregated = await queue.flush_and_get_aggregated_window_spend_transactions()
-
-    assert {payload["window_start"]: payload["request_ids"] for payload in aggregated} == {
-        "2026-08-01T00:00:00.000000": ("req-a",),
-        "2026-08-31T00:00:00.000000": ("req-b",),
-    }
-
-
-@pytest.mark.asyncio
-async def test_request_ids_are_deduplicated_and_ordered():
-    queue = WindowSpendUpdateQueue()
-    await queue.add_update(_txn("k1", WINDOW_A, 1.0, request_id="req-b"))
-    await queue.add_update(_txn("k1", WINDOW_A, 1.0, request_id="req-a"))
-    await queue.add_update(_txn("k1", WINDOW_A, 1.0, request_id="req-a"))
-
-    aggregated = await queue.flush_and_get_aggregated_window_spend_transactions()
-
-    assert aggregated[0]["request_ids"] == ("req-a", "req-b")
-
-
-@pytest.mark.asyncio
-async def test_increment_without_a_request_id_carries_no_exclusion():
-    queue = WindowSpendUpdateQueue()
-    await queue.add_update(_txn("k1", WINDOW_A, 1.0))
-
-    aggregated = await queue.flush_and_get_aggregated_window_spend_transactions()
-
-    assert aggregated[0]["request_ids"] == ()
-
-
-def test_request_ids_survive_the_redis_json_round_trip():
+def test_started_at_survives_the_redis_json_round_trip():
     aggregated = WindowSpendUpdateQueue.get_aggregated_window_spend_transactions(
-        [(_txn("k1", WINDOW_A, 1.0, request_id="req-1"),)]
+        [(_txn("k1", WINDOW_A, 1.0, started_at=datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)),)]
     )
 
     reloaded = WindowSpendUpdateQueue.get_aggregated_window_spend_transactions([json.loads(json.dumps(aggregated))])
 
-    assert reloaded[0]["request_ids"] == ("req-1",)
+    assert reloaded[0]["started_at"] == "2026-08-10T12:00:00.000000"
     assert reloaded[0]["spend"] == 1.0

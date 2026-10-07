@@ -2,6 +2,7 @@
 Repository classes for database operations.
 """
 
+from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
@@ -92,6 +93,7 @@ __all__ = [
     "AdaptiveRouterStateRepository",
     "AgentsRepository",
     "AuditLogRepository",
+    "AutoRouterSessionRepository",
     "BatchTable",
     "BudgetCascadeUnitOfWork",
     "BudgetRepository",

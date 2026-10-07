@@ -3,12 +3,13 @@ Base class across routing strategies to abstract commmon functions like batch in
 """
 
 import asyncio
+import logging
 from abc import ABC
 from typing import Final
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
-from litellm.caching.redis_cache import RedisPipelineIncrementOperation
+from litellm.caching.redis_cache import RedisPipelineIncrementOperation, log_redis_failure
 from litellm.constants import DEFAULT_REDIS_SYNC_INTERVAL
 
 
@@ -147,7 +148,7 @@ class BaseRoutingStrategy(ABC):
                 return return_result
 
         except Exception as e:
-            verbose_router_logger.error("Error syncing in-memory cache with Redis: %s", e)
+            log_redis_failure(verbose_router_logger, logging.ERROR, "Error syncing in-memory cache with Redis", e)
             self.redis_increment_operation_queue = []
 
     def add_to_in_memory_keys_to_update(self, key: str):
