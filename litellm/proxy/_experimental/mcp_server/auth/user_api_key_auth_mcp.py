@@ -1,5 +1,6 @@
 import re
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -15,6 +16,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_ALL_TOOLS_WILDCARD
+from litellm.proxy._experimental.mcp_server.catalog import global_manager
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
     get_passthrough_www_authenticate,
@@ -71,6 +73,7 @@ from litellm.repositories.table_repositories import (
     MCPServerRepository,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -448,188 +451,191 @@ class MCPRequestHandler:
         Raises:
             HTTPException: If headers are invalid or missing required headers
         """
-        headers: Final = MCPRequestHandler._safe_get_headers_from_scope(scope)
+        async with global_manager().catalog.operation():
+            headers: Final = MCPRequestHandler._safe_get_headers_from_scope(scope)
 
-        # Check if there is an explicit LiteLLM API key (primary header)
-        has_explicit_litellm_key: Final = headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY) is not None
+            # Check if there is an explicit LiteLLM API key (primary header)
+            has_explicit_litellm_key: Final = (
+                headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY) is not None
+            )
 
-        litellm_api_key: Final = MCPRequestHandler.get_litellm_api_key_from_headers(headers) or ""
+            litellm_api_key: Final = MCPRequestHandler.get_litellm_api_key_from_headers(headers) or ""
 
-        # Get the old mcp_auth_header for backward compatibility
-        mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
+            # Get the old mcp_auth_header for backward compatibility
+            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
 
-        # Get the new server-specific auth headers
-        mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+            # Get the new server-specific auth headers
+            mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
 
-        # Get the oauth2 headers
-        oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
+            # Get the oauth2 headers
+            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
 
-        # Parse MCP servers from header
-        mcp_servers_header: Final = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
-        verbose_logger.debug("Raw MCP servers header: %s", mcp_servers_header)
-        mcp_servers = None
-        if mcp_servers_header is not None:
-            try:
-                mcp_servers = [s.strip() for s in mcp_servers_header.split(",") if s.strip()]
-                verbose_logger.debug("Parsed MCP servers: %s", mcp_servers)
-            except Exception as e:
-                verbose_logger.debug("Error parsing mcp_servers header: %s", e)
-                mcp_servers = None
-            if mcp_servers_header == "" or (mcp_servers is not None and len(mcp_servers) == 0):
-                mcp_servers = []
-        # Create a proper Request object with mock body method to avoid ASGI receive channel issues
-        request: Final = Request(scope=scope)
+            # Parse MCP servers from header
+            mcp_servers_header: Final = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
+            verbose_logger.debug("Raw MCP servers header: %s", mcp_servers_header)
+            mcp_servers = None
+            if mcp_servers_header is not None:
+                try:
+                    mcp_servers = [s.strip() for s in mcp_servers_header.split(",") if s.strip()]
+                    verbose_logger.debug("Parsed MCP servers: %s", mcp_servers)
+                except Exception as e:
+                    verbose_logger.debug("Error parsing mcp_servers header: %s", e)
+                    mcp_servers = None
+                if mcp_servers_header == "" or (mcp_servers is not None and len(mcp_servers) == 0):
+                    mcp_servers = []
+            # Create a proper Request object with mock body method to avoid ASGI receive channel issues
+            request: Final = Request(scope=scope)
 
-        async def mock_body():
-            return b"{}"
+            async def mock_body():
+                return b"{}"
 
-        request.body = mock_body
-        # Inline import — auth_utils participates in a proxy import cycle.
-        from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
-            get_request_route,
-        )
+            request.body = mock_body
+            # Inline import — auth_utils participates in a proxy import cycle.
+            from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+                get_request_route,
+            )
 
-        request_route: Final = get_request_route(request)
-        # Only OAuth metadata routes registered under /.well-known/ are public.
-        if request_route.startswith("/.well-known/"):
-            validated_user_api_key_auth = UserAPIKeyAuth()
-        elif (
-            has_explicit_litellm_key
-            and oauth2_headers
-            and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
-            and (
-                dual_bridge_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+            request_route: Final = get_request_route(request)
+            # Only OAuth metadata routes registered under /.well-known/ are public.
+            if request_route.startswith("/.well-known/"):
+                validated_user_api_key_auth = UserAPIKeyAuth()
+            elif (
+                has_explicit_litellm_key
+                and oauth2_headers
+                and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
+                and (
+                    dual_bridge_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+                        path=request_route,
+                        mcp_servers=mcp_servers,
+                        client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                    )
+                )
+                is not None
+            ):
+                (
+                    validated_user_api_key_auth,
+                    mcp_server_auth_headers,
+                ) = await MCPRequestHandler._admit_dcr_bridge_dual_credential(
+                    server=dual_bridge_target.server,
+                    requested_name=dual_bridge_target.requested_name,
+                    authorization_value=oauth2_headers["Authorization"],
+                    litellm_api_key=litellm_api_key,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    request=request,
+                    route=request_route,
+                )
+            elif has_explicit_litellm_key:
+                # An explicit x-litellm-api-key is always a LiteLLM credential, even
+                # for a delegated server, so validate it: identity / spend / rate
+                # limits resolve and any stored upstream token can be forwarded.
+                validated_user_api_key_auth = await user_api_key_auth(
+                    api_key=f"Bearer {_get_bearer_token_or_received_api_key(litellm_api_key)}",
+                    request=request,
+                )
+            elif MCPRequestHandler._target_servers_are_true_passthrough(
+                path=request_route,
+                mcp_servers=mcp_servers,
+                client_ip=IPAddressUtils.get_mcp_client_ip(request),
+            ) or (
+                MCPRequestHandler._single_dcr_bridge_delegate_target(
                     path=request_route,
                     mcp_servers=mcp_servers,
                     client_ip=IPAddressUtils.get_mcp_client_ip(request),
                 )
-            )
-            is not None
-        ):
-            (
-                validated_user_api_key_auth,
-                mcp_server_auth_headers,
-            ) = await MCPRequestHandler._admit_dcr_bridge_dual_credential(
-                server=dual_bridge_target.server,
-                requested_name=dual_bridge_target.requested_name,
-                authorization_value=oauth2_headers["Authorization"],
-                litellm_api_key=litellm_api_key,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                request=request,
-                route=request_route,
-            )
-        elif has_explicit_litellm_key:
-            # An explicit x-litellm-api-key is always a LiteLLM credential, even
-            # for a delegated server, so validate it: identity / spend / rate
-            # limits resolve and any stored upstream token can be forwarded.
-            validated_user_api_key_auth = await user_api_key_auth(
-                api_key=f"Bearer {_get_bearer_token_or_received_api_key(litellm_api_key)}",
-                request=request,
-            )
-        elif MCPRequestHandler._target_servers_are_true_passthrough(
-            path=request_route,
-            mcp_servers=mcp_servers,
-            client_ip=IPAddressUtils.get_mcp_client_ip(request),
-        ) or (
-            MCPRequestHandler._single_dcr_bridge_delegate_target(
-                path=request_route,
-                mcp_servers=mcp_servers,
-                client_ip=IPAddressUtils.get_mcp_client_ip(request),
-            )
-            is not None
-            and not oauth2_headers
-            and not mcp_server_auth_headers
-            and not mcp_auth_header
-        ):
-            validated_user_api_key_auth = UserAPIKeyAuth()
-        elif (
-            bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
-                path=request_route,
-                mcp_servers=mcp_servers,
-                client_ip=IPAddressUtils.get_mcp_client_ip(request),
-            )
-        ) is not None and oauth2_headers:
-            (
-                validated_user_api_key_auth,
-                mcp_server_auth_headers,
-            ) = await MCPRequestHandler._admit_dcr_bridge_authorization(
-                server=bridge_delegate_target.server,
-                requested_name=bridge_delegate_target.requested_name,
-                authorization_value=oauth2_headers["Authorization"],
-                litellm_api_key=litellm_api_key,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                request=request,
-                route=request_route,
-            )
-        elif oauth2_headers and is_session_bearer_shaped(oauth2_headers["Authorization"]):
-            # A gateway DCR session bearer at any MCP scope: open the identity-only session
-            # token and admit under the live litellm user; downstream grant resolution
-            # intersects the admitted subject's servers with any path or header target, so a
-            # per-server scope narrows and never broadens. One that does not open fails
-            # closed with the scope's invalid_token challenge; a non-session bearer falls
-            # through to the oauth2 arm.
-            validated_user_api_key_auth = await MCPRequestHandler._admit_gateway_session(
-                authorization_value=oauth2_headers["Authorization"],
-                request=request,
-                route=request_route,
-                mcp_servers=mcp_servers,
-            )
-        elif oauth2_headers:
-            # Authorization on a non-delegated server: the bearer must be a real
-            # LiteLLM credential, so a failed validation is a genuine 401/403 and
-            # propagates unless a fallback in _admission_failure_fallback applies.
-            try:
-                validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
-            except (HTTPException, ProxyException) as e:
-                validated_user_api_key_auth = _admission_failure_fallback(
-                    request=request,
-                    request_route=request_route,
+                is not None
+                and not oauth2_headers
+                and not mcp_server_auth_headers
+                and not mcp_auth_header
+            ):
+                validated_user_api_key_auth = UserAPIKeyAuth()
+            elif (
+                bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+                    path=request_route,
                     mcp_servers=mcp_servers,
-                    mcp_auth_header=mcp_auth_header,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    exc=e,
-                    bearer_presented=True,
+                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
                 )
-        else:
-            try:
-                validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
-            except (HTTPException, ProxyException) as exc:
-                validated_user_api_key_auth = _admission_failure_fallback(
+            ) is not None and oauth2_headers:
+                (
+                    validated_user_api_key_auth,
+                    mcp_server_auth_headers,
+                ) = await MCPRequestHandler._admit_dcr_bridge_authorization(
+                    server=bridge_delegate_target.server,
+                    requested_name=bridge_delegate_target.requested_name,
+                    authorization_value=oauth2_headers["Authorization"],
+                    litellm_api_key=litellm_api_key,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
                     request=request,
-                    request_route=request_route,
-                    mcp_servers=mcp_servers,
-                    mcp_auth_header=mcp_auth_header,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    exc=exc,
-                    bearer_presented=False,
+                    route=request_route,
                 )
+            elif oauth2_headers and is_session_bearer_shaped(oauth2_headers["Authorization"]):
+                # A gateway DCR session bearer at any MCP scope: open the identity-only session
+                # token and admit under the live litellm user; downstream grant resolution
+                # intersects the admitted subject's servers with any path or header target, so a
+                # per-server scope narrows and never broadens. One that does not open fails
+                # closed with the scope's invalid_token challenge; a non-session bearer falls
+                # through to the oauth2 arm.
+                validated_user_api_key_auth = await MCPRequestHandler._admit_gateway_session(
+                    authorization_value=oauth2_headers["Authorization"],
+                    request=request,
+                    route=request_route,
+                    mcp_servers=mcp_servers,
+                )
+            elif oauth2_headers:
+                # Authorization on a non-delegated server: the bearer must be a real
+                # LiteLLM credential, so a failed validation is a genuine 401/403 and
+                # propagates unless a fallback in _admission_failure_fallback applies.
+                try:
+                    validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
+                except (HTTPException, ProxyException) as e:
+                    validated_user_api_key_auth = _admission_failure_fallback(
+                        request=request,
+                        request_route=request_route,
+                        mcp_servers=mcp_servers,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
+                        exc=e,
+                        bearer_presented=True,
+                    )
+            else:
+                try:
+                    validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
+                except (HTTPException, ProxyException) as exc:
+                    validated_user_api_key_auth = _admission_failure_fallback(
+                        request=request,
+                        request_route=request_route,
+                        mcp_servers=mcp_servers,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
+                        exc=exc,
+                        bearer_presented=False,
+                    )
 
-        # Leak-defense (single chokepoint): a gateway admission credential (session bearer or bridge
-        # envelope) is NEVER a valid upstream token. Scrub it from EVERY egress context so no
-        # client-forwarded, OBO, or passthrough path can send it upstream for replay. Anchored to the
-        # credential SHAPE, so a legitimate upstream/passthrough token is forwarded unchanged.
-        raw_headers = dict(headers)
-        (
-            oauth2_headers,
-            raw_headers,
-            mcp_auth_header,
-            mcp_server_auth_headers,
-        ) = MCPRequestHandler._scrub_gateway_admission_credentials(
-            admitted=_is_mcp_admitted_user_subject(validated_user_api_key_auth),
-            oauth2_headers=oauth2_headers,
-            raw_headers=raw_headers,
-            mcp_auth_header=mcp_auth_header,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-        )
+            # Leak-defense (single chokepoint): a gateway admission credential (session bearer or bridge
+            # envelope) is NEVER a valid upstream token. Scrub it from EVERY egress context so no
+            # client-forwarded, OBO, or passthrough path can send it upstream for replay. Anchored to the
+            # credential SHAPE, so a legitimate upstream/passthrough token is forwarded unchanged.
+            raw_headers = dict(headers)
+            (
+                oauth2_headers,
+                raw_headers,
+                mcp_auth_header,
+                mcp_server_auth_headers,
+            ) = MCPRequestHandler._scrub_gateway_admission_credentials(
+                admitted=_is_mcp_admitted_user_subject(validated_user_api_key_auth),
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+            )
 
-        return (
-            validated_user_api_key_auth,
-            mcp_auth_header,
-            mcp_servers,
-            mcp_server_auth_headers,
-            oauth2_headers,
-            raw_headers,
-        )
+            return (
+                validated_user_api_key_auth,
+                mcp_auth_header,
+                mcp_servers,
+                mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
+            )
 
     @staticmethod
     def _is_gateway_admission_credential(value: str | None) -> bool:
@@ -1197,6 +1203,31 @@ class MCPRequestHandler:
             return None
 
     @staticmethod
+    async def refresh_catalog_authority(auth: UserAPIKeyAuth | None) -> UserAPIKeyAuth | None:
+        from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+        if auth is None:
+            return None
+        refreshed = auth.model_copy()
+        if auth.mcp_admitted_user_subject and auth.user_id:
+            current = await MCPRequestHandler.reload_admitted_user(auth.user_id, requires_fresh_policy=True)
+            refreshed.object_permission = current.object_permission
+            refreshed.object_permission_id = current.object_permission_id
+            refreshed.user_role = current.user_role
+            refreshed.org_id = current.org_id
+        elif auth.via_virtual_key and auth.api_key and auth.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS:
+            current = await MCPRequestHandler._reload_admitted_key(auth.api_key, check_db_only=True)
+            refreshed.object_permission = current.object_permission
+            refreshed.object_permission_id = current.object_permission_id
+            refreshed.team_id = current.team_id
+            refreshed.org_id = current.org_id
+            refreshed.project_id = current.project_id
+            refreshed.user_id = current.user_id
+            refreshed.access_group_ids = current.access_group_ids
+        refreshed.requires_fresh_policy = True
+        return refreshed
+
+    @staticmethod
     async def _reload_admitted_key(key_hash: str, *, check_db_only: bool = False) -> UserAPIKeyAuth:
         """Reload the live key record an admitted envelope references and re-check live policy.
 
@@ -1239,6 +1270,8 @@ class MCPRequestHandler:
         if not MCPRequestHandler._admitted_key_is_active(key_object):
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
         await MCPRequestHandler._reject_if_admitted_owner_scim_deactivated(key_object)
+        key_object.api_key = key_hash
+        key_object.via_virtual_key = True
         return key_object
 
     @staticmethod
@@ -1613,9 +1646,13 @@ class MCPRequestHandler:
             # Get allowed servers from key and team
             allowed_mcp_servers_for_key = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
 
-            # The key explicitly opted out of every MCP server. This overrides
-            # team inheritance and additive grants (mirrors no-default-models).
-            if SpecialMCPServerNames.no_mcp_servers.value in allowed_mcp_servers_for_key:
+            # Only an explicit opt-out overrides additive grants. An empty group
+            # scope uses the same marker to restrict inheritance below.
+            if SpecialMCPServerNames.no_mcp_servers.value in allowed_mcp_servers_for_key and (
+                user_api_key_auth is None
+                or (permission := await MCPRequestHandler._key_object_permission_hydrated(user_api_key_auth)) is None
+                or SpecialMCPServerNames.no_mcp_servers.value in (permission.mcp_servers or [])
+            ):
                 return MCPServerAccess(server_ids=(), scope="scoped")
 
             allowed_mcp_servers_for_team = await MCPRequestHandler._get_allowed_mcp_servers_for_team(user_api_key_auth)
@@ -1742,7 +1779,7 @@ class MCPRequestHandler:
 
             declares_key_mcp_scope: Final = getattr(key_object_permission, "mcp_servers", None) is not None
             return MCPServerAccess(
-                server_ids=tuple(set(allowed_mcp_servers)),
+                server_ids=tuple(set(allowed_mcp_servers) - {SpecialMCPServerNames.no_mcp_servers.value}),
                 scope=(
                     "scoped"
                     if has_lower_level_mcp_restrictions or org_restricts or declares_key_mcp_scope
@@ -2544,6 +2581,20 @@ class MCPRequestHandler:
             return []
 
     @staticmethod
+    def _server_grants_with_group_scope(
+        servers: AbstractSet[str],
+        permission: LiteLLM_ObjectPermissionTable,
+    ) -> AbstractSet[str]:
+        """Keep a configured empty group scope distinct from an unrestricted level.
+
+        Combine same-level grants first; the existing zero-server marker prevents
+        inheritance and ceiling substitution without discarding independent grants.
+        """
+        if servers or not permission.mcp_access_groups:
+            return servers
+        return {SpecialMCPServerNames.no_mcp_servers.value}
+
+    @staticmethod
     async def _get_allowed_mcp_servers_for_key(
         user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> list[str]:
@@ -2625,7 +2676,7 @@ class MCPRequestHandler:
 
             # Combine all lists
             all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers + toolset_servers
-            return list(set(all_servers))
+            return list(MCPRequestHandler._server_grants_with_group_scope(set(all_servers), key_object_permission))
         except Exception as e:
             verbose_logger.warning("Failed to get allowed MCP servers for key: %s", e)
             return []
@@ -2698,7 +2749,7 @@ class MCPRequestHandler:
         team_access_group_servers: list[str],
         *,
         requires_fresh_policy: bool = False,
-    ) -> set[str]:
+    ) -> AbstractSet[str]:
         """The raw MCP-server set a team grants (before any org ceiling): its object_permission (direct
         ``mcp_servers``, the ``all_proxy_servers`` sentinel → the full registry, legacy access groups,
         tool-perm-referenced servers, toolset-referenced servers) unioned with its unified
@@ -2719,13 +2770,14 @@ class MCPRequestHandler:
         toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(
             object_permissions, requires_fresh_policy=requires_fresh_policy
         )
-        return (
+        servers: Final = (
             set(global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or []))
             | set(legacy_access_group_servers)
             | set(global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys())
             | toolset_grants.keys()
             | set(team_access_group_servers)
         )
+        return MCPRequestHandler._server_grants_with_group_scope(servers, object_permissions)
 
     @staticmethod
     async def _allowed_mcp_servers_for_single_team(
@@ -2935,7 +2987,7 @@ class MCPRequestHandler:
             all_servers: Final = tuple(
                 {*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants}
             )
-            return list(set(all_servers))
+            return list(MCPRequestHandler._server_grants_with_group_scope(set(all_servers), object_permissions))
         except Exception as e:
             # None = ceiling UNRESOLVED, distinct from [] = org places no restriction. Collapsing them
             # let a DB fault silently drop a ceiling; the caller picks fail-open/closed from this signal.
@@ -3033,7 +3085,7 @@ class MCPRequestHandler:
 
             # Combine all lists
             all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers
-            return list(set(all_servers))
+            return list(MCPRequestHandler._server_grants_with_group_scope(set(all_servers), object_permission))
         except Exception as e:
             verbose_logger.warning("Failed to get allowed MCP servers for end_user: %s", e)
             return []
@@ -3130,6 +3182,8 @@ class MCPRequestHandler:
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
             return object_permission_id
+        except UserNotFoundError:
+            return None
         except Exception as e:  # noqa: BLE001  # Legacy callers retain their existing optional user-ceiling behavior
             if check_db_only:
                 raise HTTPException(503, "User policy is unavailable") from e
@@ -3168,7 +3222,12 @@ class MCPRequestHandler:
             toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(
                 object_permissions, requires_fresh_policy=fresh
             )
-            return tuple({*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants})
+            return tuple(
+                MCPRequestHandler._server_grants_with_group_scope(
+                    {*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants},
+                    object_permissions,
+                )
+            )
         except Exception as e:  # noqa: BLE001  # any resolution fault is an unresolved ceiling, never "no ceiling"
             verbose_logger.warning("Failed to get allowed MCP servers for user: %s", e)
             return None
@@ -3515,7 +3574,12 @@ class MCPRequestHandler:
                 obj_perm, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
             )
             inline_tools: Final = global_mcp_server_manager.expand_tool_permissions(obj_perm.mcp_tool_permissions)
-            return list({*expanded_direct_servers, *access_group_servers, *toolset_grants, *inline_tools})
+            return list(
+                MCPRequestHandler._server_grants_with_group_scope(
+                    {*expanded_direct_servers, *access_group_servers, *toolset_grants, *inline_tools},
+                    obj_perm,
+                )
+            )
         except Exception as e:
             if managed_agent_policy(user_api_key_auth) is not None or isinstance(e, UnloadableEntitlementError):
                 raise
@@ -3638,7 +3702,7 @@ class MCPRequestHandler:
         requires_fresh_policy: bool = False,
     ) -> list[str]:
         """
-        Resolve MCP access groups to server IDs by querying BOTH the MCP server table (DB) AND config-loaded servers.
+        Resolve MCP access groups against the operation snapshot, or database and config outside an operation.
         ``requires_fresh_policy`` reads the writer and propagates a read fault instead of resolving to no servers.
         """
         from litellm.proxy.proxy_server import prisma_client
@@ -3648,6 +3712,10 @@ class MCPRequestHandler:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
+
+            snapshot: Final = global_mcp_server_manager.catalog.current()
+            if snapshot is not None:
+                return list(MCPRequestHandler._get_config_server_ids_for_access_groups(snapshot.servers, access_groups))
 
             # Use the new helper for config-loaded servers
             server_ids: Final = MCPRequestHandler._get_config_server_ids_for_access_groups(

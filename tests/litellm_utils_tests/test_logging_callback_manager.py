@@ -305,7 +305,7 @@ async def test_generic_api_compatible_callbacks_json():
 
     with patch.dict(os.environ, {"SUMOLOGIC_WEBHOOK_URL": test_sumologic_url}):
         # Test that sumologic callback is recognized from JSON file
-        result = LoggingCallbackManager._add_custom_callback_generic_api_str(
+        result = LoggingCallbackManager.add_custom_callback_generic_api_str(
             "sumologic"
         )
 
@@ -346,7 +346,7 @@ async def test_generic_api_compatible_callbacks_json_rubrik():
         {"RUBRIK_WEBHOOK_URL": test_rubrik_url, "RUBRIK_API_KEY": test_rubrik_api_key},
     ):
         # Test that rubrik callback is recognized from JSON file
-        result = LoggingCallbackManager._add_custom_callback_generic_api_str("rubrik")
+        result = LoggingCallbackManager.add_custom_callback_generic_api_str("rubrik")
 
         # Verify a GenericAPILogger instance is returned
         assert isinstance(
@@ -378,7 +378,7 @@ def test_generic_api_compatible_callbacks_json_unknown_callback():
     Test that unknown callbacks (not in JSON or callback_settings) are returned unchanged
     """
     # Test with a callback that doesn't exist in the JSON file
-    result = LoggingCallbackManager._add_custom_callback_generic_api_str(
+    result = LoggingCallbackManager.add_custom_callback_generic_api_str(
         "unknown_callback"
     )
 
@@ -409,7 +409,7 @@ async def test_generic_api_callback_settings_retry_config():
     }
 
     try:
-        result = LoggingCallbackManager._add_custom_callback_generic_api_str(
+        result = LoggingCallbackManager.add_custom_callback_generic_api_str(
             callback_name
         )
 

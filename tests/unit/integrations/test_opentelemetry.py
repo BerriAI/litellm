@@ -1,4 +1,4 @@
-import asyncio
+import asyncio, importlib, pytest_asyncio
 import concurrent.futures
 import contextlib
 import gc
@@ -45,6 +45,12 @@ from litellm.integrations.opentelemetry import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+from collections.abc import AsyncIterator
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.utils import ModelResponse
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.logging_callback_tests.base_test import BaseLoggingCallbackTest
 
 
 class TestOpenTelemetryGuardrails(unittest.TestCase):
@@ -308,6 +314,65 @@ class TestOpenTelemetryTeamAttributesOnChildSpans(unittest.TestCase):
         assert (
             exception_span.attributes["metadata.user_api_key_team_alias"] == "my-team"
         )
+
+
+def test_v1_routing_diagnostics_add_scalar_attributes_and_preserve_legacy_metadata() -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    decision: Final = {
+        "router_model_name": "auto-router",
+        "routed_model": "answer",
+        "router_config_id": "definition-1",
+        "cause": "heuristic",
+        "classifier_failure_reason": "timeout",
+        "classifier_error_type": "TimeoutError",
+        "classifier_cost": 0.001,
+    }
+    with provider.get_tracer(__name__).start_as_current_span("inference") as span:
+        otel.set_attributes(
+            span,
+            {
+                "model": "answer",
+                "standard_logging_object": {
+                    "id": "routing-call",
+                    "call_type": "acompletion",
+                    "metadata": {"routing_decision": decision},
+                },
+            },
+            {"model": "answer", "choices": [], "usage": {}},
+        )
+    (finished,) = exporter.get_finished_spans()
+    actual: Final = {
+        key: value for key, value in finished.attributes.items() if key.startswith("litellm.routing.")
+    }
+    assert actual == {f"litellm.routing.{key}": value for key, value in decision.items()}
+    assert finished.attributes["metadata.routing_decision"] == str(decision)
+
+
+@pytest.mark.parametrize("decision", ["custom", 42, ["custom"]])
+def test_v1_malformed_routing_metadata_preserves_inference_attributes(decision: object) -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    with provider.get_tracer(__name__).start_as_current_span("inference") as span:
+        otel.set_attributes(
+            span,
+            {
+                "model": "answer",
+                "standard_logging_object": {
+                    "id": "routing-call",
+                    "call_type": "acompletion",
+                    "metadata": {"routing_decision": decision},
+                },
+            },
+            {"model": "answer", "choices": [], "usage": {}},
+        )
+    (finished,) = exporter.get_finished_spans()
+    assert finished.attributes["gen_ai.request.model"] == "answer"
+    assert not any(key.startswith("litellm.routing.") for key in finished.attributes)
 
 
 class TestOpenTelemetryCostBreakdown(unittest.TestCase):
@@ -6796,3 +6861,293 @@ def test_set_raw_request_attributes_stamps_only_json_object_responses(
     original_response: str, expected: dict[str, object]
 ):
     assert _raw_response_span_attributes(original_response) == expected
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def drain_logging_worker(isolate_litellm_state: None) -> AsyncIterator[None]:
+    yield
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+
+LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm state to the true defaults captured at conftest import time,
+    then restores after the test. This prevents module-level mutations (e.g.
+    `litellm.num_retries = 3` at the top of test_langfuse_e2e_test.py) from
+    leaking across tests within the same xdist worker.
+    """
+    from litellm.litellm_core_utils import litellm_logging as ll_logging
+    from litellm.proxy.management_helpers import audit_logs as ll_audit_logs
+
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
+    yield
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
+
+_LIST_ATTRS = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+    "service_callback",
+    "pre_call_rules",
+    "post_call_rules",
+)
+
+_SCALAR_ATTRS = (
+    "set_verbose",
+    "cache",
+    "num_retries",
+    "num_retries_per_request",
+    "turn_off_message_logging",
+    "redact_messages_in_exceptions",
+    "redact_user_api_key_info",
+    "s3_callback_params",
+    "s3_audit_callback_params",
+    "datadog_params",
+    "vector_store_registry",
+)
+
+_DEFAULTS: dict = {}
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception as e:
+            print(f"Error reloading litellm.proxy.proxy_server: {e}")
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
+    def test_parallel_tool_calls(self, mock_response_obj: ModelResponse):
+        tool_calls = mock_response_obj.choices[0].message.tool_calls
+        from litellm.integrations.opentelemetry import OpenTelemetry
+        from litellm.proxy._types import SpanAttributes
+
+        kv_pair_dict = OpenTelemetry._tool_calls_kv_pair(tool_calls)
+
+        assert kv_pair_dict == {
+            f"{SpanAttributes.LLM_COMPLETIONS.value}.0.function_call.arguments": '{"city": "New York"}',
+            f"{SpanAttributes.LLM_COMPLETIONS.value}.0.function_call.name": "get_weather",
+            f"{SpanAttributes.LLM_COMPLETIONS.value}.1.function_call.arguments": '{"city": "New York"}',
+            f"{SpanAttributes.LLM_COMPLETIONS.value}.1.function_call.name": "get_news",
+        }
+
+    @pytest.mark.asyncio
+    async def test_opentelemetry_integration(self):
+        """
+        Unit test to confirm external parent otel spans are NOT ended by LiteLLM.
+
+        External spans (passed via metadata) should be managed by their creators,
+        not by LiteLLM. This prevents premature closure of spans from Langfuse,
+        user code, or other external observability tools.
+        """
+        # Reset all callbacks to ensure clean state
+        litellm.logging_callback_manager._reset_all_callbacks()
+
+        parent_otel_span = MagicMock()
+        litellm.callbacks = ["otel"]
+
+        await litellm.acompletion(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hey!",
+            metadata={"litellm_parent_otel_span": parent_otel_span},
+        )
+
+        await asyncio.sleep(1)
+
+        # Verify external span was NOT ended by LiteLLM
+        # External spans should only be closed by their creators
+        parent_otel_span.end.assert_not_called()
+
+    def test_get_span_context_detects_active_span(self):
+        """
+        Unit test: _get_span_context() should auto-detect active spans from global context.
+
+        Active spans should be automatically detected without explicit metadata
+        """
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        # Setup: Create TracerProvider and tracer
+        tracer_provider = TracerProvider()
+        trace.set_tracer_provider(tracer_provider)
+        tracer = trace.get_tracer(__name__)
+
+        # Create OpenTelemetry integration
+        otel_integration = OpenTelemetry()
+
+        # Act: Create an active span and test detection
+        with tracer.start_as_current_span("test_parent") as parent_span:
+            parent_span_context = parent_span.get_span_context()
+
+            # Call _get_span_context without explicit parent in metadata
+            kwargs = {"litellm_params": {"metadata": {}}}
+            detected_context, detected_span = otel_integration._get_span_context(kwargs)
+
+            # Assert: Should detect the active span
+            assert detected_span is not None, "Should detect active span from global context"
+            assert detected_span is parent_span, "Detected span should be the active parent span"
+
+            detected_span_context = detected_span.get_span_context()
+            assert detected_span_context.trace_id == parent_span_context.trace_id, (
+                "Detected span should have same trace_id as parent"
+            )
+            assert detected_span_context.span_id == parent_span_context.span_id, (
+                "Detected span should have same span_id as parent"
+            )
+
+    def test_record_exception_on_span(self):
+        """
+        Test that _record_exception_on_span properly records exception information.
+
+        This test verifies that StandardLoggingPayloadErrorInformation is properly
+        extracted and set as span attributes using ErrorAttributes constants.
+        """
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from litellm.integrations._types.open_inference import ErrorAttributes
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        # Setup: Create TracerProvider and tracer
+        tracer_provider = TracerProvider()
+        trace.set_tracer_provider(tracer_provider)
+        tracer = trace.get_tracer(__name__)
+
+        # Create OpenTelemetry integration
+        otel_integration = OpenTelemetry()
+
+        # Create a mock span
+        mock_span = MagicMock()
+
+        # Create test exception
+        test_exception = ValueError("Test error message")
+
+        # Create kwargs with exception and error_information
+        kwargs = {
+            "exception": test_exception,
+            "standard_logging_object": {
+                "error_information": {
+                    "error_code": "500",
+                    "error_class": "ValueError",
+                    "llm_provider": "openai",
+                    "traceback": "Traceback (most recent call last)...",
+                    "error_message": "Test error message",
+                },
+                "error_str": "Test error message",
+            },
+        }
+
+        # Act: Record exception on span
+        otel_integration._record_exception_on_span(span=mock_span, kwargs=kwargs)
+
+        # Assert: span.record_exception should be called with the exception
+        mock_span.record_exception.assert_called_once_with(test_exception)
+
+        # Assert: Error attributes should be set using ErrorAttributes constants
+        expected_calls = [
+            (ErrorAttributes.ERROR_CODE, "500"),
+            (ErrorAttributes.ERROR_TYPE, "ValueError"),
+            (ErrorAttributes.ERROR_MESSAGE, "Test error message"),
+            (ErrorAttributes.ERROR_LLM_PROVIDER, "openai"),
+            (ErrorAttributes.ERROR_STACK_TRACE, "Traceback (most recent call last)..."),
+        ]
+
+        # Check that set_attribute was called with expected values
+        actual_calls = [call.args for call in mock_span.set_attribute.call_args_list]
+
+        for expected_call in expected_calls:
+            assert expected_call in actual_calls, (
+                f"Expected set_attribute call {expected_call} not found in actual calls: {actual_calls}"
+            )
+
+    def test_record_exception_on_span_with_fallback(self):
+        """
+        Test that _record_exception_on_span falls back to error_str when error_information is None.
+        """
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from litellm.integrations._types.open_inference import ErrorAttributes
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        # Setup: Create TracerProvider and tracer
+        tracer_provider = TracerProvider()
+        trace.set_tracer_provider(tracer_provider)
+        tracer = trace.get_tracer(__name__)
+
+        # Create OpenTelemetry integration
+        otel_integration = OpenTelemetry()
+
+        # Create a mock span
+        mock_span = MagicMock()
+
+        # Create test exception
+        test_exception = ValueError("Test error message")
+
+        # Create kwargs without error_information (should fallback to error_str)
+        kwargs = {
+            "exception": test_exception,
+            "standard_logging_object": {
+                "error_information": None,
+                "error_str": "Fallback error message",
+            },
+        }
+
+        # Act: Record exception on span
+        otel_integration._record_exception_on_span(span=mock_span, kwargs=kwargs)
+
+        # Assert: span.record_exception should be called
+        mock_span.record_exception.assert_called_once_with(test_exception)
+
+        # Assert: error.message should be set from error_str using ErrorAttributes constant
+        mock_span.set_attribute.assert_called_with(ErrorAttributes.ERROR_MESSAGE, "Fallback error message")

@@ -42,7 +42,7 @@ def get_all_functions_called_in_tests(base_dir):
         print("dir_path: ", dir_path)
         for root, _, files in os.walk(dir_path):
             for file in files:
-                if file.endswith(".py") and "router" in file.lower():
+                if file.endswith(".py") and ("router" in file.lower() or test_dir == "unit"):
                     print("file: ", file)
                     file_path = os.path.join(root, file)
                     with open(file_path, "r", encoding="utf-8") as f:
@@ -71,6 +71,8 @@ def get_functions_from_router(file_path):
 
 ignored_function_names = [
     "_acancel_batch",
+    "_acreate_batch",
+    "_acreate_file",
     "__init__",
     "avector_store_create",  # Tested via proxy vector_store_endpoints (files lack "router" in name)
     "_override_vector_store_methods_for_router",  # No-op placeholder, called during Router init
@@ -80,6 +82,7 @@ ignored_function_names = [
     "chunks",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
     "messages",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
     "model",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
+    "_routing_groups",  # Property getter and setter reads are never ast.Call nodes
     "_request_header",  # Tested through Claude Code session routing in test_router.py
     "_claude_code_session_router_cache_key",  # Tested through Claude Code session routing in test_router.py
     "_delete_claude_code_session_router_binding",  # Tested through Redis cleanup failure in test_router.py
