@@ -14787,15 +14787,17 @@ async def test_process_single_key_update_non_admin_permissions_explicit_empty_re
     [{"metadata": {}}, {"metadata": None}, {"denied_passthrough_routes": []}],
     ids=["metadata_replaced", "metadata_null", "denies_cleared"],
 )
-async def test_process_single_key_update_non_admin_cannot_drop_stored_denied_passthrough_routes(fields):
-    stored_key = LiteLLM_VerificationToken(
+async def test_process_single_key_update_non_admin_cannot_drop_stored_denied_passthrough_routes(
+    fields: dict[str, object],
+) -> None:
+    stored_key: Final = LiteLLM_VerificationToken(
         token="hashed-key", user_id="key-owner", metadata={"denied_passthrough_routes": ["/svc/admin"]}
     )
-    prisma_client = AsyncMock()
+    prisma_client: Final = AsyncMock()
 
     with pytest.raises(HTTPException) as exc_info:
         await _process_single_key_update(
-            update_key_request=UpdateKeyRequest(key="sk-owned-key", **fields),
+            update_key_request=UpdateKeyRequest.model_validate({"key": "sk-owned-key", **fields}),
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
             litellm_changed_by=None,
             prisma_client=prisma_client,
