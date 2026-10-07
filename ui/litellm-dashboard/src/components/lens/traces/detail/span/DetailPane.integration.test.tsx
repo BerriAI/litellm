@@ -5,6 +5,8 @@ import { type ComponentProps, useState } from "react";
 
 import { renderWithProviders, testQueryClient } from "../../../../../../tests/test-utils";
 import { DetailPane } from "./DetailPane";
+import type { TracesApi } from "../../api";
+import { createTracePrefetcher } from "../../list/tracePrefetch";
 import type { SpanTab } from "../../routing";
 import { absoluteTime, SpanHoverCard, spanFacts } from "../tree/SpanHoverCard";
 import type { GroupRowData, SpanRowData } from "../../tree";
@@ -237,6 +239,26 @@ describe("DetailPane", () => {
     expect(await screen.findByText("Customer acme-404 says billing is wrong.")).toBeVisible();
     expect(screen.getAllByText("get_customer_plan").length).toBeGreaterThan(0);
     expect(vi.mocked(agentTraceSpanCall)).toHaveBeenCalledWith("sk-test", "t1", "llm1", undefined);
+  });
+
+  it("shows a preloaded run's default step without reading it again", async () => {
+    const healthy: Trace = { ...trace, spans: [root, llm] };
+    const traces = {
+      trace: vi.fn(async () => healthy),
+      span: (traceId: string, spanId: string, traceRef?: string) =>
+        agentTraceSpanCall("sk-test", traceId, spanId, traceRef),
+    } as unknown as TracesApi;
+    const deps = { queryClient: testQueryClient, traces, accessToken: "sk-test", concurrency: 1 };
+    const prefetcher = createTracePrefetcher(deps);
+    await prefetcher.warm([{ traceId: "t1" }]);
+    expect(agentTraceSpanCall).toHaveBeenCalledTimes(1);
+
+    renderWithProviders(
+      <LocalDetailPane trace={healthy} row={spanRow(root)} accessToken="sk-test" onClose={vi.fn()} />,
+    );
+    expect(screen.getByText("Customer acme-404 is on the Enterprise plan.")).toBeVisible();
+    expect(screen.queryByText("Loading span…")).not.toBeInTheDocument();
+    expect(agentTraceSpanCall).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the output visible when a step contains a long input conversation", async () => {
