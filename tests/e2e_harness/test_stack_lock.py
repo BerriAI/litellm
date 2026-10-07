@@ -5,6 +5,7 @@ queues behind it instead of starving it."""
 from __future__ import annotations
 
 import fcntl
+import inspect
 import os
 import subprocess
 import sys
@@ -14,10 +15,9 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+import stack_lock
 
-from stack_lock import STACK_DIGEST
-
-HARNESS_DIR: Final = Path(__file__).resolve().parent
+HARNESS_DIR: Final = Path(inspect.getfile(stack_lock)).resolve().parent
 DEADLINE_SECONDS: Final = 30.0
 SETTLE_SECONDS: Final = 0.5
 HOLDER_SCRIPT: Final = """
@@ -89,7 +89,7 @@ def _start_holder(held: ExitStack, tmp_path: Path, name: str, mode: str) -> subp
 
 
 def test_readers_share_exclusive_waits_and_a_waiting_exclusive_beats_later_readers(tmp_path: Path) -> None:
-    lock_dir: Final = tmp_path / f"litellm-e2e-stack-{STACK_DIGEST}"
+    lock_dir: Final = tmp_path / f"litellm-e2e-stack-{stack_lock.STACK_DIGEST}"
     lock_dir.mkdir()
     log_path: Final = tmp_path / "events"
     with ExitStack() as held:

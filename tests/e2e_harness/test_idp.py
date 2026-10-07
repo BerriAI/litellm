@@ -4,6 +4,7 @@ these carry no `e2e` marker and run everywhere."""
 
 from __future__ import annotations
 
+import inspect
 import os
 import signal
 import socket
@@ -19,6 +20,7 @@ from queue import SimpleQueue
 from threading import Thread
 from typing import Final, Literal
 
+import idp
 import pytest
 from e2e_http import ExternalWrite
 from idp import (
@@ -35,6 +37,7 @@ from idp import (
     keycloak_from_env,
 )
 
+IDP_SCRIPT: Final = inspect.getfile(idp)
 _REALM: Final = Keycloak(
     base_url="http://keycloak:8080", realm="litellm-e2e", admin_username="admin", admin_password="pw"
 )
@@ -175,7 +178,7 @@ def test_oidc_launcher_removes_client_on_exit_and_termination(
         with subprocess.Popen(
             [
                 sys.executable,
-                str(Path(__file__).with_name("idp.py")),
+                IDP_SCRIPT,
                 "http://127.0.0.1:9999",
                 sys.executable,
                 "-c",
