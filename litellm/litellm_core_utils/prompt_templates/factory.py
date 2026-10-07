@@ -217,9 +217,7 @@ def _ollama_bad_message(model: str, message: AllMessageValues, msg_i: int, detai
     )
 
 
-def _ollama_content_part(
-    model: str, message: AllMessageValues, part: Mapping[str, object], msg_i: int
-) -> tuple[str, str]:
+def _ollama_content_part(model: str, message: AllMessageValues, part: object, msg_i: int) -> tuple[str, str]:
     match part:
         case {"type": "text", "text": str() as text}:
             return text, ""
@@ -233,6 +231,13 @@ def _ollama_content_part(
             return "", image_url
         case {"type": "image_url", "image_url": {"url": str() as image_url}}:
             return "", image_url
+        case {"type": "image_url", "image_url": dict()}:
+            raise _ollama_bad_message(
+                model,
+                message,
+                msg_i,
+                "has an image_url object without a url string; image_url must be a URL string or an object with a url",
+            )
         case {"type": "image_url", "image_url": bad_image_url}:
             raise _ollama_bad_message(
                 model,
@@ -247,8 +252,12 @@ def _ollama_content_part(
                 msg_i,
                 "has an image_url part with no image_url; image_url must be a URL string or an object with a url",
             )
-        case _:
+        case Mapping():
             return "", ""
+        case _:
+            raise _ollama_bad_message(
+                model, message, msg_i, f"has a {type(part).__name__} content part; content parts must be objects"
+            )
 
 
 def _ollama_user_message_parts(

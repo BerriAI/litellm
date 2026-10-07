@@ -244,21 +244,29 @@ def test_ollama_pt_rejects_non_text_tool_content_as_a_bad_request(content: objec
 @pytest.mark.parametrize(
     ("part", "expected_detail"),
     (
-        ({"type": "image_url", "image_url": None}, "NoneType"),
-        ({"type": "text", "text": 22}, "int"),
-        ({"type": "text"}, "no text"),
-        ({"type": "image_url"}, "no image_url"),
+        ({"type": "image_url", "image_url": None}, "NoneType image_url"),
+        ({"type": "text", "text": 22}, "int text part"),
+        ({"type": "text"}, "text part with no text"),
+        ({"type": "image_url"}, "image_url part with no image_url"),
+        ({"type": "image_url", "image_url": {"detail": "high"}}, "image_url object without a url string"),
+        ("hello", "str content part"),
     ),
-    ids=("none-image-url", "int-text", "text-without-text", "image-url-without-image-url"),
+    ids=(
+        "none-image-url",
+        "int-text",
+        "text-without-text",
+        "image-url-without-image-url",
+        "image-url-object-without-url",
+        "str-part",
+    ),
 )
-def test_ollama_pt_rejects_a_malformed_content_part_as_a_bad_request(part: dict[str, object], expected_detail: str):
+def test_ollama_pt_rejects_a_malformed_content_part_as_a_bad_request(part: object, expected_detail: str):
     messages: Final = [{"role": "user", "content": [part]}]
 
     with pytest.raises(litellm.BadRequestError) as excinfo:
         ollama_pt(model="llava", messages=messages)
 
     assert excinfo.value.status_code == 400
-    assert str(part["type"]) in excinfo.value.message
     assert "user message at index 0" in excinfo.value.message
     assert expected_detail in excinfo.value.message
 

@@ -132,14 +132,14 @@ def test_tool_call_delta_is_emitted_as_responses_events():
     evt1 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
     assert evt1 is not None
     assert evt1.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    assert evt1.output_index == 1
+    assert evt1.output_index == 0
 
     # The arguments are now chunked, so we get the first delta chunk
     evt2 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
     assert evt2 is not None
     assert evt2.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
     assert evt2.item_id == "fc_call_1"
-    assert evt2.output_index == 1
+    assert evt2.output_index == 0
     # The delta will be a chunk of the arguments, not the full arguments
     assert len(evt2.delta) <= 10  # Chunks are max 10 characters
 
@@ -391,7 +391,7 @@ def test_tool_calls_present_only_in_final_response_are_emitted_before_completed(
     # First common_done_event_logic call should yield tool events, not response.completed.
     evt1 = iterator.common_done_event_logic(sync_mode=True)
     assert evt1.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    assert evt1.output_index == 1
+    assert evt1.output_index == 0
 
     # Now delta events are emitted (arguments split into chunks)
     # Collect all delta events
@@ -412,12 +412,12 @@ def test_tool_calls_present_only_in_final_response_are_emitted_before_completed(
     # The last event should be FUNCTION_CALL_ARGUMENTS_DONE
     assert evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE
     assert evt.item_id == "fc_call_2"
-    assert evt.output_index == 1
+    assert evt.output_index == 0
     assert evt.arguments == '{"y":2}'
 
     evt_final = iterator.common_done_event_logic(sync_mode=True)
     assert evt_final.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
-    assert evt_final.output_index == 1
+    assert evt_final.output_index == 0
 
 
 def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
@@ -472,7 +472,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     # First event should be OUTPUT_ITEM_ADDED
     assert evt is not None
     assert evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    assert evt.output_index == 1
+    assert evt.output_index == 0
     assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
 
     # Collect all remaining delta events from the pending queue by creating empty chunks
@@ -506,7 +506,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     for evt in delta_events:
         assert len(evt.delta) <= 10
         assert evt.item_id == "fc_call_test"
-        assert evt.output_index == 1
+        assert evt.output_index == 0
         assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
 
     # Verify all deltas concatenated equal the original arguments
@@ -1229,6 +1229,47 @@ async def test_tool_then_reasoning_then_text_gives_message_its_own_output_index(
 
     output_indexes_by_item_id: Final = {event.item.id: event.output_index for event in output_item_added_events}
     assert len(output_indexes_by_item_id) == len(set(output_indexes_by_item_id.values()))
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_tool_only_stream_puts_the_function_call_at_output_index_zero(sync_mode: bool):
+    iterator: Final = _build_iterator([_tool_call_chunk(), _chunk("", finish_reason="tool_calls")])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    indexed_events: Final = [event for event in events if hasattr(event, "output_index")]
+    assert indexed_events
+    assert {event.output_index for event in indexed_events} == {0}
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert [item.type for item in completed.response.output] == ["function_call"]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completed_output_follows_the_streamed_output_indexes(sync_mode: bool):
+    iterator: Final = _build_iterator(
+        [
+            _reasoning_chunk("thinking"),
+            _tool_call_chunk(),
+            _chunk("Hello"),
+            _chunk("!", finish_reason="stop"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    added: Final = [
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+    assert [event.output_index for event in added] == list(range(len(added)))
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert [item.type for item in completed.response.output] == [event.item.type for event in added]
+    assert [item.id for item in completed.response.output] == [event.item.id for event in added]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
