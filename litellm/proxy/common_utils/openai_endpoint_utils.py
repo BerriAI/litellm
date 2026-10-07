@@ -17,21 +17,27 @@ def remove_sensitive_info_from_deployment(
     excluded_keys: set[str] | None = None,
 ) -> dict:
     """
-    Removes sensitive information from a deployment dictionary.
+    Returns a public deployment copy without credentials or supplier headers.
 
     Args:
         deployment_dict (dict): The deployment dictionary to remove sensitive information from.
         excluded_keys (Optional[Set[str]]): Set of keys that should not be masked (exact match).
 
     Returns:
-        dict: The modified deployment dictionary with sensitive information removed.
+        dict: A copied deployment dictionary with sensitive information removed.
     """
-    deployment_dict["litellm_params"].pop("api_key", None)
-    deployment_dict["litellm_params"].pop("client_secret", None)
-    deployment_dict["litellm_params"].pop("vertex_credentials", None)
-    deployment_dict["litellm_params"].pop("vertex_ai_credentials", None)
-    deployment_dict["litellm_params"].pop("aws_access_key_id", None)
-    deployment_dict["litellm_params"].pop("aws_secret_access_key", None)
+    _private_params: Final = frozenset(
+        (
+            "api_key",
+            "client_secret",
+            "vertex_credentials",
+            "vertex_ai_credentials",
+            "aws_access_key_id",
+            "aws_secret_access_key",
+            "extra_headers",
+            "headers",
+        )
+    )
 
     # Rate-limit config fields must never be masked — they are integers, not credentials.
     # The field names contain "key" which matches the masker's sensitive pattern, so we
@@ -42,11 +48,13 @@ def remove_sensitive_info_from_deployment(
     }
     _excluded: Final = (excluded_keys or set()) | _rate_limit_config_keys
 
-    deployment_dict["litellm_params"] = SENSITIVE_DATA_MASKER.mask_dict(
-        deployment_dict["litellm_params"], excluded_keys=_excluded
-    )
-
-    return deployment_dict
+    return {
+        **deployment_dict,
+        "litellm_params": SENSITIVE_DATA_MASKER.mask_dict(
+            {key: value for key, value in deployment_dict["litellm_params"].items() if key not in _private_params},
+            excluded_keys=_excluded,
+        ),
+    }
 
 
 async def get_custom_llm_provider_from_request_body(request: Request) -> str | None:

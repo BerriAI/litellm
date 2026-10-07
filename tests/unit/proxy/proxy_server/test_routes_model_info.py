@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -933,3 +934,102 @@ def test_v2_model_info_access_group_paginates_over_the_filtered_set(client, auth
     assert _model_names(payload) == ["openai/*"]
     assert payload["total_count"] == 2
     assert payload["total_pages"] == 2
+
+
+async def test_external_headers_are_private_on_permitted_nonadmin_discovery(
+    tmp_path: Path,
+    mock_prisma: MagicMock,
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import yaml
+    from openai import AsyncOpenAI
+
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.model_offerings import ModelOfferingsManager
+
+    secret: Final = "opaque-session-fixture"
+    monkeypatch.setenv("SUPPLIER_SESSION", secret)
+    path: Final = tmp_path / "offerings.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "providers": {
+                    "source": {
+                        "provider": "openai",
+                        "api_base": "https://supplier.test/v1",
+                        "api_key": "supplier-fixture-key",
+                        "headers": {"X-Session": "os.environ/SUPPLIER_SESSION"},
+                    }
+                },
+                "offerings": [
+                    {
+                        "model_name": "selected",
+                        "source": "manual",
+                        "provider": "source",
+                        "upstream_model": "fixture-backend",
+                        "model_info": {"mode": "chat", "context_window": 1000},
+                    }
+                ],
+            }
+        )
+    )
+    catalog_handler: Final = AsyncHTTPHandler()
+    await catalog_handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": []}))
+    ) as catalog_client:
+        catalog_handler.client = catalog_client
+        manager: Final = ModelOfferingsManager(
+            path=path, template=litellm.Router(model_list=[], num_retries=0), client=catalog_handler
+        )
+        assert await manager.reload(initial=True)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(proxy_server, "user_config_file_path", None)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    monkeypatch.setattr(proxy_server, "llm_router", manager.router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", manager.router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    deployment_id: Final = manager.router.get_model_ids()[0]
+    with auth_as(LitellmUserRoles.INTERNAL_USER, models=["selected"]):
+        for route, query in (
+            ("/model/info", {}),
+            ("/v1/model/info", {"litellm_model_id": deployment_id}),
+            ("/v2/model/info", {}),
+            ("/v2/model/info", {"modelId": deployment_id}),
+            ("/model_group/info", {}),
+            ("/v1/models", {}),
+            ("/v1/models/selected", {}),
+        ):
+            response: Final = client.get(route, params=query)
+            assert response.status_code == 200, response.text
+            assert "selected" in response.text
+            assert secret not in response.text
+            assert "x-session" not in response.text.lower()
+    runtime_headers: Final = manager.router.get_model_list()[0]["litellm_params"]["extra_headers"]
+    assert runtime_headers["x-session"] == secret
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.headers["x-session"] == secret
+        return httpx.Response(
+            200,
+            json={
+                "id": "fixture-response",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-backend",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "accepted"}, "finish_reason": "stop"}
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        async with AsyncOpenAI(api_key="supplier-fixture-key", http_client=http_client, max_retries=0) as sdk_client:
+            result: Final = await manager.router.acompletion(
+                model="selected", messages=[{"role": "user", "content": "fixture"}], client=sdk_client
+            )
+            assert result.choices[0].message.content == "accepted"
