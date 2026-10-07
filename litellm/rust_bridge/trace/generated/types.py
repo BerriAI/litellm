@@ -51,6 +51,11 @@ class SpanErrorPage(typing_extensions.TypedDict):
 SpanStatus: TypeAlias = Literal["ok", "error", "unset"]
 
 
+class RunSource(typing_extensions.TypedDict):
+    url: ReadOnly[str]
+    title: ReadOnly[str]
+
+
 class AgentNode(typing_extensions.TypedDict):
     name: ReadOnly[str]
     parent_agent: ReadOnly[str | None]
@@ -125,6 +130,7 @@ class TraceSummary(typing_extensions.TypedDict):
     models: ReadOnly[tuple[str, ...]]
     spend: ReadOnly[float | None]
     priced_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    source: ReadOnly[NotRequired[RunSource | None | None]]
 
 
 class Span(typing_extensions.TypedDict):
