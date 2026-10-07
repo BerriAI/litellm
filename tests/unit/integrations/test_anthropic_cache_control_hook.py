@@ -3705,9 +3705,9 @@ class TestPromptCacheBreakpointCapability:
         bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
         with open(bundled) as handle:
             monkeypatch.setattr(litellm, "model_cost", json.load(handle))
-        litellm.utils._cached_get_model_info_helper.cache_clear()
+        litellm.utils.cached_get_model_info_helper.cache_clear()
         yield
-        litellm.utils._cached_get_model_info_helper.cache_clear()
+        litellm.utils.cached_get_model_info_helper.cache_clear()
 
 
     def test_listed_model_uses_the_model_map_flag(self, monkeypatch):

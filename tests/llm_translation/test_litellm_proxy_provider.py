@@ -128,7 +128,7 @@ async def _gateway_embedding_via_injected_client(
 @pytest.mark.asyncio
 async def test_litellm_gateway_from_sdk_embedding(is_async: bool):
     litellm.set_verbose = True
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     transport, response = await _gateway_embedding_via_injected_client(is_async)
 
@@ -152,7 +152,7 @@ async def test_litellm_gateway_from_sdk_embedding_under_foreign_cassette(tmp_pat
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
 async def test_litellm_gateway_from_sdk_image_generation(is_async):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     if is_async:
         from openai import AsyncOpenAI
@@ -202,7 +202,7 @@ async def test_litellm_gateway_from_sdk_image_generation(is_async):
 @pytest.mark.asyncio
 async def test_litellm_gateway_image_generation_direct(is_async):
     """Test image generation using the litellm_proxy provider directly."""
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Create mock response that matches OpenAI's response structure
     mock_openai_response = MagicMock()
@@ -276,7 +276,7 @@ async def test_litellm_gateway_image_generation_direct(is_async):
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
 async def test_litellm_gateway_from_sdk_image_edit(is_async):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     mock_response = {
         "created": 1,
@@ -331,7 +331,7 @@ async def test_litellm_gateway_from_sdk_image_edit(is_async):
 @pytest.mark.asyncio
 async def test_litellm_gateway_from_sdk_transcription(is_async):
     litellm.set_verbose = True
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     if is_async:
         from openai import AsyncOpenAI
@@ -427,7 +427,7 @@ async def test_litellm_gateway_from_sdk_speech(is_async):
 @pytest.mark.asyncio
 async def test_litellm_gateway_from_sdk_rerank(is_async):
     litellm.set_verbose = True
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     if is_async:
         client = AsyncHTTPHandler()
@@ -521,7 +521,7 @@ async def test_litellm_gateway_from_sdk_rerank(is_async):
 
 def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
     litellm.set_verbose = True
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     from openai import OpenAI
 

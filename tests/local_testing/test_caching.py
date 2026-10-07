@@ -110,7 +110,7 @@ async def test_batch_get_cache_with_none_keys(sync_mode):
     """
     from litellm.caching.caching import RedisCache
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     redis_cache = RedisCache(
         host=os.environ.get("REDIS_HOST"),
@@ -505,7 +505,7 @@ def test_embedding_caching():
 
 @pytest.mark.asyncio
 async def test_embedding_caching_individual_items_and_then_list():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.cache = Cache()
     text_to_embed = [
         "hello",
@@ -2592,7 +2592,7 @@ async def test_redis_increment_pipeline():
         from litellm.caching.redis_cache import RedisCache
 
         litellm.set_verbose = True
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         redis_cache = RedisCache(
             host=os.environ["REDIS_HOST"],
             port=os.environ["REDIS_PORT"],
@@ -2863,7 +2863,7 @@ def test_caching_with_reasoning_content():
 
 def test_caching_reasoning_args_miss():  # test in memory cache
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
@@ -2889,7 +2889,7 @@ def test_caching_reasoning_args_miss():  # test in memory cache
 
 def test_caching_reasoning_args_hit():  # test in memory cache
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
@@ -2916,7 +2916,7 @@ def test_caching_reasoning_args_hit():  # test in memory cache
 
 def test_caching_thinking_args_miss():  # test in memory cache
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
@@ -2942,7 +2942,7 @@ def test_caching_thinking_args_miss():  # test in memory cache
 
 def test_caching_thinking_args_hit():  # test in memory cache
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
