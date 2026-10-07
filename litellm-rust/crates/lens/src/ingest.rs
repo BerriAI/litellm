@@ -78,7 +78,7 @@ pub fn response(content_type: Option<&str>, outcome: Result<(), Error>) -> Respo
         )
     };
     let mut response = (status, [(http::header::CONTENT_TYPE, media_type)], body).into_response();
-    if status == StatusCode::SERVICE_UNAVAILABLE {
+    if matches!(status, StatusCode::SERVICE_UNAVAILABLE | StatusCode::TOO_MANY_REQUESTS) {
         response
             .headers_mut()
             .insert("retry-after", http::HeaderValue::from_static("5"));
