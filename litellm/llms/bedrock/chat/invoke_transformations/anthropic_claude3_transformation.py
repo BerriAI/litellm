@@ -46,6 +46,24 @@ else:
     LiteLLMLoggingObj = Any
 
 
+def _get_bedrock_claude_response_model(
+    route_model: str,
+    requested_model_id: object,
+    provider_response_model: object,
+) -> str:
+    if isinstance(requested_model_id, str) and is_bedrock_application_inference_profile_arn(requested_model_id):
+        if isinstance(provider_response_model, str):
+            return (
+                provider_response_model
+                if provider_response_model.startswith("anthropic.")
+                else f"anthropic.{provider_response_model}"
+            )
+        return strip_bedrock_routing_prefix(route_model)
+    if isinstance(requested_model_id, str):
+        return extract_model_name_from_bedrock_arn(requested_model_id)
+    return strip_bedrock_routing_prefix(route_model)
+
+
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     """
     Reference:
@@ -396,11 +414,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             json_mode=json_mode,
         )
         requested_model_id: Final = litellm_params.get("bedrock_invoke_model_id")
-        response_model: Final = (
-            model
-            if not isinstance(requested_model_id, str)
-            or is_bedrock_application_inference_profile_arn(requested_model_id)
-            else extract_model_name_from_bedrock_arn(requested_model_id)
+        response_model: Final = _get_bedrock_claude_response_model(
+            route_model=model,
+            requested_model_id=requested_model_id,
+            provider_response_model=transformed.model,
         )
         transformed.model = strip_bedrock_routing_prefix(response_model)
         resolved_region: Final = litellm_params.get("aws_region_name")

@@ -1274,3 +1274,26 @@ def test_invoke_claude_keeps_resolved_region(
     assert response.model == "anthropic.claude-opus-5"
     assert response._hidden_params["region_name"] == expected_region
     assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+def test_invoke_claude_application_profile_uses_provider_response_model_for_cost(
+    local_model_cost_map,
+    monkeypatch,
+):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFAKEFAKEFAKE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    model_id: Final = "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:application-inference-profile/opus-profile"
+    cost_key: Final = "bedrock/us-gov-west-1/anthropic.claude-opus-5"
+    prices: Final = litellm.model_cost[cost_key]
+    expected_cost: Final = 10 * prices["input_cost_per_token"] + 20 * prices["output_cost_per_token"]
+
+    response: Final = _complete_bedrock_claude(
+        "bedrock/invoke/anthropic.claude-haiku-4-5",
+        model_id=model_id,
+    )
+
+    assert response.model == "anthropic.claude-opus-5"
+    assert response._hidden_params["region_name"] == "us-gov-west-1"
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
