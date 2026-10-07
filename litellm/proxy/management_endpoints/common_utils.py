@@ -169,11 +169,21 @@ def _check_passthrough_routes_caller_permission(
 ) -> None:
     """
     Only proxy admins may set `allowed_passthrough_routes` or `denied_passthrough_routes`
-    (top-level or under `metadata`) — the runtime route checker reads both from key and
-    team metadata, so keys and teams must be gated identically. A non-admin request must
-    also leave an existing deny list as it is: clearing it, or replacing `metadata`
-    without it, would widen access.
+    (top-level or under `metadata`), since the runtime route checker reads both from key and
+    team metadata.
     """
+    check_allowed_passthrough_routes_caller_permission(data, user_api_key_dict, entity=entity)
+    check_denied_passthrough_routes_caller_permission(
+        data, user_api_key_dict, entity=entity, existing_metadata=existing_metadata
+    )
+
+
+def check_allowed_passthrough_routes_caller_permission(
+    data: BaseModel | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+) -> None:
     if data is None:
         return
     metadata: Final = getattr(data, "metadata", None)
@@ -193,6 +203,22 @@ def _check_passthrough_routes_caller_permission(
     if isinstance(metadata, dict) and metadata.get("allowed_passthrough_routes"):
         raise _passthrough_routes_permission_error("metadata.allowed_passthrough_routes", entity)
 
+
+def check_denied_passthrough_routes_caller_permission(
+    data: BaseModel | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    """
+    A non-admin request must leave an existing deny list as it is: clearing it, or replacing
+    `metadata` without it, would widen access. The outcome depends on the stored deny list, so
+    run this only after the caller is known to be allowed to edit the object.
+    """
+    if data is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    metadata: Final = getattr(data, "metadata", None)
     existing_denied: Final = (existing_metadata or {}).get("denied_passthrough_routes") or None
     if (
         "denied_passthrough_routes" in data.model_fields_set

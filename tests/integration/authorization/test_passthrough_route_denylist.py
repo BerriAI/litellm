@@ -77,8 +77,15 @@ def test_denied_subpath_is_blocked_even_when_allowed_while_its_sibling_still_rea
 
 @pytest.mark.parametrize(
     "subpath",
-    ["public/%2e%2e/admin/users", "/admin/users"],
-    ids=["encoded_dot_dot_segment", "empty_segment"],
+    ["public/%2e%2e/admin/users", "/admin/users", "admin%3F", "admin%3F/users", "admin%23", "admin%23/users"],
+    ids=[
+        "encoded_dot_dot_segment",
+        "empty_segment",
+        "encoded_query_mark",
+        "encoded_query_mark_then_subpath",
+        "encoded_fragment_mark",
+        "encoded_fragment_mark_then_subpath",
+    ],
 )
 def test_dot_and_empty_segments_cannot_reach_a_denied_subpath(gateway: Gateway, subpath: str) -> None:
     with wire_server(_echo) as wire, gateway.scenario() as scenario:
@@ -248,3 +255,68 @@ def test_team_admin_cannot_clear_or_drop_a_deny_a_proxy_admin_set_on_a_team_key(
         assert unchanged.status_code == 200, unchanged.text
         _assert_denied(_call(gateway, f"{path}/admin/users", key), f"{path}/admin")
         assert _upstream_targets(wire) == ()
+
+
+def test_team_admin_bulk_update_cannot_drop_a_deny_a_proxy_admin_set_on_a_team_key(gateway: Gateway) -> None:
+    with wire_server(_echo) as wire, gateway.scenario() as scenario:
+        path: Final = _registered_endpoint(gateway, scenario, wire)
+        team_admin: Final = scenario.user(user_role="internal_user")
+        team: Final = scenario.team(members_with_roles=[{"role": "admin", "user_id": team_admin}])
+        team_admin_key: Final = scenario.key(user_id=team_admin)
+        guarded: Final = scenario.key(
+            team_id=team, allowed_passthrough_routes=[path], denied_passthrough_routes=[f"{path}/admin"]
+        )
+        plain: Final = scenario.key(team_id=team, allowed_passthrough_routes=[path])
+
+        response: Final = gateway.request(
+            "POST",
+            "/team/key/bulk_update",
+            {"team_id": team, "key_ids": [guarded, plain], "update_fields": {"metadata": {}}},
+            key=team_admin_key,
+        )
+
+        assert response.status_code == 200, response.text
+        body: Final = JSON_OBJECT.validate_python(response.json())
+        failed: Final = tuple(object_value(item) for item in ENDPOINTS.validate_python(body["failed_updates"]))
+        succeeded: Final = tuple(object_value(item) for item in ENDPOINTS.validate_python(body["successful_updates"]))
+        assert [string_value(item["key"]) for item in failed] == [guarded], response.text
+        assert "metadata.denied_passthrough_routes" in string_value(failed[0]["failed_reason"]), response.text
+        assert [string_value(item["key"]) for item in succeeded] == [plain], response.text
+        _assert_denied(_call(gateway, f"{path}/admin/users", guarded), f"{path}/admin")
+        assert _upstream_targets(wire) == ()
+
+
+@pytest.mark.parametrize("route", ["/key/update", "/key/regenerate"])
+def test_non_owner_gets_the_same_refusal_whether_or_not_another_users_key_has_a_deny(
+    gateway: Gateway, route: str
+) -> None:
+    with gateway.scenario() as scenario:
+        owner: Final = scenario.user(user_role="internal_user")
+        guarded: Final = scenario.key(user_id=owner, denied_passthrough_routes=["/integration-deny-probe"])
+        plain: Final = scenario.key(user_id=owner)
+        outsider_key: Final = scenario.key(user_id=scenario.user(user_role="internal_user"))
+
+        def probe(key: str) -> httpx.Response:
+            return gateway.request("POST", route, {"key": key, "denied_passthrough_routes": []}, key=outsider_key)
+
+        on_guarded: Final = probe(guarded)
+        on_plain: Final = probe(plain)
+
+        assert on_guarded.status_code == on_plain.status_code != 200, (on_guarded.text, on_plain.text)
+        assert "denied_passthrough_routes" not in on_guarded.text, on_guarded.text
+        assert on_guarded.text.replace(guarded, "KEY") == on_plain.text.replace(plain, "KEY")
+
+
+def test_non_admin_setting_allowed_routes_on_regenerate_is_refused_before_the_key_lookup(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        user_key: Final = scenario.key(user_id=scenario.user(user_role="internal_user"))
+
+        response: Final = gateway.request(
+            "POST",
+            "/key/regenerate",
+            {"key": f"sk-missing-{uuid.uuid4().hex}", "allowed_passthrough_routes": ["/integration-deny-probe"]},
+            key=user_key,
+        )
+
+        assert response.status_code == 403, response.text
+        assert "allowed_passthrough_routes" in response.text, response.text

@@ -4555,8 +4555,28 @@ def test_denied_passthrough_routes_do_not_restrict_proxy_admins():
 
 @pytest.mark.parametrize(
     "route",
-    ["/svc/public/../admin/users", "/svc/public/../../admin/users", "/svc//admin/users", "/svc/./admin"],
-    ids=["dot-dot-segment", "dot-dot-past-endpoint-root", "empty-segment", "dot-segment"],
+    [
+        "/svc/public/../admin/users",
+        "/svc/public/../../admin/users",
+        "/svc//admin/users",
+        "/svc/./admin",
+        "/svc/admin?",
+        "/svc/admin?/users",
+        "/svc/admin#",
+        "/svc/admin#/users",
+        "/svc/public/../admin?x",
+    ],
+    ids=[
+        "dot-dot-segment",
+        "dot-dot-past-endpoint-root",
+        "empty-segment",
+        "dot-segment",
+        "query-mark",
+        "query-mark-then-subpath",
+        "fragment-mark",
+        "fragment-mark-then-subpath",
+        "dot-dot-then-query-mark",
+    ],
 )
 def test_dot_and_empty_segments_cannot_reach_a_denied_route(route):
     valid_token = UserAPIKeyAuth(
@@ -4605,3 +4625,13 @@ def test_dot_segments_resolving_outside_a_denied_route_still_pass():
     )
 
     _check_route_with_registered_routes(route="/svc/public/./docs", valid_token=valid_token)
+
+
+def test_query_text_naming_a_denied_route_still_passes():
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
+    )
+
+    _check_route_with_registered_routes(route="/svc/public?next=/svc/admin", valid_token=valid_token)

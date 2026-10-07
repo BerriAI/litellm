@@ -8278,3 +8278,24 @@ def test_team_has_passthrough_route_access_denied_route_wins(team_allowed_routes
             request_method="POST",
             team_allowed_routes=team_allowed_routes,
         )
+
+
+@pytest.mark.parametrize(
+    "team_metadata, expected_detail",
+    [
+        (
+            {"allowed_passthrough_routes": ["/model-host"], "denied_passthrough_routes": ["/model-host/v1"]},
+            "Matched `/model-host/v1` in `denied_passthrough_routes`",
+        ),
+        ({}, "Team not allowed to access passthrough route"),
+    ],
+    ids=["team-deny-names-the-entry", "no-grant-keeps-generic-message"],
+)
+def test_team_passthrough_route_denial_names_the_matched_deny_entry(team_metadata, expected_detail):
+    team = LiteLLM_TeamTable(team_id="team-a", metadata=team_metadata)
+
+    with pytest.raises(HTTPException) as exc_info:
+        JWTAuthManager._raise_team_passthrough_route_denial(route="/model-host/v1/predict", team_object=team)
+
+    assert exc_info.value.status_code == 403
+    assert expected_detail in str(exc_info.value.detail)

@@ -698,7 +698,18 @@ class RouteChecks:
     @staticmethod
     def _forwardable_routes(route: str) -> frozenset[str]:
         """
-        Every path ``route`` can reach once the pass-through forwarder resolves ``.``, ``..`` and empty
+        Every path ``route`` can reach upstream. The forwarder appends the subpath to the target URL, so a
+        decoded ``?`` or ``#`` there starts the query or fragment and cuts the forwarded path short.
+        """
+        forwarded_path: Final = re.split(r"[?#]", route, maxsplit=1)[0]
+        if forwarded_path == route:
+            return RouteChecks._resolved_routes(route)
+        return RouteChecks._resolved_routes(route) | RouteChecks._resolved_routes(forwarded_path)
+
+    @staticmethod
+    def _resolved_routes(route: str) -> frozenset[str]:
+        """
+        Every path ``route`` resolves to once the pass-through forwarder resolves ``.``, ``..`` and empty
         segments in the subpath after the endpoint's own path, which can be any clean prefix of ``route``.
         """
         segments: Final = tuple(route.lstrip("/").split("/"))

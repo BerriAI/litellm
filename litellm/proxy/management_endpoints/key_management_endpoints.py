@@ -94,6 +94,8 @@ from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _team_member_has_permission,
     _user_has_admin_view,
+    check_allowed_passthrough_routes_caller_permission,
+    check_denied_passthrough_routes_caller_permission,
     validate_budget_duration,
     validate_finite_spend,
 )
@@ -2775,6 +2777,11 @@ async def _process_single_key_update(
             existing_key_row=existing_key_row,
             user_api_key_cache=user_api_key_cache,
         )
+    check_denied_passthrough_routes_caller_permission(
+        update_key_request,
+        user_api_key_dict,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+    )
 
     # Custom key update hook
     if user_custom_key_update is not None:
@@ -3092,11 +3099,7 @@ async def _validate_update_key_data(
         existing_key_row=existing_key_row,
         user_api_key_dict=user_api_key_dict,
     )
-    _check_passthrough_routes_caller_permission(
-        data=data,
-        user_api_key_dict=user_api_key_dict,
-        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
-    )
+    check_allowed_passthrough_routes_caller_permission(data, user_api_key_dict)
     _check_permissions_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
@@ -3242,6 +3245,11 @@ async def _validate_update_key_data(
             user_api_key_cache=user_api_key_cache,
             route=("/key/update (max_budget/spend)" if _is_budget_change else "/key/update"),
         )
+    check_denied_passthrough_routes_caller_permission(
+        data,
+        user_api_key_dict,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+    )
 
     # Check team limits if key has a team_id (from request or existing key)
     team_obj: LiteLLM_TeamTableCachedObj | None = None
@@ -3947,7 +3955,7 @@ async def bulk_update_team_keys(
 
     # Block metadata.allowed_passthrough_routes for non-admins — the runtime
     # route checker reads it from key/team metadata to grant passthrough.
-    _check_passthrough_routes_caller_permission(data=data.update_fields, user_api_key_dict=user_api_key_dict)
+    check_allowed_passthrough_routes_caller_permission(data.update_fields, user_api_key_dict)
 
     if not requested_tokens:
         raise HTTPException(
@@ -5827,6 +5835,7 @@ async def regenerate_key_fn(
                 user_api_key_dict=user_api_key_dict,
                 allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
             )
+            check_allowed_passthrough_routes_caller_permission(data, user_api_key_dict)
             _check_permissions_caller_permission(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
@@ -5923,11 +5932,6 @@ async def regenerate_key_fn(
             _key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
             user_api_key_dict,
         )
-        _check_passthrough_routes_caller_permission(
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-            existing_metadata=_key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
-        )
 
         # check if user has permission to regenerate key
         await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
@@ -5949,6 +5953,11 @@ async def regenerate_key_fn(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "You are not authorized to regenerate this key"},
             )
+        check_denied_passthrough_routes_caller_permission(
+            data,
+            user_api_key_dict,
+            existing_metadata=_key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        )
 
         if data is not None and (data.access_group_ids or data.object_permission is not None):
             regenerate_team_table: LiteLLM_TeamTableCachedObj | None = None
