@@ -121,6 +121,50 @@ async fn all_inference_endpoints_share_native_cache(
 }
 
 #[rstest]
+#[case::no_cache(json!({"cache": {"no-cache": true}}), false, true)]
+#[case::no_store(json!({"cache": {"no-store": true}}), true, false)]
+#[case::caching_disabled(json!({"caching": false}), false, false)]
+#[case::caching_enabled(json!({"caching": true}), true, true)]
+#[case::null_controls(json!({"caching": null, "cache": null}), true, true)]
+#[tokio::test]
+async fn request_controls_gate_cache_reads_and_writes(
+    #[case] controls: Value,
+    #[case] reads: bool,
+    #[case] writes: bool,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id":"response-1", "model":"test-model", "status":"completed", "output":[]
+        })))
+        .expect(1 + u64::from(!writes) + u64::from(!reads))
+        .mount(&upstream)
+        .await;
+    let cache: Arc<dyn ResponseCacheService> = Arc::new(ResponseCache::new(Arc::new(
+        InMemoryCache::new(Some(100), Some(Duration::from_secs(60))),
+    )));
+    let app = support::app_with_cache("openai/test-model", &upstream.uri(), cache);
+    let plain = json!({"model":"public/model", "input":"hello"});
+    let controlled = Value::Object(
+        plain
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .chain(controls.as_object().unwrap().clone())
+            .collect(),
+    );
+    let hit = async |body: Value| {
+        let response = support::post(app.clone(), "/v1/responses", body).await;
+        assert_eq!(response.status(), 200);
+        response.headers().contains_key("x-litellm-cache-key")
+    };
+    assert!(!hit(controlled.clone()).await);
+    assert_eq!(hit(plain).await, writes);
+    assert_eq!(hit(controlled).await, reads);
+}
+
+#[rstest]
 #[case::different_subject("issuer", "tenant-b")]
 #[case::different_authority("other-issuer", "tenant-a")]
 #[tokio::test]
@@ -175,4 +219,55 @@ async fn authenticated_callers_do_not_share_cached_responses(
         first_again.headers().get("x-litellm-cache-key"),
         Some(first_key)
     );
+}
+
+#[rstest]
+#[case::chat("/v1/chat/completions", "anthropic/test-model")]
+#[case::messages("/v1/messages", "anthropic/test-model")]
+#[case::responses("/v1/responses", "openai/test-model")]
+#[tokio::test]
+async fn model_groups_over_one_deployment_do_not_share_cached_responses(
+    #[case] path: &str,
+    #[case] model: &str,
+) {
+    let upstream = MockServer::start().await;
+    let provider_body = if path.ends_with("responses") {
+        json!({"id":"response-1", "model":"test-model", "status":"completed", "output":[]})
+    } else {
+        json!({"id":"message-1", "model":"test-model", "type":"message", "role":"assistant", "content":[{"type":"text","text":"hello"}], "stop_reason":"end_turn", "usage":{"input_tokens":1,"output_tokens":1}})
+    };
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(provider_body))
+        .expect(2)
+        .mount(&upstream)
+        .await;
+    let cache: Arc<dyn ResponseCacheService> = Arc::new(ResponseCache::new(Arc::new(
+        InMemoryCache::new(Some(100), Some(Duration::from_secs(60))),
+    )));
+    let app = support::app_with_cache_for_models(
+        &["public/fast", "public/smart"],
+        model,
+        &upstream.uri(),
+        cache,
+    );
+    let request = |name: &str| {
+        if path.ends_with("responses") {
+            json!({"model":name, "input":"hello"})
+        } else {
+            json!({"model":name, "messages":[{"role":"user","content":"hello"}], "max_tokens":16})
+        }
+    };
+    for (name, cached) in [
+        ("public/fast", false),
+        ("public/smart", false),
+        ("public/fast", true),
+    ] {
+        let response = support::post(app.clone(), path, request(name)).await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers().contains_key("x-litellm-cache-key"),
+            cached
+        );
+    }
+    upstream.verify().await;
 }

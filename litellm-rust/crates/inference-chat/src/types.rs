@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use litellm_auth::SecretValue;
-use litellm_cache_response::CacheKeyInput;
+use litellm_cache_response::{CacheKeyInput, Deployment, extra_headers};
 use litellm_inference::{
     RouteError,
     caching::{Cachable, CacheKeyProjection},
@@ -85,18 +85,14 @@ pub struct ProviderChatCompletionsRequest {
 
 impl CacheKeyProjection for ChatCompletionsRequest<'_> {
     fn cache_key_input(&self) -> Result<CacheKeyInput, RouteError> {
-        Ok(CacheKeyInput::new(
+        Ok(CacheKeyInput::forwarded(
             <crate::route::ChatCompletions as Cachable>::SURFACE,
-            Value::Object(
-                self.optional_params
-                    .clone()
-                    .into_iter()
-                    .chain([
-                        ("model".into(), self.model.into()),
-                        ("messages".into(), self.messages.clone()),
-                    ])
-                    .collect(),
-            ),
+            Deployment::new(self.model, self.custom_llm_provider, self.api_base),
+            self.optional_params
+                .clone()
+                .into_iter()
+                .chain([("messages".into(), self.messages.clone())]),
+            extra_headers(self.extra_headers.as_ref()),
         ))
     }
 }

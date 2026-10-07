@@ -13,7 +13,7 @@ use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
     CacheAccess, CacheCredential, CacheKey, CacheKeyInput, CacheOptions, CachePolicy, CacheScope,
-    ResponseCache, ResponseCacheService,
+    Deployment, ResponseCache, ResponseCacheService,
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
@@ -63,6 +63,7 @@ impl StreamCachable for TestRoute {
 
 struct CacheRequest {
     identity: ProviderIdentity,
+    deployment: Deployment,
     parameters: Value,
 }
 
@@ -72,6 +73,7 @@ fn cache_request(input: Value) -> CacheRequest {
             model: "test-model".into(),
             provider: "test-provider".into(),
         },
+        deployment: Deployment::new("test-model", None, None),
         parameters: input,
     }
 }
@@ -85,7 +87,7 @@ fn plan<P: Cachable>(
         CachePlan::new(
             cache,
             options,
-            CacheKeyInput::new(P::SURFACE, request.parameters),
+            CacheKeyInput::new(P::SURFACE, request.deployment, request.parameters),
         )
     });
     (request.identity, plan)
@@ -220,7 +222,7 @@ async fn cache_controls_apply_to_both_reads_and_writes(
 
 #[rstest]
 #[tokio::test]
-async fn request_identity_is_scoped(cache: Arc<dyn ResponseCacheService>) {
+async fn request_identity_is_canonical_and_scoped(cache: Arc<dyn ResponseCacheService>) {
     let calls = AtomicUsize::new(0);
     let first = call(
         &cache,
@@ -229,11 +231,20 @@ async fn request_identity_is_scoped(cache: Arc<dyn ResponseCacheService>) {
         json!({"model":"m", "input":{"a":1,"b":2}}),
     )
     .await;
+    let second = call(
+        &cache,
+        Some(CacheOptions::default()),
+        &calls,
+        json!({"input":{"b":2,"a":1}, "model":"m"}),
+    )
+    .await;
+    assert_eq!(first, second);
     let other = call(
         &cache,
         Some(CacheOptions {
             scope: CacheScope {
                 credential: Some(CacheCredential::new("test", "other-tenant", "key")),
+                model_group: None,
             },
             ..CacheOptions::default()
         }),

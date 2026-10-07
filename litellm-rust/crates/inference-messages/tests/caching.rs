@@ -7,7 +7,9 @@ use std::{
 };
 
 use litellm_cache_memory::InMemoryCache;
-use litellm_cache_response::{CacheKeyInput, CacheOptions, ResponseCache, ResponseCacheService};
+use litellm_cache_response::{
+    CacheKeyInput, CacheOptions, Deployment, ResponseCache, ResponseCacheService,
+};
 use litellm_host::interceptors::{Interceptors, ProviderIdentity};
 use litellm_inference::{
     RouteError,
@@ -17,6 +19,7 @@ use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 struct CacheRequest {
     identity: ProviderIdentity,
+    deployment: Deployment,
     parameters: Value,
 }
 
@@ -29,7 +32,7 @@ fn plan<P: Cachable>(
         CachePlan::new(
             cache,
             options,
-            CacheKeyInput::new(P::SURFACE, request.parameters),
+            CacheKeyInput::new(P::SURFACE, request.deployment, request.parameters),
         )
     });
     (request.identity, plan)
@@ -100,6 +103,7 @@ async fn messages_cache_identity_includes_provider_native_parameters(
                         model: "test".into(),
                         provider: "anthropic".into(),
                     },
+                    deployment: Deployment::new("test", None, None),
                     parameters: json!({
                         "messages":[{"role":"user","content":"hello"}],
                         "max_tokens":32, (field):value
@@ -301,6 +305,80 @@ async fn cache_identity_ignores_deployment_settings_and_skips_rewritten_requests
     }
     first.verify().await;
     second.verify().await;
+}
+
+#[rstest]
+#[case::same_request("none", true)]
+#[case::other_beta_header("provider_specific_header", false)]
+#[case::other_extra_header("extra_headers", false)]
+#[case::other_api_base_without_a_group("api_base", false)]
+#[tokio::test]
+async fn forwarded_headers_and_the_deployment_decide_messages_cache_reuse(
+    cache: Arc<dyn ResponseCacheService>,
+    #[case] change: &str,
+    #[case] hit: bool,
+) {
+    use litellm_inference_messages::MessagesCall;
+    use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id":"message-test", "type":"message", "role":"assistant", "model":"test",
+            "content":[{"type":"text", "text":"answer"}], "stop_reason":"end_turn",
+            "stop_sequence":null, "usage":{"input_tokens":3,"output_tokens":2}
+        })))
+        .expect(if hit { 1 } else { 2 })
+        .mount(&upstream)
+        .await;
+    let route = support::messages_route(litellm_inference_testing::no_secrets()).with_cache(cache);
+    let hooks = ChangingHooks::default();
+    let call = |change: &str| MessagesCall {
+        body: serde_json::from_value(json!({
+            "model":"claude-cache-test",
+            "messages":[{"role":"user","content":"hello"}],
+            "max_tokens":32
+        }))
+        .unwrap(),
+        api_key: Some("sk-test".into()),
+        api_base: Some(match change {
+            "api_base" => format!("{}/", upstream.uri()),
+            _ => upstream.uri(),
+        }),
+        custom_llm_provider: Some("anthropic".into()),
+        extra_headers: (change == "extra_headers").then(|| {
+            json!({"anthropic-version":"2023-06-01"})
+                .as_object()
+                .unwrap()
+                .clone()
+        }),
+        provider_specific_header: (change == "provider_specific_header").then(|| {
+            ProviderSpecificHeaders::One(ProviderSpecificHeader {
+                custom_llm_provider: "anthropic".into(),
+                extra_headers: json!({"anthropic-beta":"context-1m-2025-08-07"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            })
+        }),
+        timeout: None,
+        shaping: Default::default(),
+    };
+    for change in ["none", change] {
+        route
+            .execute(call(change), &hooks, CacheOptions::default())
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        matches!(
+            hooks.facts.lock().unwrap()[1].source,
+            ResultSource::Cache { .. }
+        ),
+        hit
+    );
+    upstream.verify().await;
 }
 
 use bytes::Bytes;

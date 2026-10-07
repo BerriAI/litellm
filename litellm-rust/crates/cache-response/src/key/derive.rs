@@ -1,7 +1,7 @@
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use super::{CacheCredential, CacheKeyInput, CacheScope};
+use super::{CacheCredential, CacheKeyInput, CacheScope, target::CacheTarget};
 
 const KEY_VERSION: &str = "v0";
 
@@ -16,6 +16,7 @@ impl CacheKey {
         let material = json!({
             "credential": scope.credential.as_ref().map(CacheCredential::as_str),
             "surface": input.surface,
+            "target": CacheTarget::resolve(scope, &input.deployment),
             "parameters": input.parameters,
         });
         let hash = format!("{:x}", Sha256::digest(material.to_string()));

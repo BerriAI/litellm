@@ -8,7 +8,7 @@ use litellm_cache::{
 };
 use litellm_cache_azure_blob::AzureBlobCache;
 use litellm_cache_response::{
-    CacheEntry, CacheKey, CacheKeyInput, CacheScope, ResponseCache, ResponseCacheCodec,
+    CacheEntry, CacheKey, CacheKeyInput, CacheScope, Deployment, ResponseCache, ResponseCacheCodec,
 };
 use rstest::{fixture, rstest};
 use serde_json::json;
@@ -28,7 +28,11 @@ fn response_cache(fixture: &Fixture) -> ResponseCache<AzureBlobCache<ResponseCac
 
 fn key(cache: &ResponseCache<AzureBlobCache<ResponseCacheCodec>>, model: &str) -> CacheKey {
     cache.key(
-        &CacheKeyInput::new("chat_completions", serde_json::json!({"model": model})),
+        &CacheKeyInput::new(
+            "chat_completions",
+            Deployment::new(model, None, None),
+            serde_json::json!({}),
+        ),
         &CacheScope::default(),
     )
 }
