@@ -10,6 +10,15 @@ from pydantic import ConfigDict, Field, JsonValue
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
+class TraceAgentList(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    data: tuple[str, ...]
+
+
 class TraceSQLResponse(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -19,4 +28,4 @@ class TraceSQLResponse(LiteLLMBaseModel):
     data: tuple[Mapping[str, JsonValue], ...]
 
 
-TraceWireResponses: TypeAlias = Annotated[TraceSQLResponse, Field(..., title="TraceWireResponses")]
+TraceWireResponses: TypeAlias = Annotated[TraceAgentList | TraceSQLResponse, Field(..., title="TraceWireResponses")]
