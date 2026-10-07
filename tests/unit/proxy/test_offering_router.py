@@ -2,8 +2,10 @@ from types import MappingProxyType
 from typing import Final
 
 import litellm
+import pytest
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_EndUserTable, ModelAccessDeniedProxyException, ProxyErrorTypes, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import can_customer_access_model, can_key_call_model
 from litellm.proxy.offering_router import OfferingAccessGuard, OfferingRouterView, OfferingServingSnapshot
 from litellm.router import Router
 from litellm.types.utils import CallTypes
@@ -56,3 +58,36 @@ async def test_unavailable_and_unselected_offerings_cannot_forward_or_override_c
         pass
     else:
         raise AssertionError("An unavailable deployment sharing the backend model was allowed")
+
+
+async def test_globally_available_offerings_preserve_customer_and_key_model_permissions() -> None:
+    native: Final = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": f"openai/{name}", "api_key": "fixture-key"}}
+            for name in ("allowed", "restricted")
+        ]
+    )
+    router: Final = OfferingRouterView(
+        OfferingServingSnapshot(
+            native,
+            frozenset({"allowed", "restricted"}),
+            MappingProxyType({}),
+            frozenset({"openai/allowed", "openai/restricted"}),
+        )
+    )
+    guard: Final = OfferingAccessGuard(router)
+    key: Final = UserAPIKeyAuth(models=["allowed", "restricted"])
+    customer: Final = LiteLLM_EndUserTable(user_id="fixture-customer", blocked=False, models=["allowed"])
+    with router.pin_snapshot():
+        assert await guard.async_pre_call_hook(key, DualCache(), {"model": "restricted"}, "acompletion") is None
+        assert await can_key_call_model("restricted", None, key, router) is True
+        with pytest.raises(ModelAccessDeniedProxyException) as denied_customer:
+            can_customer_access_model("restricted", customer, router, key)
+        assert denied_customer.value.code == "403"
+        assert denied_customer.value.type == ProxyErrorTypes.customer_model_access_denied
+        assert can_customer_access_model("allowed", customer, router, key) is True
+        assert await can_key_call_model("allowed", None, key, router) is True
+        with pytest.raises(ModelAccessDeniedProxyException) as denied_key:
+            await can_key_call_model("restricted", None, UserAPIKeyAuth(models=["allowed"]), router)
+        assert denied_key.value.code == "403"
+        assert denied_key.value.type == ProxyErrorTypes.key_model_access_denied
