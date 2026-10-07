@@ -83,3 +83,158 @@ async def test_inflight_records_count_toward_the_queue_limit() -> None:
 def test_oversized_event_is_rejected_before_queueing(value: str) -> None:
     with pytest.raises(OverflowError):
         encode_record({"messages": value})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", (429, 502, 503, 504, 0))
+async def test_transient_failures_retry_the_same_batch_and_recover(status: int) -> None:
+    requests: Final = asyncio.Queue[bytes]()
+    waits: Final = asyncio.Queue[float]()
+
+    async def retry_delay(seconds: float) -> None:
+        waits.put_nowait(seconds)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request.content)
+        if requests.qsize() == 3:
+            return httpx.Response(204)
+        if status == 0:
+            raise httpx.ConnectError("private storage host", request=request)
+        return httpx.Response(status)
+
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(respond)) as client:
+        exporter: Final = LensExporter(client, sleep=retry_delay)
+        assert exporter.enqueue(b'{"id":1}')
+        exporter.start()
+        await exporter.aclose()
+    assert tuple(requests.get_nowait() for _ in range(3)) == (b'[{"id":1}]',) * 3
+    assert tuple(waits.get_nowait() for _ in range(2)) == (1.0, 2.0)
+    assert (exporter.rows_written, exporter.rows_dropped, exporter.buffered_bytes, exporter.buffered_events) == (
+        1,
+        0,
+        0,
+        0,
+    )
+    assert exporter.last_error == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,attempts,reason", ((401, 1, "HTTP 401"), (500, 1, "HTTP 500"), (503, 3, "retry limit reached"))
+)
+async def test_failed_exports_are_counted_and_release_all_buffer_capacity(
+    status: int, attempts: int, reason: str
+) -> None:
+    requests: Final = asyncio.Queue[bytes]()
+
+    async def no_wait(_: float) -> None:
+        return None
+
+    def reject(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request.content)
+        return httpx.Response(status, text="private credentials")
+
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(reject)) as client:
+        exporter: Final = LensExporter(client, sleep=no_wait)
+        assert exporter.enqueue(b"{}")
+        exporter.start()
+        exporter.start()
+        await exporter.aclose()
+    assert requests.qsize() == attempts
+    assert (exporter.rows_written, exporter.rows_dropped, exporter.buffered_bytes, exporter.buffered_events) == (
+        0,
+        1,
+        0,
+        0,
+    )
+    assert exporter.last_error == reason
+    assert not exporter.enqueue(b"{}")
+    assert exporter.rows_dropped == 2
+
+
+@pytest.mark.asyncio
+async def test_cancelled_inflight_export_drops_the_batch_and_pending_records() -> None:
+    started: Final = asyncio.Event()
+
+    async def block(_: httpx.Request) -> httpx.Response:
+        started.set()
+        await asyncio.Future[None]()
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(block)) as client:
+        exporter: Final = LensExporter(client)
+        assert exporter.enqueue(b"{}")
+        exporter.start()
+        await started.wait()
+        assert exporter.enqueue(b"{}")
+        assert exporter.task is not None
+        exporter.task.cancel()
+        await exporter.aclose()
+    assert (exporter.rows_written, exporter.rows_dropped, exporter.buffered_bytes, exporter.buffered_events) == (
+        0,
+        2,
+        0,
+        0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_byte_budget_rejects_large_queue_and_shutdown_without_start_discards_it() -> None:
+    from litellm.tracing.exporter import MAX_BUFFER_BYTES
+
+    async with httpx.AsyncClient(base_url="http://lens") as client:
+        exporter: Final = LensExporter(client)
+        assert not exporter.enqueue(b"x" * (MAX_EVENT_BYTES + 1))
+        for _ in range(MAX_BUFFER_BYTES // MAX_EVENT_BYTES):
+            assert exporter.enqueue(b"x" * MAX_EVENT_BYTES)
+        assert not exporter.enqueue(b"x")
+        assert exporter.buffered_bytes == MAX_BUFFER_BYTES
+        await exporter.aclose()
+    assert exporter.rows_dropped == MAX_BUFFER_BYTES // MAX_EVENT_BYTES + 2
+    assert (exporter.buffered_bytes, exporter.buffered_events) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_batches_stay_bounded_without_losing_or_reordering_records() -> None:
+    from litellm.tracing.exporter import MAX_BATCH_BYTES
+
+    bodies: Final = asyncio.Queue[bytes]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        bodies.put_nowait(request.content)
+        return httpx.Response(204)
+
+    records: Final = tuple(encode_record({"id": index, "text": "x" * (MAX_EVENT_BYTES // 2)}) for index in range(10))
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
+        exporter: Final = LensExporter(client)
+        for record in records:
+            assert exporter.enqueue(record)
+        exporter.start()
+        await exporter.aclose()
+    sent: Final = tuple(bodies.get_nowait() for _ in range(bodies.qsize()))
+    assert len(sent) == 2
+    assert all(len(body) <= MAX_BATCH_BYTES for body in sent)
+    assert [row["id"] for body in sent for row in json.loads(body)] == list(range(10))
+    assert exporter.rows_written == 10
+    assert exporter.rows_dropped == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", (None, {"id": []}, {"id": "x", "messages": [{"content": "x" * MAX_EVENT_BYTES}]}))
+async def test_invalid_callback_data_never_interrupts_model_requests(payload: object) -> None:
+    async with httpx.AsyncClient(base_url="http://lens") as client:
+        exporter: Final = LensExporter(client)
+        await exporter.async_log_failure_event({"standard_logging_object": payload}, None, None, None)
+        await exporter.aclose()
+    assert exporter.rows_written == 0
+    assert exporter.buffered_bytes == 0
+    assert exporter.rows_dropped == (0 if payload is None else 1)
+
+
+def test_serialization_rejects_recursive_and_non_finite_payloads() -> None:
+    cyclic: Final[dict[str, object]] = {}  # mutable-ok: deliberately constructs a cyclic callback payload
+    cyclic["self"] = cyclic
+    with pytest.raises(OverflowError):
+        encode_record(cyclic)
+    with pytest.raises(ValueError, match="Out of range float values"):
+        encode_record({"cost": float("nan")})

@@ -760,7 +760,7 @@ export function TracingSetupCard(props: TracingSetupProps) {
       <p className="mt-2 text-sm leading-6 text-muted-foreground">
         {enabled
           ? "Send your agent’s runs to LiteLLM to see its inputs, outputs, and tool calls."
-          : "Tracing needs ClickHouse and a small update to your LiteLLM proxy configuration."}
+          : "Tracing needs a Lens service with ClickHouse access and a connection from LiteLLM."}
       </p>
       <TracingSetupFields {...props} />
     </div>

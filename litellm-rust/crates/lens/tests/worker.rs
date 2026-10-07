@@ -259,3 +259,109 @@ async fn model_failures_expose_only_bounded_sanitized_gateway_diagnostics(
         litellm_lens::Error::Control { status: 400, .. }
     ));
 }
+
+#[rstest]
+#[tokio::test]
+async fn configured_private_dns_names_are_reachable_without_following_redirects() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/private-service"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/redirect"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", "/private-service"))
+        .mount(&server)
+        .await;
+    let base = server.uri().replace("127.0.0.1", "localhost");
+    let client = http_client().unwrap();
+    let response = client
+        .get(format!("{base}/private-service"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let redirected = client.get(format!("{base}/redirect")).send().await.unwrap();
+    assert_eq!(redirected.status(), 302);
+}
+
+#[tokio::test]
+async fn oversized_combined_tool_replies_remain_readable_after_a_checkpoint() {
+    use litellm_lens::{
+        activity::Tracker,
+        agent,
+        evidence::{MAX_TOOL_BYTES, Workspace},
+    };
+    let server = MockServer::start().await;
+    let claim: wire::Claim = serde_json::from_value(fixture()).unwrap();
+    let sample: wire::Sample = serde_json::from_str(include_str!("fixtures/sample.json")).unwrap();
+    let filler_size = MAX_TOOL_BYTES * 3 / 5;
+    let page_calls = Arc::new(AtomicUsize::new(0));
+    let page_count = page_calls.clone();
+    let execution = sample.executions[0].clone();
+    Mock::given(method("GET"))
+        .and(path("/lens/worker/lens-test/job-test/content"))
+        .respond_with(move |_: &Request| {
+            let marker = if page_count.fetch_add(1, Ordering::SeqCst) == 0 { "FIRST_REPLY" } else { "ARCHIVED_SECOND_REPLY" };
+            ResponseTemplate::new(200).set_body_json(json!({"execution":execution,"parts":[{
+                "execution_id":"run-test","span_id":"span-test","name":format!("{marker}{}", "x".repeat(filler_size)),"kind":"tool","content":"evidence","truncated":false
+            }]}))
+        }).expect(2).mount(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/lens/worker/lens-test/job-test/progress"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(&server)
+        .await;
+    let model_calls = Arc::new(AtomicUsize::new(0));
+    let model_count = model_calls.clone();
+    Mock::given(method("POST"))
+        .and(path("/lens/worker/lens-test/job-test/model"))
+        .respond_with(move |request: &Request| {
+            let model: wire::ModelRequest = request.body_json().unwrap();
+            let turn = match model_count.fetch_add(1, Ordering::SeqCst) {
+                0 => json!({"tools":[{"action":"catalog","execution_id":"run-test"},{"action":"catalog","execution_id":"run-test"}],"checkpoint":"Inspect the archived second reply"}),
+                1 => {
+                    let reply: Value = serde_json::from_str(&model.messages.last().unwrap().content).unwrap();
+                    assert!(reply["tool_results"][1].as_str().unwrap().contains("Combined tool output exceeds"), "{}", reply["tool_results"][1].as_str().unwrap().chars().take(600).collect::<String>());
+                    json!({"tools":[{"action":"history","turn_start":0,"turn_end":1,"char_start":filler_size,"char_end":filler_size+6000}]})
+                },
+                2 => {
+                    let reply: Value = serde_json::from_str(&model.messages.last().unwrap().content).unwrap();
+                    let history: Value = serde_json::from_str(reply["tool_results"][0].as_str().unwrap()).unwrap();
+                    assert!(history["excerpt"].as_str().unwrap().contains("ARCHIVED_SECOND_REPLY"));
+                    json!({"result":{"observations":[]}})
+                },
+                _ => panic!("Unexpected model retry"),
+            };
+            ResponseTemplate::new(200).set_body_json(json!({"content":turn.to_string(),"cost":0}))
+        }).expect(3).mount(&server).await;
+    let client = client(&server);
+    let workspace = Workspace::new(sample.executions, client.clone());
+    let tracker = Tracker::start(
+        &client,
+        "test".into(),
+        wire::ActivityPhase::Review,
+        "Archive".into(),
+        vec![],
+    )
+    .await
+    .unwrap();
+    let output: wire::Extraction = agent::run(
+        &claim,
+        &workspace,
+        agent::Assignment {
+            stage: "test",
+            task: "Read two tools and recover the second from history".into(),
+            purpose: wire::ModelRequestPurpose::Extract,
+            supplied: json!({}),
+        },
+        &tracker,
+    )
+    .await
+    .unwrap();
+    assert!(output.observations.is_empty());
+    assert_eq!(page_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(model_calls.load(Ordering::SeqCst), 3);
+}

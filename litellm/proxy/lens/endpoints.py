@@ -630,7 +630,7 @@ async def claim(worker: WorkerAuth, protocol_version: int = 1, worker_release: s
     if protocol_version != PROTOCOL_VERSION or worker_release != expected:
         raise HTTPException(409, f"Upgrade the Lens worker to {image} and retry")
     if worker.analysis_key_id is None:
-        raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
+        return None
     now: Final = datetime.now(timezone.utc)
     lens_repository: Final = repository()
     await lens_repository.heartbeat(worker.id, now.isoformat())

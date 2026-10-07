@@ -2,11 +2,13 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final
+from enum import Enum
+from typing import Final, NoReturn
 from urllib.parse import urlsplit
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
+from typing_extensions import assert_never
 
 from litellm.rust_bridge.trace.errors import TraceChanged
 from litellm.rust_bridge.trace.generated.types import QueryScope, ReadQueryName, TraceScope
@@ -47,6 +49,33 @@ class LensConnection:
         )
 
 
+class _ReadFailure(Enum):
+    INVALID_QUERY = "invalid_query"
+    CHANGED = "changed"
+    QUERY_TOO_LARGE = "query_too_large"
+    UNAVAILABLE = "unavailable"
+    RESPONSE_TOO_LARGE = "response_too_large"
+    INVALID_RESPONSE = "invalid_response"
+
+
+def _raise_read_failure(failure: _ReadFailure) -> NoReturn:
+    match failure:
+        case _ReadFailure.INVALID_QUERY:
+            raise ValueError("Invalid trace query")
+        case _ReadFailure.CHANGED:
+            raise TraceChanged("Trace changed while paging; refresh the trace to continue")
+        case _ReadFailure.QUERY_TOO_LARGE:
+            raise OverflowError("Trace exceeds the interactive read budget")
+        case _ReadFailure.UNAVAILABLE:
+            raise RuntimeError("Lens trace storage is unavailable")
+        case _ReadFailure.RESPONSE_TOO_LARGE:
+            raise RuntimeError("Lens response exceeds the size limit")
+        case _ReadFailure.INVALID_RESPONSE:
+            raise ValueError("Invalid Lens response")
+        case _:
+            assert_never(failure)
+
+
 class RemoteTraceStore:
     def __init__(self, client: httpx.AsyncClient) -> None:
         self.client: Final = client
@@ -55,19 +84,31 @@ class RemoteTraceStore:
         return
 
     async def _read(self, request: Mapping[str, object]) -> JsonValue:
+        result: Final = await self._read_result(request)
+        if isinstance(result, _ReadFailure):
+            _raise_read_failure(result)
+        return result
+
+    async def _read_result(self, request: Mapping[str, object]) -> JsonValue | _ReadFailure:
         try:
             async with self.client.stream("POST", "/internal/read", json=dict(request)) as response:
-                if response.status_code == 400:
-                    raise ValueError("Invalid trace query")
-                if response.status_code == 409:
-                    raise TraceChanged("Trace changed while paging; refresh the trace to continue")
-                if response.status_code == 413:
-                    raise OverflowError("Trace exceeds the interactive read budget")
-                if response.status_code != 200:
-                    raise RuntimeError("Lens trace storage is unavailable")
-                return _JSON.validate_json(await bounded_response(response, MAX_RESPONSE_BYTES))
-        except httpx.HTTPError as error:
-            raise RuntimeError("Lens trace storage is unavailable") from error
+                match response.status_code:
+                    case 400:
+                        return _ReadFailure.INVALID_QUERY
+                    case 409:
+                        return _ReadFailure.CHANGED
+                    case 413:
+                        return _ReadFailure.QUERY_TOO_LARGE
+                    case 200:
+                        return _JSON.validate_json(await bounded_response(response, MAX_RESPONSE_BYTES))
+                    case _:
+                        return _ReadFailure.UNAVAILABLE
+        except httpx.HTTPError:
+            return _ReadFailure.UNAVAILABLE
+        except RuntimeError:
+            return _ReadFailure.RESPONSE_TOO_LARGE
+        except ValueError:
+            return _ReadFailure.INVALID_RESPONSE
 
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
         if table != "spend_logs":

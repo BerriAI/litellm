@@ -644,6 +644,8 @@ lensWorker:
   serviceTokenSecret:
     name: ""
     key: service-token
+  clickhouseDatabase: litellm
+  retentionDays: 14
   clickhouseSecret:
     name: ""
     key: url

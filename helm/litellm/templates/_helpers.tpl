@@ -528,3 +528,9 @@ shutdown drain window.
       key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
 {{- end }}
 {{- end -}}
+
+{{- define "litellm.lensWorker.labels" -}}
+{{- $labels := include "litellm.commonLabels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (printf "%s-lens-worker" (include "litellm.name" . | trunc 51 | trimSuffix "-")) -}}
+{{- toYaml $labels -}}
+{{- end -}}

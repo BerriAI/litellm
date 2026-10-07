@@ -269,17 +269,16 @@ pub async fn run<T: Output>(
                 Ok(value) => value.to_string(),
                 Err(error) => json!({"request": tool, "error": error.to_string()}).to_string(),
             };
-            bytes += result.len();
-            if bytes > MAX_TOOL_BYTES {
-                let error = json!({"request": tool, "error": "Combined tool output exceeds 8 MiB. Request smaller ranges or fewer tools per turn."}).to_string();
-                results.push(error.clone());
-                archived.push(error);
-                continue;
-            }
             archived.push(match &tool {
                 Tool::Evidence(r) => journal.reference(r).unwrap_or_else(|| result.clone()),
                 _ => result.clone(),
             });
+            bytes += result.len();
+            if bytes > MAX_TOOL_BYTES {
+                let error = json!({"request": tool, "error": "Combined tool output exceeds 8 MiB. Request smaller ranges or fewer tools per turn."}).to_string();
+                results.push(error);
+                continue;
+            }
             results.push(result);
         }
         journal

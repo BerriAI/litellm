@@ -82,8 +82,12 @@ lensWorker:
   clickhouseSecret:
     name: litellm-lens-clickhouse
     key: url
+  clickhouseDatabase: litellm
+  retentionDays: 14
   publicUrl: https://<your-litellm-host>/lens-ingest
 ```
+
+Set `clickhouseDatabase` and `retentionDays` to your existing database and retention before upgrading
 
 When the chart's main ingress is enabled, it routes `/lens-ingest` directly to Lens. With a custom ingress, add that route yourself. For a dedicated hostname, use `lensWorker.ingress.enabled`, `host`, `className`, and `tls`, and set `publicUrl` to that hostname. The chart connects LiteLLM to Lens internally and gives both services the shared secret
 

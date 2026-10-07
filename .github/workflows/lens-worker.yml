@@ -88,6 +88,7 @@ jobs:
           retention-days: 1
 
   publish:
+    name: Publish Lens development index
     needs: lens-worker-image
     if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest

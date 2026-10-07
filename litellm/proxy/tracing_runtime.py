@@ -2,6 +2,7 @@ from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Final
 
+import httpx
 from fastapi import HTTPException, Request
 from pydantic import ConfigDict, TypeAdapter
 
@@ -38,6 +39,7 @@ async def manage_tracing(
     enabled: bool,
     receiver_factory: Callable[[], TraceReceiver] | None = None,
     settings: Mapping[str, object] | None = None,
+    client_factory: Callable[[LensConnection], httpx.AsyncClient] = LensConnection.client,
 ) -> AsyncGenerator[TraceReceiver | None, None]:
     if not enabled:
         yield None
@@ -50,7 +52,7 @@ async def manage_tracing(
         )
         yield None
         return
-    async with connection.client() as client:
+    async with client_factory(connection) as client:
         tracing: Final = (
             receiver_factory()
             if receiver_factory

@@ -4,7 +4,7 @@ kind: Deployment
 metadata:
   name: {{ include "litellm.fullname" . }}-lens-worker
   labels:
-    {{- include "litellm.labels" . | nindent 4 }}
+    {{- include "litellm.lensWorker.labels" . | nindent 4 }}
     app.kubernetes.io/component: lens-worker
 spec:
   replicas: {{ .Values.lensWorker.replicaCount }}
@@ -15,7 +15,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "litellm.labels" . | nindent 8 }}
+        {{- include "litellm.lensWorker.labels" . | nindent 8 }}
         app.kubernetes.io/component: lens-worker
     spec:
       automountServiceAccountToken: false
@@ -52,6 +52,10 @@ spec:
                 secretKeyRef:
                   name: {{ required "lensWorker.clickhouseSecret.name is required" .Values.lensWorker.clickhouseSecret.name | quote }}
                   key: {{ .Values.lensWorker.clickhouseSecret.key | quote }}
+            - name: CLICKHOUSE_DATABASE
+              value: {{ .Values.lensWorker.clickhouseDatabase | quote }}
+            - name: AGENT_TRACING_RETENTION_DAYS
+              value: {{ .Values.lensWorker.retentionDays | quote }}
             {{- if .Values.lensWorker.tokenSecret.name }}
             - name: LENS_WORKER_TOKEN
               valueFrom:

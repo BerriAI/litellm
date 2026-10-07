@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections import deque
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from io import BytesIO
 from typing import Final
@@ -72,9 +72,10 @@ def encode_record(value: Mapping[str, object]) -> bytes:
 
 
 class LensExporter(CustomLogger):
-    def __init__(self, client: httpx.AsyncClient) -> None:
+    def __init__(self, client: httpx.AsyncClient, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
         super().__init__()
         self.client: Final = client
+        self.sleep: Final = sleep
         self.queue: Final[deque[bytes]] = deque()  # mutable-ok: bounded producer-consumer queue
         self.wake: Final = asyncio.Event()
         self.closed = False
@@ -173,7 +174,7 @@ class LensExporter(CustomLogger):
             except httpx.HTTPError:
                 pass
             if attempt < 2:
-                await asyncio.sleep(float(1 << attempt))
+                await self.sleep(float(1 << attempt))
         self._warn("retry limit reached")
         return False
 
