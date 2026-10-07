@@ -291,14 +291,9 @@ class RedisSemanticCache(BaseCache):
             return
 
         if isinstance(value, dict):
-            content = value.get("content")
-            if content is not None:
-                cls._collect_responses_input_text(content, prompt_parts)
-                return
-
-            output = value.get("output")
-            if isinstance(output, list):
-                cls._collect_responses_input_text(output, prompt_parts)
+            nested: Final = cls._nested_response_input(value)
+            if nested is not None:
+                cls._collect_responses_input_text(nested, prompt_parts)
                 return
 
             for text_key in ("text", "output", "input_text", "output_text"):
@@ -322,6 +317,14 @@ class RedisSemanticCache(BaseCache):
                 if stripped_text:
                     prompt_parts.append(stripped_text)
                     return
+
+    @staticmethod
+    def _nested_response_input(value: dict[str, object]) -> object:
+        content: Final = value.get("content")
+        if content is not None:
+            return content
+        output: Final = value.get("output")
+        return output if isinstance(output, list) else None
 
     @staticmethod
     def _coerce_response_input_value(value: object) -> object:
