@@ -14232,10 +14232,10 @@ class TestContextWindowEscalation:
         only through `model_info.base_model`. The gate used to resolve that deployment to no
         window at all (base_model was read for azure only), treat it as infinite, and leave an
         oversized SIMPLE prompt on it to 400 at the provider."""
-        base_model = "meta.llama3-8b-instruct-v1:0"
-        base_window = litellm.get_model_info(model=f"bedrock/{base_model}")["max_input_tokens"]
+        base_model: Final = "meta.llama3-8b-instruct-v1:0"
+        base_window: Final = litellm.get_model_info(model=f"bedrock/{base_model}")["max_input_tokens"]
         assert base_window is not None
-        litellm_router = Router(
+        litellm_router: Final = Router(
             model_list=[
                 {
                     "model_name": "small-model",
@@ -14252,19 +14252,21 @@ class TestContextWindowEscalation:
                 },
             ]
         )
-        router = ComplexityRouter(
+        router: Final = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=litellm_router,
             complexity_router_config=_tier_config(),
         )
-        filler_repeats = (base_window * 4) // len(_CONTEXT_FILLER) + 2
-        oversized_turns = [
+        filler_repeats: Final = (base_window * 4) // len(_CONTEXT_FILLER) + 2
+        oversized_turns: Final = [
             {"role": "user", "content": "Here is everything discussed so far. " + _CONTEXT_FILLER * filler_repeats},
             {"role": "assistant", "content": "Noted, I have read all of it."},
             {"role": "user", "content": "ok continue"},
         ]
 
-        result = await router.async_pre_routing_hook(model="test-router", request_kwargs={}, messages=oversized_turns)
+        result: Final = await router.async_pre_routing_hook(
+            model="test-router", request_kwargs={}, messages=oversized_turns
+        )
 
         assert result is not None
         assert result.model == "big-model"
