@@ -6,7 +6,7 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.keenable.search.transformation import KeenableSearchConfig
+from litellm.llms.keenable.search.transformation import KEENABLE_KEYLESS_PARAM, KeenableSearchConfig
 
 DEFAULT_ROOT = "https://api.keenable.ai/v1"
 
@@ -20,12 +20,12 @@ def _config() -> KeenableSearchConfig:
     return KeenableSearchConfig()
 
 
-def _resp(payload, status_code: int = 200):
-    r = Mock()
-    r.status_code = status_code
-    r.headers = {}
-    r.content = (payload if isinstance(payload, str) else json.dumps(payload)).encode()
-    return r
+def _resp(payload, status_code: int = 200, path: str = "/search/public"):
+    return httpx.Response(
+        status_code,
+        content=(payload if isinstance(payload, str) else json.dumps(payload)).encode(),
+        request=httpx.Request("POST", f"{DEFAULT_ROOT}{path}"),
+    )
 
 
 def _result(**overrides):
@@ -162,7 +162,7 @@ def test_malformed_domain_filter_is_ignored():
 def test_response_maps_snippet_and_dates():
     response = _config().transform_search_response(
         _resp({"query": "q", "results": [_result(), _result(snippet="", description="Only a description")]}),
-        logging_obj=Mock(),
+        logging_obj=Mock(optional_params={}),
     )
 
     first, second = response.results
@@ -173,20 +173,22 @@ def test_response_maps_snippet_and_dates():
 
 
 def test_degraded_result_maps_to_empty_strings():
-    response = _config().transform_search_response(_resp({"results": [{}]}), logging_obj=Mock())
+    response = _config().transform_search_response(_resp({"results": [{}]}), logging_obj=Mock(optional_params={}))
 
     only = response.results[0]
     assert (only.title, only.url, only.snippet, only.date, only.last_updated) == ("", "", "", None, None)
 
 
 def test_empty_result_list_is_a_successful_search():
-    assert _config().transform_search_response(_resp({"results": []}), logging_obj=Mock()).results == []
+    assert (
+        _config().transform_search_response(_resp({"results": []}), logging_obj=Mock(optional_params={})).results == []
+    )
 
 
 @pytest.mark.parametrize("payload", [{}, {"results": None}, "<html>bad gateway</html>"])
 def test_body_that_is_not_a_search_response_raises(payload):
     with pytest.raises(BaseLLMException, match="Keenable Search: response does not match"):
-        _config().transform_search_response(_resp(payload, status_code=200), logging_obj=Mock())
+        _config().transform_search_response(_resp(payload, status_code=200), logging_obj=Mock(optional_params={}))
 
 
 def test_error_class_surfaces_the_api_message():
@@ -259,3 +261,37 @@ def test_litellm_search_surfaces_the_api_error_message():
     assert "Public API hourly limit reached" in str(excinfo.value)
     assert "set KEENABLE_API_KEY" in str(excinfo.value)
     assert "does not match" not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("path, keyless", [("/search/public", True), ("/search", False)])
+def test_response_records_which_endpoint_answered(path: str, keyless: bool):
+    logging_obj = Mock(optional_params={"max_results": 3, KEENABLE_KEYLESS_PARAM: not keyless})
+    _config().transform_search_response(_resp({"results": []}, path=path), logging_obj=logging_obj)
+    assert logging_obj.optional_params == {"max_results": 3, KEENABLE_KEYLESS_PARAM: keyless}
+
+
+def test_response_without_its_request_counts_as_keyed():
+    logging_obj = Mock(optional_params={})
+    _config().transform_search_response(httpx.Response(200, json={"results": []}), logging_obj=logging_obj)
+    assert logging_obj.optional_params == {KEENABLE_KEYLESS_PARAM: False}
+
+
+def test_the_keyless_flag_is_never_sent():
+    body = _config().transform_search_request(query="q", optional_params={KEENABLE_KEYLESS_PARAM: True})
+    assert body == {"query": "q"}
+
+
+@pytest.mark.parametrize(
+    "optional_params, cost",
+    [({KEENABLE_KEYLESS_PARAM: True}, 0.0), ({KEENABLE_KEYLESS_PARAM: False}, 0.004), (None, 0.004), ({}, 0.004)],
+)
+def test_only_keyed_searches_are_billed(monkeypatch: pytest.MonkeyPatch, optional_params, cost: float):
+    """Assert against the map in this checkout: the remote cost map litellm loads by
+    default only carries providers already released."""
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+    assert search_provider_cost_per_query(
+        model="keenable/search", custom_llm_provider="keenable", optional_params=optional_params
+    ) == (cost, 0.0)

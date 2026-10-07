@@ -22866,11 +22866,11 @@
         }
     },
     "keenable/search": {
-        "input_cost_per_query": 0.0,
+        "input_cost_per_query": 0.004,
         "litellm_provider": "keenable",
         "mode": "search",
         "metadata": {
-            "notes": "Keyless requests to /v1/search/public are free and rate limited per IP, and keyed accounts get 100,000 free requests a month. Usage past that is billed by Keenable at $4 per 1,000 requests and is not tracked here."
+            "notes": "Keyed requests to /v1/search are priced at Keenable's $4 per 1,000 list rate; the 100,000 free requests a month per organization are not tracked here. Keyless requests to /v1/search/public are free and priced at $0 by the search cost calculator."
         }
     },
     "elevenlabs/scribe_v1": {

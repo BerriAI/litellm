@@ -71,6 +71,10 @@ class _ErrorEnvelope(LiteLLMBaseModel):
 
 _DomainListAdapter: Final = TypeAdapter(tuple[str, ...])
 
+# Set on the logging object's optional_params from the endpoint that answered, and read by the
+# search cost calculator: keyless searches are free, keyed ones are billed per query.
+KEENABLE_KEYLESS_PARAM: Final = "_keenable_keyless"
+
 _NOTHING: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -161,8 +165,13 @@ class KeenableSearchConfig(BaseSearchConfig):
         site: Final = include[0] if len(include) == 1 else None
 
         # Spread after the derived `site` so an explicitly supplied one wins.
+        # The keyless flag is reserved for pricing and never sent to Keenable.
         passthrough: Final = MappingProxyType(
-            {param: value for param, value in optional_params.items() if param not in unified_params}
+            {
+                param: value
+                for param, value in optional_params.items()
+                if param not in unified_params and param != KEENABLE_KEYLESS_PARAM
+            }
         )
 
         return {
@@ -189,6 +198,9 @@ class KeenableSearchConfig(BaseSearchConfig):
         first. `date` is the page's `published_at` and `last_updated` is `acquired_at`, when
         Keenable last fetched the page. A body that does not match the documented schema raises
         an attributed error rather than being reported as a successful empty search.
+
+        Records whether the keyless endpoint answered, so the cost calculator prices only keyed
+        searches. Written unconditionally, so a caller-supplied value never sets its own cost.
         """
         try:
             parsed: Final = _KeenableSearchResponse.model_validate_json(raw_response.content)
@@ -198,6 +210,11 @@ class KeenableSearchConfig(BaseSearchConfig):
                 status_code=raw_response.status_code,
                 headers=dict(raw_response.headers),
             )
+
+        logging_obj.optional_params = {
+            **logging_obj.optional_params,
+            KEENABLE_KEYLESS_PARAM: _answered_keyless(raw_response),
+        }
 
         return SearchResponse(
             results=[
@@ -231,6 +248,14 @@ class KeenableSearchConfig(BaseSearchConfig):
             message=f"Keenable Search: {detail}.{hint} See {_KEENABLE_DOCS_URL} for details.",
             headers=headers,
         )
+
+
+def _answered_keyless(raw_response: httpx.Response) -> bool:
+    """True when /search/public answered. An unknown endpoint counts as keyed, so it is billed."""
+    try:
+        return raw_response.request.url.path.endswith("/search/public")
+    except RuntimeError:  # a response built without its request
+        return False
 
 
 def _unwrap_error_detail(error_message: str) -> str:
