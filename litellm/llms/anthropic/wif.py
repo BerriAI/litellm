@@ -234,12 +234,12 @@ def _raise_if_federation_requested(
 
 def _explicit_federation_request(litellm_params: Mapping[str, object] | None) -> str | None:
     source_kind: Final = _resolve_source_kind(litellm_params)
-    if source_kind is not None:
-        if source_kind not in {kind.value for kind in AnthropicIdentitySourceKind}:
-            _raise_unknown_source_kind(source_kind)
-        return f"{_IDENTITY_SOURCE_PARAM} is {source_kind!r}"
-    legacy_ref_param: Final = _legacy_ref_param(litellm_params)
-    return None if legacy_ref_param is None else f"{legacy_ref_param} is set"
+    if source_kind is None:
+        legacy_ref_param: Final = _legacy_ref_param(litellm_params)
+        return None if legacy_ref_param is None else f"{legacy_ref_param} is set"
+    if source_kind not in {kind.value for kind in AnthropicIdentitySourceKind}:
+        _raise_unknown_source_kind(source_kind)
+    return f"{_IDENTITY_SOURCE_PARAM} is {source_kind!r}"
 
 
 def _resolve_source_kind(litellm_params: Mapping[str, object] | None) -> str | None:
