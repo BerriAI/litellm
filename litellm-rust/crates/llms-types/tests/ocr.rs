@@ -1,6 +1,17 @@
-use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrPage};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrBoundingBox, OcrDocument, OcrKeyValuePair, OcrPage, OcrTable,
+};
 use rstest::rstest;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
+
+fn round_trip<T>(wire: Value)
+where
+    T: DeserializeOwned + Serialize,
+{
+    let parsed: T = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+}
 
 #[rstest]
 #[case::missing_page_fields(json!({"pages": [{}]}))]
@@ -101,4 +112,30 @@ fn response_serialization_preserves_extensions_and_native_presence(
     let decoded: LiteLLMOcrResponse = serde_json::from_value(serialized.clone()).unwrap();
     assert_eq!(decoded.provider_native_response, native);
     assert_eq!(decoded.into_json(), serialized);
+}
+
+#[rstest]
+fn bounding_box_round_trips() {
+    round_trip::<OcrBoundingBox>(json!({"x":1.5,"y":2,"width":3,"height":4,"future":true}));
+}
+
+#[rstest]
+fn table_round_trips_nested_cells_and_regions() {
+    round_trip::<OcrTable>(json!({
+        "rowCount":1,
+        "columnCount":1,
+        "cells":[{"rowIndex":0,"columnIndex":0,"content":"value","spans":[{"offset":0,"length":5}]}],
+        "boundingRegions":[{"pageNumber":1,"polygon":[0,0,10,10]}],
+        "spans":[{"offset":0,"length":5}],
+        "content":"value"
+    }));
+}
+
+#[rstest]
+fn key_value_pair_round_trips_nested_elements() {
+    round_trip::<OcrKeyValuePair>(json!({
+        "key":{"content":"Name","boundingRegions":[{"pageNumber":1,"polygon":[0,0,1,1]}]},
+        "value":{"content":"Ada","spans":[{"offset":5,"length":3}]},
+        "confidence":0.99
+    }));
 }

@@ -33,6 +33,15 @@ fn content_block_type_schema_remains_a_string() {
 #[case::compaction("compaction", ContentBlockType::Compaction)]
 #[case::advisor_result("advisor_tool_result", ContentBlockType::AdvisorToolResult)]
 #[case::web_search_result("web_search_tool_result", ContentBlockType::WebSearchToolResult)]
+#[case::image("image", ContentBlockType::Image)]
+#[case::document("document", ContentBlockType::Document)]
+#[case::tool_addition("tool_addition", ContentBlockType::ToolAddition)]
+#[case::tool_removal("tool_removal", ContentBlockType::ToolRemoval)]
+#[case::advisor("advisor_result", ContentBlockType::AdvisorResult)]
+#[case::web_search_error(
+    "web_search_tool_result_error",
+    ContentBlockType::WebSearchToolResultError
+)]
 #[case::future_block("future_block", ContentBlockType::Other("future_block".into()))]
 #[case::case_sensitive("Tool_Use", ContentBlockType::Other("Tool_Use".into()))]
 #[case::empty("", ContentBlockType::Other(String::new()))]

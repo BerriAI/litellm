@@ -1,5 +1,17 @@
-use litellm_llms_types::formats::responses::streaming_websocket::ResponsesWsEventType;
+use litellm_llms_types::formats::responses::{
+    ResponsesOutputItem, streaming_websocket::ResponsesWsEventType,
+};
 use rstest::rstest;
+use serde::{Serialize, de::DeserializeOwned};
+use serde_json::{Value, json};
+
+fn round_trip<T>(wire: Value)
+where
+    T: DeserializeOwned + Serialize,
+{
+    let parsed: T = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+}
 
 #[rstest]
 #[case::create("response.create", ResponsesWsEventType::ResponseCreate)]
@@ -45,4 +57,18 @@ fn websocket_event_type_schema_is_open_string() {
         schema.to_value().get("type"),
         Some(&serde_json::json!("string"))
     );
+}
+
+#[rstest]
+#[case::message(json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[{"type":"url_citation","url":"https://example.test","start_index":0,"end_index":6}]}]}))]
+#[case::function_call(json!({"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"query\":\"q\"}"}))]
+#[case::custom_tool(json!({"type":"custom_tool_call","name":"lookup","input":"q"}))]
+#[case::reasoning(json!({"type":"reasoning","summary":[{"type":"summary_text","text":"summary"}],"encrypted_content":"opaque"}))]
+#[case::web_search(json!({"type":"web_search_call","action":{"type":"search","queries":["q"],"sources":[{"type":"url","url":"https://example.test"}]}}))]
+#[case::file_search(json!({"type":"file_search_call","queries":["q"],"results":[{"file_id":"file_1","score":1,"attributes":{"custom":[1,null]}}]}))]
+#[case::code(json!({"type":"code_interpreter_call","outputs":[{"type":"logs","logs":"done"},{"type":"image","url":"https://example.test"}]}))]
+#[case::image(json!({"type":"image_generation_call","result":"generated"}))]
+#[case::mcp(json!({"type":"mcp_call","server_label":"server","name":"lookup","arguments":"{}","output":"done"}))]
+fn output_items_round_trip(#[case] wire: Value) {
+    round_trip::<ResponsesOutputItem>(wire);
 }
