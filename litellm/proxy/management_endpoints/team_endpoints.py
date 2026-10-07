@@ -3286,6 +3286,8 @@ async def _validate_and_populate_member_user_info(
             return member
 
         if isinstance(users_by_email, list) and len(users_by_email) > 1:
+            if any(user.user_id == member.user_id for user in users_by_email):
+                return member
             raise HTTPException(
                 status_code=400,
                 detail={

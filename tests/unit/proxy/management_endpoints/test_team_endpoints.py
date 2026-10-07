@@ -10661,6 +10661,34 @@ async def test_validate_and_populate_member_user_info_both_provided_match():
     )
 
 
+def _users_sharing_email(email: str, *user_ids: str) -> list[MagicMock]:
+    return [MagicMock(user_id=user_id, user_email=email) for user_id in user_ids]
+
+
+@pytest.mark.asyncio
+async def test_validate_and_populate_member_user_info_duplicate_email_accepts_matching_user_id():
+    member = Member(user_email="dup@example.com", user_id="user-b", role="user")
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.get_data = AsyncMock(return_value=_users_sharing_email("dup@example.com", "user-a", "user-b"))
+
+    result = await _validate_and_populate_member_user_info(member=member, prisma_client=mock_prisma_client)
+
+    assert (result.user_id, result.user_email) == ("user-b", "dup@example.com")
+
+
+@pytest.mark.asyncio
+async def test_validate_and_populate_member_user_info_duplicate_email_rejects_unrelated_user_id():
+    member = Member(user_email="dup@example.com", user_id="user-c", role="user")
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.get_data = AsyncMock(return_value=_users_sharing_email("dup@example.com", "user-a", "user-b"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _validate_and_populate_member_user_info(member=member, prisma_client=mock_prisma_client)
+
+    assert exc_info.value.status_code == 400
+    assert "Multiple users found with email 'dup@example.com'" in str(exc_info.value.detail)
+
+
 @pytest.mark.asyncio
 async def test_validate_and_populate_member_user_info_only_email_provided():
     """
