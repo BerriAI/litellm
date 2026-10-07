@@ -23,7 +23,7 @@ mod processing;
 mod redaction;
 mod runtime;
 
-pub use configuration::{DestinationConfig, DiagnosticPolicy, DiagnosticsConfig, Severity};
+pub use configuration::{DestinationConfig, DiagnosticPolicy, DiagnosticsConfig};
 pub use error::Error;
 pub use export::{ExportPolicy, OtlpSink};
 pub use layer::sink_layer;

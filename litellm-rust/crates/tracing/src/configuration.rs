@@ -1,37 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::{Error, ExportPolicy, Level};
 
-#[derive(Clone, Copy, Default, Deserialize, Serialize)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum Severity {
-    Trace,
-    Debug,
-    #[default]
-    Info,
-    Warn,
-    Error,
-}
-
-impl From<Severity> for Level {
-    fn from(value: Severity) -> Self {
-        match value {
-            Severity::Trace => Level::TRACE,
-            Severity::Debug => Level::DEBUG,
-            Severity::Info => Level::INFO,
-            Severity::Warn => Level::WARN,
-            Severity::Error => Level::ERROR,
-        }
-    }
-}
-
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DiagnosticPolicy {
-    pub minimum_level: Severity,
+    #[serde(
+        serialize_with = "serialize_level",
+        deserialize_with = "deserialize_level"
+    )]
+    pub minimum_level: Level,
     pub target_prefixes: Vec<String>,
     pub sample_rate: f64,
 }
@@ -39,7 +20,7 @@ pub struct DiagnosticPolicy {
 impl Default for DiagnosticPolicy {
     fn default() -> Self {
         Self {
-            minimum_level: Severity::Info,
+            minimum_level: Level::INFO,
             target_prefixes: vec![],
             sample_rate: 1.0,
         }
@@ -49,11 +30,24 @@ impl Default for DiagnosticPolicy {
 impl DiagnosticPolicy {
     pub(crate) fn build(&self) -> Result<ExportPolicy, Error> {
         ExportPolicy::new(
-            self.minimum_level.into(),
+            self.minimum_level,
             self.target_prefixes.clone(),
             self.sample_rate,
         )
     }
+}
+
+fn serialize_level<S: Serializer>(level: &Level, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(level.as_str())
+}
+
+fn deserialize_level<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Level, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    value
+        .parse::<Level>()
+        .ok()
+        .filter(|level| level.as_str() == value)
+        .ok_or_else(|| serde::de::Error::custom("expected TRACE, DEBUG, INFO, WARN, or ERROR"))
 }
 
 #[derive(Clone, Deserialize, Serialize)]
