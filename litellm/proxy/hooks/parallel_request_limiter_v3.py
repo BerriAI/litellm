@@ -31,9 +31,10 @@ from pydantic import TypeAdapter, ValidationError
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
-from litellm import DualCache
+import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import (
     BatchResult,
     RegisteredScript,
@@ -481,6 +482,12 @@ PARALLEL_REQUEST_SLOT_TTL_SECONDS: Final = 3600
 CacheCounterValue: TypeAlias = int | float | str | bytes
 
 CacheCounterValues: TypeAlias = Sequence[CacheCounterValue | None]
+
+
+def _positions_by_key(keys: Sequence[str]) -> Mapping[str, tuple[int, ...]]:
+    """Positions of every key in ``keys``, ascending, so repeated keys keep each of their slots."""
+    sorted_positions: Final = sorted(range(len(keys)), key=keys.__getitem__)
+    return {key: tuple(group) for key, group in itertools.groupby(sorted_positions, key=keys.__getitem__)}
 
 
 def _as_counter_values(reply: object) -> list[CacheCounterValue]:
@@ -1367,12 +1374,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Group keys by their Redis hash tag to ensure cluster compatibility.
 
         For Redis clusters, uses slot calculation to group keys that belong to the same slot.
-        For regular Redis, no grouping is needed - all keys can be processed together.
+        For regular Redis, no grouping is needed - all keys can be processed together, unless
+        ``litellm.force_redis_hash_tag_grouping`` is set for a single-endpoint backend that still
+        enforces cross-slot restrictions (e.g. Azure Managed Redis with the Enterprise clustering policy).
         """
         groups: Final[dict[str, list[str]]] = {}
 
-        # Use slot calculation for Redis clusters only
-        if self._is_redis_cluster():
+        if self._is_redis_cluster() or litellm.force_redis_hash_tag_grouping:
             for key in keys:
                 slot = self.keyslot_for_redis_cluster(key)
                 slot_key = f"slot_{slot}"
@@ -1468,7 +1476,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             now_int: int - Current timestamp
 
         Returns:
-            List of cache values
+            List of cache values in ``keys_to_fetch`` order
         """
         if self.batch_rate_limiter_script is None:
             return []
@@ -1509,7 +1517,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 all_cache_values.extend(group_cache_values)
 
-        return all_cache_values
+        grouped_keys: Final = tuple(itertools.chain.from_iterable(keys for _tag, keys in key_groups))
+        positions_by_key: Final = {key: iter(positions) for key, positions in _positions_by_key(keys_to_fetch).items()}
+        value_by_position: Final = dict(zip((next(positions_by_key[key]) for key in grouped_keys), all_cache_values))
+        return [value_by_position.get(position) for position in range(len(keys_to_fetch))]
 
     async def _refund_later_pipelined_groups(
         self,
@@ -3682,8 +3693,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         custom model name) or otherwise raises -- the audio add-on still
         applies on top of the fallback.
         """
-        from litellm import token_counter
-
         if not isinstance(data, dict):
             return 0
         is_responses_request: Final = call_type in RESPONSES_API_CALL_TYPES
@@ -3727,7 +3736,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             estimate: Final = max(
                 0,
                 int(
-                    token_counter(
+                    litellm.token_counter(
                         model=model or "",
                         messages=countable_messages,
                         text=selected_text,

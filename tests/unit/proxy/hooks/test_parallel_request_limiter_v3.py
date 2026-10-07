@@ -1890,7 +1890,7 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
             Exception(
                 "EVALSHA - all keys must map to the same key slot"
             ),  # First group fails
-            [1234, 1, 1234, 2],  # Second group succeeds
+            [1234, 2],  # Second group succeeds
         ]
         handler.batch_rate_limiter_script = mock_script
 
@@ -1910,8 +1910,7 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
             keys_to_fetch=test_keys, now_int=1234
         )
 
-        # Verify results: 2 from fallback + 4 from successful script = 6 total
-        assert len(results) == 6, f"Expected 6 results, got {len(results)}"
+        assert len(results) == 4, f"Expected 4 results, got {len(results)}"
 
         # Verify script was called twice (once per slot group)
         assert mock_script.call_count == 2
@@ -7667,3 +7666,55 @@ async def test_a2a_url_target_owns_invocation_fee_and_request_limit(
         await _rpm_request(limiter, cache, auth, "a2a/cheap")
     assert denied.value.status_code == 429
     assert "expensive" in str(denied.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_execute_redis_batch_rate_limiter_script_returns_values_in_keys_to_fetch_order(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", True)
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    keys_to_fetch: Final = [
+        "{api_key:sk-abc}:window",
+        "{api_key:sk-abc}:requests",
+        "{api_key:sk-abc}:window",
+        "{api_key:sk-abc}:tokens",
+        "{team:t1}:window",
+        "{team:t1}:requests",
+        "{end_user:u28551}:window",
+        "{end_user:u28551}:requests",
+    ]
+    slots: Final = [handler.keyslot_for_redis_cluster(key) for key in keys_to_fetch]
+    assert slots[0] == slots[6] != slots[4], "fixture needs the first and last hash tags to share a slot"
+    positions_of: Final = {
+        key: iter([index for index, candidate in enumerate(keys_to_fetch) if candidate == key])
+        for key in set(keys_to_fetch)
+    }
+    handler.batch_rate_limiter_script = AsyncMock(
+        side_effect=lambda keys, args: [next(positions_of[key]) for key in keys]
+    )
+
+    results: Final = await handler._execute_redis_batch_rate_limiter_script(keys_to_fetch=keys_to_fetch, now_int=1234)
+
+    assert results == list(range(len(keys_to_fetch)))
+
+
+@pytest.mark.asyncio
+async def test_force_redis_hash_tag_grouping_splits_non_cluster_evalsha_by_slot(monkeypatch):
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-enterprise-policy"), rpm_limit=5, user_id="enterprise-user", user_rpm_limit=5
+    )
+
+    plain: Final = _ScriptedRedis()
+    handler: Final = _handler_with_redis(plain)
+    await _admit(handler, auth)
+    assert len(plain.batch_call_keys) == 1
+    assert len({handler.keyslot_for_redis_cluster(k) for k in plain.batch_call_keys[0]}) > 1
+
+    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", True)
+    forced: Final = _ScriptedRedis()
+    await _admit(_handler_with_redis(forced), auth)
+    assert len(forced.batch_call_keys) > 1
+    for keys in forced.batch_call_keys:
+        assert len({handler.keyslot_for_redis_cluster(k) for k in keys}) == 1
+    assert sorted(k for keys in forced.batch_call_keys for k in keys) == sorted(plain.batch_call_keys[0])
