@@ -211,6 +211,9 @@
   --trace-row-hover: oklch(0.975 0.008 215);
   --trace-row-selected: oklch(0.95 0.035 200);
   --trace-brand: oklch(0.6 0.13 195);
+  --finding-affected: #2b1eeb;
+  --finding-unaffected: #71717b;
+  --finding-quote: oklch(0.705 0.187 47.6 / 0.2);
   --trace-border: oklch(0.92 0.01 230);
   --trace-line: oklch(0.88 0.03 205);
   --trace-card-border: oklch(0.93 0.01 230);
@@ -288,6 +291,9 @@
   --trace-row-hover: oklch(0.23 0.018 230);
   --trace-row-selected: oklch(0.29 0.05 210);
   --trace-brand: oklch(0.78 0.13 190);
+  --finding-affected: #8b9bff;
+  --finding-unaffected: #52525c;
+  --finding-quote: oklch(0.705 0.187 47.6 / 0.28);
   --trace-border: oklch(0.3 0.02 235);
   --trace-line: oklch(0.36 0.04 210);
   --trace-card-border: oklch(0.27 0.02 235);
@@ -326,6 +332,9 @@
   --color-trace-row-hover: var(--trace-row-hover);
   --color-trace-row-selected: var(--trace-row-selected);
   --color-trace-brand: var(--trace-brand);
+  --color-finding-affected: var(--finding-affected);
+  --color-finding-unaffected: var(--finding-unaffected);
+  --color-finding-quote: var(--finding-quote);
   --color-trace-border: var(--trace-border);
   --color-trace-line: var(--trace-line);
   --color-trace-card-border: var(--trace-card-border);
