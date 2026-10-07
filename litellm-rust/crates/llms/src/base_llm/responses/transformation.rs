@@ -73,30 +73,23 @@ pub fn enforce_model(event: &ResponsesWsEvent, model: &str) -> ResponsesWsEvent 
     if !event.is_response_create() {
         return event.clone();
     }
-    let mut enforced = event.clone();
-    let has_flat_model = enforced.data.contains_key("model");
-    if let Some(response) = enforced
-        .data
-        .get_mut("response")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        response.insert(
-            "model".to_string(),
-            serde_json::Value::String(model.to_string()),
-        );
-        if has_flat_model {
-            enforced.data.insert(
-                "model".to_string(),
-                serde_json::Value::String(model.to_string()),
-            );
-        }
-    } else {
-        enforced.data.insert(
-            "model".to_string(),
-            serde_json::Value::String(model.to_string()),
-        );
+    use litellm_llms_types::recognized::Recognized;
+    let nested = event.response.as_ref().and_then(Recognized::known);
+    ResponsesWsEvent {
+        model: if event.model.is_some() || nested.is_none() {
+            Some(Recognized::Known(model.to_string()))
+        } else {
+            None
+        },
+        response: match nested {
+            Some(response) => Some(Recognized::Known(litellm_llms_types::formats::responses::streaming_websocket::ResponsesEventResponse {
+                model: Some(Recognized::Known(model.to_string())),
+                ..response.clone()
+            })),
+            None => event.response.clone(),
+        },
+        ..event.clone()
     }
-    enforced
 }
 
 #[cfg(test)]
@@ -107,36 +100,32 @@ mod tests {
         serde_json::from_value(value).expect("valid event")
     }
 
-    #[test]
-    fn enforce_model_overrides_flat_and_nested_values() {
-        let flat = enforce_model(
-            &event(serde_json::json!({"type":"response.create","model":"wrong"})),
-            "gpt-5",
-        );
-        assert_eq!(flat.model(), Some("gpt-5"));
-        let nested = enforce_model(
-            &event(serde_json::json!({
-                "type":"response.create",
-                "model":"wrong",
-                "response":{"model":"also-wrong"}
-            })),
-            "gpt-5",
-        );
-        assert_eq!(nested.model(), Some("gpt-5"));
-        assert_eq!(
-            nested
-                .data
-                .get("response")
-                .and_then(|value| value.get("model")),
-            Some(&serde_json::json!("gpt-5"))
-        );
-        let nested_without_flat = enforce_model(
-            &event(serde_json::json!({
-                "type":"response.create",
-                "response":{"model":"also-wrong"}
-            })),
-            "gpt-5",
-        );
-        assert!(!nested_without_flat.data.contains_key("model"));
+    #[rstest::rstest]
+    #[case::flat(
+        serde_json::json!({"type":"response.create","model":"wrong"}),
+        serde_json::json!({"type":"response.create","model":"configured-model"})
+    )]
+    #[case::both(
+        serde_json::json!({"type":"response.create","model":null,"response":{"model":"wrong","future":null}}),
+        serde_json::json!({"type":"response.create","model":"configured-model","response":{"model":"configured-model","future":null}})
+    )]
+    #[case::nested_only(
+        serde_json::json!({"type":"response.create","response":{"model":false}}),
+        serde_json::json!({"type":"response.create","response":{"model":"configured-model"}})
+    )]
+    #[case::malformed_response(
+        serde_json::json!({"type":"response.create","response":17}),
+        serde_json::json!({"type":"response.create","model":"configured-model","response":17})
+    )]
+    #[case::not_create(
+        serde_json::json!({"type":"response.created","response":{"model":"provider-model"}}),
+        serde_json::json!({"type":"response.created","response":{"model":"provider-model"}})
+    )]
+    fn enforce_model_preserves_shapes_and_extensions(
+        #[case] wire: serde_json::Value,
+        #[case] expected: serde_json::Value,
+    ) {
+        let enforced = enforce_model(&event(wire), "configured-model");
+        assert_eq!(serde_json::to_value(enforced).unwrap(), expected);
     }
 }

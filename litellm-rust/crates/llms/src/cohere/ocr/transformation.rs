@@ -419,7 +419,12 @@ mod tests {
         assert_eq!(response.usage_info.unwrap().pages_processed, Some(0));
         assert_eq!(response.pages[0].extra_fields["blocks"], blocks);
         let images = response.pages[0].images.as_ref().unwrap();
-        assert_eq!(images[0].bbox.as_ref().unwrap()["x"], 1);
+        assert_eq!(
+            images[0].bbox.as_ref().unwrap().x,
+            Some(litellm_llms_types::recognized::Recognized::Known(
+                serde_json::Number::from(1)
+            ))
+        );
         assert_eq!(images[0].extra_fields["category"], "future");
         assert_eq!(images[0].extra_fields.get("extension"), Some(&Value::Null));
         assert_eq!(images[1].image_base64.as_deref(), Some("encoded"));

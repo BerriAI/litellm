@@ -7,7 +7,7 @@ use litellm_core_utils::{call_arguments::CallArguments, url_utils::ApiUrl};
 use litellm_llms_types::serde_compat::{FiniteF64, LaxI64};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use serde_with::serde_as;
 use tokio::time::Instant;
 
@@ -82,9 +82,9 @@ struct AzureDocumentIntelligenceAnalyzeResult {
     pub content: Option<String>,
     #[serde(default)]
     pub pages: Vec<AzureDocumentIntelligencePage>,
-    pub tables: Option<Vec<Map<String, Value>>>,
+    pub tables: Option<Vec<litellm_llms_types::formats::ocr::OcrTable>>,
     #[serde(rename = "keyValuePairs")]
-    pub key_value_pairs: Option<Vec<Map<String, Value>>>,
+    pub key_value_pairs: Option<Vec<litellm_llms_types::formats::ocr::OcrKeyValuePair>>,
 }
 
 #[serde_as]

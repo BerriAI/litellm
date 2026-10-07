@@ -12,8 +12,12 @@ use axum::{
 };
 use litellm_host_http::Sse;
 use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
-use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_llms_types::{
+    headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
+    recognized::Recognized,
+};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
 
@@ -87,11 +91,11 @@ fn project(
 }
 
 fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders> {
-    let extra_headers: Map<String, Value> = ANTHROPIC_API_HEADERS
+    let extra_headers: BTreeMap<String, Recognized<String>> = ANTHROPIC_API_HEADERS
         .into_iter()
         .filter_map(|name| {
             let value = headers.get(name)?.to_str().ok()?;
-            Some((name.to_owned(), Value::from(value)))
+            Some((name.to_owned(), Recognized::Known(value.to_owned())))
         })
         .collect();
     (!extra_headers.is_empty()).then(|| {
