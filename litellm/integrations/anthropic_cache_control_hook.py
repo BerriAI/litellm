@@ -109,25 +109,53 @@ def _model_map_prompt_cache_breakpoint_flag(model: str) -> bool | None:
     return next((bool(flag) for flag in flags if flag is not None), None)
 
 
-def _hosted_openai_dialect_flag(model: str, resolve_provider: Callable[[], str | None]) -> bool | None:
-    """
-    Explicit opt-in for an OpenAI-shaped deployment served by another provider.
-
-    ``model_cost`` is keyed per exact deployment string, so a flag on the deployment's
-    own entry states the dialect directly, which a provider name cannot express. Entries
-    for the openai provider are left to the caller's api_base check, so an
-    OpenAI-compatible third-party host is still not assumed to speak the dialect.
-    """
-    import litellm
-
-    entry: Final = litellm.model_cost.get(model)
-    if not isinstance(entry, dict):
-        return None
+def _hosted_entry_flag(entry: Mapping[str, object], resolve_provider: Callable[[], str | None]) -> bool | None:
     flag: Final = entry.get("supports_prompt_cache_breakpoint")
     entry_provider: Final = entry.get("litellm_provider")
     if flag is None or entry_provider is None or entry_provider == "openai":
         return None
     return bool(flag) if entry_provider == resolve_provider() else None
+
+
+def _hosted_openai_dialect_flag(
+    model: str, custom_llm_provider: str | None, resolve_provider: Callable[[str], str | None]
+) -> bool | None:
+    """
+    Explicit opt-in for an OpenAI-shaped deployment served by another provider.
+
+    ``model_cost`` is keyed per deployment string, so a flag on the deployment's own
+    entry states the dialect directly, which a provider name cannot express. A routing
+    form the map does not key verbatim (``bedrock_mantle/us-east-1/openai.gpt-5.6-sol``)
+    is read through the candidate keys ``get_model_info`` resolves it with, an entry
+    keyed with the region outranking the region-free one. A bare name the map does not
+    key has no such candidates, so it costs no provider lookup. Entries for the openai
+    provider are left to the caller's api_base check, so an OpenAI-compatible
+    third-party host is still not assumed to speak the dialect.
+    """
+    import litellm
+
+    exact_entry: Final = litellm.model_cost.get(model)
+    if isinstance(exact_entry, dict):
+        return _hosted_entry_flag(exact_entry, lambda: custom_llm_provider or resolve_provider(model))
+    if custom_llm_provider is None and "/" not in model:
+        return None
+    provider: Final = custom_llm_provider or resolve_provider(model)
+    if provider is None or provider == "openai":
+        return None
+    from litellm.utils import get_potential_model_names
+
+    names: Final = get_potential_model_names(model, provider)
+    candidates: Final = (
+        names["combined_model_name"],
+        names["region_free_combined_model_name"],
+        names["split_model"],
+        names["combined_stripped_model_name"],
+        names["stripped_model_name"],
+        names["provider_prefixed_model_name"],
+    )
+    entries: Final = (litellm.model_cost.get(candidate) for candidate in candidates)
+    flags: Final = (_hosted_entry_flag(entry, lambda: provider) for entry in entries if isinstance(entry, dict))
+    return next((flag for flag in flags if flag is not None), None)
 
 
 def targets_openai_api(api_base: object) -> bool:
@@ -334,7 +362,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if model is None:
             return False
         hosted_flag: Final = _hosted_openai_dialect_flag(
-            model, lambda: custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)
+            model, custom_llm_provider, AnthropicCacheControlHook._resolve_provider
         )
         if hosted_flag is not None:
             return hosted_flag

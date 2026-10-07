@@ -3838,6 +3838,43 @@ class TestHostedOpenAIDialectFlag:
         assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-5.6", "azure") is False
         assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("azure/gpt-5.6", None) is False
 
+    REGIONAL_MODEL = "bedrock_mantle/us-east-1/openai.gpt-5.6-sol"
+
+    def test_region_prefixed_deployment_reads_its_region_free_entry(self, monkeypatch):
+        """``bedrock_mantle/<region>/<model>`` is a documented routing form the map keys without the region."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, "bedrock_mantle")
+            is True
+        )
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, None) is True
+
+    def test_region_prefixed_deployment_honors_a_flag_set_false(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=False)
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, "bedrock_mantle")
+            is False
+        )
+
+    def test_region_prefixed_entry_outranks_the_region_free_one(self, monkeypatch):
+        """A row keyed with the region states that deployment's own dialect; GovCloud rows carry no flag."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        gov_model = "bedrock_mantle/us-gov-west-1/openai.gpt-5.6-sol"
+        self._register(monkeypatch, gov_model, "bedrock_mantle", flag=None)
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(gov_model, "bedrock_mantle") is False
+
+    def test_region_free_entry_does_not_license_another_provider(self, monkeypatch):
+        """The candidate keys are built for the request's provider, so a flagged Mantle row stays Mantle's."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("us-east-1/openai.gpt-5.6-sol", "azure")
+            is False
+        )
+
+    def test_unmapped_deployment_name_stays_ineligible(self):
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("azure/my-deployment", None) is False
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("my-deployment", "azure") is False
+
 
 class TestBedrockMantleGptShipsTheOpenAIDialect:
     """The shipped cost map flags Bedrock Mantle's GPT-5.6 and newer OpenAI rows, so a configured injection point
@@ -3895,6 +3932,19 @@ class TestBedrockMantleGptShipsTheOpenAIDialect:
         assert messages[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
         assert params["prompt_cache_options"] == {"mode": "implicit"}
         assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 1
+
+    def test_region_prefixed_deployment_emits_the_openai_marker(self):
+        """The region-prefixed routing form documented for Mantle lands on the same shipped row."""
+        _, messages, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="bedrock_mantle/us-east-1/openai.gpt-5.6-sol",
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert messages[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
 
 class TestRecordGatewayInjection:
