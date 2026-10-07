@@ -115,7 +115,10 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "compatible-host policy is consumed by the DeepSeek Messages adapter"
+)]
 pub(crate) enum ThinkingSemantics {
     /// Claude's rules: disabled thinking is dropped, legacy and adaptive thinking and effort
     /// are rewritten for the model, and a temperature that conflicts with thinking is removed.
@@ -125,7 +128,10 @@ pub(crate) enum ThinkingSemantics {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "compatible-host policy is consumed by the DeepSeek Messages adapter"
+)]
 pub(crate) enum BillingMetadata {
     Forward,
     Strip,
@@ -144,7 +150,10 @@ pub(crate) const FIRST_PARTY_REQUEST_POLICY: RequestPolicy = RequestPolicy {
 };
 
 /// A third-party host that speaks the Anthropic wire format but is not Claude.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "compatible-host policy is consumed by the DeepSeek Messages adapter"
+)]
 pub(crate) const COMPATIBLE_HOST_REQUEST_POLICY: RequestPolicy = RequestPolicy {
     thinking: ThinkingSemantics::Passthrough,
     billing_metadata: BillingMetadata::Strip,
@@ -155,6 +164,14 @@ pub(crate) fn transform_messages_request(
     context: &MessagesTransformContext,
 ) -> Result<MessagesRequest, Error> {
     transform_messages_request_with(request, context, FIRST_PARTY_REQUEST_POLICY)
+}
+
+fn without_null<T>(value: Option<Nullable<T>>) -> Option<Nullable<T>> {
+    value.filter(|value| matches!(value, Nullable::Value(_)))
+}
+
+fn without_null_recognized<T>(value: Option<Recognized<T>>) -> Option<Recognized<T>> {
+    value.filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null)))
 }
 
 fn is_billing_metadata(text: &str) -> bool {
@@ -205,75 +222,29 @@ pub(crate) fn transform_messages_request_with(
     let params = request.params;
     let request = MessagesRequest {
         params: MessagesOptionalParams {
-            max_tokens: params
-                .max_tokens
-                .filter(|value| matches!(value, Nullable::Value(_))),
-            system: params
-                .system
-                .filter(|value| matches!(value, Nullable::Value(_))),
-            metadata: params
-                .metadata
-                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
-            stop_sequences: params
-                .stop_sequences
-                .filter(|value| matches!(value, Nullable::Value(_))),
-            stream: params
-                .stream
-                .filter(|value| matches!(value, Nullable::Value(_))),
-            temperature: params
-                .temperature
-                .filter(|value| matches!(value, Nullable::Value(_))),
-            top_p: params
-                .top_p
-                .filter(|value| matches!(value, Nullable::Value(_))),
-            top_k: params
-                .top_k
-                .filter(|value| matches!(value, Nullable::Value(_))),
-            tools: params
-                .tools
-                .filter(|value| matches!(value, Nullable::Value(_))),
-            tool_choice: params
-                .tool_choice
-                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
-            thinking: params
-                .thinking
-                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
-            service_tier: params
-                .service_tier
-                .filter(|value| matches!(value, Nullable::Value(_))),
-            container: params
-                .container
-                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
-            mcp_servers: params
-                .mcp_servers
-                .filter(|value| matches!(value, Nullable::Value(_))),
-            context_management: params
-                .context_management
-                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
-            output_format: params
-                .output_format
-                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
-            output_config: params
-                .output_config
-                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
-            speed: params
-                .speed
-                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
-            inference_geo: params
-                .inference_geo
-                .filter(|value| matches!(value, Nullable::Value(_))),
-            reasoning_effort: params
-                .reasoning_effort
-                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
-            compaction: params
-                .compaction
-                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
-            cache_control: params
-                .cache_control
-                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
-            safeguards: params
-                .safeguards
-                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+            max_tokens: without_null(params.max_tokens),
+            system: without_null(params.system),
+            metadata: without_null_recognized(params.metadata),
+            stop_sequences: without_null(params.stop_sequences),
+            stream: without_null(params.stream),
+            temperature: without_null(params.temperature),
+            top_p: without_null(params.top_p),
+            top_k: without_null(params.top_k),
+            tools: without_null(params.tools),
+            tool_choice: without_null_recognized(params.tool_choice),
+            thinking: without_null_recognized(params.thinking),
+            service_tier: without_null(params.service_tier),
+            container: without_null_recognized(params.container),
+            mcp_servers: without_null(params.mcp_servers),
+            context_management: without_null_recognized(params.context_management),
+            output_format: without_null_recognized(params.output_format),
+            output_config: without_null_recognized(params.output_config),
+            speed: without_null_recognized(params.speed),
+            inference_geo: without_null(params.inference_geo),
+            reasoning_effort: without_null_recognized(params.reasoning_effort),
+            compaction: without_null_recognized(params.compaction),
+            cache_control: without_null_recognized(params.cache_control),
+            safeguards: without_null_recognized(params.safeguards),
             extra: params.extra,
         },
         ..request
