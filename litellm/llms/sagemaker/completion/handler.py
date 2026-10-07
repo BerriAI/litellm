@@ -576,16 +576,27 @@ class SagemakerLLM(BaseAWSLLM):
         #### EMBEDDING LOGIC
         # Transform request based on model type
         provider_config: Final = SagemakerEmbeddingConfig.get_model_config(model)
-        request_data: Final = provider_config.transform_embedding_request(model, input, optional_params, {})
+        endpoint_name: Final = SagemakerEmbeddingConfig.get_endpoint_name(model)
+        inference_component_name: Final = optional_params.get("model_id")
+        body_params: Final = {k: v for k, v in optional_params.items() if k != "model_id"}
+        request_data: Final = provider_config.transform_embedding_request(endpoint_name, input, body_params, {})
         data: Final = json.dumps(request_data).encode("utf-8")
+        invoke_kwargs: Final = {
+            "EndpointName": endpoint_name,
+            "ContentType": "application/json",
+            "Body": data,
+            "CustomAttributes": "accept_eula=true",
+            **({"InferenceComponentName": inference_component_name} if inference_component_name else {}),
+        }
 
         ## LOGGING
         request_str: Final = f"""
         response = client.invoke_endpoint(
-            EndpointName={model},
+            EndpointName={endpoint_name},
             ContentType="application/json",
             Body=f"{data!r}",  # Use !r for safe representation
             CustomAttributes="accept_eula=true",
+            InferenceComponentName={inference_component_name},
         )"""
         logging_obj.pre_call(
             input=input,
@@ -594,12 +605,7 @@ class SagemakerLLM(BaseAWSLLM):
         )
         ## EMBEDDING CALL
         try:
-            response = client.invoke_endpoint(
-                EndpointName=model,
-                ContentType="application/json",
-                Body=data,
-                CustomAttributes="accept_eula=true",
-            )
+            response = client.invoke_endpoint(**invoke_kwargs)
         except Exception as e:
             status_code: Final = getattr(e, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode", 500)
             error_message: Final = getattr(e, "response", {}).get("Error", {}).get("Message", str(e))
@@ -630,7 +636,7 @@ class SagemakerLLM(BaseAWSLLM):
 
         # Use the request_data that was already transformed above
         return provider_config.transform_embedding_response(
-            model=model,
+            model=endpoint_name,
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=logging_obj,
