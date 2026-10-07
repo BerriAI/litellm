@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
@@ -137,33 +138,50 @@ def test_tier_config_is_normalized_and_unknown_router_extras_are_rejected() -> N
 @pytest.mark.parametrize(
     ("jev_override", "rejected_at"),
     [
-        ({"api_base": "https://collector.invalid"}, "jev_classifier_config"),
+        ({"api_base": "https://collector.invalid"}, "opensource_classifier_config"),
         ({"api_key": "sk-member"}, "api_key"),
         ({"api_base": "https://collector.invalid", "api_key": "sk-member"}, "api_key"),
-        ({"api_base": "https://collector.invalid", "api_key": ""}, "jev_classifier_config.api_key"),
+        ({"api_base": "https://collector.invalid", "api_key": ""}, "opensource_classifier_config.api_key"),
+        ({"provider": "laya", "model": "english", "api_base": "https://collector.invalid"}, "api_base"),
+        ({"provider": "laya", "model": "english", "api_key": "sk-member"}, "api_key"),
+        ({"provider": "bespoke", "model": "nimble-latest", "api_base": "https://collector.invalid"}, "api_base"),
+        ({"provider": "bespoke", "model": "nimble-latest", "api_key": "sk-member"}, "api_key"),
     ],
 )
+@pytest.mark.parametrize("legacy", [False, True])
 def test_members_cannot_move_the_jev_classifier_off_the_proxys_typesafe_account(
-    jev_override: Mapping[str, str], rejected_at: str
+    jev_override: Mapping[str, str], rejected_at: str, legacy: bool
 ) -> None:
     with pytest.raises(HTTPException) as denied:
         validate_member_auto_router_config(
-            {"tiers": {"SIMPLE": "allowed"}, "classifier_type": "jev", "jev_classifier_config": jev_override}
+            {
+                "tiers": {"SIMPLE": "allowed"},
+                "classifier_type": "jev" if legacy else "oss_classifier",
+                "jev_classifier_config" if legacy else "opensource_classifier_config": jev_override,
+            }
         )
     assert denied.value.status_code == 400
     assert denied.value.detail == f"Invalid member auto-router configuration at {rejected_at}."
 
 
-def test_members_can_still_tune_the_jev_classifier() -> None:
+@pytest.mark.parametrize(("provider", "model"), [("typesafe", "jev-preview"), ("laya", "english"), ("bespoke", "nimble-latest")])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_members_can_still_tune_the_jev_classifier(provider: str, model: str, legacy: bool) -> None:
     validated: Final = validate_member_auto_router_config(
         {
             "tiers": {"SIMPLE": "allowed"},
-            "classifier_type": "jev",
-            "jev_classifier_config": {"model": "jev-preview", "timeout_ms": 500},
+            "classifier_type": "jev" if legacy else "oss_classifier",
+            "jev_classifier_config" if legacy else "opensource_classifier_config": {
+                "provider": provider, "model": model, "timeout_ms": 500,
+            },
         }
     )
     assert validated.jev_classifier_config is not None
-    assert (validated.jev_classifier_config.model, validated.jev_classifier_config.timeout_ms) == ("jev-preview", 500)
+    assert (
+        validated.jev_classifier_config.provider,
+        validated.jev_classifier_config.model,
+        validated.jev_classifier_config.timeout_ms,
+    ) == ("jev" if provider == "typesafe" else provider, model, 500)
     assert validate_member_auto_router_config(validated.model_dump()).jev_classifier_config is not None
 
 
@@ -218,6 +236,92 @@ async def test_member_updates_restrict_fields_and_preserve_an_inherited_default(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "nested,expected_identity,restricted",
+    [
+        ("omit-config", "laya/english", False),
+        ("omit-config", "laya/english", True),
+        ("omit-block", None, False),
+        (None, None, False),
+        ({}, None, False),
+        ({"timeout_ms": 500}, None, False),
+        ({"model": "english", "timeout_ms": 500}, "laya/english", False),
+        ({"model": "english", "timeout_ms": 500}, "laya/english", True),
+        ({"model": "multilingual"}, "laya/multilingual", False),
+        ({"provider": "typesafe", "model": "jev-latest"}, "typesafe/jev-latest", False),
+        ({"provider": "typesafe", "model": "jev-latest"}, "typesafe/jev-latest", True),
+    ],
+)
+async def test_member_authorization_and_persistence_resolve_the_same_classifier(
+    catalog: Router, monkeypatch: pytest.MonkeyPatch, nested: object, expected_identity: str | None, restricted: bool
+) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        _strategy_router_write_violation,
+        update_db_model,
+    )
+    from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "member-router-test-salt")
+    stored_config: Final = {
+        "classifier_type": "jev", "tiers": {"SIMPLE": "allowed"},
+        "jev_classifier_config": {
+            "provider": "laya", "model": "english", "timeout_ms": 12000,
+            "api_base": "https://laya.test", "api_key": "stored-classifier-key",
+        },
+    }
+    existing: Final = Deployment(
+        model_name="member-router",
+        litellm_params=LiteLLM_Params(model="auto_router/complexity_router", complexity_router_config=stored_config),
+        model_info=ModelInfo(id="router-a", team_id="team-a"), created_by="owner",
+    )
+    incoming_config: Final = (
+        None if nested == "omit-config" else {
+            "classifier_type": "jev", "tiers": {"SIMPLE": "allowed"},
+            **({} if nested == "omit-block" else {"jev_classifier_config": nested}),
+        }
+    )
+    patch: Final = updateDeployment.model_validate({"litellm_params": {
+        "complexity_router_config": incoming_config, "complexity_router_default_model": "allowed",
+    }})
+    operation: Final = authorize_member_auto_router_write(
+        incoming=patch, existing=existing, user_api_key_dict=_actor(
+            models=["allowed"] if restricted or expected_identity is None else ["allowed", expected_identity],
+        ),
+        team=_team(models=["allowed", "laya/english", "laya/multilingual", "typesafe/jev-latest"]),
+        premium_user=True, prisma_client=_Client(), llm_router=catalog,
+    )
+    violation: Final = _strategy_router_write_violation(patch.litellm_params, existing.litellm_params)
+    if expected_identity is None:
+        assert violation is not None
+        with pytest.raises(HTTPException) as rejected:
+            await operation
+        assert rejected.value.status_code == 400
+        return
+    assert violation is None
+    if restricted:
+        with pytest.raises(ProxyException, match=expected_identity):
+            await operation
+        return
+    grant: Final = await operation
+    persisted: Final = update_db_model(existing, patch)
+    saved: Final = RequestComplexityRouterConfig.model_validate(
+        json.loads(persisted["litellm_params"])["complexity_router_config"]
+    )
+    assert grant.config == saved
+    assert saved.jev_classifier_config is not None
+    assert (
+        "typesafe" if saved.jev_classifier_config.provider == "jev" else saved.jev_classifier_config.provider
+    ) + f"/{saved.jev_classifier_config.model}" == expected_identity
+    assert saved.jev_classifier_config.api_key == (
+        "stored-classifier-key" if expected_identity.startswith("laya/") else None
+    )
+    assert saved.jev_classifier_config.timeout_ms == (
+        12000 if nested == "omit-config" else 500 if nested == {"model": "english", "timeout_ms": 500} else 3000
+    )
+    assert existing.litellm_params.complexity_router_config == stored_config
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("target", ["missing", "nested"])
 async def test_member_dependencies_require_plain_configured_models(target: str) -> None:
     catalog: Final = Router(
@@ -246,13 +350,17 @@ async def test_member_dependencies_require_plain_configured_models(target: str) 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("restricted", ["key", "team", None])
+@pytest.mark.parametrize(("provider", "model"), [("typesafe", "jev-latest"), ("laya", "english"), ("bespoke", "nimble-latest")])
 async def test_jev_evaluation_requires_model_access_but_no_completion_deployment(
-    catalog: Router, restricted: str | None
+    catalog: Router, restricted: str | None, provider: str, model: str
 ) -> None:
-    permitted: Final = ["allowed", "typesafe/jev-latest"]
+    permitted: Final = ["allowed", f"{provider}/{model}"]
     operation: Final = authorize_member_auto_router_dependencies(
         config=validate_member_auto_router_config(
-            {"tiers": {"SIMPLE": "allowed"}, "classifier_type": "jev", "jev_classifier_config": {}}
+            {
+                "tiers": {"SIMPLE": "allowed"}, "classifier_type": "jev",
+                "jev_classifier_config": {"provider": provider, "model": model},
+            }
         ),
         default_model=None,
         user_api_key_dict=_actor(models=["allowed"] if restricted == "key" else permitted),
@@ -261,17 +369,20 @@ async def test_jev_evaluation_requires_model_access_but_no_completion_deployment
         llm_router=catalog,
     )
     if restricted is not None:
-        with pytest.raises(ProxyException, match="jev-latest"):
+        with pytest.raises(ProxyException, match=model):
             await operation
         return
     await operation
-    assert not catalog.get_model_list("typesafe/jev-latest")
+    assert not catalog.get_model_list(f"{provider}/{model}")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("restricted", ["member", "project", "organization", None])
-async def test_jev_evaluation_obeys_each_containing_scope(catalog: Router, restricted: str | None) -> None:
-    allowed: Final = ["allowed", "typesafe/jev-latest"]
+@pytest.mark.parametrize(("provider", "model"), [("typesafe", "jev-latest"), ("laya", "english"), ("bespoke", "nimble-latest")])
+async def test_jev_evaluation_obeys_each_containing_scope(
+    catalog: Router, restricted: str | None, provider: str, model: str
+) -> None:
+    allowed: Final = ["allowed", f"{provider}/{model}"]
     membership: Final = LiteLLM_TeamMembership.model_validate(
         {
             "user_id": "owner",
@@ -293,7 +404,10 @@ async def test_jev_evaluation_obeys_each_containing_scope(catalog: Router, restr
     )
     operation: Final = authorize_member_auto_router_dependencies(
         config=validate_member_auto_router_config(
-            {"tiers": {"SIMPLE": "allowed"}, "classifier_type": "jev", "jev_classifier_config": {}}
+            {
+                "tiers": {"SIMPLE": "allowed"}, "classifier_type": "jev",
+                "jev_classifier_config": {"provider": provider, "model": model},
+            }
         ),
         default_model=None,
         user_api_key_dict=_actor(models=allowed, project_id="project-a"),
@@ -303,8 +417,8 @@ async def test_jev_evaluation_obeys_each_containing_scope(catalog: Router, restr
         dependency_objects=MemberAutoRouterDependencyObjects(membership, organization, project),
     )
     if restricted is not None:
-        with pytest.raises(ProxyException, match="jev-latest"):
+        with pytest.raises(ProxyException, match=model):
             await operation
         return
     await operation
-    assert not catalog.get_model_list("typesafe/jev-latest")
+    assert not catalog.get_model_list(f"{provider}/{model}")

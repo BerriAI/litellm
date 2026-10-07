@@ -16,7 +16,9 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final, Protocol, TypeVar, overload
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_DailyTagSpend as PrismaDailyTagSpendRow
@@ -42,7 +44,7 @@ MAX_TAGS: Final = 250  # Maximum number of distinct tags to return
 router: Final = APIRouter()
 
 
-class TagActiveUsersResponse(BaseModel):
+class TagActiveUsersResponse(LiteLLMBaseModel):
     """Response for tag active users metrics"""
 
     tag: str
@@ -52,13 +54,13 @@ class TagActiveUsersResponse(BaseModel):
     period_end: str | None = None  # For WAU/MAU, this will be the end of the period
 
 
-class ActiveUsersAnalyticsResponse(BaseModel):
+class ActiveUsersAnalyticsResponse(LiteLLMBaseModel):
     """Response for active users analytics"""
 
     results: list[TagActiveUsersResponse]
 
 
-class TagSummaryMetrics(BaseModel):
+class TagSummaryMetrics(LiteLLMBaseModel):
     """Summary metrics for a tag"""
 
     tag: str
@@ -70,25 +72,25 @@ class TagSummaryMetrics(BaseModel):
     total_spend: float
 
 
-class TagSummaryResponse(BaseModel):
+class TagSummaryResponse(LiteLLMBaseModel):
     """Response for tag summary analytics"""
 
     results: list[TagSummaryMetrics]
 
 
-class DistinctTagResponse(BaseModel):
+class DistinctTagResponse(LiteLLMBaseModel):
     """Response for distinct user agent tags"""
 
     tag: str
 
 
-class DistinctTagsResponse(BaseModel):
+class DistinctTagsResponse(LiteLLMBaseModel):
     """Response for all distinct user agent tags"""
 
     results: list[DistinctTagResponse]
 
 
-class PerUserMetrics(BaseModel):
+class PerUserMetrics(LiteLLMBaseModel):
     """Metrics for individual user"""
 
     user_id: str
@@ -101,7 +103,7 @@ class PerUserMetrics(BaseModel):
     spend: float = 0.0
 
 
-class PerUserAnalyticsResponse(BaseModel):
+class PerUserAnalyticsResponse(LiteLLMBaseModel):
     """Response for per-user analytics"""
 
     results: list[PerUserMetrics]
@@ -111,11 +113,11 @@ class PerUserAnalyticsResponse(BaseModel):
     total_pages: int
 
 
-class _DistinctTagRow(BaseModel):
+class _DistinctTagRow(LiteLLMBaseModel):
     tag: str
 
 
-class _ActiveUsersRow(BaseModel):
+class _ActiveUsersRow(LiteLLMBaseModel):
     tag: str
     active_users: int
     date: str
@@ -123,7 +125,7 @@ class _ActiveUsersRow(BaseModel):
     period_end: str | None = None
 
 
-class _TagSummaryRow(BaseModel):
+class _TagSummaryRow(LiteLLMBaseModel):
     tag: str
     unique_users: int | None = None
     total_requests: float | int | str | None = None

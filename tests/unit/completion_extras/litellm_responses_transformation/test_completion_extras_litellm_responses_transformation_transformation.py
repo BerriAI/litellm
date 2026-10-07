@@ -7,6 +7,15 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
 import pytest
+from openai.types.responses import (
+    ResponseFunctionToolCall,
+    ResponseOutputMessage,
+    ResponseOutputText,
+)
+from openai.types.responses.response_reasoning_item import (
+    ResponseReasoningItem,
+    Summary,
+)
 
 import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -1568,7 +1577,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
         for effort in effort_levels:
-            result = handler._map_reasoning_effort(effort)
+            result = handler.map_reasoning_effort(effort)
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
@@ -1584,7 +1593,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         litellm.reasoning_auto_summary = True
 
         for effort in effort_levels:
-            result = handler._map_reasoning_effort(effort)
+            result = handler.map_reasoning_effort(effort)
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
@@ -1600,7 +1609,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         litellm.reasoning_auto_summary = False
         monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
 
-        result = handler._map_reasoning_effort("high")
+        result = handler.map_reasoning_effort("high")
         assert (
             result["summary"] == "detailed"
         ), "Summary should be 'detailed' when env var is enabled"
@@ -1612,7 +1621,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
         dict_input = {"effort": "high", "summary": "custom_summary"}
-        result_dict = handler._map_reasoning_effort(dict_input)
+        result_dict = handler.map_reasoning_effort(dict_input)
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
@@ -3307,6 +3316,148 @@ def test_convert_response_output_generic_pydantic_message_item():
     assert choices[0].finish_reason == "stop"
 
 
+def test_convert_response_output_merges_message_reasoning_and_function_call() -> None:
+    message: Final = ResponseOutputMessage(
+        id="msg_weather",
+        content=[
+            ResponseOutputText(
+                annotations=[
+                    {
+                        "type": "url_citation",
+                        "start_index": 0,
+                        "end_index": 5,
+                        "title": "Forecast",
+                        "url": "https://example.com/forecast",
+                    }
+                ],
+                text="Sunny.",
+                type="output_text",
+                logprobs=[],
+            )
+        ],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+    reasoning: Final = ResponseReasoningItem(
+        id="rs_before",
+        summary=[Summary(type="summary_text", text="Checking the forecast.")],
+        type="reasoning",
+        content=None,
+        encrypted_content=None,
+        status=None,
+    )
+    pending_reasoning: Final = ResponseReasoningItem(
+        id="rs_after",
+        summary=[Summary(type="summary_text", text="The location is Paris.")],
+        type="reasoning",
+        content=None,
+        encrypted_content=None,
+        status=None,
+    )
+    function_call: Final = ResponseFunctionToolCall(
+        id="fc_1",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_1",
+        name="get_weather",
+    )
+
+    message_and_call: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (message, function_call)
+    )
+    assert len(message_and_call) == 1
+    assert message_and_call[0].index == 0
+    assert message_and_call[0].finish_reason == "tool_calls"
+    assert message_and_call[0].message.role == "assistant"
+    assert message_and_call[0].message.content == "Sunny."
+    assert message_and_call[0].message.annotations == [
+        {
+            "type": "url_citation",
+            "start_index": 0,
+            "end_index": 5,
+            "title": "Forecast",
+            "url": "https://example.com/forecast",
+        }
+    ]
+    function_calls: Final = message_and_call[0].message.tool_calls
+    assert function_calls is not None
+    assert len(function_calls) == 1
+    assert function_calls[0].function.name == "get_weather"
+    assert function_calls[0].function.arguments == '{"city":"Paris"}'
+
+    reasoning_before_message: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (reasoning, message, function_call)
+    )
+    assert len(reasoning_before_message) == 1
+    assert reasoning_before_message[0].message.reasoning_content == "Checking the forecast."
+    reasoning_before_items: Final = reasoning_before_message[0].message.reasoning_items
+    assert reasoning_before_items is not None
+    assert reasoning_before_items[0]["id"] == "rs_before"
+
+    reasoning_after_message: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (message, pending_reasoning, function_call)
+    )
+    assert len(reasoning_after_message) == 1
+    assert reasoning_after_message[0].message.reasoning_content == "The location is Paris."
+    reasoning_after_items: Final = reasoning_after_message[0].message.reasoning_items
+    assert reasoning_after_items is not None
+    assert reasoning_after_items[0]["id"] == "rs_after"
+
+    merged_reasoning: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (reasoning, message, pending_reasoning, function_call)
+    )
+    assert len(merged_reasoning) == 1
+    assert merged_reasoning[0].message.reasoning_content == "Checking the forecast. The location is Paris."
+    merged_reasoning_items: Final = merged_reasoning[0].message.reasoning_items
+    assert merged_reasoning_items is not None
+    assert [item["id"] for item in merged_reasoning_items] == ["rs_before", "rs_after"]
+
+    tool_only: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices((function_call,))
+    assert len(tool_only) == 1
+    assert tool_only[0].index == 0
+    assert tool_only[0].finish_reason == "tool_calls"
+    assert tool_only[0].message.content is None
+    assert tool_only[0].message.tool_calls is not None
+    assert len(tool_only[0].message.tool_calls) == 1
+
+    message_only: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices((message,))
+    assert len(message_only) == 1
+    assert message_only[0].index == 0
+    assert message_only[0].finish_reason == "stop"
+    assert message_only[0].message.content == "Sunny."
+    assert message_only[0].message.tool_calls is None
+
+
+def test_convert_response_output_merges_raw_dict_message_and_function_call() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    raw_message: Final = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Let me check.", "annotations": []}],
+    }
+    raw_function_call: Final = {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_1",
+        "name": "get_weather",
+        "arguments": '{"city":"Paris"}',
+    }
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (raw_message, raw_function_call),
+        handle_raw_dict_callback=handler._handle_raw_dict_response_item,
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "tool_calls"
+    assert choices[0].message.role == "assistant"
+    assert choices[0].message.content == "Let me check."
+    assert choices[0].message.tool_calls is not None
+    assert len(choices[0].message.tool_calls) == 1
+
+
 def test_convert_tools_to_responses_format_flattens_nested_custom_tool():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
@@ -3950,6 +4101,27 @@ def test_stored_reasoning_items_win_over_thinking_blocks():
     assert reasoning_items[0]["id"] == "rs_real"
 
 
+@pytest.mark.parametrize("missing_id", [None, ""])
+def test_a_stored_reasoning_item_without_an_id_is_replayed_without_inventing_one(missing_id):
+    """The Responses API rejects every id it did not mint, so no id beats a made-up one."""
+    handler = LiteLLMResponsesTransformationHandler()
+    stored_item = {"type": "reasoning", "summary": [], "encrypted_content": "enc_abc"}
+    messages = [
+        {
+            "role": "assistant",
+            "content": "Denver is sunny.",
+            "reasoning_items": [stored_item if missing_id is None else {**stored_item, "id": missing_id}],
+        },
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    (reasoning_item,) = [item for item in input_items if item.get("type") == "reasoning"]
+    assert "id" not in reasoning_item
+    assert reasoning_item["encrypted_content"] == "enc_abc"
+    assert reasoning_item["summary"] == []
+
+
 def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool_reference():
     """Tool-search tool_reference blocks have no Responses API equivalent: skip them, never stringify them."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -4183,6 +4355,53 @@ def test_streaming_final_chunk_carries_provider_metadata():
 
 def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
+
+
+@pytest.mark.parametrize(
+    ("content_block", "expected_content"),
+    [
+        (
+            {"type": "text", "text": "Stable prefix"},
+            {"type": "input_text", "text": "Stable prefix"},
+        ),
+        (
+            {"type": "image_url", "image_url": "https://example.com/image.png"},
+            {"type": "input_image", "image_url": "https://example.com/image.png", "detail": "auto"},
+        ),
+        (
+            {"type": "file", "file": {"file_id": "file-123"}},
+            {"type": "input_file", "file_id": "file-123"},
+        ),
+    ],
+    ids=("text", "image_url", "file"),
+)
+def test_prompt_cache_breakpoint_survives_chat_to_responses_conversion(
+    content_block: dict[str, object], expected_content: dict[str, object]
+) -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    marked_content: Final = {**content_block, "prompt_cache_breakpoint": cache_breakpoint}
+
+    request: Final = handler.transform_request(
+        model="gpt-5.6-sol",
+        messages=[
+            {
+                "role": "user",
+                "content": [marked_content],
+            }
+        ],
+        optional_params={"prompt_cache_options": cache_breakpoint},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["input"][0] == {
+        "type": "message",
+        "role": "user",
+        "content": [{**expected_content, "prompt_cache_breakpoint": cache_breakpoint}],
+    }
+    assert request["prompt_cache_options"] == cache_breakpoint
 
 
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():

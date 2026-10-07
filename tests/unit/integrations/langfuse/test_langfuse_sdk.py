@@ -1543,12 +1543,12 @@ def test_exporter_reports_failure_when_no_span_of_the_batch_can_be_encoded(monke
 
 def test_built_exporter_uses_the_shared_litellm_handler_and_langfuse_headers(monkeypatch):
     """No private requests session or TLS adapter: the channel is the same handler the rest of litellm uses."""
-    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
     monkeypatch.delenv("LANGFUSE_TIMEOUT", raising=False)
     monkeypatch.delenv("LANGFUSE_MAX_RETRIES", raising=False)
     default = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
-    assert default.handler is _get_httpx_client()
+    assert default.handler is get_httpx_client()
     assert default.timeout == 20
     assert len(default.delays) == 3
 

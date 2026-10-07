@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm import ModelResponse, Router
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -569,6 +570,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         else:
             get_or_create_request_stash().rate_limit_response = atomic_response
 
+    @with_service_target("rate_limits")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -656,6 +658,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         return None
 
+    @with_service_target("rate_limits")
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
         Post-call hook to add rate limit headers to response.
@@ -685,6 +688,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             verbose_proxy_logger.exception("Error in dynamic rate limiter v3 post-call hook: %s", e)
             return response
 
+    @with_service_target("rate_limits")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         Update token usage for priority-based rate limiting after successful API calls.
@@ -694,7 +698,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         - priority_model: Priority-specific token tracking
         """
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
@@ -705,7 +709,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         try:
             verbose_proxy_logger.debug("INSIDE dynamic rate limiter ASYNC SUCCESS LOGGING")
 
-            litellm_parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+            litellm_parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
 
             # Get metadata from standard_logging_object
             standard_logging_object: Final = kwargs.get("standard_logging_object") or {}

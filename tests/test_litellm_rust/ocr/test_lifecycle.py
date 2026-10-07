@@ -96,7 +96,7 @@ async def test_metadata_failure_dispatches_only_failure_and_releases_logger(
     seen: Final = []
 
     class FailingMetadata(Logging):
-        def _response_cost_calculator(self, *args, **kwargs):
+        def response_cost_calculator(self, *args, **kwargs):
             raise failure
 
         def success_handler(self, *args, **kwargs):
@@ -512,7 +512,7 @@ def created_loggers(monkeypatch: pytest.MonkeyPatch) -> list[Logging]:
     ) -> tuple[Logging, dict[str, object]]:
         logger, prepared = original_setup(call_type, rules, start, *args, is_async_call=is_async_call, **kwargs)
         assert isinstance(logger, Logging)
-        setattr(logger, "_defer_async_logging", True)
+        setattr(logger, "defer_async_logging", True)
         loggers.append(logger)
         return logger, prepared
 
