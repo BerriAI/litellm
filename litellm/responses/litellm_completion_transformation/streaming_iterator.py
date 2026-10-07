@@ -81,6 +81,19 @@ def _delta_has_signed_thinking_block(delta: object) -> bool:
     return any(isinstance(b, dict) and (b.get("signature") or b.get("data")) for b in blocks)
 
 
+def _delta_carries_output(delta: ChatCompletionDelta) -> bool:
+    fields: Final = (
+        delta.content,
+        getattr(delta, "reasoning_content", None),
+        delta.tool_calls,
+        delta.function_call,
+        getattr(delta, "annotations", None),
+        getattr(delta, "images", None),
+        getattr(delta, "audio", None),
+    )
+    return any(fields) or _delta_has_signed_thinking_block(delta)
+
+
 class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     """
     Async iterator for processing streaming responses from the Responses API.
@@ -939,6 +952,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if not chunk.choices:
             return
         delta: Final = chunk.choices[0].delta
+        if chunk.choices[0].finish_reason is None and not _delta_carries_output(delta):
+            return
 
         self._sequence_number += 1
         self.sent_output_item_added_event = True

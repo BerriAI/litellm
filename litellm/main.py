@@ -9143,8 +9143,10 @@ def stream_chunk_builder(
             and chunk["choices"][0]["delta"]["content"] is not None
         ]
 
-        if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = processor.get_combined_content(content_chunks)
+        combined_content: Final = processor.get_combined_content(content_chunks) if content_chunks else None
+        rebuilt_tool_calls: Final = len(tool_call_chunks) > 0 or len(function_call_chunks) > 0
+        if combined_content is not None and (combined_content != "" or not rebuilt_tool_calls):
+            response["choices"][0]["message"]["content"] = combined_content
 
         thinking_blocks: Final = [
             chunk

@@ -978,6 +978,23 @@ def _reasoning_chunk(reasoning: str, finish_reason: str | None = None) -> ModelR
     )
 
 
+def _annotation_only_chunk() -> ModelResponseStream:
+    citation: Final = {"start_index": 0, "end_index": 2, "url": "https://example.com", "title": "Example"}
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-4-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", annotations=[{"type": "url_citation", "url_citation": citation}]),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
 def _signature_only_thinking_chunk(signature: str) -> ModelResponseStream:
     return ModelResponseStream(
         id=CHAT_COMPLETION_ID,
@@ -1032,6 +1049,68 @@ async def test_tool_only_stream_emits_no_message_item_events(sync_mode: bool):
         in (ResponsesAPIStreamEvents.CONTENT_PART_ADDED, ResponsesAPIStreamEvents.CONTENT_PART_DONE)
     ] == []
     assert any(getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED for event in events)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "leading_chunk",
+    [pytest.param(_chunk(""), id="empty-text-delta"), pytest.param(_reasoning_chunk(""), id="empty-reasoning-delta")],
+)
+@pytest.mark.asyncio
+async def test_empty_leading_delta_does_not_open_a_message_item_ahead_of_a_tool_call(
+    sync_mode: bool, leading_chunk: ModelResponseStream
+):
+    iterator: Final = _build_iterator([leading_chunk, _tool_call_chunk(), _chunk("", finish_reason="tool_calls")])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    item_events: Final = [
+        (event.type, event.item.type)
+        for event in events
+        if getattr(event, "type", None)
+        in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    ]
+    assert item_events == [
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "function_call"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "function_call"),
+    ]
+    completed: Final = [
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    ]
+    assert [item.type for item in completed[0].response.output] == ["function_call"]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_empty_leading_delta_still_opens_the_message_item_for_the_first_text_delta(sync_mode: bool):
+    iterator: Final = _build_iterator([_chunk(""), _chunk("Hi"), _chunk("", finish_reason="stop")])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    added_types: Final = [
+        event.item.type
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+    assert added_types == ["message"]
+    completed: Final = [
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    ]
+    assert completed[0].response.output_text == "Hi"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_annotation_only_leading_delta_opens_the_message_item_before_its_annotation(sync_mode: bool):
+    iterator: Final = _build_iterator([_annotation_only_chunk(), _chunk("Hi"), _chunk("", finish_reason="stop")])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    event_types: Final = [getattr(event, "type", None) for event in events]
+    assert ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED in event_types
+    assert event_types.index(ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED) < event_types.index(
+        ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED
+    )
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

@@ -193,6 +193,66 @@ def test_ollama_pt_consecutive_user_messages():
     assert result["prompt"] == expected_prompt
 
 
+def _ollama_tool_turn(*results: object) -> list[dict]:
+    call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+    return [
+        {"role": "user", "content": "Weather in Paris?"},
+        {"role": "assistant", "content": None, "tool_calls": [call]},
+        *({"role": "tool", "tool_call_id": "call_1", "content": result} for result in results),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("results", "forwarded"),
+    [
+        pytest.param(("Paris: 22 degrees", "Sky: clear"), "Paris: 22 degrees\nSky: clear", id="two-tool-messages"),
+        pytest.param(
+            ([{"type": "text", "text": "Paris: 22 degrees"}, {"type": "text", "text": "clear skies"}],),
+            "Paris: 22 degrees\nclear skies",
+            id="text-parts-of-one-tool-message",
+        ),
+        pytest.param(
+            ([{"type": "text", "text": "Paris: 22 degrees"}], "Sky: clear"),
+            "Paris: 22 degrees\nSky: clear",
+            id="text-part-then-string",
+        ),
+        pytest.param(
+            ([{"type": "text", "text": ""}, {"type": "text", "text": "clear skies"}],),
+            "clear skies",
+            id="empty-text-part-adds-no-blank-line",
+        ),
+    ],
+)
+def test_ollama_pt_separates_merged_tool_results_with_a_newline(results: tuple[object, ...], forwarded: str):
+    result: Final = ollama_pt(model="llama2", messages=_ollama_tool_turn(*results))
+
+    assert isinstance(result, dict)
+    assert result["prompt"].endswith(f"### User:\n{forwarded}\n\n"), result["prompt"]
+
+
+@pytest.mark.parametrize("content", [22, 22.5, True, {"temperature": 22}], ids=type)
+def test_ollama_pt_rejects_non_text_tool_content_as_a_bad_request(content: object):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        ollama_pt(model="llama2", messages=_ollama_tool_turn(content))
+
+    assert excinfo.value.status_code == 400
+    assert "content" in excinfo.value.message
+    assert "tool message at index 2" in excinfo.value.message
+    assert type(content).__name__ in excinfo.value.message
+
+
+def test_ollama_pt_rejects_a_malformed_image_url_part_as_a_bad_request():
+    messages: Final = [{"role": "user", "content": [{"type": "image_url", "image_url": None}]}]
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        ollama_pt(model="llava", messages=messages)
+
+    assert excinfo.value.status_code == 400
+    assert "image_url" in excinfo.value.message
+    assert "user message at index 0" in excinfo.value.message
+    assert "NoneType" in excinfo.value.message
+
+
 @pytest.mark.asyncio
 async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     """

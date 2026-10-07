@@ -343,6 +343,7 @@ async def test_async_openai_sdk_stream_answers_the_tool_result_in_plain_text(gat
             extra_body={"cache": _NO_CACHE},
         )
         chunks: Final = [chunk async for chunk in stream]
+        assert {chunk.id for chunk in chunks} == {chunks[0].id}
         choices: Final = tuple(_stream_choices(chunks))
         assert "".join(choice.delta.content or "" for choice in choices) == _ANSWER
         assert tuple(_delta_tool_calls(choices)) == ()
@@ -497,6 +498,7 @@ async def test_async_openai_sdk_responses_stream_emits_the_function_call_item(ga
         assert json.loads(item.arguments) == _ARGUMENTS
         completed: Final = [event for event in events if event.type == "response.completed"]
         assert len(completed) == 1
+        assert [item.type for item in completed[0].response.output] == ["function_call"], completed[0].response.output
         final_calls: Final = [item for item in completed[0].response.output if item.type == "function_call"]
         assert [(item.name, json.loads(item.arguments)) for item in final_calls] == [("get_weather", _ARGUMENTS)]
         assert completed[0].response.output_text == ""
@@ -640,8 +642,8 @@ def test_ollama_server_error_on_the_tool_result_turn_does_not_take_the_deploymen
         pytest.param("r" * 5120, "r" * 5120, id="5kb-string-forwarded-intact"),
         pytest.param(
             [{"type": "text", "text": "Paris: 22 degrees"}, {"type": "text", "text": "clear skies"}],
-            "Paris: 22 degreesclear skies",
-            id="text-parts-joined",
+            "Paris: 22 degrees\nclear skies",
+            id="text-parts-joined-by-newline",
         ),
     ],
 )
@@ -668,6 +670,7 @@ def test_the_same_tool_result_twice_is_forwarded_twice_under_one_instruction(gat
         prompt: Final = _prompt_of(_only_generate(wire))
         _assert_instructed_once(prompt, "get_weather")
         assert prompt.count(_RESULT) == 2, prompt
+        assert f"### User:\n{_RESULT}\n{_RESULT}\n\n" in prompt, prompt
         assert prompt.count("### User:") == 2 and prompt.count("### Assistant:") == 1, prompt
 
 
@@ -707,15 +710,16 @@ def test_a_non_function_json_answer_is_returned_as_text(gateway: Gateway) -> Non
         assert _spend_row(completion.id) == _billed(model)
 
 
-def test_int_tool_result_content_fails_in_the_response_body_and_leaves_the_deployment_serving(gateway: Gateway) -> None:
+def test_int_tool_result_content_is_a_400_naming_the_field_and_leaves_the_deployment_serving(gateway: Gateway) -> None:
     with _ollama_server(lambda _: _generate_reply(_ANSWER)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
         code, text = _post(
             gateway, "/v1/chat/completions", {"model": model, "messages": _second_turn(22), "tools": [_WEATHER_TOOL]}
         )
-        assert code >= 400, text
+        assert code == 400, text
         error: Final = _JSON_OBJECT.validate_json(text)["error"]
-        assert isinstance(error, dict) and isinstance(error["message"], str) and error["message"], text
+        assert isinstance(error, dict) and isinstance(error["message"], str), text
+        assert "content" in error["message"] and "tool message" in error["message"], text
         assert _generate_calls(wire) == ()
         payload: Final = _post_chat(gateway, model, _second_turn(), tools=[_WEATHER_TOOL])
         assert json.dumps(payload["choices"]).count(_ANSWER) == 1, payload
