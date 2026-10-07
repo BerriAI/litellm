@@ -180,7 +180,13 @@ struct Emitting;
 
 impl Emitting {
     fn enter() -> Option<Self> {
-        EMITTING.with(|active| (!active.replace(true)).then_some(Self))
+        EMITTING.with(|active| {
+            if active.replace(true) {
+                None
+            } else {
+                Some(Self)
+            }
+        })
     }
 }
 
@@ -231,5 +237,21 @@ impl Visit for Record {
 
     fn record_f64(&mut self, field: &Field, value: f64) {
         self.field(field, value.into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[rstest::rstest]
+    fn rejected_reentrant_entries_preserve_the_outer_guard() {
+        let guard = Emitting::enter().unwrap();
+        assert!(Emitting::enter().is_none());
+        assert!(EMITTING.get());
+        assert!(Emitting::enter().is_none());
+        assert!(EMITTING.get());
+        drop(guard);
+        assert!(!EMITTING.get());
     }
 }

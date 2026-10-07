@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::{Arc, OnceLock},
+    time::Instant,
+};
 
 use tracing::{
     Dispatch, Event, Metadata, Subscriber,
@@ -15,6 +18,7 @@ where
     S: Sink,
     R: Subscriber + for<'a> LookupSpan<'a>,
 {
+    register_scoped();
     let sink = Arc::new(sink);
     let filter_sink = sink.clone();
     Output(sink).with_filter(dynamic_filter_fn(move |metadata, _| {
@@ -23,6 +27,7 @@ where
 }
 
 pub(crate) fn dispatch(sink: impl Sink) -> Dispatch {
+    register_scoped();
     let sink = Arc::new(sink);
     let filter_sink = sink.clone();
     Dispatch::new(
@@ -32,6 +37,12 @@ pub(crate) fn dispatch(sink: impl Sink) -> Dispatch {
                 enabled(filter_sink.as_ref(), metadata)
             })),
     )
+}
+
+fn register_scoped() {
+    // A sole scoped dispatcher can cache unscoped callsites as never interested.
+    static REGISTRATION: OnceLock<Dispatch> = OnceLock::new();
+    REGISTRATION.get_or_init(|| Dispatch::new(tracing::subscriber::NoSubscriber::default()));
 }
 
 fn enabled(sink: &impl Sink, metadata: &Metadata<'_>) -> bool {
