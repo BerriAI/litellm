@@ -36,7 +36,7 @@ from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
 from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
 from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import LakeraAIGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-    _OPTIONAL_PresidioPIIMasking,
+    OPTIONAL_PresidioPIIMasking,
 )
 from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrail,
@@ -224,7 +224,7 @@ guardrail_class_registry: Final[dict[str, type[CustomGuardrail]]] = {
     SupportedGuardrailIntegrations.GRAYSWAN.value: GraySwanGuardrail,
     SupportedGuardrailIntegrations.LAKERA.value: lakeraAI_Moderation,
     SupportedGuardrailIntegrations.LAKERA_V2.value: LakeraAIGuardrail,
-    SupportedGuardrailIntegrations.PRESIDIO.value: _OPTIONAL_PresidioPIIMasking,
+    SupportedGuardrailIntegrations.PRESIDIO.value: OPTIONAL_PresidioPIIMasking,
     SupportedGuardrailIntegrations.TOOL_PERMISSION.value: ToolPermissionGuardrail,
 }
 

@@ -20,11 +20,11 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (
-    _check_team_member_model_access,  # pyright: ignore[reportPrivateUsage]  # shared membership authorization owner
     can_key_call_model,
     can_org_access_model,
     can_project_access_model,
     can_team_access_model,
+    check_team_member_model_access,  # pyright: ignore[reportPrivateUsage]  # shared membership authorization owner
 )
 from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -222,7 +222,7 @@ async def authorize_member_auto_router_dependencies(
             llm_router=llm_router,
             prisma_client=prisma_client,
         )
-        await _check_team_member_model_access(
+        await check_team_member_model_access(
             model=model,
             team_object=team,
             valid_token=scoped_actor,

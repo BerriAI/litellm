@@ -182,7 +182,7 @@ async def test_list_batches_with_target_model_names():
     # Mock _read_request_body to return our target_model_names
     with (
         patch(
-            "litellm.proxy.batches_endpoints.endpoints._read_request_body"
+            "litellm.proxy.batches_endpoints.endpoints.read_request_body"
         ) as mock_read_body,
         patch("litellm.proxy.proxy_server.llm_router") as mock_router,
     ):

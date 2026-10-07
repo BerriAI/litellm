@@ -27,16 +27,22 @@ def get_active_mcp_request_ctx() -> "ServerRequestContext | None":
 # Set server-side in proxy_server.py route handlers when a request arrives via
 # /toolset/{name}/mcp or the toolset fallback in dynamic_mcp_route.
 # Never populated from client-supplied headers.
-_mcp_active_toolset_id: Final[ContextVar[str | None]] = ContextVar("_mcp_active_toolset_id", default=None)
+mcp_active_toolset_id: Final[ContextVar[str | None]] = ContextVar("_mcp_active_toolset_id", default=None)
+
+_mcp_active_toolset_id: Final = mcp_active_toolset_id
 
 # Per-request merged InitializeResult.instructions; set in MCP HTTP/SSE handlers.
-_mcp_gateway_initialize_instructions: Final[ContextVar[str | None]] = ContextVar(
+mcp_gateway_initialize_instructions: Final[ContextVar[str | None]] = ContextVar(
     "_mcp_gateway_initialize_instructions", default=None
 )
 
+_mcp_gateway_initialize_instructions: Final = mcp_gateway_initialize_instructions
+
 # Per-request scoped server name; set in MCP HTTP/SSE handlers when the path
 # identifies exactly one upstream server. Never populated from client-supplied headers.
-_mcp_gateway_server_name: Final[ContextVar[str | None]] = ContextVar("_mcp_gateway_server_name", default=None)
+mcp_gateway_server_name: Final[ContextVar[str | None]] = ContextVar("_mcp_gateway_server_name", default=None)
+
+_mcp_gateway_server_name: Final = mcp_gateway_server_name
 
 # Set server-side by the /mcp/proxy route. Never populated from client-supplied headers.
 _mcp_proxy_mode: Final[ContextVar[bool]] = ContextVar("_mcp_proxy_mode", default=False)

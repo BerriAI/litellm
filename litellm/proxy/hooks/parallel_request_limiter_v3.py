@@ -771,7 +771,7 @@ def _parse_output_cap_value(raw_value: object) -> int | None:
         return None
 
 
-class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
+class PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     batch_rate_limiter_script: _AsyncLuaScript | None
     batch_counter_read_script: _AsyncLuaScript | None
     token_increment_script: _AsyncLuaScript | None
@@ -866,10 +866,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if self._batch_rate_limiter is None:
             try:
                 from litellm.proxy.hooks.batch_rate_limiter import (
-                    _PROXY_BatchRateLimiter,
+                    PROXY_BatchRateLimiter,
                 )
 
-                self._batch_rate_limiter = _PROXY_BatchRateLimiter(
+                self._batch_rate_limiter = PROXY_BatchRateLimiter(
                     internal_usage_cache=self.internal_usage_cache,
                     parallel_request_limiter=self,
                     time_provider=self._time_provider,
@@ -1021,17 +1021,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         if not isinstance(data, dict):
             return
-        base_capped_floor: Final = _PROXY_MaxParallelRequestsHandler_v3.no_max_tokens_output_floor(min_configured_limit)
+        base_capped_floor: Final = PROXY_MaxParallelRequestsHandler_v3.no_max_tokens_output_floor(min_configured_limit)
         capped_floor: Final = (
             max(base_capped_floor, RESPONSES_API_MIN_OUTPUT_TOKENS)
             if call_type in RESPONSES_API_CALL_TYPES
             else base_capped_floor
         )
         baseline_floor: Final = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
-        is_embedding: Final = _PROXY_MaxParallelRequestsHandler_v3._is_embedding_request(data, call_type)
+        is_embedding: Final = PROXY_MaxParallelRequestsHandler_v3._is_embedding_request(data, call_type)
         if (
             capped_floor >= baseline_floor
-            or _PROXY_MaxParallelRequestsHandler_v3._has_explicit_output_cap(data, call_type)
+            or PROXY_MaxParallelRequestsHandler_v3._has_explicit_output_cap(data, call_type)
             or is_embedding
             or endpoint_type == EndpointType.DECISIONS
         ):
@@ -3145,7 +3145,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if (limit := tag_limits.get(tag)) is not None
         )
 
-    def _create_rate_limit_descriptors(
+    def create_rate_limit_descriptors(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
@@ -3308,6 +3308,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         return descriptors
+
+    _create_rate_limit_descriptors = create_rate_limit_descriptors
 
     async def _check_model_has_recent_failures(
         self,
@@ -3915,7 +3917,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if requested_model and self._is_dynamic_rate_limiting_enabled(rpm_limit_type, tpm_limit_type)
             else False
         )
-        descriptors: Final = self._create_rate_limit_descriptors(  # pyright: ignore[reportUnknownMemberType]  # legacy helper reads a dictionary with validated keys
+        descriptors: Final = self.create_rate_limit_descriptors(  # pyright: ignore[reportUnknownMemberType]  # legacy helper reads a dictionary with validated keys
             user_api_key_dict=user_api_key_dict,
             data=dict(data),
             rpm_limit_type=rpm_limit_type,
@@ -4003,7 +4005,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         data: dict,
         call_type: str,
         endpoint_type: EndpointType = EndpointType.GENERIC,
-    ):
+    ) -> Exception | str | dict[str, object] | None:
         """
         Pre-call hook to check rate limits before making the API call.
         Supports dynamic rate limiting based on deployment health.
@@ -5020,7 +5022,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return pipeline_operations
 
     @with_service_target("rate_limits")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         Update TPM usage on successful API calls by incrementing counters using pipeline
         """
@@ -5138,7 +5140,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
     @with_service_target("rate_limits")
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         On failure: decrement max_parallel_requests and refund the upfront
         TPM reservation only against the scopes the reservation actually
@@ -5267,7 +5269,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         await self._release_stashed_parallel_slot(get_request_stash(), None)
 
     @with_service_target("rate_limits")
-    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
+    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response) -> None:
         """
         Release completed-request slots and update rate limit headers in the response.
         """
@@ -5448,3 +5450,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error releasing TPM reservation on post-call failure: %s", e)
         return
+
+
+_PROXY_MaxParallelRequestsHandler_v3: Final = PROXY_MaxParallelRequestsHandler_v3

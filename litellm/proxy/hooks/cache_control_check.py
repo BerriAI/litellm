@@ -13,7 +13,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
 
-class _PROXY_CacheControlCheck(CustomLogger):
+class PROXY_CacheControlCheck(CustomLogger):
     # Class variables or attributes
     def __init__(self):
         pass
@@ -24,7 +24,7 @@ class _PROXY_CacheControlCheck(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ):
+    ) -> None:
         try:
             verbose_proxy_logger.debug("Inside Cache Control Check Pre-Call Hook")
             allowed_cache_controls: Final = user_api_key_dict.allowed_cache_controls
@@ -56,3 +56,6 @@ class _PROXY_CacheControlCheck(CustomLogger):
             verbose_logger.exception(
                 "litellm.proxy.hooks.cache_control_check.py::async_pre_call_hook(): Exception occured - %s", e
             )
+
+
+_PROXY_CacheControlCheck: Final = PROXY_CacheControlCheck

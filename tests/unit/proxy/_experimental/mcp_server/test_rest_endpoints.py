@@ -218,7 +218,7 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
         )
 
@@ -243,7 +243,7 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
         )
 
@@ -271,7 +271,7 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             hanging_create_client,
         )
 
@@ -350,13 +350,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -400,13 +400,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -451,13 +451,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -492,13 +492,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -546,13 +546,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -600,13 +600,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -648,13 +648,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -692,13 +692,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -900,7 +900,7 @@ class TestTestToolsList:
 
         monkeypatch.setattr(
             auth_mcp.MCPRequestHandler,
-            "_get_oauth2_headers_from_headers",
+            "get_oauth2_headers_from_headers",
             staticmethod(fake_oauth),
             raising=False,
         )
@@ -1082,7 +1082,7 @@ class TestTestToolsList:
 
         monkeypatch.setattr(
             auth_mcp.MCPRequestHandler,
-            "_get_oauth2_headers_from_headers",
+            "get_oauth2_headers_from_headers",
             staticmethod(fake_oauth),
             raising=False,
         )
@@ -1136,7 +1136,7 @@ class TestTestToolsList:
 
         monkeypatch.setattr(
             auth_mcp.MCPRequestHandler,
-            "_get_oauth2_headers_from_headers",
+            "get_oauth2_headers_from_headers",
             staticmethod(lambda headers: oauth_headers),
             raising=False,
         )
@@ -1451,7 +1451,7 @@ class TestListToolsRestAPI:
             fake_get_toolset_by_name_cached,
             raising=False,
         )
-        monkeypatch.setattr(rest_endpoints, "_apply_toolset_scope", fake_apply_toolset_scope, raising=False)
+        monkeypatch.setattr(rest_endpoints, "apply_toolset_scope", fake_apply_toolset_scope, raising=False)
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
             "get_allowed_mcp_servers",
@@ -2238,7 +2238,7 @@ class TestListToolsRestAPI:
         )
         monkeypatch.setattr(
             rest_endpoints,
-            "_apply_toolset_scope",
+            "apply_toolset_scope",
             fake_apply_toolset_scope,
             raising=False,
         )
@@ -3416,7 +3416,7 @@ class TestGetToolsForSingleServer:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_get_tools_from_server",
+            "get_tools_from_server",
             fake_get_tools_from_server,
             raising=False,
         )
@@ -3469,7 +3469,7 @@ class TestGetToolsForSingleServer:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_get_tools_from_server",
+            "get_tools_from_server",
             fake_get_tools_from_server,
             raising=False,
         )
@@ -3511,7 +3511,7 @@ class TestGetToolsForSingleServer:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_get_tools_from_server",
+            "get_tools_from_server",
             fake_get_tools_from_server,
             raising=False,
         )
@@ -3558,7 +3558,7 @@ class TestGetToolsForSingleServer:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_get_tools_from_server",
+            "get_tools_from_server",
             fake_get_tools_from_server,
             raising=False,
         )
@@ -3607,7 +3607,7 @@ class TestGetToolsForSingleServer:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_get_tools_from_server",
+            "get_tools_from_server",
             fake_get_tools_from_server,
             raising=False,
         )
@@ -3658,7 +3658,7 @@ class TestGetToolsForSingleServer:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_get_tools_from_server",
+            "get_tools_from_server",
             fake_get_tools_from_server,
             raising=False,
         )
@@ -4437,7 +4437,7 @@ class TestRestListToolsetFiltering:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_get_tools_from_server",
+            "get_tools_from_server",
             AsyncMock(return_value=upstream_tools),
         )
 

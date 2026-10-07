@@ -43,7 +43,7 @@ def validate_budget_duration(budget_duration: str | None, status_code: int = 400
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
-from litellm.proxy._types import (
+from litellm.proxy._types import (  # re-exported
     CommonProxyErrors,
     KeyRequestBase,
     LiteLLM_ManagementEndpoint_MetadataFields,
@@ -56,19 +56,19 @@ from litellm.proxy._types import (
     NewProjectRequest,
     UpdateProjectRequest,
     UserAPIKeyAuth,
-)
-from litellm.proxy._types import (  # noqa: F401  re-exported
-    user_api_key_has_admin_view as _user_has_admin_view,
+    user_api_key_has_admin_view,
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.management.teams.authz import is_team_admin
-from litellm.proxy.utils import _premium_user_check
+from litellm.proxy.utils import premium_user_check
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+_user_has_admin_view: Final = user_api_key_has_admin_view
 
 # TODO: drop once the litellm-enterprise pin moves past 0.1.71, which imports this name
 _is_user_team_admin: Final = is_team_admin
@@ -150,7 +150,7 @@ def require_caller_user_id_for_non_admin(
     return user_api_key_dict.user_id
 
 
-def _check_passthrough_routes_caller_permission(
+def check_passthrough_routes_caller_permission(
     data: BaseModel,
     user_api_key_dict: UserAPIKeyAuth,
     *,
@@ -177,7 +177,10 @@ def _check_passthrough_routes_caller_permission(
         )
 
 
-def _check_disable_global_guardrails_caller_permission(
+_check_passthrough_routes_caller_permission: Final = check_passthrough_routes_caller_permission
+
+
+def check_disable_global_guardrails_caller_permission(
     disable_global_guardrails: bool | None,
     metadata: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
@@ -205,7 +208,10 @@ def _check_disable_global_guardrails_caller_permission(
     )
 
 
-def _team_member_has_permission(
+_check_disable_global_guardrails_caller_permission: Final = check_disable_global_guardrails_caller_permission
+
+
+def team_member_has_permission(
     user_api_key_dict: UserAPIKeyAuth,
     team_obj: LiteLLM_TeamTable,
     permission: str,
@@ -221,7 +227,10 @@ def _team_member_has_permission(
     return False
 
 
-async def _user_has_admin_privileges(
+_team_member_has_permission: Final = team_member_has_permission
+
+
+async def user_has_admin_privileges(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Optional["PrismaClient"] = None,
     user_api_key_cache: Optional["DualCache"] = None,
@@ -285,6 +294,9 @@ async def _user_has_admin_privileges(
         return False
 
     return False
+
+
+_user_has_admin_privileges: Final = user_has_admin_privileges
 
 
 def _org_admin_can_invite_user(
@@ -429,7 +441,7 @@ async def admin_can_invite_user(
         return False
 
 
-def _set_object_metadata_field(
+def set_object_metadata_field(
     object_data: Union[
         LiteLLM_TeamTable,
         KeyRequestBase,
@@ -450,10 +462,13 @@ def _set_object_metadata_field(
         value: Value to set for the field
     """
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium and value:
-        _premium_user_check(field_name)
+        premium_user_check(field_name)
 
     object_data.metadata = object_data.metadata or {}
     object_data.metadata[field_name] = value
+
+
+_set_object_metadata_field: Final = set_object_metadata_field
 
 
 _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
@@ -515,7 +530,7 @@ def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
 
 
-async def _upsert_budget_and_membership(
+async def upsert_budget_and_membership(
     tx,
     *,
     team_id: str,
@@ -525,7 +540,7 @@ async def _upsert_budget_and_membership(
     budget_patch: Mapping[str, object],
     team_default_budget_id: str | None = None,
     shared_budget_ids: frozenset[str] | None = None,
-):
+) -> None:
     """
     Apply a merge-patch of per-member budget fields to a team membership.
 
@@ -636,6 +651,9 @@ async def _upsert_budget_and_membership(
     )
 
 
+_upsert_budget_and_membership: Final = upsert_budget_and_membership
+
+
 def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
     """
     Helper function to update metadata fields that require premium user checks in the update endpoint
@@ -650,7 +668,7 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
         # only for a truthy value. The falsy value is still persisted below so a
         # previously-set field can be cleared.
         if updated_kv.get(field_name):
-            _premium_user_check()
+            premium_user_check()
 
     if field_name in updated_kv and updated_kv[field_name] is not None:
         # remove field from updated_kv
@@ -672,7 +690,7 @@ def _has_non_empty_value(value: object) -> bool:
     return True
 
 
-def _update_metadata_fields(updated_kv: dict) -> None:
+def update_metadata_fields(updated_kv: dict) -> None:
     """
     Helper function to update all metadata fields (both premium and standard).
 
@@ -686,3 +704,6 @@ def _update_metadata_fields(updated_kv: dict) -> None:
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if field in updated_kv and updated_kv[field] is not None:
             _update_metadata_field(updated_kv=updated_kv, field_name=field)
+
+
+_update_metadata_fields: Final = update_metadata_fields

@@ -34,7 +34,7 @@ from litellm.proxy._types import (
     UpdateKeyRequest,
 )
 from litellm.proxy.auth.auth_checks import (
-    _delete_cache_access_object,  # pyright: ignore[reportPrivateUsage]  # the access-group endpoints reach for this same cache primitive
+    delete_cache_access_object,  # pyright: ignore[reportPrivateUsage]  # the access-group endpoints reach for this same cache primitive
 )
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.repositories.table_repositories import AccessGroupRepository
@@ -86,7 +86,7 @@ async def _invalidate_access_group_cache(access_group_id: str) -> None:
     """
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
-    await _delete_cache_access_object(
+    await delete_cache_access_object(
         access_group_id=access_group_id,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,

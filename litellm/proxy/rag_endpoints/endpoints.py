@@ -32,9 +32,9 @@ from litellm.proxy.common_request_processing import (
     ttft_keepalive_interval,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,
-    _safe_get_request_headers,
     get_form_data,
+    read_request_body,
+    safe_get_request_headers,
 )
 from litellm.proxy.rag_endpoints.upload_security import (
     MAX_UPLOAD_SIZE_BYTES,
@@ -420,7 +420,7 @@ async def parse_rag_ingest_request(
     Returns:
         Tuple of (ingest_options, file_data, file_url, file_id)
     """
-    headers: Final = _safe_get_request_headers(request)
+    headers: Final = safe_get_request_headers(request)
     content_type = headers.get("content-type", "")
 
     file_data: tuple[str, bytes, str] | None = None
@@ -448,7 +448,7 @@ async def parse_rag_ingest_request(
 
     else:
         # JSON body
-        data: Final = await _read_request_body(request)
+        data: Final = await read_request_body(request)
         ingest_options = data.get("ingest_options", {})
         file_url = data.get("file_url")
         file_id = data.get("file_id")
@@ -770,7 +770,7 @@ async def rag_query(
 
     try:
         # Parse request body
-        data: Final = await _read_request_body(request)
+        data: Final = await read_request_body(request)
 
         # Extract required fields
         model: Final = data.get("model")

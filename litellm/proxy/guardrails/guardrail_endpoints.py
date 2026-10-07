@@ -41,7 +41,7 @@ from litellm.proxy.guardrails.guardrail_registry import (
     encrypt_guardrail_litellm_params,
 )
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.types.guardrails import (
@@ -245,7 +245,7 @@ async def list_guardrails_v2(
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
-    is_admin: Final = _user_has_admin_view(user_api_key_dict)
+    is_admin: Final = user_api_key_has_admin_view(user_api_key_dict)
 
     try:
         guardrails = (
@@ -923,7 +923,7 @@ async def list_guardrail_submissions(
     # Admin Viewer follows the read-parity rule: see all submissions like a
     # Proxy Admin would (no writes — registration / approval still gated
     # elsewhere by their own per-action checks).
-    is_admin: Final = _user_has_admin_view(user_api_key_dict)
+    is_admin: Final = user_api_key_has_admin_view(user_api_key_dict)
     visible_team_ids: list[str] | None = None
     if not is_admin:
         visible_team_ids = await _get_user_team_ids(user_api_key_dict)
@@ -1002,7 +1002,7 @@ async def get_guardrail_submission(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
-    is_admin: Final = _user_has_admin_view(user_api_key_dict)
+    is_admin: Final = user_api_key_has_admin_view(user_api_key_dict)
 
     try:
         row: Final = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})

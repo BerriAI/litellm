@@ -41,8 +41,8 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
-from litellm.proxy.hooks.max_iterations_limiter import _PROXY_MaxIterationsHandler
+from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
+from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandler
 from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
@@ -10989,7 +10989,7 @@ def test_is_internal_litellm_proxy_callback():
     """
     logging = setup_logging()
 
-    assert logging._is_internal_litellm_proxy_callback(_PROXY_MaxIterationsHandler) == True
+    assert logging._is_internal_litellm_proxy_callback(PROXY_MaxIterationsHandler) == True
 
     # Test non-internal callbacks
     def regular_callback():
@@ -11022,7 +11022,7 @@ def test_should_run_sync_callbacks_for_async_calls():
     assert logging._should_run_sync_callbacks_for_async_calls() == True
 
     # Test with internal callback only
-    litellm.success_callback = [_PROXY_MaxIterationsHandler]
+    litellm.success_callback = [PROXY_MaxIterationsHandler]
     assert logging._should_run_sync_callbacks_for_async_calls() == False
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
@@ -11034,8 +11034,8 @@ def test_remove_internal_litellm_callbacks():
 
     callbacks = [
         regular_callback,
-        _PROXY_MaxIterationsHandler,
-        _PROXY_CacheControlCheck,
+        PROXY_MaxIterationsHandler,
+        PROXY_CacheControlCheck,
         "string_callback",
     ]
 
@@ -11043,8 +11043,8 @@ def test_remove_internal_litellm_callbacks():
     assert len(filtered) == 2  # Should only keep regular_callback and string_callback
     assert regular_callback in filtered
     assert "string_callback" in filtered
-    assert _PROXY_MaxIterationsHandler not in filtered
-    assert _PROXY_CacheControlCheck not in filtered
+    assert PROXY_MaxIterationsHandler not in filtered
+    assert PROXY_CacheControlCheck not in filtered
 
 @pytest.mark.asyncio
 async def test_background_interaction_completion_logs_while_in_progress_handler_is_parked(monkeypatch):

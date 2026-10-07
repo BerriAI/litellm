@@ -57,7 +57,7 @@ class TestAnthropicLoggingHandlerModelFallback:
         return mock_handler
 
     @patch.object(
-        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
     )
     @patch.object(
         AnthropicPassthroughLoggingHandler, "_create_anthropic_response_logging_payload"
@@ -2202,7 +2202,7 @@ class TestAnthropicUsageOnlyFallback:
 
     @patch("litellm.completion_cost")
     @patch.object(
-        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
     )
     def test_handler_falls_back_when_assembly_returns_none(
         self, mock_assemble, mock_cost
@@ -2228,7 +2228,7 @@ class TestAnthropicUsageOnlyFallback:
 
     @patch("litellm.completion_cost")
     @patch.object(
-        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
     )
     def test_handler_falls_back_when_assembly_raises(self, mock_assemble, mock_cost):
         import litellm
@@ -2260,7 +2260,7 @@ class TestAnthropicUsageOnlyFallback:
         assert result["kwargs"]["response_cost"] == 0.0021
 
     @patch.object(
-        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
     )
     def test_handler_returns_none_when_no_usage_recoverable(self, mock_assemble):
         # assembly fails AND the chunks carry no usage event, so there is nothing
@@ -2284,10 +2284,10 @@ class TestAnthropicUsageOnlyFallback:
         assert result["kwargs"] == {}
 
     @patch.object(
-        AnthropicPassthroughLoggingHandler, "_build_usage_only_response_from_chunks"
+        AnthropicPassthroughLoggingHandler, "build_usage_only_response_from_chunks"
     )
     @patch.object(
-        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
     )
     def test_handler_does_not_crash_when_usage_only_fallback_raises(
         self, mock_assemble, mock_fallback

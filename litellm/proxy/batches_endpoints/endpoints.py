@@ -36,14 +36,13 @@ from litellm.proxy.common_request_processing import (
     request_litellm_call_id,
 )
 from litellm.proxy.common_utils.callback_utils import sanitize_openai_provider_metadata
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
-    _is_base64_encoded_unified_file_id,
     add_deployment_model_info,
     add_internal_model_credentials,
     apply_team_provider_credentials,
@@ -59,6 +58,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
     get_original_file_id,
+    is_base64_encoded_unified_file_id,
     is_litellm_executed_batch,
     prepare_data_with_credentials,
     update_batch_in_database,
@@ -269,7 +269,7 @@ async def create_batch(
 
     data: dict = {}
     try:
-        data = await _read_request_body(request=request)
+        data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n%s",
             json.dumps(data, indent=4),
@@ -341,7 +341,9 @@ async def create_batch(
         model_from_file_id = None
         if input_file_id:
             model_from_file_id = decode_model_from_file_id(input_file_id)
-            unified_file_id = _is_base64_encoded_unified_file_id(input_file_id)
+            unified_file_id = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                is_base64_encoded_unified_file_id(input_file_id)
+            )
 
         # SCENARIO 1: File ID is encoded with model info
         if model_from_file_id is not None and input_file_id:
@@ -587,7 +589,7 @@ async def retrieve_batch(
         )
 
         data = cast(dict, _retrieve_batch_request)
-        unified_batch_id: Final = _is_base64_encoded_unified_file_id(batch_id)
+        unified_batch_id: Final = is_base64_encoded_unified_file_id(batch_id)
 
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
@@ -891,7 +893,7 @@ async def list_batches(
             )
 
         # Include original request and headers in the data
-        data = await _read_request_body(request=request)
+        data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
@@ -1084,7 +1086,7 @@ async def cancel_batch(
         )
         data = cast(dict, _cancel_batch_request)
 
-        unified_batch_id: Final = _is_base64_encoded_unified_file_id(batch_id)
+        unified_batch_id: Final = is_base64_encoded_unified_file_id(batch_id)
 
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (

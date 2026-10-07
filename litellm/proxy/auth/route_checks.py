@@ -14,7 +14,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 
-from .auth_checks_organization import _user_is_org_admin
+from .auth_checks_organization import user_is_org_admin
 
 # Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write
 # endpoint to a management router REQUIRES adding it here too — the surrounding
@@ -127,7 +127,7 @@ class RouteChecks:
                             allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS
                             and RouteChecks.is_auth_enforced_pass_through_route(
                                 route=route,
-                                method=RouteChecks._get_request_method(request=request),
+                                method=RouteChecks.get_request_method(request=request),
                             )
                         ):
                             if RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
@@ -140,7 +140,7 @@ class RouteChecks:
                     #  For llm_api_routes, also check registered pass-through endpoints
                     ################################################
                     if allowed_route == "llm_api_routes":
-                        if route == "/auto_router/session" and RouteChecks._get_request_method(request) == "GET":
+                        if route == "/auto_router/session" and RouteChecks.get_request_method(request) == "GET":
                             return True
 
                         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -150,7 +150,7 @@ class RouteChecks:
                         if InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=route):
                             if RouteChecks.is_auth_enforced_pass_through_route(
                                 route=route,
-                                method=RouteChecks._get_request_method(request=request),
+                                method=RouteChecks.get_request_method(request=request),
                             ):
                                 if RouteChecks.check_passthrough_route_access(
                                     route=route, user_api_key_dict=valid_token
@@ -276,7 +276,7 @@ class RouteChecks:
 
         if RouteChecks.is_auth_enforced_pass_through_route(
             route=route,
-            method=RouteChecks._get_request_method(request=request),
+            method=RouteChecks.get_request_method(request=request),
         ):
             RouteChecks._require_auth_pass_through_access(
                 route=route,
@@ -328,7 +328,7 @@ class RouteChecks:
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER.value
             and RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value)
-            or _user_is_org_admin(request_data=request_data, user_object=user_obj)
+            or user_is_org_admin(request_data=request_data, user_object=user_obj)
             and RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.org_admin_allowed_routes.value)
             or _user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
             and RouteChecks.check_route_access(
@@ -422,7 +422,7 @@ class RouteChecks:
                 if RouteChecks._route_matches_pattern(route=route, pattern=openai_route):
                     return True
             # Check for wildcard patterns like "/containers/*"
-            if RouteChecks._is_wildcard_pattern(pattern=openai_route):
+            if RouteChecks.is_wildcard_pattern(pattern=openai_route):
                 if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=openai_route):
                     return True
 
@@ -548,11 +548,13 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def _is_wildcard_pattern(pattern: str) -> bool:
+    def is_wildcard_pattern(pattern: str) -> bool:
         """
         Check if pattern is a wildcard pattern
         """
         return pattern.endswith("*")
+
+    _is_wildcard_pattern = is_wildcard_pattern
 
     @staticmethod
     def route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
@@ -634,7 +636,7 @@ class RouteChecks:
         if any(
             RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route)
             for allowed_route in allowed_routes
-            if RouteChecks._is_wildcard_pattern(pattern=allowed_route)
+            if RouteChecks.is_wildcard_pattern(pattern=allowed_route)
         ):
             return True
 
@@ -652,7 +654,7 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def _get_request_method(request: Request | None) -> str | None:
+    def get_request_method(request: Request | None) -> str | None:
         if request is None:
             return None
 
@@ -664,6 +666,8 @@ class RouteChecks:
             return None
 
         return method.upper()
+
+    _get_request_method = get_request_method
 
     @staticmethod
     def is_auth_enforced_pass_through_route(route: str, method: str | None = None) -> bool:
@@ -762,7 +766,7 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def _is_assistants_api_request(request: Request) -> bool:
+    def is_assistants_api_request(request: Request) -> bool:
         """
         Returns True if `thread` or `assistant` is in the request path
 
@@ -779,6 +783,8 @@ class RouteChecks:
         if "thread" in route or "assistant" in route:
             return True
         return False
+
+    _is_assistants_api_request = is_assistants_api_request
 
     @staticmethod
     def is_generate_content_route(route: str) -> bool:

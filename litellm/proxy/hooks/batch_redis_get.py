@@ -15,7 +15,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
 
-class _PROXY_BatchRedisRequests(CustomLogger):
+class PROXY_BatchRedisRequests(CustomLogger):
     # Class variables or attributes
     in_memory_cache: InMemoryCache | None = None
 
@@ -25,7 +25,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 self.async_get_cache
             )  # map the litellm 'get_cache' function to our custom function
 
-    def print_verbose(self, print_statement, debug_level: Literal["INFO", "DEBUG"] = "DEBUG"):
+    def print_verbose(self, print_statement, debug_level: Literal["INFO", "DEBUG"] = "DEBUG") -> None:
         if debug_level == "DEBUG" or debug_level == "INFO":
             verbose_proxy_logger.debug(print_statement)
         if litellm.set_verbose is True:
@@ -37,7 +37,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ):
+    ) -> None:
         try:
             """
             Get the user key
@@ -83,7 +83,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             )
             verbose_proxy_logger.debug(traceback.format_exc())
 
-    async def async_get_cache(self, *args, **kwargs):
+    async def async_get_cache(self, *args, **kwargs) -> object | None:
         """
         - Check if the cache key is in-memory
 
@@ -113,3 +113,6 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 return litellm.cache.get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             return None
+
+
+_PROXY_BatchRedisRequests: Final = PROXY_BatchRedisRequests

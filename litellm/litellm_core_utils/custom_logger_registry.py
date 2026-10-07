@@ -53,8 +53,8 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
     VectorStorePreCallHook,
 )
 from litellm.integrations.zerobus import ZerobusLogger
-from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import _PROXY_DynamicRateLimitHandlerV3
+from litellm.proxy.hooks.dynamic_rate_limiter import PROXY_DynamicRateLimitHandler
+from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
 
 
 class CustomLoggerRegistry:
@@ -101,8 +101,8 @@ class CustomLoggerRegistry:
         "pointfive": PointFiveLogger,
         "zerobus": ZerobusLogger,
         "aws_sqs": SQSLogger,
-        "dynamic_rate_limiter": _PROXY_DynamicRateLimitHandler,
-        "dynamic_rate_limiter_v3": _PROXY_DynamicRateLimitHandlerV3,
+        "dynamic_rate_limiter": PROXY_DynamicRateLimitHandler,
+        "dynamic_rate_limiter_v3": PROXY_DynamicRateLimitHandlerV3,
         "vector_store_pre_call_hook": VectorStorePreCallHook,
         "dotprompt": DotpromptManager,
         "bitbucket": BitBucketPromptManager,

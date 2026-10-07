@@ -31,8 +31,8 @@ from litellm.proxy.auth.user_api_key_auth import (
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, create_response
 from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,
-    _safe_set_request_parsed_body,
+    read_request_body,
+    safe_set_request_parsed_body,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -184,12 +184,12 @@ async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
     from litellm.proxy.proxy_server import llm_router
 
     try:
-        raw_body: Final = await _read_request_body(request=request)
+        raw_body: Final = await read_request_body(request=request)
     except (json.JSONDecodeError, ProxyException):
         return
     resolved: Final = _resolve_cursor_model_variant(raw_body, llm_router)
     if resolved is not raw_body:
-        _safe_set_request_parsed_body(request=request, parsed_body=resolved)
+        safe_set_request_parsed_body(request=request, parsed_body=resolved)
 
 
 @router.post(
@@ -244,7 +244,6 @@ async def responses_api(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         native_background_mode,
@@ -252,6 +251,7 @@ async def responses_api(
         polling_via_cache_enabled,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         redis_usage_cache,
         select_data_generator,
         user_api_base,
@@ -263,7 +263,7 @@ async def responses_api(
     )
 
     native_data_generator: Final = partial(select_data_generator, responses_stream_errors=True)
-    data = await _read_request_body(request=request)
+    data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
 
     # Check if polling via cache should be used for this request
     from litellm.proxy.response_polling.polling_handler import (
@@ -313,7 +313,7 @@ async def responses_api(
             )
             raise_if_required_body_param_missing(route_type="aresponses", data=data, llm_router=llm_router)
         except Exception as e:
-            raise await processor._handle_llm_api_exception(
+            raise await processor.handle_llm_api_exception(
                 e=e,
                 user_api_key_dict=user_api_key_dict,
                 proxy_logging_obj=proxy_logging_obj,
@@ -451,7 +451,7 @@ async def responses_api(
             return await create_response(generator=_blocked_stream(), media_type="text/event-stream", headers={})
         return build_blocked_response(e)
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -547,7 +547,7 @@ async def cursor_chat_completions(
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import ModelResponse
 
-    raw_body: Final = await _read_request_body(request=request)
+    raw_body: Final = await read_request_body(request=request)
 
     if _is_chat_completions_body(raw_body):
         # Genuine chat completions body (Cursor sends these for models whose BYOK it
@@ -556,7 +556,7 @@ async def cursor_chat_completions(
         # empty messages stub alongside a real agent-mode input array
         normalized: Final = _normalize_tool_dialect(raw_body, to_chat=True)
         if normalized is not raw_body:
-            _safe_set_request_parsed_body(request=request, parsed_body=normalized)
+            safe_set_request_parsed_body(request=request, parsed_body=normalized)
         return await chat_completion(
             request=request,
             fastapi_response=fastapi_response,
@@ -667,7 +667,7 @@ async def cursor_chat_completions(
         # Streaming responses are already transformed by cursor_select_data_generator
         return response
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -719,11 +719,11 @@ async def get_response(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         redis_usage_cache,
         select_data_generator,
         user_api_base,
@@ -760,7 +760,7 @@ async def get_response(
         return state
 
     # Normal provider response flow
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -783,7 +783,7 @@ async def get_response(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -830,11 +830,11 @@ async def delete_response(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         redis_usage_cache,
         select_data_generator,
         user_api_base,
@@ -869,7 +869,7 @@ async def delete_response(
             raise HTTPException(status_code=500, detail="Failed to delete polling response")
 
     # Normal provider response flow
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -892,7 +892,7 @@ async def delete_response(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -926,11 +926,11 @@ async def get_response_input_items(
 ):
     """List input items for a response."""
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -940,7 +940,7 @@ async def get_response_input_items(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -963,7 +963,7 @@ async def get_response_input_items(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -1009,11 +1009,11 @@ async def compact_response(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -1023,7 +1023,7 @@ async def compact_response(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -1045,7 +1045,7 @@ async def compact_response(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -1162,7 +1162,7 @@ async def responses_input_tokens(
 
     Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
     """
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     model_name: Final = data.get("model")
     input_value: Final = data.get("input")
     if not isinstance(model_name, str) or not model_name:
@@ -1240,11 +1240,11 @@ async def cancel_response(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         redis_usage_cache,
         select_data_generator,
         user_api_base,
@@ -1283,7 +1283,7 @@ async def cancel_response(
             raise HTTPException(status_code=500, detail="Failed to cancel polling response")
 
     # Normal provider response flow
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -1306,7 +1306,7 @@ async def cancel_response(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -1436,8 +1436,8 @@ async def _enforce_responses_ws_first_frame_model_auth(
     llm_router: "Router | None",
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import (
-        _enforce_key_and_fallback_model_access,
-        _run_centralized_common_checks,
+        enforce_key_and_fallback_model_access,
+        run_centralized_common_checks,
     )
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -1456,7 +1456,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
         return
     if user_custom_auth is not None and not general_settings.get("custom_auth_run_common_checks", False):
         return
-    await _enforce_key_and_fallback_model_access(
+    await enforce_key_and_fallback_model_access(
         valid_token=user_api_key_dict,
         request_data=request_data,
         route=route,
@@ -1464,7 +1464,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
         llm_model_list=llm_model_list,
         llm_router=llm_router,
     )
-    await _run_centralized_common_checks(
+    await run_centralized_common_checks(
         user_api_key_auth_obj=user_api_key_dict,
         request=request,
         request_data=request_data,
@@ -1535,7 +1535,7 @@ async def responses_websocket_endpoint(
         "headers": headers_list,
     }
     request: Final = Request(scope=scope)
-    request._url = websocket.url
+    request._url = websocket.url  # pyright: ignore[reportPrivateUsage]  # Starlette WebSocket URL storage
 
     _body_bytes: Final = json.dumps({"model": resolved_model}).encode()
 

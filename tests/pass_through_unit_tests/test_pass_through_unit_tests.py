@@ -371,7 +371,7 @@ async def test_pass_through_request_logging_failure_with_stream(
     # Patch both the logging handler and the httpx client
     with (
         patch(
-            "litellm.proxy.pass_through_endpoints.streaming_handler.PassThroughStreamingHandler._route_streaming_logging_to_handler",
+            "litellm.proxy.pass_through_endpoints.streaming_handler.PassThroughStreamingHandler.route_streaming_logging_to_handler",
             new=mock_logging_failure,
         ),
         patch(

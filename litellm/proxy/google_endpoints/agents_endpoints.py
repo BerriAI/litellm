@@ -24,8 +24,8 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,
-    _safe_get_request_query_params,
+    read_request_body,
+    safe_get_request_query_params,
 )
 
 router: Final = APIRouter(tags=["gemini managed agents"])
@@ -92,7 +92,7 @@ def _merge_query_params_into_data(data: dict, request: Request) -> dict:
     headers. Use the ``litellm_params_template`` JSON body field on POST
     requests, or the JSON-encoded query parameter above for GET/DELETE.
     """
-    query_params: Final = _safe_get_request_query_params(request)
+    query_params: Final = safe_get_request_query_params(request)
     if not query_params:
         return data
 
@@ -172,7 +172,7 @@ async def create_gemini_agent(
     ```
     """
     srv: Final = _proxy_server_imports()
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     # Merge litellm_params_template (e.g. custom_llm_provider, api_key) into the request
     litellm_params_template: Final = data.pop("litellm_params_template", None) or {}
     if isinstance(litellm_params_template, dict):
@@ -203,7 +203,7 @@ async def create_gemini_agent(
             version=srv["version"],
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=srv["proxy_logging_obj"],
@@ -260,7 +260,7 @@ async def list_gemini_agents(
             version=srv["version"],
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=srv["proxy_logging_obj"],
@@ -318,7 +318,7 @@ async def get_gemini_agent(
             version=srv["version"],
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=srv["proxy_logging_obj"],
@@ -376,7 +376,7 @@ async def delete_gemini_agent(
             version=srv["version"],
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=srv["proxy_logging_obj"],
@@ -434,7 +434,7 @@ async def list_gemini_agent_versions(
             version=srv["version"],
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=srv["proxy_logging_obj"],

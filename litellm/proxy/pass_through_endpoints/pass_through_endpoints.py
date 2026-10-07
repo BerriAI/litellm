@@ -92,8 +92,8 @@ from litellm.proxy.common_request_processing import (
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,
-    _safe_get_request_headers,
+    read_request_body,
+    safe_get_request_headers,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
@@ -107,9 +107,9 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
-    _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
+    get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import normalize_route_for_root_path
@@ -586,7 +586,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
 
     @staticmethod
-    def _init_kwargs_for_pass_through_endpoint(
+    def init_kwargs_for_pass_through_endpoint(
         request: Request,
         user_api_key_dict: UserAPIKeyAuth,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
@@ -697,6 +697,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         return kwargs
 
+    _init_kwargs_for_pass_through_endpoint = init_kwargs_for_pass_through_endpoint
+
     @staticmethod
     def construct_target_url_with_subpath(base_target: str, subpath: str, include_subpath: bool | None) -> str:
         """
@@ -762,7 +764,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         return combined
 
     @staticmethod
-    def _update_stream_param_based_on_request_body(
+    def update_stream_param_based_on_request_body(
         parsed_body: dict,
         stream: bool | None = None,
     ) -> bool | None:
@@ -773,6 +775,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         if "stream" in parsed_body:
             return parsed_body.get("stream", stream)
         return stream
+
+    _update_stream_param_based_on_request_body = update_stream_param_based_on_request_body
 
 
 def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | None) -> None:
@@ -857,7 +861,7 @@ def _resolve_team_callback_wiring(
     otherwise reject the vars mid-request.
     """
     try:
-        callback_settings_obj: Final = _get_dynamic_logging_metadata(
+        callback_settings_obj: Final = get_dynamic_logging_metadata(
             user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
         )
         if callback_settings_obj and callback_settings_obj.callback_vars:
@@ -1119,7 +1123,7 @@ async def pass_through_request(
         url = httpx.URL(target)
         headers = custom_headers
         headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
-            request_headers=_safe_get_request_headers(request).copy(),
+            request_headers=safe_get_request_headers(request).copy(),
             headers=headers,
             forward_headers=forward_headers,
         )
@@ -1155,7 +1159,7 @@ async def pass_through_request(
             # Don't parse multipart body here - it will be handled by make_multipart_http_request
             _parsed_body = {}
         else:
-            _parsed_body = await _read_request_body(request)
+            _parsed_body = await read_request_body(request)  # rebind-ok: pre-existing rebinding on a rename-only line
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
@@ -1252,7 +1256,7 @@ async def pass_through_request(
             request_method=getattr(request, "method", None),
             cost_per_request=cost_per_request,
         )
-        kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        kwargs = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(  # rebind-ok: pre-existing rebinding on a rename-only line
             user_api_key_dict=user_api_key_dict,
             _parsed_body=_parsed_body,
             passthrough_logging_payload=passthrough_logging_payload,
@@ -1426,7 +1430,7 @@ async def pass_through_request(
                 "headers": upstream_headers,
             },
         )
-        stream = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+        stream = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
             parsed_body=_parsed_body or {},
             stream=stream,
         )
@@ -1974,7 +1978,7 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
 
     # Only add tags key if there are tags to add
     if tags_to_add:
-        metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+        metadata["tags"] = LiteLLMProxyRequestSetup.merge_tags(
             request_tags=metadata.get("tags"),
             tags_to_add=tags_to_add,
         )
@@ -2474,7 +2478,7 @@ async def websocket_passthrough_request(
     )
 
     # Initialize kwargs for logging using the same pattern as HTTP passthrough
-    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+    kwargs: Final = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
         user_api_key_dict=user_api_key_dict,
         _parsed_body={},  # WebSocket doesn't have a traditional request body
         passthrough_logging_payload=passthrough_logging_payload,

@@ -441,7 +441,7 @@ async def test_tool_listing_returns_empty_result_without_dispatch_for_unavailabl
     upstream = AsyncMock()
     with (
         patch.object(operations, "_get_allowed_mcp_servers", allowed),
-        patch.object(operations.global_mcp_server_manager, "_get_tools_from_server", upstream),
+        patch.object(operations.global_mcp_server_manager, "get_tools_from_server", upstream),
     ):
         result = await GatewayOperations().execute(ListToolsRequest(), prepare_context())
     assert result.tools == []
@@ -773,7 +773,7 @@ async def test_list_mcp_tools_records_the_catalog_only_when_asked(
     upstream = [MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})]
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
-        patch.object(manager, "_create_mcp_client", AsyncMock(return_value=object())),
+        patch.object(manager, "create_mcp_client", AsyncMock(return_value=object())),
         patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
         patch.dict(manager.tool_name_to_mcp_server_name_mapping),
     ):
