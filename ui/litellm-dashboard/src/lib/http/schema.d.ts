@@ -44704,6 +44704,18 @@ export interface components {
             /** Start */
             start?: string | null;
         };
+        /** RunSource */
+        RunSource: {
+            /** Title */
+            title: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "slack" | "teams" | "discord" | "linear" | "github" | "jira" | "custom";
+            /** Url */
+            url: string;
+        };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
             /** Costcenter */
@@ -47951,6 +47963,7 @@ export interface components {
             resolution_limited?: boolean;
             /** Service */
             service: string;
+            source?: components["schemas"]["RunSource"] | null;
             /** Span Count */
             span_count: number;
             /** Spend */

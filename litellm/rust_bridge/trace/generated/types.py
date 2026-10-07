@@ -51,6 +51,9 @@ class SpanErrorPage(typing_extensions.TypedDict):
 SpanStatus: TypeAlias = Literal["ok", "error", "unset"]
 
 
+RunSourceType: TypeAlias = Literal["slack", "teams", "discord", "linear", "github", "jira", "custom"]
+
+
 class AgentNode(typing_extensions.TypedDict):
     name: ReadOnly[str]
     parent_agent: ReadOnly[str | None]
@@ -102,29 +105,10 @@ class UIMessage(typing_extensions.TypedDict):
     tool_calls: ReadOnly[NotRequired[tuple[UIToolCall, ...]]]
 
 
-class TraceSummary(typing_extensions.TypedDict):
-    resolution_limited: ReadOnly[NotRequired[bool]]
-    trace_id: ReadOnly[str]
-    trace_ref: ReadOnly[NotRequired[str]]
-    name: ReadOnly[str]
-    service: ReadOnly[str]
-    agent_names: ReadOnly[NotRequired[tuple[str, ...]]]
-    frameworks: ReadOnly[NotRequired[tuple[str, ...]]]
-    input_preview: ReadOnly[str]
-    start_time: ReadOnly[str]
-    duration_ms: ReadOnly[float]
-    status: ReadOnly[SpanStatus]
-    span_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    agent_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    agent_invocations: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    llm_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    tool_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    error_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    input_tokens: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    output_tokens: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    models: ReadOnly[tuple[str, ...]]
-    spend: ReadOnly[float | None]
-    priced_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+class RunSource(typing_extensions.TypedDict):
+    type: ReadOnly[RunSourceType]
+    url: ReadOnly[str]
+    title: ReadOnly[str]
 
 
 class Span(typing_extensions.TypedDict):
@@ -149,18 +133,6 @@ class Span(typing_extensions.TypedDict):
     spend_match: ReadOnly[SpendMatch | None | None]
 
 
-class Trace(typing_extensions.TypedDict):
-    summary: ReadOnly[TraceSummary]
-    agents: ReadOnly[tuple[AgentNode, ...]]
-    spans: ReadOnly[tuple[Span, ...]]
-    next_cursor: ReadOnly[NotRequired[str | None]]
-
-
-class TracePage(typing_extensions.TypedDict):
-    data: ReadOnly[tuple[TraceSummary, ...]]
-    next_cursor: ReadOnly[str | None]
-
-
 class UIMessages(typing_extensions.TypedDict):
     messages: ReadOnly[tuple[UIMessage, ...]]
     kind: ReadOnly[Literal["messages"]]
@@ -176,6 +148,44 @@ class SpanDetail(typing_extensions.TypedDict):
     input: ReadOnly[str]
     output: ReadOnly[str]
     attributes: ReadOnly[Mapping[str, str]]
+
+
+class TraceSummary(typing_extensions.TypedDict):
+    resolution_limited: ReadOnly[NotRequired[bool]]
+    trace_id: ReadOnly[str]
+    trace_ref: ReadOnly[NotRequired[str]]
+    name: ReadOnly[str]
+    service: ReadOnly[str]
+    agent_names: ReadOnly[NotRequired[tuple[str, ...]]]
+    frameworks: ReadOnly[NotRequired[tuple[str, ...]]]
+    input_preview: ReadOnly[str]
+    start_time: ReadOnly[str]
+    duration_ms: ReadOnly[float]
+    status: ReadOnly[SpanStatus]
+    span_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    agent_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    agent_invocations: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    llm_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    tool_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    error_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    input_tokens: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    output_tokens: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    models: ReadOnly[tuple[str, ...]]
+    spend: ReadOnly[float | None]
+    priced_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    source: ReadOnly[NotRequired[RunSource | None | None]]
+
+
+class Trace(typing_extensions.TypedDict):
+    summary: ReadOnly[TraceSummary]
+    agents: ReadOnly[tuple[AgentNode, ...]]
+    spans: ReadOnly[tuple[Span, ...]]
+    next_cursor: ReadOnly[NotRequired[str | None]]
+
+
+class TracePage(typing_extensions.TypedDict):
+    data: ReadOnly[tuple[TraceSummary, ...]]
+    next_cursor: ReadOnly[str | None]
 
 
 TraceWireTypes: TypeAlias = QueryScope | SpanDetail | SpanErrorPage | Trace | TracePage | TraceScope | ReadQueryName
