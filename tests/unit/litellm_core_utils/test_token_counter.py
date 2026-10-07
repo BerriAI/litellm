@@ -1830,3 +1830,51 @@ def test_messages_reach_token_count_honours_disable_token_counter(monkeypatch: p
     messages = _threshold_test_messages(turns=3)
     assert messages_reach_token_count(model="gpt-4o", messages=messages, threshold=0) is True
     assert messages_reach_token_count(model="gpt-4o", messages=messages, threshold=1) is False
+
+
+@pytest.mark.parametrize(
+    "content_block",
+    [
+        {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAA"}},
+        {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "mp3"}},
+    ],
+    ids=["video_url", "input_audio"],
+)
+def test_token_counter_with_non_text_modality_blocks(content_block: dict):
+    """
+    Video and audio content blocks must not raise.
+
+    Raising `Invalid content item type: video_url` breaks two paths: on the proxy
+    it nulls response_cost and drops the SpendLogs row, and on the ollama route the
+    counter runs after generation, so an already-produced 200 response becomes a 500.
+
+    Their payload is opaque here, so they contribute 0 tokens and the count matches
+    the same message without the block.
+    """
+    prompt = {"type": "text", "text": "Describe the attachment."}
+    messages = [{"role": "user", "content": [prompt, content_block]}]
+    text_only = [{"role": "user", "content": [prompt]}]
+
+    tokens = token_counter_new(model="gpt-4o", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+    assert tokens == token_counter_new(model="gpt-4o", messages=text_only)
+
+
+def test_count_content_list_error_message_lists_modality_types():
+    """
+    The catch-all error enumerates the handled block types, and the video and audio
+    types must appear there.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    with pytest.raises(ValueError, match="Invalid content item type: totally_unknown_block") as exc_info:
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "totally_unknown_block"}],
+            use_default_image_token_count=False,
+            default_token_count=None,
+        )
+
+    message = str(exc_info.value)
+    for content_type in ("video_url", "input_audio"):
+        assert content_type in message
