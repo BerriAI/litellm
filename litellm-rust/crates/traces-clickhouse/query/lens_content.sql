@@ -17,6 +17,7 @@ SELECT * FROM (
     FROM otel_traces WHERE {source:String}='traces'
       AND ({all_teams:UInt8}=1 OR TeamId={team:String})
       AND ({key_hash:String}='' OR ApiKeyHash={key_hash:String})
+      AND Timestamp >= parseDateTime64BestEffortOrZero({start_time:String}, 9) - INTERVAL 7 DAY
       AND ({trace_ref:String}='' OR hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId)))={trace_ref:String})
       AND TraceId={id:String} AND TeamId={record_team:String} AND SpanId > {cursor:String}
     ORDER BY SpanId LIMIT 1 BY SpanId LIMIT 40
@@ -35,5 +36,6 @@ SELECT * FROM (
     FROM spend_logs FINAL WHERE {source:String}='requests'
       AND ({all_teams:UInt8}=1 OR team_id={team:String})
       AND ({key_hash:String}='' OR api_key={key_hash:String})
+      AND spend_logs.start_time >= parseDateTime64BestEffortOrZero({start_time:String}, 3) - INTERVAL 7 DAY
       AND request_id={id:String} AND team_id={record_team:String} LIMIT 1
 )

@@ -215,6 +215,7 @@ class LensContentParams(LiteLLMBaseModel):
     source: ContentSource
     id: str
     record_team: str
+    start_time: str
     trace_ref: str
     cursor: str
     offset: int = Field(..., ge=0, le=4294967295)
@@ -232,6 +233,7 @@ class LensEvidenceParams(LiteLLMBaseModel):
     source: ContentSource
     id: str
     record_team: str
+    start_time: str
     trace_ref: str
     span: str
     quote: str

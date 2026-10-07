@@ -1150,6 +1150,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         ("source".into(), Parameter::Text("traces".into())),
         ("id".into(), Parameter::Text("shared".into())),
         ("record_team".into(), Parameter::Text("team".into())),
+        ("start_time".into(), Parameter::Text(String::new())),
         ("trace_ref".into(), Parameter::Text(first_ref.into())),
         ("cursor".into(), Parameter::Text(String::new())),
         ("offset".into(), Parameter::Integer(1)),
@@ -1177,6 +1178,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         ("source".into(), Parameter::Text("traces".into())),
         ("id".into(), Parameter::Text("shared".into())),
         ("record_team".into(), Parameter::Text("team".into())),
+        ("start_time".into(), Parameter::Text(String::new())),
         ("trace_ref".into(), Parameter::Text(first_ref.into())),
         ("span".into(), Parameter::Text("root".into())),
         ("quote".into(), Parameter::Text(opposite.into())),
@@ -1339,7 +1341,7 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
 #[case::traces("traces", 9)]
 #[case::requests("requests", 3)]
 #[tokio::test]
-async fn lens_content_keeps_original_span_and_request_timestamps(
+async fn lens_content_keeps_original_timestamps_with_start_time_slack(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
     #[case] source: &str,
     #[case] precision: usize,
@@ -1379,6 +1381,30 @@ async fn lens_content_keeps_original_span_and_request_timestamps(
     )
     .await?;
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let start_time_body = execute_read(
+        &database.client,
+        &connection,
+        "SELECT toString(fromUnixTimestamp64Nano({timestamp:Int64})) AS start_time FORMAT JSON",
+        &BTreeMap::from([(
+            "timestamp".into(),
+            Parameter::Integer(root_start + 86_400_000_000_000),
+        )]),
+    )
+    .await?;
+    let start_time: serde_json::Value = serde_json::from_str(&start_time_body)?;
+    let start_time = start_time["data"][0]["start_time"]
+        .as_str()
+        .ok_or("start time missing")?
+        .to_owned();
+    let parsed_time_body = execute_read(
+        &database.client,
+        &connection,
+        "SELECT toString(parseDateTime64BestEffortOrZero({start_time:String}, 9)) AS start_time FORMAT JSON",
+        &BTreeMap::from([("start_time".into(), Parameter::Text(start_time.clone()))]),
+    )
+    .await?;
+    let parsed_time: serde_json::Value = serde_json::from_str(&parsed_time_body)?;
+    assert_eq!(parsed_time["data"][0]["start_time"], start_time);
     let parameters = BTreeMap::from([
         ("source".into(), Parameter::Text(source.into())),
         ("all_teams".into(), Parameter::Integer(0)),
@@ -1386,6 +1412,7 @@ async fn lens_content_keeps_original_span_and_request_timestamps(
         ("record_team".into(), Parameter::Text("team".into())),
         ("key_hash".into(), Parameter::Text(String::new())),
         ("trace_ref".into(), Parameter::Text(String::new())),
+        ("start_time".into(), Parameter::Text(start_time)),
         ("id".into(), Parameter::Text("run".into())),
         ("cursor".into(), Parameter::Text(String::new())),
         ("offset".into(), Parameter::Integer(1)),
@@ -1453,6 +1480,7 @@ async fn lens_content_keeps_output_visible_after_long_input(
         ("record_team".into(), Parameter::Text("team".into())),
         ("key_hash".into(), Parameter::Text(String::new())),
         ("trace_ref".into(), Parameter::Text(String::new())),
+        ("start_time".into(), Parameter::Text(String::new())),
         ("id".into(), Parameter::Text("request".into())),
         ("cursor".into(), Parameter::Text(String::new())),
         ("offset".into(), Parameter::Integer(1)),

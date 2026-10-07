@@ -10,8 +10,10 @@ from litellm.proxy.lens.sources import SourceReader, execution_id, parse_executi
 from litellm.rust_bridge.trace.generated.models import (
     ActivityAvailability,
     AgentRow,
+    CountRow,
     ExecutionRow,
     LensContentParams,
+    LensEvidenceParams,
     PartRow,
 )
 from tests.unit.proxy.lens.test_agent_workspace import python_data
@@ -183,8 +185,16 @@ async def test_recorded_times_survive_source_catalog_reads_search_and_python(
 
     class ContentStorage:
         async def lens_content(self, parameters: LensContentParams) -> tuple[PartRow, ...]:
-            assert parameters.source == source and parameters.record_team == "team"
+            assert (
+                parameters.source == source
+                and parameters.record_team == "team"
+                and parameters.start_time == run.start_time
+            )
             return rows
+
+        async def lens_evidence(self, parameters: LensEvidenceParams) -> tuple[CountRow, ...]:
+            assert parameters.start_time == run.start_time
+            return (CountRow(count=1),)
 
     reader: Final = SourceReader(ContentStorage())
 
@@ -217,6 +227,11 @@ async def test_recorded_times_survive_source_catalog_reads_search_and_python(
     assert computed.sessions[0].parts == expected
     assert min(computed.sessions[0].parts, key=lambda part: part.start_time).span_id == rows[-1].span_id
     assert await workspace.valid(Evidence(execution_id=run.id, span_id=rows[0].span_id, quote=rows[0].content))
+    assert await reader.verify_evidence(
+        Scope(team_id="team"),
+        run,
+        Evidence(execution_id=run.id, span_id=rows[0].span_id, quote=rows[0].content),
+    )
 
 
 @pytest.mark.asyncio
