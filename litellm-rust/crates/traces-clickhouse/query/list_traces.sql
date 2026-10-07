@@ -1,4 +1,36 @@
-WITH page AS (
+WITH window_runs AS (
+    SELECT TeamId, ApiKeyHash, TraceId, min(StartTs) AS trace_start, max(EndTs) AS trace_end
+    FROM agent_traces_by_key
+    WHERE {agent:String} != ''
+      AND ({all_teams:UInt8} = 1
+           OR ({user_id:String} != '' AND UserIds = [{user_id:String}])
+           OR has({team_ids:Array(String)}, TeamId))
+    GROUP BY TeamId, ApiKeyHash, TraceId
+    HAVING trace_start >= fromUnixTimestamp64Milli({start_ms:Int64})
+       AND trace_start < fromUnixTimestamp64Milli({end_ms:Int64})
+       AND ({cursor_ms:Int64} = 0 OR toUnixTimestamp64Milli(trace_start) <= {cursor_ms:Int64})
+),
+agent_runs AS (
+    SELECT TeamId, ApiKeyHash, TraceId
+    FROM (
+        -- Keep in sync with trace_agents.sql: the run's agents, else its first service.
+        SELECT TeamId, ApiKeyHash, TraceId,
+               if(countIf(AgentName != '') = 0,
+                  groupUniqArrayIf(SpanName, ObservationType = 'agent'),
+                  arrayConcat(groupUniqArrayIf(AgentName, AgentName != ''),
+                              groupUniqArrayIf(SpanName, ObservationType = 'agent' AND AgentName = ''
+                                                         AND NOT WrapperCandidate))) AS names,
+               argMin(ServiceName, Timestamp) AS first_service
+        FROM otel_traces
+        WHERE Timestamp >= (SELECT min(trace_start) FROM window_runs)
+          AND Timestamp <= (SELECT max(trace_end) FROM window_runs)
+          AND TraceId IN (SELECT TraceId FROM window_runs)
+          AND (TeamId, ApiKeyHash, TraceId) IN (SELECT TeamId, ApiKeyHash, TraceId FROM window_runs)
+        GROUP BY TeamId, ApiKeyHash, TraceId
+    )
+    WHERE has(if(empty(names), [first_service], names), {agent:String})
+),
+page AS (
 SELECT TraceId AS trace_id,
        hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId))) AS trace_ref,
        if(length(groupUniqArrayArray(UserIds)) = 1, arrayElement(groupUniqArrayArray(UserIds), 1), '') AS user_id, TeamId AS team_id, ApiKeyHash AS api_key_hash,
@@ -24,26 +56,7 @@ HAVING min(StartTs) >= fromUnixTimestamp64Milli({start_ms:Int64})
    AND min(StartTs) < fromUnixTimestamp64Milli({end_ms:Int64})
    AND ({cursor_ms:Int64} = 0 OR (toUnixTimestamp64Milli(min(StartTs)), trace_ref)
         < ({cursor_ms:Int64}, {cursor_trace_id:String}))
-   AND ({agent:String} = '' OR (TeamId, ApiKeyHash, TraceId) IN (
-        SELECT TeamId, ApiKeyHash, TraceId
-        FROM (
-            -- Keep in sync with trace_agents.sql: the run's agents, else its first service.
-            SELECT TeamId, ApiKeyHash, TraceId,
-                   if(countIf(AgentName != '') = 0,
-                      groupUniqArrayIf(SpanName, ObservationType = 'agent'),
-                      arrayConcat(groupUniqArrayIf(AgentName, AgentName != ''),
-                                  groupUniqArrayIf(SpanName, ObservationType = 'agent' AND AgentName = ''
-                                                             AND NOT WrapperCandidate))) AS names,
-                   argMin(ServiceName, Timestamp) AS first_service
-            FROM otel_traces
-            WHERE {agent:String} != ''
-              AND Timestamp >= fromUnixTimestamp64Milli({start_ms:Int64})
-              AND ({all_teams:UInt8} = 1
-                   OR ({user_id:String} != '' AND UserId = {user_id:String})
-                   OR has({team_ids:Array(String)}, TeamId))
-            GROUP BY TeamId, ApiKeyHash, TraceId
-        )
-        WHERE has(if(empty(names), [first_service], names), {agent:String})))
+   AND ({agent:String} = '' OR (TeamId, ApiKeyHash, TraceId) IN (SELECT TeamId, ApiKeyHash, TraceId FROM agent_runs))
 ORDER BY start_ms DESC, trace_ref DESC
 LIMIT {limit:UInt32}
 )
