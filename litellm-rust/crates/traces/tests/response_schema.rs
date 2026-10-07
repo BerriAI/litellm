@@ -1,6 +1,6 @@
 #![cfg(feature = "schema")]
 
-use litellm_traces::response::TraceSQLResponse;
+use litellm_traces::response::{TraceAgentList, TraceSQLResponse};
 use litellm_traces::schema::response_schemas;
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -43,4 +43,19 @@ fn sql_response_schema_requires_data_and_leaves_rows_open() {
         schema["properties"]["data"]["items"]["additionalProperties"],
         false
     );
+}
+
+#[rstest]
+fn agent_list_serializes_names_under_data_only() {
+    let response = TraceAgentList {
+        data: vec!["claude-code".to_owned(), "research_agent".to_owned()],
+    };
+    assert_eq!(
+        serde_json::to_value(response).unwrap(),
+        json!({"data": ["claude-code", "research_agent"]})
+    );
+    let schema: Value = serde_json::to_value(&response_schemas()["TraceAgentList"]).unwrap();
+    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(schema["required"], json!(["data"]));
+    assert_eq!(schema["properties"]["data"]["items"]["type"], "string");
 }
