@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "end_ms": {
+      "default": null,
+      "description": "Window end, unix ms. Default: now",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "start_ms": {
+      "default": null,
+      "description": "Window start, unix ms. Default: 24h ago",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "TraceAgentsRequest",
+  "type": "object"
+}
