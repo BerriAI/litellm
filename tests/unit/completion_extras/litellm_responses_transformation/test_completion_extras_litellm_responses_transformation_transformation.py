@@ -4610,12 +4610,8 @@ def test_every_bridged_chunk_after_response_created_carries_the_served_service_t
 
 
 def test_convert_chat_completion_messages_to_responses_api_keeps_prompt_cache_breakpoint_on_unknown_block():
-    """A block type the bridge cannot map still has to keep the marker.
-
-    The hook marks the last block of the message it targets, so a message ending in a block this
-    bridge does not know falls through to the stringify path. Losing the marker there is the same
-    failure as losing it on a text block: the request goes out in explicit mode with nothing marked.
-    """
+    """The hook marks the last block of its target message, so a message ending in a block the bridge
+    cannot map reaches the stringify path and has to keep the marker there."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
     )
@@ -4652,16 +4648,16 @@ _HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS: Final = (
         "input_audio": {"data": "Zm9v", "format": "wav"},
         "prompt_cache_breakpoint": ["explicit"],
     },
-    {"type": "text", "text": "an extra key", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+    {"type": "text", "text": "unsupported ttl", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+    {"type": "text", "text": "unknown key", "prompt_cache_breakpoint": {"mode": "explicit", "scope": "all"}},
+    {"type": "text", "text": "supported ttl", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
     {"type": "text", "text": "well formed", "prompt_cache_breakpoint": {"mode": "explicit"}},
 )
 
 
 def test_convert_chat_completion_messages_to_responses_api_drops_malformed_prompt_cache_breakpoint_under_drop_params():
-    """Under drop_params a marker the Responses API would reject is dropped like any other unsupported value.
-
-    A well-formed marker still reaches the wire, and an extra key is dropped from an otherwise valid one.
-    """
+    """OpenAI's Responses API answered "Supported values are: '30m'" for a 1h breakpoint ttl on 2026-10-07,
+    so an unsupported ttl drops the marker as a unit while an unknown key is dropped from a valid one."""
     handler = LiteLLMResponsesTransformationHandler()
     messages = [{"role": "user", "content": list(_HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS)}]
 
@@ -4672,14 +4668,15 @@ def test_convert_chat_completion_messages_to_responses_api_drops_malformed_promp
         None,
         None,
         None,
+        None,
         {"mode": "explicit"},
+        {"mode": "explicit", "ttl": "30m"},
         {"mode": "explicit"},
     ]
-    assert all("prompt_cache_breakpoint" not in block for block in content[:3])
+    assert all("prompt_cache_breakpoint" not in block for block in content[:4])
 
 
 def test_convert_chat_completion_messages_to_responses_api_keeps_malformed_prompt_cache_breakpoint_by_default():
-    """Without drop_params every marker goes out as written, and the provider judges a malformed one."""
     handler = LiteLLMResponsesTransformationHandler()
     messages = [{"role": "user", "content": list(_HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS)}]
 
@@ -4692,7 +4689,6 @@ def test_convert_chat_completion_messages_to_responses_api_keeps_malformed_promp
 
 
 def test_transform_request_drop_params_in_litellm_params_gates_the_prompt_cache_breakpoint_carry():
-    """The per-request drop_params flag travels in litellm_params and has to reach the content converter."""
     handler = LiteLLMResponsesTransformationHandler()
     messages = [{"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": "explicit"}]}]
 
