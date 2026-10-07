@@ -77,29 +77,6 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   }),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
-  useCurrentUser: () => ({
-    data: { user_id: "test-user", user_alias: "Current User", user_email: "current@example.com" },
-  }),
-}));
-
-vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
-  useInfiniteUsers: () => ({
-    data: {
-      pages: [
-        {
-          users: [{ user_id: "test-user", user_alias: "Current User", user_email: "current@example.com" }],
-        },
-      ],
-    },
-    fetchNextPage: vi.fn(),
-    hasNextPage: false,
-    isFetchingNextPage: false,
-    isLoading: false,
-  }),
-  useUserLookup: () => ({ data: null }),
-}));
-
 const mockKey: KeyResponse = {
   token: "88a145505dd6e87e2ea166fcef1e4b53948dbdb32af6431dfd05ec06b571ee52",
   token_id: "key-1",
@@ -633,20 +610,6 @@ it("should display 'Unknown' for last_active when value is null", async () => {
 });
 
 describe("server-side filtering – the LIT-4080 regression guard", () => {
-  it("uses the current user's id when their User Alias option is selected", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<VirtualKeysTable />);
-
-    openFilters();
-    await user.click(await screen.findByRole("combobox", { name: "User Alias" }));
-    await user.click(await screen.findByRole("option", { name: "Current User (test-user) (you)" }));
-    fireEvent.click(screen.getByTestId("filter-drawer-apply"));
-
-    await waitFor(() => {
-      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "test-user" }));
-    });
-  });
-
   it("threads an applied User ID filter into the useKeys query so any refetch keeps it", async () => {
     renderWithProviders(<VirtualKeysTable />);
 

@@ -757,15 +757,6 @@ describe("userListCall search serialization", () => {
     expect(lastParams(mockFetch).has("search")).toBe(false);
     expect(lastParams(mockFetch).get("user_email")).toBe("ada@example.com");
   });
-
-  it("sends user_alias without user_email when filtering by alias", async () => {
-    const mockFetch = mockOkFetch();
-
-    await Networking.userListCall("token", null, 1, 25, null, null, null, null, null, null, null, null, "alice");
-
-    expect(lastParams(mockFetch).get("user_alias")).toBe("alice");
-    expect(lastParams(mockFetch).has("user_email")).toBe(false);
-  });
 });
 
 describe("fetchMemoryList search serialization", () => {

@@ -10,8 +10,6 @@ interface UserDropdownProps {
   disabled?: boolean;
   pageSize?: number;
   id?: string;
-  searchField?: "email" | "alias";
-  pinnedUser?: Pick<UserInfo, "user_id" | "user_alias" | "user_email"> | null;
 }
 
 export const userOptionLabel = (user: Pick<UserInfo, "user_id" | "user_alias" | "user_email">): string => {
@@ -20,49 +18,30 @@ export const userOptionLabel = (user: Pick<UserInfo, "user_id" | "user_alias" | 
   return user.user_id;
 };
 
-const UserDropdown: React.FC<UserDropdownProps> = ({
-  value,
-  onChange,
-  disabled,
-  pageSize = 50,
-  id,
-  searchField = "email",
-  pinnedUser,
-}) => {
+const UserDropdown: React.FC<UserDropdownProps> = ({ value, onChange, disabled, pageSize = 50, id }) => {
   const [search, setSearch] = useState("");
 
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteUsers(
     pageSize,
-    searchField === "email" ? search || undefined : undefined,
-    searchField === "alias" ? search || undefined : undefined,
+    search || undefined,
   );
 
   const loadedOptions = useMemo<SearchSelectOption[]>(() => {
     const byId = new Map<string, SearchSelectOption>();
     for (const user of (data?.pages ?? []).flatMap((page) => page.users)) {
-      if (user.user_id === pinnedUser?.user_id) continue;
       if (byId.has(user.user_id)) continue;
       byId.set(user.user_id, { value: user.user_id, label: userOptionLabel(user) });
     }
     return Array.from(byId.values());
-  }, [data, pinnedUser?.user_id]);
+  }, [data]);
 
   const selectedIsLoaded = loadedOptions.some((option) => option.value === value);
-  const selectedIsPinned = pinnedUser != null && value === pinnedUser.user_id;
-  const { data: selectedUser } = useUserLookup(value && !selectedIsLoaded && !selectedIsPinned ? value : null);
+  const { data: selectedUser } = useUserLookup(value && !selectedIsLoaded ? value : null);
 
   const options = useMemo<SearchSelectOption[]>(() => {
-    const selectedUserIsNeeded = value != null && !selectedIsLoaded && !selectedIsPinned;
-    const includeSelectedUser = selectedUserIsNeeded && selectedUser != null;
-    const selectedOption = includeSelectedUser
-      ? [{ value: selectedUser.user_id, label: userOptionLabel(selectedUser) }]
-      : [];
-    return [
-      ...(pinnedUser ? [{ value: pinnedUser.user_id, label: `${userOptionLabel(pinnedUser)} (you)` }] : []),
-      ...selectedOption,
-      ...loadedOptions,
-    ];
-  }, [pinnedUser, value, selectedIsLoaded, selectedIsPinned, selectedUser, loadedOptions]);
+    if (!value || selectedIsLoaded || !selectedUser) return loadedOptions;
+    return [{ value: selectedUser.user_id, label: userOptionLabel(selectedUser) }, ...loadedOptions];
+  }, [value, selectedIsLoaded, selectedUser, loadedOptions]);
 
   return (
     <div data-testid="user-dropdown">
@@ -75,7 +54,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({
         hasNextPage={hasNextPage}
         isLoading={isLoading}
         isFetchingNextPage={isFetchingNextPage}
-        placeholder={`Search users by ${searchField}…`}
+        placeholder="Search users by email…"
         emptyText="No users found"
         loadingText="Loading users…"
         disabled={disabled}

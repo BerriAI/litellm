@@ -1058,7 +1058,6 @@ export const userListCall = async (
   sortOrder: "asc" | "desc" | null = null,
   organizationIds: string[] | null = null,
   search: string | null = null,
-  userAlias: string | null = null,
 ): Promise<UserListResponse> => {
   const { data } = await fetchClient.GET("/user/list", {
     headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
@@ -1075,7 +1074,6 @@ export const userListCall = async (
         sort_order: sortOrder || undefined,
         organization_ids: organizationIds && organizationIds.length > 0 ? organizationIds.join(",") : undefined,
         search: search || undefined,
-        user_alias: userAlias || undefined,
       },
     },
   });

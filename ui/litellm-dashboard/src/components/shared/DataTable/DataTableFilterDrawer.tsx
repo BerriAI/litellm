@@ -105,18 +105,10 @@ export function DataTableFilterDrawer<TData>({
   );
 }
 
-export function DataTableFilterField({
-  label,
-  id,
-  children,
-}: {
-  label: string;
-  id?: string;
-  children: React.ReactNode;
-}) {
+export function DataTableFilterField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id}>{label}</Label>
+      <Label>{label}</Label>
       {children}
     </div>
   );
