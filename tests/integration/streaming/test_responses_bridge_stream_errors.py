@@ -176,8 +176,8 @@ def _free_ports(count: int) -> tuple[int, ...]:
 
 
 def _fallback_config(directory: Path, primary_port: int, spare_port: int) -> Path:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["model_list"] = [
+    base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    deployments: Final = [
         {
             "model_name": name,
             "litellm_params": {
@@ -188,9 +188,9 @@ def _fallback_config(directory: Path, primary_port: int, spare_port: int) -> Pat
         }
         for name, port in ((_PRIMARY, primary_port), (_SPARE, spare_port))
     ]
-    config["router_settings"] = {"num_retries": 0, "disable_cooldowns": True, "fallbacks": [{_PRIMARY: [_SPARE]}]}
+    router_settings: Final = {"num_retries": 0, "disable_cooldowns": True, "fallbacks": [{_PRIMARY: [_SPARE]}]}
     path: Final = directory / "bridged-fallbacks.yaml"
-    path.write_text(yaml.safe_dump(config))
+    path.write_text(yaml.safe_dump({**base, "model_list": deployments, "router_settings": router_settings}))
     return path
 
 
