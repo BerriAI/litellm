@@ -80770,6 +80770,10 @@
         "supports_vision": true
     },
 "claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens_batches": 2.5e-07,
+        "output_cost_per_token_above_100k_tokens_batches": 1.25e-06,
+        "cache_creation_input_token_cost_above_100k_tokens_batches": 3.125e-07,
+        "cache_read_input_token_cost_above_100k_tokens_batches": 2.5e-08,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_1hr": 2e-07,
@@ -80821,6 +80825,11 @@
         "cache_read_input_token_cost_above_100k_tokens": 5e-08
     },
     "bedrock_mantle/anthropic.claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 5.5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.75e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.875e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1.1e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5.5e-08,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-07,
         "cache_creation_input_token_cost_above_1hr": 2.2e-07,
@@ -80862,6 +80871,11 @@
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html"
     },
     "bedrock_mantle/us-gov-west-1/anthropic.claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 6e-07,
+        "output_cost_per_token_above_100k_tokens": 3e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 7.5e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1.2e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 6e-08,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 1.5e-07,
@@ -80898,6 +80912,11 @@
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html"
     },
     "anthropic.claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.5e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5e-08,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_1hr": 2e-07,
@@ -80939,6 +80958,11 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 5.5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.75e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.875e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1.1e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5.5e-08,
         "bedrock_converse_supports_strict_tools": false,
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
@@ -80975,6 +80999,11 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "au.anthropic.claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 5.5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.75e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.875e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1.1e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5.5e-08,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-07,
         "cache_creation_input_token_cost_above_1hr": 2.2e-07,
@@ -81016,6 +81045,11 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "azure_ai/claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.5e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5e-08,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_1hr": 2e-07,
@@ -81052,6 +81086,11 @@
         "source": "https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide"
     },
     "bedrock/us-gov-east-1/anthropic.claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 6e-07,
+        "output_cost_per_token_above_100k_tokens": 3e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 7.5e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1.2e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 6e-08,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 1.5e-07,
@@ -81087,6 +81126,11 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 6e-07,
+        "output_cost_per_token_above_100k_tokens": 3e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 7.5e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1.2e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 6e-08,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 1.5e-07,
@@ -81122,6 +81166,11 @@
         "supports_xhigh_reasoning_effort": true
     },
     "eu.anthropic.claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 5.5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.75e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.875e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1.1e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5.5e-08,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-07,
         "cache_creation_input_token_cost_above_1hr": 2.2e-07,
@@ -81163,6 +81212,11 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.5e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5e-08,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_1hr": 2e-07,
@@ -81204,6 +81258,11 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 5.5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.75e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.875e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1.1e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5.5e-08,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-07,
         "cache_creation_input_token_cost_above_1hr": 2.2e-07,
@@ -81256,6 +81315,11 @@
         "source": "https://docs.perplexity.ai/docs/agent-api/models"
     },
     "us-gov.anthropic.claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 6e-07,
+        "output_cost_per_token_above_100k_tokens": 3e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 7.5e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1.2e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 6e-08,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 1.5e-07,
@@ -81292,6 +81356,11 @@
         "supports_xhigh_reasoning_effort": true
     },
     "us.anthropic.claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens": 5.5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.75e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.875e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1.1e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5.5e-08,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-07,
         "cache_creation_input_token_cost_above_1hr": 2.2e-07,
