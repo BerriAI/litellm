@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
 from typing import Final, Literal, Protocol, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -245,16 +245,35 @@ class ReplayStream(FallbackAwareStreamWrapper):
         try:
             return await self._inner.__anext__()
         except MidStreamFallbackError as error:
-            if error.original_exception is not None:
-                raise error.original_exception from error
-            raise
+            raise _unwrapped(error) from error
+
+    def __iter__(self) -> Iterator[ModelResponseStream]:
+        return self
+
+    def __next__(self) -> ModelResponseStream:
+        buffered: Final = next(self._replay, None)
+        if buffered is not None:
+            return buffered
+        try:
+            return self._inner.__next__()
+        except MidStreamFallbackError as error:
+            raise _unwrapped(error) from error
 
     async def aclose(self) -> None:
         await self._inner.aclose()
 
 
+def _unwrapped(error: BaseException) -> BaseException:
+    """The provider error behind a mid-stream fallback error, which Python's stream wrappers raise in its place."""
+    if isinstance(error, MidStreamFallbackError) and error.original_exception is not None:
+        return error.original_exception
+    return error
+
+
 def _not_fetched(stream: CustomStreamWrapper) -> bool:
-    return cast(object, stream.completion_stream) is None and stream.make_call is not None  # cast-ok: untyped attribute
+    return (
+        cast(object, stream.completion_stream) is None and cast(object, stream.make_call) is not None
+    )  # cast-ok: untyped attributes
 
 
 async def _replay_from_first_content(stream: CustomStreamWrapper) -> ReplayStream:
@@ -263,6 +282,20 @@ async def _replay_from_first_content(stream: CustomStreamWrapper) -> ReplayStrea
     buffered: Final[list[ModelResponseStream]] = []  # mutable-ok: chunks read before the first content
     try:
         async for chunk in stream:
+            buffered.append(chunk)
+            if _stream_chunks_have_generated_content([chunk]):
+                break
+    except MidStreamFallbackError as error:
+        raise _StreamFailed(error, "before_content") from error
+    except Exception as error:
+        raise _StreamFailed(error, "terminal") from error
+    return ReplayStream(stream, buffered)
+
+
+def _replay_from_first_content_sync(stream: CustomStreamWrapper) -> ReplayStream:
+    buffered: Final[list[ModelResponseStream]] = []  # mutable-ok: chunks read before the first content
+    try:
+        for chunk in stream:
             buffered.append(chunk)
             if _stream_chunks_have_generated_content([chunk]):
                 break
@@ -336,6 +369,12 @@ class RoutedCall:
             return self._mock(parsed, kwargs)
         try:
             response: Final = self._completion(parsed, kwargs)
+        except _StreamFailed as failed:
+            return (
+                "error",
+                failed.error,
+                {**classify(failed.error, kwargs, callbacks_ran=True), "stream_failure": failed.kind},
+            )
         except _AttemptFailed as failed:
             return ("error", failed.error, classify(failed.error, kwargs, callbacks_ran=False))
         except Exception as error:
@@ -358,7 +397,7 @@ class RoutedCall:
 
     def failure(self, error: object, ops: Sequence[Mapping[str, object]]) -> BaseException:
         self._apply(ops)
-        return self._exception(error)
+        return _unwrapped(self._exception(error))
 
     def _prepare(self, attempt: Attempt) -> Kwargs:
         self._apply(attempt.ops)
@@ -486,7 +525,6 @@ class RoutedCall:
         normalizer: Final = self._normalizer
         deployment: Final = self._deployment(attempt)
         messages: Final = self._kwargs.get("messages")
-        model_name: str | None = None  # rebind-ok: set once the deployment's params are read
         try:
             normalizer._drop_unsupported_classifier_reasoning_effort(  # pyright: ignore[reportPrivateUsage]  # the attempt body PythonRouter runs
                 deployment=deployment,  # pyright: ignore[reportArgumentType]  # router deployment dict
@@ -498,7 +536,6 @@ class RoutedCall:
             )
             kwargs.setdefault("messages", messages)
             normalizer._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)  # pyright: ignore[reportPrivateUsage]  # as above
-            model_name = str(litellm_params["model"])  # rebind-ok: read by the failure counter below
             potential_client: Final = normalizer._get_client(deployment=deployment, kwargs=kwargs)  # pyright: ignore[reportPrivateUsage]  # as above
             dynamic_api_key: Final = kwargs.get("api_key")
             client: Final = (
@@ -526,13 +563,18 @@ class RoutedCall:
                         message="Response output was blocked.", model=attempt.model_group, llm_provider=""
                     )
                 )
-            normalizer.success_calls[model_name] += 1
+            if isinstance(response, CustomStreamWrapper) and _not_fetched(response):
+                response.fetch_sync_stream()
+            if isinstance(response, CustomStreamWrapper):
+                return _replay_from_first_content_sync(response)
             return response
+        except _StreamFailed:
+            raise
         except _AttemptFailed as failed:
-            self._stamp(failed.error, deployment, kwargs, model_name)
+            self._stamp(failed.error, deployment, kwargs, None)
             raise
         except Exception as error:
-            self._stamp(error, deployment, kwargs, model_name)
+            self._stamp(error, deployment, kwargs, None)
             raise
 
     def _stamp(

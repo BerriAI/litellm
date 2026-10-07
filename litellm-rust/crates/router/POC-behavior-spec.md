@@ -532,3 +532,6 @@ Response (`set_response_headers`, PR:11756-11784, HDR):
 23. `_update_usage` writes a per-id counter that nothing on the hot path reads (PR:8746-8763, 15102-15113)
 24. `_get_router_metadata_variable_name` substring-matches `"file"`, so any handler name containing it switches buckets (BU:161-171)
 25. Exhausted-retry stamping uses `type(e) in LITELLM_EXCEPTION_TYPES`, so subclasses (e.g. `MidStreamFallbackError`) never get `max_retries`/`num_retries` (PR:8173)
+26. Sync chat streams: a stream failing before content reruns `function_with_fallbacks` on the same group instead of walking the fallback chain, so fallbacks are only reached when the rerun's call itself raises, and a group that keeps failing recurses until `RecursionError` (PR:3624-3735). NOT replicated: the Rust backend applies the async rule (section 9) to sync streams too
+27. `_combine_fallback_usage` only adds the failed stream's partial usage when `hasattr(usage, "usage")`, which a `Usage` never has, so partial usage is never added to the fallback's (PR:2942-2947). Matching it means the Rust backend adds nothing
+28. Python's sync `_completion` updates none of `total_calls`/`success_calls`/`fail_calls`, while `_acompletion` updates all three (PR:2652-2760 vs 3780-3940)

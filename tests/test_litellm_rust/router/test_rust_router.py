@@ -172,6 +172,22 @@ def test_sync_completion_retries_and_answers(build: Callable[[Mapping[str, objec
     assert _content(response) == "from a"
 
 
+def test_sync_calls_leave_the_call_counters_as_python_does() -> None:
+    arguments: Final = {
+        "model_list": (_deployment("g", "a"), _deployment("h", "b", Exception("broke"))),
+        "num_retries": 0,
+    }
+    counters: Final[list[tuple[object, ...]]] = []  # mutable-ok: one reading per backend
+    for build in BACKENDS:
+        backend = build(arguments, 1)
+        backend.completion("g", MESSAGES)
+        with pytest.raises(litellm.InternalServerError):
+            backend.completion("h", MESSAGES)
+        counters.append(tuple(dict(getattr(backend, name)) for name in ("total_calls", "success_calls", "fail_calls")))
+
+    assert counters[1] == counters[0]
+
+
 async def test_the_facade_serves_a_supported_config_from_the_rust_backend() -> None:
     backend: Final = select_backend(
         (), {"model_list": [_deployment("g", "a")]}, rules=(RouteRule(Route.ROUTER, Rollout.RUST_REQUIRED),)
@@ -190,10 +206,7 @@ class _FailingStream(CustomStreamWrapper):
     def __init__(self, model: str) -> None:
         super().__init__(completion_stream=object(), model=model, custom_llm_provider="openai", logging_obj=MagicMock())
 
-    def __aiter__(self) -> _FailingStream:
-        return self
-
-    async def __anext__(self) -> ModelResponseStream:
+    def _fail(self) -> ModelResponseStream:
         raise MidStreamFallbackError(
             message=f"provider 500 from {self.model}",
             model=str(self.model),
@@ -203,6 +216,18 @@ class _FailingStream(CustomStreamWrapper):
                 message=f"provider 500 from {self.model}", model=str(self.model), llm_provider="openai"
             ),
         )
+
+    def __aiter__(self) -> _FailingStream:
+        return self
+
+    async def __anext__(self) -> ModelResponseStream:
+        return self._fail()
+
+    def __iter__(self) -> _FailingStream:
+        return self
+
+    def __next__(self) -> ModelResponseStream:
+        return self._fail()
 
 
 class _OkStream(_FailingStream):
@@ -221,30 +246,102 @@ class _OkStream(_FailingStream):
             raise StopAsyncIteration
         return reply
 
+    def __next__(self) -> ModelResponseStream:
+        reply: Final = next(self._replies, None)
+        if reply is None:
+            raise StopIteration
+        return reply
 
-async def _fake_stream(**kwargs: object) -> CustomStreamWrapper:  # kwargs-ok: litellm.acompletion's surface
-    model: Final = str(kwargs["model"])
-    return _OkStream(model) if "fb2" in model else _FailingStream(model)
+
+def _streams(healthy: str) -> Callable[..., CustomStreamWrapper]:
+    def stream(**kwargs: object) -> CustomStreamWrapper:  # kwargs-ok: litellm.completion's surface
+        model: Final = str(kwargs["model"])
+        return _OkStream(model) if healthy in model else _FailingStream(model)
+
+    return stream
 
 
-async def test_a_stream_failing_before_content_walks_the_fallback_chain_on_both_backends() -> None:
-    arguments: Final = {
-        "model_list": (
-            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "k"}},
-            {"model_name": "fb1", "litellm_params": {"model": "openai/fb1-model", "api_key": "k"}},
-            {"model_name": "fb2", "litellm_params": {"model": "openai/fb2-model", "api_key": "k"}},
+def _async_streams(healthy: str) -> Callable[..., object]:
+    sync: Final = _streams(healthy)
+
+    async def stream(**kwargs: object) -> CustomStreamWrapper:  # kwargs-ok: litellm.acompletion's surface
+        return sync(**kwargs)
+
+    return stream
+
+
+def _stream_groups(
+    fallbacks: list[dict[str, list[str]]],
+) -> Mapping[str, object]:  # mutable-ok: Router's fallbacks shape
+    return {
+        "model_list": tuple(
+            {"model_name": group, "litellm_params": {"model": f"openai/{group}-model", "api_key": "k"}}
+            for group in ("primary", "fb1", "fb2")
         ),
-        "fallbacks": [{"primary": ["fb1", "fb2"]}],
+        "fallbacks": fallbacks,
         "num_retries": 2,
     }
-    observed: Final[list[tuple[str, tuple[str, ...]]]] = []  # mutable-ok: one observation per backend
-    for build in BACKENDS:
-        backend = build(arguments, 1)
-        with patch("litellm.acompletion", side_effect=_fake_stream) as acompletion:
+
+
+StreamOutcome = tuple[str, tuple[str, ...], Mapping[str, object]]
+
+
+async def _astream(backend: Backend, healthy: str) -> StreamOutcome:
+    with patch("litellm.acompletion", side_effect=_async_streams(healthy)) as acompletion:
+        try:
             response = await backend.acompletion("primary", MESSAGES, stream=True)
             content = "".join([chunk.choices[0].delta.content or "" async for chunk in response])  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownVariableType]  # stream chunks
-        groups = tuple(str(call.kwargs["metadata"]["model_group"]) for call in acompletion.call_args_list)
-        observed.append((content, groups))
+        except litellm.InternalServerError as error:
+            content = f"raised {type(error).__name__}: {error}"
+            response = None
+    groups: Final = tuple(str(call.kwargs["metadata"]["model_group"]) for call in acompletion.call_args_list)
+    return content, groups, _headers(response)
 
-    assert observed[0] == observed[1]
-    assert observed[1] == ("ok-from-openai/fb2-model", ("primary", "fb1", "fb2"))
+
+@pytest.mark.parametrize(
+    ("fallbacks", "healthy", "expected"),
+    (
+        pytest.param(
+            [{"primary": ["fb1", "fb2"]}],
+            "fb2",
+            ("ok-from-openai/fb2-model", ("primary", "fb1", "fb2")),
+            id="chain-of-one-group",
+        ),
+        pytest.param(
+            [{"primary": ["fb1"]}, {"fb1": ["fb2"]}],
+            "fb2",
+            ("ok-from-openai/fb2-model", ("primary", "fb1", "fb2")),
+            id="fallback-hop-uses-its-own-chain",
+        ),
+        pytest.param(
+            [{"primary": ["fb1", "fb2"]}],
+            "nowhere",
+            (
+                "raised InternalServerError: litellm.InternalServerError: provider 500 from openai/fb2-model",
+                ("primary", "fb1", "fb2"),
+            ),
+            id="every-group-fails",
+        ),
+    ),
+)
+async def test_a_stream_failing_before_content_falls_back_the_same_way_on_both_backends(
+    fallbacks: list[dict[str, list[str]]],  # mutable-ok: Router's fallbacks shape
+    healthy: str,
+    expected: tuple[str, tuple[str, ...]],
+) -> None:
+    python: Final = await _astream(_python(_stream_groups(fallbacks), 1), healthy)
+    rust: Final = await _astream(_rust(_stream_groups(fallbacks), 1), healthy)
+
+    assert rust == python
+    assert rust[:2] == expected
+
+
+def test_a_sync_stream_failing_before_content_falls_back_like_the_async_path() -> None:
+    """Python's sync wrapper reruns the same group instead of falling back, and recurses until
+    `RecursionError` while the group keeps failing; the Rust backend applies the async rule."""
+    with patch("litellm.completion", side_effect=_streams("fb2")) as completion:
+        response = _rust(_stream_groups([{"primary": ["fb1", "fb2"]}]), 1).completion("primary", MESSAGES, stream=True)
+        content = "".join(chunk.choices[0].delta.content or "" for chunk in response)  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownVariableType,reportGeneralTypeIssues]  # stream chunks
+
+    assert content == "ok-from-openai/fb2-model"
+    assert [call.kwargs["metadata"]["model_group"] for call in completion.call_args_list] == ["primary", "fb1", "fb2"]

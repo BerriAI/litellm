@@ -157,10 +157,12 @@ impl Engine {
                 outcome: success.outcome,
                 ops,
             }),
-            Err(Stop::Failed(failure)) => Err(RouteError::Failed(Box::new(Failed {
-                error: failure.raised,
-                ops,
-            }))),
+            Err(Stop::Failed(failure) | Stop::Settled(failure)) => {
+                Err(RouteError::Failed(Box::new(Failed {
+                    error: failure.raised,
+                    ops,
+                })))
+            }
             Err(Stop::Host(fault)) => Err(RouteError::Host(fault)),
         }
     }
@@ -169,11 +171,36 @@ impl Engine {
 struct Success<R> {
     response: R,
     outcome: Outcome,
+    /// Served by the fallback a failed stream started. Python's outer layers had already
+    /// returned that stream, so they leave this outcome as the fallback reported it.
+    settled: bool,
 }
 
 enum Stop<E, F> {
     Failed(Box<Failure<E>>),
+    /// The failure of a stream's own fallback. Python's outer layers had already returned the
+    /// stream, so they neither retry nor fall back from it.
+    Settled(Box<Failure<E>>),
     Host(F),
+}
+
+/// The failure the retry layer handles; anything else passes through it.
+fn failed<E, F>(stop: Stop<E, F>) -> Result<Box<Failure<E>>, Stop<E, F>> {
+    match stop {
+        Stop::Failed(failure) => Ok(failure),
+        other => Err(other),
+    }
+}
+
+fn settle<R, E, F>(result: Attempted<R, E, F>) -> Attempted<R, E, F> {
+    match result {
+        Ok(success) => Ok(Success {
+            settled: true,
+            ..success
+        }),
+        Err(Stop::Failed(failure)) => Err(Stop::Settled(failure)),
+        Err(stop) => Err(stop),
+    }
 }
 
 type Attempted<R, E, F> = Result<Success<R>, Stop<E, F>>;
@@ -242,9 +269,8 @@ impl<'a, H: RouterHost> Run<'a, H> {
                 None => self.retries(&hop).await,
             };
             match first {
-                Ok(success) => Ok(success),
-                Err(Stop::Host(fault)) => Err(Stop::Host(fault)),
                 Err(Stop::Failed(failure)) => self.fallback(&hop, failure).await,
+                other => other,
             }
         })
     }
@@ -283,6 +309,7 @@ impl<'a, H: RouterHost> Run<'a, H> {
                     max_retries: None,
                     attempted_fallbacks: 0,
                 },
+                settled: false,
             }),
         }
     }
@@ -306,10 +333,12 @@ impl<'a, H: RouterHost> Run<'a, H> {
         };
         let failure = match first {
             Ok(success) => return Ok(success),
-            Err(stop) => self.failed(stop).map_err(Stop::Host)?,
+            Err(stop) => failed(stop)?,
         };
-        if failure.classified.guardrail_intervention || failure.classified.stream_failure.is_some()
-        {
+        if let Some(kind) = failure.classified.stream_failure {
+            return self.stream_failed(hop, failure, kind).await;
+        }
+        if failure.classified.guardrail_intervention {
             return Err(Stop::Failed(failure));
         }
         if self.call.num_retries.is_none()
@@ -345,14 +374,16 @@ impl<'a, H: RouterHost> Run<'a, H> {
             stamp.max_retries = num_retries;
             let failure = match self.attempt(hop, stamp, &skipped).await {
                 Ok(mut success) => {
-                    success.outcome.attempted_retries = attempt + 1;
-                    success.outcome.max_retries = Some(num_retries);
+                    if !success.settled {
+                        success.outcome.attempted_retries = attempt + 1;
+                        success.outcome.max_retries = Some(num_retries);
+                    }
                     return Ok(success);
                 }
-                Err(stop) => self.failed(stop).map_err(Stop::Host)?,
+                Err(stop) => failed(stop)?,
             };
-            if failure.classified.stream_failure.is_some() {
-                return Err(Stop::Failed(failure));
+            if let Some(kind) = failure.classified.stream_failure {
+                return self.stream_failed(hop, failure, kind).await;
             }
             self.log_retry(hop, &failure);
             let remaining = num_retries - attempt - 1;
@@ -378,10 +409,18 @@ impl<'a, H: RouterHost> Run<'a, H> {
         Err(Stop::Failed(latest))
     }
 
-    fn failed(&self, stop: Stop<H::Error, H::Fault>) -> Result<Box<Failure<H::Error>>, H::Fault> {
-        match stop {
-            Stop::Failed(failure) => Ok(failure),
-            Stop::Host(fault) => Err(fault),
+    /// `_acompletion_streaming_iterator`: the attempt returned its stream, so the retry and
+    /// fallback layers above it are done. A failure before content goes to this hop's own
+    /// fallback chain without retrying in the group; any other stream error is raised as is.
+    async fn stream_failed(
+        &mut self,
+        hop: &Hop,
+        failure: Box<Failure<H::Error>>,
+        kind: StreamFailure,
+    ) -> Attempted<H::Response, H::Error, H::Fault> {
+        match kind {
+            StreamFailure::Terminal => Err(Stop::Settled(failure)),
+            StreamFailure::BeforeContent => settle(self.fallback(hop, failure).await),
         }
     }
 
@@ -500,6 +539,7 @@ impl<'a, H: RouterHost> Run<'a, H> {
                         max_retries: None,
                         attempted_fallbacks: 0,
                     },
+                    settled: false,
                 })
             }
             Invoked::Failure { error, classified } => {
@@ -534,10 +574,7 @@ impl<'a, H: RouterHost> Run<'a, H> {
         hop: &Hop,
         failure: Box<Failure<H::Error>>,
     ) -> Attempted<H::Response, H::Error, H::Fault> {
-        if self.call.disable_fallbacks
-            || failure.classified.guardrail_intervention
-            || failure.classified.stream_failure == Some(StreamFailure::Terminal)
-        {
+        if self.call.disable_fallbacks || failure.classified.guardrail_intervention {
             return Err(Stop::Failed(failure));
         }
         let top_level = hop.depth == 0;
@@ -610,12 +647,11 @@ impl<'a, H: RouterHost> Run<'a, H> {
                 return Err(Stop::Failed(failure));
             }
             Ok(Some(targets)) => match self.run_fallbacks(hop, &targets, &failure).await {
-                Ok(success) => return Ok(success),
-                Err(Stop::Host(fault)) => return Err(Stop::Host(fault)),
                 Err(Stop::Failed(last)) => FallbackResult::Failed {
                     attempted: Some(targets),
                     last: last.raised,
                 },
+                other => return other,
             },
         };
         if top_level {
@@ -678,16 +714,18 @@ impl<'a, H: RouterHost> Run<'a, H> {
                 .await
             {
                 Ok(mut success) => {
-                    success.outcome.attempted_fallbacks = depth;
+                    if !success.settled {
+                        success.outcome.attempted_fallbacks = depth;
+                    }
                     return Ok(success);
                 }
-                Err(Stop::Host(fault)) => return Err(Stop::Host(fault)),
                 Err(Stop::Failed(failure)) => {
                     if self.call.shared_logging && self.callbacks_logged {
                         self.cooldown_failed_hop(&failure).await;
                     }
                     last = *failure;
                 }
+                Err(stop) => return Err(stop),
             }
         }
         Err(Stop::Failed(Box::new(last)))

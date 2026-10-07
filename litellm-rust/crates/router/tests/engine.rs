@@ -472,3 +472,57 @@ async fn a_terminal_stream_failure_is_raised_without_retries_or_fallbacks() {
     assert_eq!(raised(&failed.error), "a#1");
     assert!(failed.ops.is_empty());
 }
+
+#[rstest]
+#[tokio::test]
+async fn a_terminal_stream_failure_in_a_fallback_hop_ends_the_call() {
+    let mut settings = settings();
+    settings.fallbacks = Some(vec![chain("g", &["h", "i"])]);
+    let engine = engine(
+        vec![
+            deployment("a", "g"),
+            deployment("c", "h"),
+            deployment("d", "i"),
+        ],
+        settings,
+    );
+    let host = ScriptedHost::default()
+        .script("a", &[BAD_REQUEST])
+        .script("c", &[Scripted::Stream(StreamFailure::Terminal)]);
+
+    let Err(RouteError::Failed(failed)) = engine.route(&host, call("g")).await else {
+        panic!("the fallback's stream error is raised");
+    };
+
+    assert_eq!(host.attempts(), ["a", "c"]);
+    assert_eq!(raised(&failed.error), "c#2");
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_fallback_hop_stream_falls_back_on_its_own_chain_and_reports_its_depth() {
+    let mut settings = settings();
+    settings.fallbacks = Some(vec![chain("g", &["h"]), chain("h", &["i"])]);
+    let engine = engine(
+        vec![
+            deployment("a", "g"),
+            deployment("c", "h"),
+            deployment("d", "i"),
+        ],
+        settings,
+    );
+    let host = ScriptedHost::default()
+        .script("a", &[BAD_REQUEST])
+        .script("c", &[Scripted::Stream(StreamFailure::BeforeContent)]);
+
+    let routed = engine.route(&host, call("g")).await.ok().unwrap();
+
+    assert_eq!(host.attempts(), ["a", "c", "d"]);
+    assert_eq!(
+        (
+            routed.outcome.model_group.as_str(),
+            routed.outcome.attempted_fallbacks
+        ),
+        ("i", 2)
+    );
+}

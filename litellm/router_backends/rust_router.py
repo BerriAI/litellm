@@ -271,8 +271,6 @@ class RustRouter:
         unsupported: Final = [name for name in _UNSUPPORTED_REQUEST_KWARGS if name in kwargs]
         if unsupported:
             raise NotImplementedError(f"the Rust router backend does not support request option {unsupported[0]!r} yet")
-        if kwargs.get("stream") is True and operation == "completion":
-            raise NotImplementedError("the Rust router backend does not support sync streaming yet")
         clientside: Final = _IS_CLIENTSIDE_CREDENTIAL(kwargs)
         if clientside:
             raise NotImplementedError("the Rust router backend does not support client-side credentials yet")
