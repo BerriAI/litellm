@@ -18804,3 +18804,189 @@ async def test_catalog_rejects_a_changed_anchored_issuer_during_discovery(monkey
             await manager.ensure_oauth_metadata_discovered(server)
     assert rejected.value.status_code == 503
     discovery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_cursor,next_cursor,expected_owner",
+    [(None, None, "notes"), (None, "next", "other"), ("last", None, "other")],
+)
+async def test_catalog_page_registers_bare_routes_only_for_complete_initial_discovery(
+    request_cursor, next_cursor, expected_owner
+):
+    from types import SimpleNamespace
+
+    from mcp.types import ListToolsResult, PaginatedRequestParams
+
+    manager = _catalog_manager(LIST_NOTES)
+    server = _notes_server()
+    other = MCPServer(server_id="other", name="other", transport=MCPTransport.http)
+    manager.registry = {server.server_id: server, other.server_id: other}
+    manager._create_prefixed_tools([LIST_NOTES], other)
+    manager._create_mcp_client.return_value = SimpleNamespace(
+        list_tools_page=AsyncMock(return_value=ListToolsResult(tools=[LIST_NOTES], next_cursor=next_cursor))
+    )
+
+    result = await manager.get_tools_page(server, params=PaginatedRequestParams(cursor=request_cursor))
+
+    assert [tool.name for tool in result.tools] == ["notes-list_notes"]
+    assert result.next_cursor == next_cursor
+    assert manager._get_mcp_server_from_tool_name("notes-list_notes").server_id == "notes"
+    assert manager._get_mcp_server_from_tool_name("list_notes").server_id == expected_owner
+
+
+@pytest.mark.asyncio
+async def test_paginated_listing_keeps_earlier_tool_metadata_and_caller_isolation(monkeypatch):
+    from mcp.types import ListToolsResult, PaginatedRequestParams
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import catalog, operations
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "listed-tools-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    first = MCPTool(name="first", description="First page", input_schema={"type": "object"})
+    second = MCPTool(name="second", description="Second page", input_schema={"type": "object"})
+    server = MCPServer(server_id="pages", name="pages", transport=MCPTransport.http)
+    manager = MCPServerManager()
+    manager.registry = {server.server_id: server}
+    client = AsyncMock()
+    client._last_initialize_instructions = None
+    client.list_tools_page.side_effect = [
+        ListToolsResult(tools=[first], next_cursor="next"),
+        ListToolsResult(tools=[second]),
+        ListToolsResult(tools=[second]),
+    ]
+    manager._create_mcp_client = AsyncMock(return_value=client)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    caller = UserAPIKeyAuth(api_key="owned-caller", user_id="alice")
+    context = operations.prepare_context(caller)
+    first_page = await catalog.aggregate_gateway_tools(
+        context, PaginatedRequestParams(), [server], {}, record_listing=True
+    )
+    assert first_page.next_cursor
+    await catalog.aggregate_gateway_tools(
+        context, PaginatedRequestParams(cursor=first_page.next_cursor), [server], {}, record_listing=True
+    )
+    identity = ListedToolsCaller(user_api_key_auth=caller)
+    assert manager.get_listed_tool(server, "first", identity) == first
+    assert manager.get_listed_tool(server, "second", identity) == second
+    other = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(api_key="other-caller", user_id="bob"))
+    assert manager.get_listed_tool(server, "first", other) is None
+    await catalog.aggregate_gateway_tools(context, PaginatedRequestParams(), [server], {}, record_listing=True)
+    assert manager.get_listed_tool(server, "first", identity) is None
+    assert manager.get_listed_tool(server, "second", identity) == second
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_name,result_field", [("ListPromptsRequest", "prompts"), ("ListResourcesRequest", "resources"), ("ListResourceTemplatesRequest", "resource_templates")])
+@pytest.mark.parametrize("cursor", [None, "next"])
+async def test_disabled_stdio_catalog_is_empty_initially_and_rejects_continuation(monkeypatch, request_name, result_field, cursor):
+    from mcp import types
+
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    server = MCPServer(server_id="disabled", name="disabled", transport=MCPTransport.stdio, command="blocked-executable", args=[])
+    request = getattr(types, request_name)(params=types.PaginatedRequestParams(cursor=cursor))
+    manager = MCPServerManager()
+    if cursor is not None:
+        with pytest.raises(RuntimeError, match="Upstream catalog is unavailable"):
+            await manager.get_optional_catalog_page(server, request, None)
+    else:
+        page = await manager.get_optional_catalog_page(server, request, None)
+        assert getattr(page, result_field) == []
+        assert page.next_cursor is None
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", [None, "next"])
+async def test_disabled_stdio_tools_are_empty_initially_and_reject_continuation(monkeypatch, cursor):
+    from mcp.types import PaginatedRequestParams
+
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    server = MCPServer(server_id="disabled", name="disabled", transport=MCPTransport.stdio, command="blocked", args=[])
+    manager = MCPServerManager()
+    if cursor is not None:
+        with pytest.raises(RuntimeError, match="Upstream catalog is unavailable"):
+            await manager.get_tools_page(server, params=PaginatedRequestParams(cursor=cursor))
+    else:
+        page = await manager.get_tools_page(server, params=PaginatedRequestParams())
+        assert page.tools == []
+        assert page.next_cursor is None
+
+
+@pytest.mark.asyncio
+async def test_failed_aggregate_continuation_preserves_only_delivered_tool_metadata(monkeypatch):
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import ListToolsResult, PaginatedRequestParams
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import catalog, operations
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "failed-listing-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    first = MCPTool(name="first", description="Delivered", input_schema={"type": "object"})
+    unseen = MCPTool(name="unseen", description="Never delivered", input_schema={"type": "object"})
+    servers = [MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ("alpha", "beta")]
+    manager = MCPServerManager()
+    manager.registry = {server.server_id: server for server in servers}
+    clients = {server.server_id: AsyncMock() for server in servers}
+    for client in clients.values():
+        client._last_initialize_instructions = None
+        client.list_tools_page.side_effect = [
+            ListToolsResult(tools=[first], next_cursor="next"),
+            ListToolsResult(tools=[unseen], next_cursor="next" if client is clients["beta"] else None),
+        ]
+    async def create_client(server, **kwargs):
+        return clients[server.server_id]
+    manager._create_mcp_client = create_client
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    caller = UserAPIKeyAuth(api_key="owned-caller", user_id="alice")
+    context = operations.prepare_context(caller)
+    initial = await catalog.aggregate_gateway_tools(context, PaginatedRequestParams(), servers, {}, record_listing=True)
+    assert initial.next_cursor
+    with pytest.raises(MCPError, match="repeated a pagination cursor"):
+        await catalog.aggregate_gateway_tools(
+            context, PaginatedRequestParams(cursor=initial.next_cursor), servers, {}, record_listing=True
+        )
+    identity = ListedToolsCaller(user_api_key_auth=caller)
+    for server in servers:
+        assert manager.get_listed_tool(server, "first", identity) == first
+        assert manager.get_listed_tool(server, "unseen", identity) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("can_seal", [False, True])
+async def test_aggregate_publishes_complete_bare_routes_only_after_delivering_a_page(monkeypatch, can_seal):
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import ListToolsResult, PaginatedRequestParams
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import catalog, operations
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    if can_seal:
+        monkeypatch.setenv("LITELLM_SALT_KEY", "delivered-page-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    tool = MCPTool(name="first", input_schema={"type": "object"})
+    servers = [MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ("alpha", "beta")]
+    manager = MCPServerManager()
+    manager.registry = {server.server_id: server for server in servers}
+    clients = {server.server_id: AsyncMock() for server in servers}
+    for name, client in clients.items():
+        client._last_initialize_instructions = None
+        client.list_tools_page.return_value = ListToolsResult(tools=[tool], next_cursor="next" if name == "beta" else None)
+
+    async def create_client(server, **kwargs):
+        return clients[server.server_id]
+
+    manager._create_mcp_client = create_client
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    context = operations.prepare_context(UserAPIKeyAuth(api_key="owned-caller", user_id="alice"))
+    listing = catalog.aggregate_gateway_tools(context, PaginatedRequestParams(), servers, {}, record_listing=True)
+    if can_seal:
+        assert (await listing).next_cursor
+        assert manager._get_mcp_server_from_tool_name("first").server_id == "alpha"
+    else:
+        with pytest.raises(MCPError, match="LITELLM_SALT_KEY"):
+            await listing
+        assert manager._get_mcp_server_from_tool_name("first") is None

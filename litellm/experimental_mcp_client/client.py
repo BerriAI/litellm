@@ -12,7 +12,7 @@ from contextlib import AbstractAsyncContextManager
 from functools import partial
 from importlib.metadata import version
 from types import MappingProxyType
-from typing import Final, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Final, TypeAlias, TypeVar, cast
 
 import anyio
 import httpx2
@@ -47,9 +47,13 @@ from mcp.types import (
     InitializeRequestParams,
     InitializeResult,
     InputRequiredResult,
+    ListPromptsRequest,
     ListPromptsResult,
+    ListResourcesRequest,
     ListResourcesResult,
     ListResourceTemplatesResult,
+    ListToolsRequest,
+    ListToolsResult,
     PaginatedRequestParams,
     PaginatedResult,
     Prompt,
@@ -88,6 +92,9 @@ from litellm.types.mcp import (
     validate_mcp_protocol_transport,
     without_header,
 )
+
+if TYPE_CHECKING:
+    from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult
 
 
 def to_basic_auth(auth_value: str) -> str:
@@ -830,6 +837,51 @@ class MCPClient:
 
         return factory
 
+    async def list_page(self, request: "CatalogListRequest") -> "CatalogListResult":
+        from mcp.types import INVALID_PARAMS
+
+        params: Final = request.params or PaginatedRequestParams()
+        if isinstance(request, ListToolsRequest):
+            return await self.list_tools_page(params)
+
+        async def fetch(session: ClientSession) -> "CatalogListResult":
+            capabilities: Final = session.server_capabilities
+            empty: Final = (
+                ListPromptsResult(prompts=[])
+                if isinstance(request, ListPromptsRequest)
+                else ListResourcesResult(resources=[])
+                if isinstance(request, ListResourcesRequest)
+                else ListResourceTemplatesResult(resource_templates=[])
+            )
+            supported: Final = capabilities is None or (
+                capabilities.prompts is not None
+                if isinstance(request, ListPromptsRequest)
+                else capabilities.resources is not None
+            )
+            if not supported:
+                if params.cursor is not None:
+                    raise MCPError(
+                        code=INVALID_PARAMS, message="Upstream catalog became unavailable; start a fresh listing"
+                    )
+                return empty
+            try:
+                if isinstance(request, ListPromptsRequest):
+                    return await session.list_prompts(params=params)
+                if isinstance(request, ListResourcesRequest):
+                    return await session.list_resources(params=params)
+                return await session.list_resource_templates(params=params)
+            except MCPError as error:
+                if error.error.code == METHOD_NOT_FOUND and params.cursor is None:
+                    return empty
+                raise
+
+        with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):
+            return await self.run_with_session(fetch, quiet_on_error=True)
+
+    async def list_tools_page(self, params: PaginatedRequestParams) -> ListToolsResult:
+        with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):
+            return await self.run_with_session(lambda session: session.list_tools(params=params), quiet_on_error=True)
+
     async def list_tools(self, raise_on_error: bool = False) -> list[MCPTool]:
         """List available tools from the server.
 
@@ -846,7 +898,7 @@ class MCPClient:
             # A per-server timeout above the global default extends the whole-walk deadline
             listing_deadline: Final = max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
             tools: Final = await self.run_with_session(
-                partial(list_tools_with_pagination, listing_deadline=listing_deadline),
+                partial(list_tools_with_pagination, listing_deadline=listing_deadline, require_complete=raise_on_error),
                 quiet_on_error=raise_on_error,
             )
             tool_count: Final = len(tools)

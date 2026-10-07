@@ -24,7 +24,7 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from itertools import chain, groupby
@@ -44,6 +44,11 @@ from mcp.types import (
     GetPromptRequestParams,
     GetPromptResult,
     InputRequiredResult,
+    ListPromptsRequest,
+    ListResourcesRequest,
+    ListResourceTemplatesRequest,
+    ListToolsResult,
+    PaginatedRequestParams,
     Prompt,
     ResourceTemplate,
 )
@@ -215,6 +220,7 @@ from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult
     from litellm.types.mcp_server.mcp_toolset import MCPToolset
 
 try:
@@ -1970,9 +1976,9 @@ class MCPServerManager:
         self._template_discovery_cache = _DiscoveryCache[ResourceTemplate](
             discovery_ttl, discovery_clock, TypeAdapter(tuple[ResourceTemplate, ...])
         )
-        from litellm.proxy._experimental.mcp_server.catalog import TargetCatalog
+        from litellm.proxy._experimental.mcp_server.catalog import CatalogSnapshots
 
-        self.catalog = TargetCatalog(self)
+        self.catalog = CatalogSnapshots(self)
         self.registry: dict[str, MCPServer] = {}
         self._openapi_health_probes: Callable[[str], _OpenAPIHealthProbe] = lru_cache(maxsize=128)(_OpenAPIHealthProbe)
         self.config_mcp_servers: dict[str, MCPServer] = {}
@@ -4267,27 +4273,47 @@ class MCPServerManager:
         *,
         catalog_auth_header: str | dict[str, str] | None | EllipsisType = ...,
         record_listing: bool = False,
-    ) -> Sequence[MCPTool]:
-        """
-        Helper method to get tools from a single MCP server with prefixed names.
+    ) -> list[MCPTool]:
+        result: Final = await self.get_tools_page(
+            server=server,
+            mcp_auth_header=mcp_auth_header,
+            extra_headers=extra_headers,
+            add_prefix=add_prefix,
+            raw_headers=raw_headers,
+            user_api_key_auth=user_api_key_auth,
+            oauth2_headers=oauth2_headers,
+            client_ip=client_ip,
+            proxy_logging_obj=proxy_logging_obj,
+            catalog_auth_header=catalog_auth_header,
+            record_listing=record_listing,
+        )
+        return result.tools
 
-        Args:
-            server (MCPServer): The server to query tools from
-            mcp_auth_header: Optional auth header for MCP server
-            catalog_auth_header: The header the client supplied, keying the caller's catalog slot;
-                defaults to ``mcp_auth_header``
-            record_listing: Record the served catalog into the caller's listed-tools slot; only a
-                listing actually served to the caller sets it
-
-        Returns:
-            List[MCPTool]: List of tools available on the server with prefixed names
-        """
+    async def get_tools_page(
+        self,
+        server: MCPServer,
+        mcp_auth_header: str | dict[str, str] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        add_prefix: bool = True,
+        raw_headers: dict[str, str] | None = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+        oauth2_headers: dict[str, str] | None = None,
+        client_ip: str | None = None,
+        proxy_logging_obj: ProxyLogging | None = None,
+        *,
+        params: PaginatedRequestParams | None = None,
+        catalog_auth_header: str | dict[str, str] | None | EllipsisType = ...,
+        record_listing: bool = False,
+        listing_updates: ExitStack | None = None,
+    ) -> ListToolsResult:
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
         )
 
         if self._skip_blocked_stdio_listing(server, "tool"):
-            return []
+            if params is not None and params.cursor is not None:
+                raise RuntimeError("Upstream catalog is unavailable")
+            return ListToolsResult(tools=[])
 
         verbose_logger.debug("Connecting to url: %s", server.url)
         verbose_logger.info("_get_tools_from_server for %s...", server.name)
@@ -4401,10 +4427,17 @@ class MCPServerManager:
                     server, guarded_openapi, listed_caller, listed_generation, record_listing=record_listing
                 )
                 if not add_prefix:
-                    return guarded_openapi
-                return [t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
+                    return ListToolsResult(tools=list(guarded_openapi))
+                return ListToolsResult(
+                    tools=[t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
+                )
             else:
-                tools = await self._fetch_tools_with_timeout(client, server.name)
+                page: Final = (
+                    await client.list_tools_page(params)
+                    if params is not None
+                    else ListToolsResult(tools=await self._fetch_tools_with_timeout(client, server.name))
+                )
+                tools = page.tools
                 self._remember_upstream_initialize_instructions(server, client)
 
             guarded_tools: Final = await self._guard_tool_catalog(
@@ -4415,13 +4448,17 @@ class MCPServerManager:
                 raw_headers=raw_headers,
             )
             prefixed_or_original_tools: Final = self._create_prefixed_tools(
-                guarded_tools, server, add_prefix=add_prefix
+                guarded_tools,
+                server,
+                add_prefix=add_prefix,
+                register_bare_names=params is None or (params.cursor is None and not page.next_cursor),
+                listing_updates=listing_updates,
             )
             self.record_listed_tools(
                 server, guarded_tools, listed_caller, listed_generation, record_listing=record_listing
             )
 
-            return prefixed_or_original_tools
+            return page.model_copy(update={"tools": prefixed_or_original_tools})
 
         except MCPUpstreamAuthError as upstream_auth_error:
             # Pass-through 401 must surface to single-server routes so the
@@ -4537,6 +4574,7 @@ class MCPServerManager:
         generation: int | None = None,
         *,
         record_listing: bool = True,
+        continuation: bool = False,
     ) -> None:
         """Store the catalog served to ``caller``. ``generation`` is the server's listed-tools generation
         read before the listing's upstream fetch; the record is skipped when it no longer matches."""
@@ -4545,8 +4583,9 @@ class MCPServerManager:
         if generation is not None and generation != self._listed_tools_generations.get(server.server_id, 0):
             return
         identity: Final = self._listed_tools_identity(server, caller)
-        listing: Final = MappingProxyType({tool.name: tool for tool in tools})
         existing: Final = self._listed_tools_by_server_id.get(server.server_id, MappingProxyType({}))
+        prior: Final = existing.get(identity, {}) if continuation else {}
+        listing: Final = MappingProxyType({**prior, **{tool.name: tool for tool in tools}})
         shared: Final = existing.get(None)
         callers: Final = tuple((key, value) for key, value in existing.items() if key not in (None, identity))
         evicted: Final = 0 if identity is None else max(len(callers) + 1 - _LISTED_TOOLS_CALLERS_PER_SERVER, 0)
@@ -4601,6 +4640,67 @@ class MCPServerManager:
             "Skipping %s listing for MCP server %s: %s", listing, server.name, MCP_STDIO_DISABLED_MESSAGE
         )
         return True
+
+    async def get_optional_catalog_page(
+        self,
+        server: MCPServer,
+        request: "CatalogListRequest",
+        user_api_key_auth: UserAPIKeyAuth | None,
+        *,
+        mcp_auth_header: str | dict[str, str] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        raw_headers: Mapping[str, str] | None = None,
+        client_ip: str | None = None,
+    ) -> "CatalogListResult":
+        from mcp.types import ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult
+
+        if self._skip_blocked_stdio_listing(server, "catalog"):
+            if request.params is not None and request.params.cursor is not None:
+                raise RuntimeError("Upstream catalog is unavailable")
+            match request:
+                case ListPromptsRequest():
+                    return ListPromptsResult(prompts=[])
+                case ListResourcesRequest():
+                    return ListResourcesResult(resources=[])
+                case ListResourceTemplatesRequest():
+                    return ListResourceTemplatesResult(resource_templates=[])
+                case _:
+                    raise RuntimeError("Unexpected catalog request type")
+        headers: Final = (
+            dict(
+                chain(
+                    extra_headers.items() if extra_headers else (),
+                    server.static_headers.items() if server.static_headers else (),
+                )
+            )
+            or None
+        )
+        stdio_env: Final = self._build_stdio_env(server, raw_headers)
+        subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
+        client: Final = await self._create_mcp_client(
+            server=server,
+            mcp_auth_header=mcp_auth_header,
+            extra_headers=headers,
+            stdio_env=stdio_env,
+            subject_token=subject_token,
+            user_api_key_auth=user_api_key_auth,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+        )
+        page: Final = await client.list_page(request)
+        match page:
+            case ListPromptsResult():
+                return page.model_copy(update={"prompts": self._create_prefixed_prompts(page.prompts, server)})
+            case ListResourcesResult():
+                return page.model_copy(update={"resources": self._create_prefixed_resources(page.resources, server)})
+            case ListResourceTemplatesResult():
+                return page.model_copy(
+                    update={
+                        "resource_templates": self._create_prefixed_resource_templates(page.resource_templates, server)
+                    }
+                )
+            case _:
+                raise RuntimeError("Unexpected catalog result type")
 
     async def get_prompts_from_server(
         self,
@@ -5487,6 +5587,9 @@ class MCPServerManager:
         tools: Sequence[MCPTool],
         server: MCPServer,
         add_prefix: bool = True,
+        *,
+        register_bare_names: bool = True,
+        listing_updates: ExitStack | None = None,
     ) -> list[MCPTool]:
         """
         Create prefixed tools and update tool mapping.
@@ -5499,6 +5602,10 @@ class MCPServerManager:
             List of tools with prefixed names
         """
         from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        if register_bare_names and listing_updates is not None:
+            listing_updates.callback(self._create_prefixed_tools, tools, server, add_prefix=add_prefix)
+            register_bare_names = False
 
         prefixed_tools: Final = []
         prefix: Final = get_server_prefix(server)
@@ -5517,7 +5624,8 @@ class MCPServerManager:
                     continue
                 if namespace_owner is None and global_mcp_tool_registry.get_tool(spelling) is not None:
                     continue
-                self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
+                if register_bare_names or spelling != original_name:
+                    self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
 
         verbose_logger.info("Successfully fetched %s tools from server %s", len(prefixed_tools), server.name)
         return prefixed_tools

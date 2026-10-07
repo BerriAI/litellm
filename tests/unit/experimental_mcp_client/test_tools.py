@@ -129,7 +129,8 @@ async def test_load_mcp_tools_follows_pagination(mock_session):
 
 
 @pytest.mark.asyncio()
-async def test_pagination_walk_stops_at_page_cap(mock_session, monkeypatch):
+@pytest.mark.parametrize("require_complete", [False, True])
+async def test_pagination_walk_stops_at_page_cap(mock_session, monkeypatch, require_complete):
     monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_TOOL_LISTING_MAX_PAGES", 2)
     mock_session.list_tools.side_effect = [
         ListToolsResult(
@@ -142,6 +143,12 @@ async def test_pagination_walk_stops_at_page_cap(mock_session, monkeypatch):
         ),
         ListToolsResult(tools=[MCPTool(name="tool_2", description="2", inputSchema={})]),
     ]
+    if require_complete:
+        from mcp import MCPError
+
+        with pytest.raises(MCPError, match="incomplete"):
+            await list_tools_with_pagination(mock_session, require_complete=True)
+        return
     result = await list_tools_with_pagination(mock_session)
     assert [tool.name for tool in result] == ["tool_0", "tool_1"]
     assert mock_session.list_tools.call_count == 2
@@ -178,7 +185,8 @@ async def test_pagination_walk_treats_empty_cursor_as_terminal(mock_session):
 
 
 @pytest.mark.asyncio()
-async def test_pagination_walk_stops_at_whole_walk_deadline(mock_session, monkeypatch):
+@pytest.mark.parametrize("require_complete", [False, True])
+async def test_pagination_walk_stops_at_whole_walk_deadline(mock_session, monkeypatch, require_complete):
     import anyio
 
     from litellm.experimental_mcp_client.tools import list_tools_with_pagination
@@ -195,6 +203,12 @@ async def test_pagination_walk_stops_at_whole_walk_deadline(mock_session, monkey
         )
 
     mock_session.list_tools = slow_page
+    if require_complete:
+        from mcp import MCPError
+
+        with pytest.raises(MCPError, match="incomplete"):
+            await list_tools_with_pagination(mock_session, require_complete=True)
+        return
     result = await list_tools_with_pagination(mock_session)
 
     assert [tool.name for tool in result] == ["tool_0"]
@@ -466,3 +480,21 @@ def test_transform_mcp_tool_to_anthropic_tool_strips_keys_anthropic_rejects():
     assert "oneOf" not in schema_keys
     assert anthropic_tool["input_schema"]["properties"] == {"q": {"type": "string"}}
     assert anthropic_tool["input_schema"]["required"] == ["q"]
+
+
+@pytest.mark.asyncio
+async def test_incomplete_discovery_cannot_satisfy_a_complete_listing(mock_session):
+    from mcp.shared.exceptions import MCPError
+
+    mock_session.list_tools.return_value = ListToolsResult(
+        tools=[MCPTool(name="partial", input_schema={"type": "object"})], next_cursor="repeat"
+    )
+    with pytest.raises(MCPError, match="incomplete"):
+        await list_tools_with_pagination(mock_session, require_complete=True)
+
+
+@pytest.mark.asyncio
+async def test_complete_discovery_preserves_tools_when_completeness_is_required(mock_session):
+    tool = MCPTool(name="complete", input_schema={"type": "object"})
+    mock_session.list_tools.return_value = ListToolsResult(tools=[tool])
+    assert await list_tools_with_pagination(mock_session, require_complete=True) == [tool]

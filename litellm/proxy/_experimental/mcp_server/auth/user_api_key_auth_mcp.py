@@ -73,6 +73,7 @@ from litellm.repositories.table_repositories import (
     MCPServerRepository,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -1202,6 +1203,31 @@ class MCPRequestHandler:
             return None
 
     @staticmethod
+    async def refresh_catalog_authority(auth: UserAPIKeyAuth | None) -> UserAPIKeyAuth | None:
+        from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+        if auth is None:
+            return None
+        refreshed = auth.model_copy()
+        if auth.mcp_admitted_user_subject and auth.user_id:
+            current = await MCPRequestHandler.reload_admitted_user(auth.user_id, requires_fresh_policy=True)
+            refreshed.object_permission = current.object_permission
+            refreshed.object_permission_id = current.object_permission_id
+            refreshed.user_role = current.user_role
+            refreshed.org_id = current.org_id
+        elif auth.via_virtual_key and auth.api_key and auth.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS:
+            current = await MCPRequestHandler._reload_admitted_key(auth.api_key, check_db_only=True)
+            refreshed.object_permission = current.object_permission
+            refreshed.object_permission_id = current.object_permission_id
+            refreshed.team_id = current.team_id
+            refreshed.org_id = current.org_id
+            refreshed.project_id = current.project_id
+            refreshed.user_id = current.user_id
+            refreshed.access_group_ids = current.access_group_ids
+        refreshed.requires_fresh_policy = True
+        return refreshed
+
+    @staticmethod
     async def _reload_admitted_key(key_hash: str, *, check_db_only: bool = False) -> UserAPIKeyAuth:
         """Reload the live key record an admitted envelope references and re-check live policy.
 
@@ -1244,6 +1270,8 @@ class MCPRequestHandler:
         if not MCPRequestHandler._admitted_key_is_active(key_object):
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
         await MCPRequestHandler._reject_if_admitted_owner_scim_deactivated(key_object)
+        key_object.api_key = key_hash
+        key_object.via_virtual_key = True
         return key_object
 
     @staticmethod
@@ -3154,6 +3182,8 @@ class MCPRequestHandler:
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
             return object_permission_id
+        except UserNotFoundError:
+            return None
         except Exception as e:  # noqa: BLE001  # Legacy callers retain their existing optional user-ceiling behavior
             if check_db_only:
                 raise HTTPException(503, "User policy is unavailable") from e

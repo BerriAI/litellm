@@ -3417,3 +3417,106 @@ async def test_cancelled_modern_catalog_load_prevents_tool_execution() -> None:
 def test_modern_upstream_rejects_legacy_sse_transport() -> None:
     with pytest.raises(ValueError, match="transport"):
         MCPClient(protocol_version="2026-07-28", transport_type=MCPTransport.sse)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method, field, item", [
+    ("tools/list", "tools", {"name": "second", "inputSchema": {"type": "object"}}),
+    ("prompts/list", "prompts", {"name": "second"}),
+    ("resources/list", "resources", {"name": "second", "uri": "status://second"}),
+    ("resources/templates/list", "resourceTemplates", {"name": "second", "uriTemplate": "status://{name}"}),
+])
+async def test_single_catalog_page_preserves_cursor_metadata_and_request_cursor(method, field, item):
+    from mcp.types import ListToolsRequest, ListPromptsRequest, ListResourcesRequest, ListResourceTemplatesRequest, PaginatedRequestParams
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(405)
+        payload = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                        "capabilities": {"tools": {}, "prompts": {}, "resources": {}},
+                        "serverInfo": {"name": "pagination", "version": "1"},
+                    },
+                },
+            )
+        assert payload.method == method
+        assert payload.params is not None
+        assert payload.params["cursor"] == "upstream-position"
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {
+                    field: [item],
+                    "nextCursor": "upstream-next",
+                    "_meta": {"revision": "revision-two"},
+                },
+            },
+        )
+
+    client = _MockTransportClient(respond, server_url="https://upstream.example.com/mcp")
+    request_type = {
+        "tools/list": ListToolsRequest, "prompts/list": ListPromptsRequest,
+        "resources/list": ListResourcesRequest, "resources/templates/list": ListResourceTemplatesRequest,
+    }[method]
+    result = await client.list_page(request_type(params=PaginatedRequestParams(cursor="upstream-position")))
+    assert result.model_dump(by_alias=True)[field][0]["name"] == "second"
+    assert result.next_cursor == "upstream-next"
+    assert result.meta == {"revision": "revision-two"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["prompts/list", "resources/list", "resources/templates/list"])
+@pytest.mark.parametrize("failure", ["unadvertised", "method_missing", "upstream_error"])
+@pytest.mark.parametrize("cursor", [None, "continuation"])
+async def test_optional_catalog_distinguishes_absent_capability_from_failed_continuation(method, failure, cursor):
+    from mcp.types import (
+        ListPromptsRequest, ListResourcesRequest, ListResourceTemplatesRequest, PaginatedRequestParams,
+    )
+
+    methods = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(405)
+        payload = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        methods.append(payload.method)
+        if payload.method == "initialize":
+            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {
+                "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                "capabilities": {} if failure == "unadvertised" else {"prompts": {}, "resources": {}},
+                "serverInfo": {"name": "optional", "version": "1"},
+            }})
+        assert payload.method == method
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "error": {
+            "code": -32601 if failure == "method_missing" else -32603, "message": "Upstream unavailable",
+        }})
+
+    client = _MockTransportClient(respond, server_url="https://upstream.example.com/mcp")
+    request_type = {
+        "prompts/list": ListPromptsRequest, "resources/list": ListResourcesRequest,
+        "resources/templates/list": ListResourceTemplatesRequest,
+    }[method]
+    request = request_type(params=PaginatedRequestParams(cursor=cursor))
+    if cursor is not None or failure == "upstream_error":
+        with pytest.raises(MCPError):
+            await client.list_page(request)
+    else:
+        result = await client.list_page(request)
+        collection = {"prompts/list": "prompts", "resources/list": "resources", "resources/templates/list": "resource_templates"}[method]
+        assert getattr(result, collection) == []
+        assert result.next_cursor is None
+    if failure == "unadvertised":
+        assert method not in methods

@@ -23,6 +23,7 @@ from mcp.types import (
     ResourceTemplate,
     TextContent,
     TextResourceContents,
+    Tool,
 )
 from mcp.types import Tool as MCPTool
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERSION, MODERN_PROTOCOL_VERSIONS
@@ -1292,7 +1293,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     ):
         if server.name == "working_server":
             # Working server returns tools
-            tool1 = MagicMock()
+            tool1 = Tool(name="placeholder", inputSchema={})
             tool1.name = "working_tool_1"
             tool1.description = "Working tool 1"
             tool1.input_schema = {}
@@ -1308,12 +1309,12 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         mock_manager,
     ):
         with patch(
-            "litellm.proxy._experimental.mcp_server.operations.verbose_logger",
-        ) as mock_logger:
+            "litellm.proxy._experimental.mcp_server.catalog.verbose_logger",
+        ) as mock_logger, patch("litellm.proxy._experimental.mcp_server.operations.verbose_logger", mock_logger):
             # Test with server-specific auth headers
             mcp_server_auth_headers = {
-                "working": "Bearer working-token",
-                "failing": "Bearer failing-token",
+                "working": {"Authorization": "Bearer working-token"},
+                "failing": {"Authorization": "Bearer failing-token"},
             }
 
             result = await _get_tools_from_mcp_servers(
@@ -1404,12 +1405,12 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         mock_manager,
     ):
         with patch(
-            "litellm.proxy._experimental.mcp_server.operations.verbose_logger",
-        ) as mock_logger:
+            "litellm.proxy._experimental.mcp_server.catalog.verbose_logger",
+        ) as mock_logger, patch("litellm.proxy._experimental.mcp_server.operations.verbose_logger", mock_logger):
             # Test with server-specific auth headers
             mcp_server_auth_headers = {
-                "failing1": "Bearer failing1-token",
-                "failing2": "Bearer failing2-token",
+                "failing1": {"Authorization": "Bearer failing1-token"},
+                "failing2": {"Authorization": "Bearer failing2-token"},
             }
 
             result = await _get_tools_from_mcp_servers(
@@ -4381,7 +4382,7 @@ async def test_list_tools_single_server_unprefixed_names():
         raw_headers=None,
         **kwargs,
     ):
-        tool = MagicMock()
+        tool = Tool(name="placeholder", inputSchema={})
         tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
         tool.description = "desc"
         tool.input_schema = {}
@@ -4459,7 +4460,7 @@ async def test_list_tools_multiple_servers_prefixed_names():
         raw_headers=None,
         **kwargs,
     ):
-        tool = MagicMock()
+        tool = Tool(name="placeholder", inputSchema={})
         # When multiple servers, add_prefix should be True -> prefixed names
         tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
         tool.description = "desc"
@@ -4873,22 +4874,22 @@ async def test_list_tools_filters_by_key_team_permissions():
         **kwargs,
     ):
         # Return 4 tools, but only 2 should be allowed
-        tool1 = MagicMock()
+        tool1 = Tool(name="placeholder", inputSchema={})
         tool1.name = "tool1"
         tool1.description = "Tool 1"
         tool1.input_schema = {}
 
-        tool2 = MagicMock()
+        tool2 = Tool(name="placeholder", inputSchema={})
         tool2.name = "tool2"
         tool2.description = "Tool 2"
         tool2.input_schema = {}
 
-        tool3 = MagicMock()
+        tool3 = Tool(name="placeholder", inputSchema={})
         tool3.name = "tool3"
         tool3.description = "Tool 3 - not allowed"
         tool3.input_schema = {}
 
-        tool4 = MagicMock()
+        tool4 = Tool(name="placeholder", inputSchema={})
         tool4.name = "tool4"
         tool4.description = "Tool 4 - not allowed"
         tool4.input_schema = {}
@@ -4984,22 +4985,22 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
         **kwargs,
     ):
         # Return 4 tools
-        tool1 = MagicMock()
+        tool1 = Tool(name="placeholder", inputSchema={})
         tool1.name = "tool1"
         tool1.description = "Tool 1"
         tool1.input_schema = {}
 
-        tool2 = MagicMock()
+        tool2 = Tool(name="placeholder", inputSchema={})
         tool2.name = "tool2"
         tool2.description = "Tool 2"
         tool2.input_schema = {}
 
-        tool3 = MagicMock()
+        tool3 = Tool(name="placeholder", inputSchema={})
         tool3.name = "tool3"
         tool3.description = "Tool 3"
         tool3.input_schema = {}
 
-        tool4 = MagicMock()
+        tool4 = Tool(name="placeholder", inputSchema={})
         tool4.name = "tool4"
         tool4.description = "Tool 4"
         tool4.input_schema = {}
@@ -5081,17 +5082,17 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
         **kwargs,
     ):
         # Return 3 tools
-        tool1 = MagicMock()
+        tool1 = Tool(name="placeholder", inputSchema={})
         tool1.name = "tool1"
         tool1.description = "Tool 1"
         tool1.input_schema = {}
 
-        tool2 = MagicMock()
+        tool2 = Tool(name="placeholder", inputSchema={})
         tool2.name = "tool2"
         tool2.description = "Tool 2"
         tool2.input_schema = {}
 
-        tool3 = MagicMock()
+        tool3 = Tool(name="placeholder", inputSchema={})
         tool3.name = "tool3"
         tool3.description = "Tool 3"
         tool3.input_schema = {}
@@ -5182,22 +5183,22 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
         **kwargs,
     ):
         # Return tools WITH prefix (as they come from MCP server)
-        tool1 = MagicMock()
+        tool1 = Tool(name="placeholder", inputSchema={})
         tool1.name = "GITMCP-fetch_litellm_documentation"  # Prefixed
         tool1.description = "Fetch docs"
         tool1.input_schema = {}
 
-        tool2 = MagicMock()
+        tool2 = Tool(name="placeholder", inputSchema={})
         tool2.name = "GITMCP-search_litellm_documentation"  # Prefixed, not in allowed list
         tool2.description = "Search docs"
         tool2.input_schema = {}
 
-        tool3 = MagicMock()
+        tool3 = Tool(name="placeholder", inputSchema={})
         tool3.name = "GITMCP-search_litellm_code"  # Prefixed
         tool3.description = "Search code"
         tool3.input_schema = {}
 
-        tool4 = MagicMock()
+        tool4 = Tool(name="placeholder", inputSchema={})
         tool4.name = "GITMCP-fetch_generic_url_content"  # Prefixed, not in allowed list
         tool4.description = "Fetch URL"
         tool4.input_schema = {}
@@ -5793,7 +5794,7 @@ async def test_get_tools_from_mcp_servers_returns_tools_when_success_logging_fai
     server_a.auth_type = None
     server_a.extra_headers = None
 
-    tool_1 = MagicMock()
+    tool_1 = Tool(name="placeholder", inputSchema={})
     tool_1.name = "server_a-tool_1"
 
     dummy_logging_obj = MagicMock()
@@ -6119,7 +6120,7 @@ async def test_get_tools_from_mcp_servers_injects_stored_oauth2_token():
     # Simulate the DB returning a valid credential for this user+server
     prefetched_creds = {SERVER_ID: {"access_token": STORED_TOKEN, "server_id": SERVER_ID}}
 
-    tool_1 = MagicMock()
+    tool_1 = Tool(name="placeholder", inputSchema={})
     tool_1.name = "atlassian_test-search"
 
     with (
@@ -6744,7 +6745,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
         )
     )
 
-    tool_1 = MagicMock()
+    tool_1 = Tool(name="placeholder", inputSchema={})
     tool_1.name = "legacy_m2m-tool"
 
     captured_extra_headers = None
@@ -9839,7 +9840,7 @@ async def test_aggregate_listing_reports_per_server_outcomes():
 
     async def mock_get_tools_from_server(server, **kwargs):
         if server.name == "working_server":
-            tool1 = MagicMock()
+            tool1 = Tool(name="placeholder", inputSchema={})
             tool1.name = "working_tool_1"
             tool1.description = "Working tool 1"
             tool1.input_schema = {}
@@ -10685,7 +10686,7 @@ async def test_list_tools_injects_byok_credential_for_non_oauth2_auth_types(auth
 
     async def mock_get_tools_from_server(server, mcp_auth_header=None, add_prefix=False, **kwargs):
         seen_auth_headers.append(mcp_auth_header)
-        tool = MagicMock()
+        tool = Tool(name="placeholder", inputSchema={})
         tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
         tool.description = "desc"
         tool.input_schema = {}

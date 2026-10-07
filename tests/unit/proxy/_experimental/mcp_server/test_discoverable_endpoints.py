@@ -101,8 +101,8 @@ def isolate_global_mcp_registry(monkeypatch):
     """
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
-    from litellm.proxy._experimental.mcp_server.catalog import TargetCatalog
-    monkeypatch.setattr(global_mcp_server_manager, "catalog", TargetCatalog(global_mcp_server_manager))
+    from litellm.proxy._experimental.mcp_server.catalog import CatalogSnapshots
+    monkeypatch.setattr(global_mcp_server_manager, "catalog", CatalogSnapshots(global_mcp_server_manager))
     snapshot = dict(global_mcp_server_manager.registry)
     yield
     global_mcp_server_manager.registry.clear()

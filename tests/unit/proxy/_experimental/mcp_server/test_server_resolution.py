@@ -553,3 +553,16 @@ async def test_target_catalog_does_not_reuse_admin_authorization_for_another_cal
         )
     assert (error.value.status_code, error.value.detail) == (403, {"error": "denied"})
     manager.allowed_servers_spy.assert_called_once_with(_auth())
+
+
+@pytest.mark.asyncio
+async def test_catalog_without_listing_dependency_fails_explicitly():
+    from mcp.types import ListToolsRequest
+
+    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy._experimental.mcp_server.server_resolution import MCPServerTargetCatalog
+
+    catalog = MCPServerTargetCatalog(MCPServerManager())
+    with pytest.raises(RuntimeError, match="listing dependency"):
+        await catalog.list(OperationContext(_caller=None), ListToolsRequest())
