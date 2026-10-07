@@ -220,6 +220,44 @@ def test_aggregate_health_check_results_multiple_endpoints():
     assert result[key]["unhealthy_count"] == 0
 
 
+def test_aggregate_health_check_results_attributes_each_result_to_its_own_deployment():
+    model_list = [
+        {
+            "model_name": name,
+            "litellm_params": {"model": "openai/qwen", "api_base": f"http://{host}:11434/v1"},
+            "model_info": {"id": f"{host}-{name}"},
+        }
+        for host in ("a", "b")
+        for name in ("qwen", "qwen-alias")
+    ]
+    healthy_endpoints = [
+        {"model": "openai/qwen", "api_base": "http://a:11434/v1", "model_id": f"a-{name}"}
+        for name in ("qwen", "qwen-alias")
+    ]
+    unhealthy_endpoints = [
+        {
+            "model": "openai/qwen",
+            "api_base": "http://b:11434/v1",
+            "model_id": f"b-{name}",
+            "error": "Connection error.",
+        }
+        for name in ("qwen", "qwen-alias")
+    ]
+
+    result = _aggregate_health_check_results(
+        _build_model_param_to_info_mapping(model_list), healthy_endpoints, unhealthy_endpoints
+    )
+
+    assert {
+        key: (value["healthy_count"], value["unhealthy_count"], value["error_message"]) for key, value in result.items()
+    } == {
+        ("a-qwen", "qwen"): (1, 0, None),
+        ("a-qwen-alias", "qwen-alias"): (1, 0, None),
+        ("b-qwen", "qwen"): (0, 1, "Connection error."),
+        ("b-qwen-alias", "qwen-alias"): (0, 1, "Connection error."),
+    }
+
+
 @pytest.mark.asyncio
 async def test_save_health_check_results_if_changed_status_changed():
     """Test saving when status changes"""
