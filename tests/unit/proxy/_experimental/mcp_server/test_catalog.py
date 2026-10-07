@@ -593,7 +593,7 @@ async def test_continuation_rate_limit_raises_without_refetching_completed_serve
 
 @pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
 @pytest.mark.parametrize("ttls,expected", (((9000, 4000), 4000), ((9000, 0), 0)))
-def test_optional_catalog_preserves_conservative_freshness(kind, ttls, expected):
+def test_optional_catalog_preserves_conservative_freshness(kind: str, ttls: tuple[int, int], expected: int) -> None:
     from mcp.types import (
         ListPromptsRequest,
         ListPromptsResult,
@@ -608,59 +608,61 @@ def test_optional_catalog_preserves_conservative_freshness(kind, ttls, expected)
         "resources": (ListResourcesRequest(), ListResourcesResult, "resources"),
         "templates": (ListResourceTemplatesRequest(), ListResourceTemplatesResult, "resource_templates"),
     }[kind]
-    pages = tuple(result_type(**{field: []}, ttl_ms=ttl, cache_scope="public") for ttl in ttls)
-    result = catalog.combine_optional_catalog(request, pages, None, None)
+    pages: Final = tuple(result_type(**{field: []}, ttl_ms=ttl, cache_scope="public") for ttl in ttls)
+    result: Final = catalog.combine_optional_catalog(request, pages, None, None)
     assert result.ttl_ms == expected
     assert result.cache_scope == "private"
 
 
 @pytest.mark.asyncio
-async def test_tool_catalog_preserves_upstream_freshness():
-    async def fetch(server_id, cursor):
+async def test_tool_catalog_preserves_upstream_freshness() -> None:
+    async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
         return page(server_id).model_copy(update={"ttl_ms": 9000, "cache_scope": "public"})
 
-    result = await listing(fetch)
+    result: Final = await listing(fetch)
     assert 0 < result.ttl_ms <= 9000
     assert result.cache_scope == "private"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("upstream_ttl,limit,expected_ttl", [(1000, 60, 1000), (90000, 1, 1000), (0, 60, 0)])
-async def test_discovery_cache_uses_upstream_freshness_and_configured_cap(upstream_ttl, limit, expected_ttl):
+async def test_discovery_cache_uses_upstream_freshness_and_configured_cap(
+    upstream_ttl: int, limit: float, expected_ttl: int
+) -> None:
     from unittest.mock import AsyncMock
     from mcp.types import ListPromptsResult, Prompt
     from pydantic import TypeAdapter
 
     class Clock:
-        now = 0.0
+        now: float = 0.0
 
-        def __call__(self):
+        def __call__(self) -> float:
             return self.now
 
-    clock = Clock()
-    cache = catalog._DiscoveryCache(limit, clock, TypeAdapter(ListPromptsResult))
-    fetch = AsyncMock(return_value=ListPromptsResult(prompts=[Prompt(name="fresh")], ttl_ms=upstream_ttl))
-    first = await cache.get(("server", "caller"), fetch)
+    clock: Final = Clock()
+    cache: Final = catalog._DiscoveryCache(limit, clock, TypeAdapter(ListPromptsResult))
+    fetch: Final = AsyncMock(return_value=ListPromptsResult(prompts=[Prompt(name="fresh")], ttl_ms=upstream_ttl))
+    first: Final = await cache.get(("server", "caller"), fetch)
     assert first.prompts[0].name == "fresh"
-    clock.now = 0.5
-    second = await cache.get(("server", "caller"), fetch)
+    clock.now = 0.5  # rebind-ok: advance the injected test clock without sleeping
+    second: Final = await cache.get(("server", "caller"), fetch)
     assert second.prompts[0].name == "fresh"
     if expected_ttl:
         assert fetch.await_count == 1
         assert second.ttl_ms == 500
-        second.prompts[0].name = "caller edit"
+        second.prompts[0].name = "caller edit"  # rebind-ok: prove caller mutation cannot alter retained results
     else:
         assert fetch.await_count == 2
-    clock.now = 1.0
+    clock.now = 1.0  # rebind-ok: reach the exact expiry boundary without sleeping
     assert (await cache.get(("server", "caller"), fetch)).prompts[0].name == "fresh"
     assert fetch.await_count == (2 if expected_ttl else 3)
 
 
-def test_partial_optional_catalog_never_advertises_freshness():
+def test_partial_optional_catalog_never_advertises_freshness() -> None:
     from mcp.types import ListPromptsRequest, ListPromptsResult
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
 
-    result = catalog.combine_optional_catalog(
+    result: Final = catalog.combine_optional_catalog(
         ListPromptsRequest(),
         [ListPromptsResult(prompts=[], ttl_ms=9000)],
         None,

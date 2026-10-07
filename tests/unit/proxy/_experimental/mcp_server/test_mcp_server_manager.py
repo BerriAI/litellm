@@ -19060,10 +19060,10 @@ async def test_aggregate_publishes_complete_bare_routes_only_after_delivering_a_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
 async def test_discovery_does_not_retain_unknown_freshness(kind: str) -> None:
-    manager = MCPServerManager()
-    upstream = _DiscoveryUpstream()
+    manager: Final = MCPServerManager()
+    upstream: Final = _DiscoveryUpstream()
     upstream.ttl_ms = 0
-    operation = {
+    operation: Final = {
         "prompts": manager.get_prompts_from_server,
         "resources": manager.get_resources_from_server,
         "templates": manager.get_resource_templates_from_server,
@@ -19075,12 +19075,12 @@ async def test_discovery_does_not_retain_unknown_freshness(kind: str) -> None:
 
 
 def test_discovery_keys_bind_static_auth_to_caller_and_configuration() -> None:
-    manager = MCPServerManager()
-    server = _discovery_server()
-    first = UserAPIKeyAuth(user_id="first", team_id="one")
-    second = UserAPIKeyAuth(user_id="second", team_id="two")
-    updated = server.model_copy(update={"url": "https://replacement.example/mcp"})
-    keys = (
+    manager: Final = MCPServerManager()
+    server: Final = _discovery_server()
+    first: Final = UserAPIKeyAuth(user_id="first", team_id="one")
+    second: Final = UserAPIKeyAuth(user_id="second", team_id="two")
+    updated: Final = server.model_copy(update={"url": "https://replacement.example/mcp"})
+    keys: Final = (
         manager._discovery_key(server, first, None, None, None, None),
         manager._discovery_key(server, second, None, None, None, None),
         manager._discovery_key(updated, first, None, None, None, None),

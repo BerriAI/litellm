@@ -11,7 +11,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult, PaginatedRequestParams
 
 from integration._support.client import Gateway
-from integration._support.mcp import paginated_mcp_peer
+from integration._support.mcp import McpPeer, paginated_mcp_peer
 from integration._support.process import owned_proxy
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.types.mcp import MCPTransport
@@ -564,51 +564,57 @@ def test_missing_user_keeps_explicit_key_and_team_grants(
                         assert private.drain() == ()
 
 
-def test_aggregate_freshness_matches_real_upstream():
-    from mcp.types import ListPromptsRequest, ListResourcesRequest, ListResourceTemplatesRequest, ListToolsRequest
+def test_aggregate_freshness_matches_real_upstream() -> None:
+    from mcp.types import (
+        ListPromptsRequest,
+        ListResourcesRequest,
+        ListResourceTemplatesRequest,
+        ListToolsRequest,
+        ListToolsResult,
+    )
     from litellm.proxy._experimental.mcp_server.catalog import combine_optional_catalog, list_tools_page
 
-    async def exercise(peer):
-        client = MCPClient(server_url=peer.url, transport_type=MCPTransport.http, protocol_version="2026-07-28")
+    async def exercise(peer: McpPeer) -> None:
+        client: Final = MCPClient(server_url=peer.url, transport_type=MCPTransport.http, protocol_version="2026-07-28")
         for request in (ListPromptsRequest(), ListResourcesRequest(), ListResourceTemplatesRequest()):
-            page = await client.list_page(request)
+            page: Final = await client.list_page(request)
             assert page.ttl_ms == 9000
-            result = combine_optional_catalog(request, [page], None, None)
+            result: Final = combine_optional_catalog(request, [page], None, None)
             assert result.ttl_ms == 9000
             assert result.cache_scope == "private"
 
-        async def fetch(server_id, cursor):
+        async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
             return await client.list_page(ListToolsRequest())
 
-        result = await list_tools_page(
+        tools_result: Final = await list_tools_page(
             cursor=None, caller_scope="caller", snapshot="snapshot", server_ids=("server",), fetch=fetch, now=100
         )
-        assert 0 < result.ttl_ms <= 9000
-        assert result.cache_scope == "private"
-        assert len(result.tools) == 3
+        assert 0 < tools_result.ttl_ms <= 9000
+        assert tools_result.cache_scope == "private"
+        assert len(tools_result.tools) == 3
 
     with paginated_mcp_peer(page_size=3, ttl_ms=9000) as peer:
         asyncio.run(exercise(peer))
 
 
 @pytest.mark.parametrize("ttl_ms", [0, 9000])
-def test_discovery_cache_freshness_and_caller_isolation_over_http(ttl_ms):
+def test_discovery_cache_freshness_and_caller_isolation_over_http(ttl_ms: int) -> None:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
-    async def exercise(peer):
-        server = MCPServer(
+    async def exercise(peer: McpPeer) -> None:
+        server: Final = MCPServer(
             server_id="pages", name="pages", url=peer.url, transport=MCPTransport.http, protocol_version="2026-07-28"
         )
         for manager in (MCPServerManager(), MCPServerManager()):
             for user in (UserAPIKeyAuth(user_id="one"), UserAPIKeyAuth(user_id="two")):
                 for _ in range(2):
-                    result = await manager.get_prompts_from_server(server, user)
+                    result: Final = await manager.get_prompts_from_server(server, user)
                     assert [prompt.name for prompt in result] == ["pages-prompt0", "pages-prompt1", "pages-prompt2"]
 
     with paginated_mcp_peer(page_size=3, ttl_ms=ttl_ms) as peer:
         asyncio.run(exercise(peer))
-        observed = peer.drain()
-        listings = [item for item in observed if item.get("body", {}).get("method") == "prompts/list"]
+        observed: Final = peer.drain()
+        listings: Final = [item for item in observed if item.get("body", {}).get("method") == "prompts/list"]
         assert len(listings) == (8 if ttl_ms == 0 else 4)
