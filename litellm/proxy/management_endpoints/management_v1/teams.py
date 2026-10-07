@@ -51,7 +51,7 @@ async def bulk_delete_team_members_action(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_delete' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --header 'Content-Type: application/json' \
         --data '{"members": [{"user_id": "user-1"}, {"user_email": "user-2@example.com"}]}'
     ```
@@ -135,7 +135,7 @@ async def bulk_update_team_member_budgets_action(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_update' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --header 'Content-Type: application/json' \
         --data '{"members": [{"user_id": "user-1", "max_budget_in_team": 10}, {"user_email": "user-2@example.com", "max_budget_in_team": 10, "budget_duration": "30d"}]}'
     ```

@@ -17,10 +17,13 @@ import pytest
 
 from litellm.proxy.db.autorouter_session_rollup import (
     UPSERT_AUTOROUTER_SESSION_SQL,
+    UPSERT_AUTOROUTER_USER_SESSION_SQL,
     AutoRouterTurnTransaction,
     build_autorouter_turn_transaction,
     flush_autorouter_turn_transactions,
+    write_autorouter_turn,
 )
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 ROUTING_DECISION = {"router_model_name": "live-auto", "router_type": "complexity", "routed_model": "haiku"}
 
@@ -111,13 +114,18 @@ class TestBuildTransaction:
         [
             {"status": "failure"},
             {"api_key": ""},
-            {"session_id": None},
             {"model": ""},
             {"startTime": "not-a-time"},
         ],
     )
     def test_incomplete_payloads_are_skipped(self, payload_overrides: dict):
         assert _build(payload=_payload(**payload_overrides)) is None
+
+    @pytest.mark.parametrize("session_id", [None, ""])
+    def test_a_request_without_a_session_keeps_its_router_day_money(self, session_id: str | None) -> None:
+        transaction: Final = _build(payload=_payload(session_id=session_id))
+        assert transaction is not None
+        assert (transaction.session_id, transaction.router_name, transaction.spend) == ("", "live-auto", 0.01)
 
     @pytest.mark.parametrize("metadata", [{}, {"routing_decision": None}, {"routing_decision": {}}])
     def test_requests_without_a_routing_decision_are_skipped(self, metadata: dict):
@@ -480,3 +488,21 @@ def test_internal_call_origin_never_reaches_the_rollup():
     gate alone would count it; the internal_call_origin stamp must exclude it."""
     assert _build(metadata=_metadata(internal_call_origin="shadow_eval_router")) is None
     assert _build() is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("statement", "span_name"),
+    (
+        (UPSERT_AUTOROUTER_SESSION_SQL, "postgres.upsert LiteLLM_AutoRouterSession"),
+        (UPSERT_AUTOROUTER_USER_SESSION_SQL, "postgres.upsert LiteLLM_AutoRouterUserSession"),
+    ),
+)
+async def test_the_turn_upsert_span_names_the_session_table_its_statement_writes(
+    statement: str, span_name: str, postgres_span_names
+) -> None:
+    db: Final = SimpleNamespace(execute_raw=engine_call())
+
+    await write_autorouter_turn(db, _transaction(user_id="u1"), statement)
+
+    assert await postgres_span_names() == (span_name,)

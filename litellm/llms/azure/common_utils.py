@@ -5,7 +5,7 @@ import os
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Final, Literal, NamedTuple, cast
+from typing import Final, Literal, NamedTuple, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -22,7 +22,7 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import _add_path_to_api_base
+from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
 
@@ -549,7 +549,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             # on every request (via `_refresh_api_key`), so passing
             # `azure_ad_token_provider` directly preserves Azure AD token refresh
             # behavior that the regular AzureOpenAI client provides.
-            v1_api_key: str | Callable[[], Any] | None = (
+            v1_api_key: str | Callable[[], object] | None = (
                 azure_client_params.get("api_key")
                 or azure_client_params.get("azure_ad_token_provider")
                 or azure_client_params.get("azure_ad_token")
@@ -814,7 +814,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         # Add the path to the base URL
         if route not in api_base:
-            new_url = _add_path_to_api_base(api_base=api_base, ending_path=route)
+            new_url = add_path_to_api_base(api_base=api_base, ending_path=route)
         else:
             new_url = api_base
 

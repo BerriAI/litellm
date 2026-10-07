@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
+    tool_call_is_rebuilt_as_server_tool_use,
 )
 from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
@@ -122,7 +123,30 @@ def targets_openai_api(api_base: object) -> bool:
 
 
 def _carries_cache_breakpoint(block: object) -> bool:
-    return isinstance(block, dict) and any(block.get(key) is not None for key in CACHE_BREAKPOINT_KEYS)
+    return any(_attribute_or_key(block, key) is not None for key in CACHE_BREAKPOINT_KEYS)
+
+
+def _attribute_or_key(value: object, key: str) -> object | None:
+    if hasattr(value, key):
+        return getattr(value, key)
+    if isinstance(value, Mapping):
+        return value.get(key)
+    return None
+
+
+def _as_object_list(value: object | None) -> list[object] | None:
+    if not isinstance(value, list):
+        return None
+    return _validated_object_list(value)
+
+
+def _tool_call_carries_cache_breakpoint(tool_call: object, message: object) -> bool:
+    if _attribute_or_key(tool_call, "cache_control") is None:
+        return False
+
+    return not tool_call_is_rebuilt_as_server_tool_use(
+        _attribute_or_key(tool_call, "id"), _attribute_or_key(message, "provider_specific_fields")
+    )
 
 
 def _tool_carries_cache_breakpoint(tool: object) -> bool:
@@ -259,7 +283,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             openai_dialect
             and AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages) > breakpoints_before
         ):
-            non_default_params.setdefault("prompt_cache_options", PromptCacheOptions(mode="explicit"))
+            non_default_params.setdefault("prompt_cache_options", PromptCacheOptions(mode="implicit"))
 
         # Points this pass did not place: non-message ones for the provider transform, and
         # the deferred role-targeted ones. Deferring is what reaches the Responses API's
@@ -471,13 +495,16 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _count_cache_control_blocks(message: object) -> int:
-        if not isinstance(message, dict):
-            return 0
-        count = 1 if _carries_cache_breakpoint(message) else 0
-        content: Final = message.get("content")
-        if isinstance(content, list):
-            count += sum(1 for block in content if _carries_cache_breakpoint(block))
-        return count
+        message_count: Final = 1 if _carries_cache_breakpoint(message) else 0
+        content: Final = _as_object_list(_attribute_or_key(message, "content"))
+        content_count: Final = sum(1 for block in content if _carries_cache_breakpoint(block)) if content else 0
+        tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls"))
+        tool_call_count: Final = (
+            sum(1 for tool_call in tool_calls if _tool_call_carries_cache_breakpoint(tool_call, message))
+            if tool_calls
+            else 0
+        )
+        return message_count + content_count + tool_call_count
 
     @staticmethod
     def _message_has_cache_control(message: AllMessageValues) -> bool:

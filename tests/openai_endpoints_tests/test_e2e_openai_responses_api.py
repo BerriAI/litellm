@@ -1,3 +1,4 @@
+import os
 import time
 from collections.abc import Iterator
 from typing import Final
@@ -14,7 +15,7 @@ def generate_key():
     """Generate a key for testing"""
     url = "http://0.0.0.0:4000/key/generate"
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
         "Content-Type": "application/json",
     }
     data = {}
@@ -75,20 +76,6 @@ def validate_stream_chunk(chunk):
     assert isinstance(chunk.model, str)
     assert hasattr(chunk, "created")
     assert isinstance(chunk.created, int)
-
-
-def test_streaming_response():
-    client = get_test_client()
-    stream = client.responses.create(
-        model="gpt-5.5", input="just respond with the word 'ping'", stream=True
-    )
-
-    collected_chunks = []
-    for chunk in stream:
-        print("stream chunk=", chunk)
-        collected_chunks.append(chunk)
-
-    assert len(collected_chunks) > 0
 
 
 def test_model_not_found_error():

@@ -433,7 +433,7 @@ def test_write_health_state_to_router_cache_sets_states(monkeypatch):
 
     import litellm.router_utils.cooldown_handlers as cd
 
-    monkeypatch.setattr(cd, "_set_cooldown_deployments", lambda **_kw: None)
+    monkeypatch.setattr(cd, "set_cooldown_deployments", lambda **_kw: None)
 
     import litellm.router_utils.router_callbacks.track_deployment_metrics as tdm
 
@@ -507,7 +507,7 @@ def test_write_health_state_to_router_cache_populates_for_listing_filter(monkeyp
 
     monkeypatch.setattr(
         cd,
-        "_set_cooldown_deployments",
+        "set_cooldown_deployments",
         lambda **kw: cooldowns.append(kw.get("deployment")),
     )
 
@@ -560,7 +560,7 @@ def test_write_health_state_to_router_cache_swallows_internal_failures(monkeypat
 @pytest.mark.asyncio
 async def test_adaptive_router_flusher_loop_flushes_each_router(monkeypatch):
     fake_ar = MagicMock()
-    fake_ar._state_loaded = True
+    fake_ar.state_loaded = True
     fake_ar.queue.flush_state_to_db = AsyncMock()
     fake_ar.queue.flush_session_to_db = AsyncMock()
 
