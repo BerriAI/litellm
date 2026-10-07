@@ -50,7 +50,7 @@ from litellm.proxy.lens.models import (
     WorkerCreated,
 )
 from litellm.proxy.lens.release import PROTOCOL_VERSION, release_tag, worker_image
-from litellm.proxy.lens.repository import LensRepository, WriterDatabase
+from litellm.proxy.lens.repository import DueLens, LensRepository, WriterDatabase
 from litellm.proxy.lens.reviews import criteria_key
 from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
@@ -514,13 +514,19 @@ async def claim_due(
     lens_repository: LensRepository,
     supports_model: Callable[[Worker, LensSettings], Awaitable[bool]] = worker_supports_model,
 ) -> Claim | None:
-    for candidate in await lens_repository.due(worker.scope, now, CLAIM_CANDIDATES):
-        if not can_access(worker.scope, candidate.scope):
-            continue
-        if claimed := await claim_candidate(candidate, worker, now, lens_repository, supports_model):
-            return claimed
-        await lens_repository.sync_due(candidate)
-    return None
+    async def _claim_page(after: DueLens | None) -> Claim | None:
+        page: Final = await lens_repository.due(worker.scope, now, CLAIM_CANDIDATES, after)
+        for candidate in page:
+            if not can_access(worker.scope, candidate.lens.scope):
+                continue
+            if claimed := await claim_candidate(candidate.lens, worker, now, lens_repository, supports_model):
+                return claimed
+            await lens_repository.sync_due(candidate.lens)
+        if len(page) < CLAIM_CANDIDATES:
+            return None
+        return await _claim_page(page[-1])
+
+    return await _claim_page(None)
 
 
 @router.post("/worker/{lens_id}/{job_id}/progress", response_model=bool)

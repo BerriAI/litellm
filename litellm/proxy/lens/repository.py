@@ -3,6 +3,7 @@ import json
 import random
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
@@ -39,6 +40,18 @@ class Database(Protocol):
 
 class Row(LiteLLMBaseModel):
     data: JsonValue
+    due_at: datetime | None = None
+
+
+class DueRow(LiteLLMBaseModel):
+    data: JsonValue
+    due_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class DueLens:
+    lens: Lens
+    due_at: datetime
 
 
 class FindingRun(LiteLLMBaseModel):
@@ -47,6 +60,26 @@ class FindingRun(LiteLLMBaseModel):
 
 
 _ROWS: Final = TypeAdapter(tuple[Row, ...])
+_DUE_ROWS: Final = TypeAdapter(tuple[DueRow, ...])
+_DUE_QUERY: Final[LiteralString] = """SELECT data, due_at FROM "LiteLLM_Lens"
+WHERE due_at IS NOT NULL AND due_at <= ($4::timestamptz AT TIME ZONE 'UTC')
+AND ($1::boolean OR (
+    COALESCE((data->'scope'->>'all_teams')::boolean, false) IS NOT TRUE
+    AND COALESCE(data->'scope'->>'team_id', '')=$2
+    AND ($2 <> '' OR COALESCE(data->'scope'->>'api_key_hash', '')=$3)
+))
+ORDER BY due_at, id
+LIMIT $5"""
+_DUE_AFTER_QUERY: Final[LiteralString] = """SELECT data, due_at FROM "LiteLLM_Lens"
+WHERE due_at IS NOT NULL AND due_at <= ($4::timestamptz AT TIME ZONE 'UTC')
+AND (due_at, id) > ($6::timestamp, $7)
+AND ($1::boolean OR (
+    COALESCE((data->'scope'->>'all_teams')::boolean, false) IS NOT TRUE
+    AND COALESCE(data->'scope'->>'team_id', '')=$2
+    AND ($2 <> '' OR COALESCE(data->'scope'->>'api_key_hash', '')=$3)
+))
+ORDER BY due_at, id
+LIMIT $5"""
 UPDATE_ATTEMPTS: Final = 40
 UPDATE_BACKOFF_SECONDS: Final = 0.02
 
@@ -146,26 +179,31 @@ class LensRepository:
         rows: Final = _ROWS.validate_python(await self.db.query_raw('SELECT data FROM "LiteLLM_Lens" ORDER BY id'))
         return tuple(Lens.model_validate(row.data) for row in rows)
 
-    async def due(self, scope: Scope, now: datetime, limit: int) -> tuple[Lens, ...]:
-        rows: Final = _ROWS.validate_python(
-            await self.db.query_raw(
-                """SELECT data FROM "LiteLLM_Lens"
-                WHERE due_at IS NOT NULL AND due_at <= ($4::timestamptz AT TIME ZONE 'UTC')
-                AND ($1::boolean OR (
-                    COALESCE((data->'scope'->>'all_teams')::boolean, false) IS NOT TRUE
-                    AND COALESCE(data->'scope'->>'team_id', '')=$2
-                    AND ($2 <> '' OR COALESCE(data->'scope'->>'api_key_hash', '')=$3)
-                ))
-                ORDER BY due_at, id
-                LIMIT $5""",
+    async def due(
+        self, scope: Scope, now: datetime, limit: int, after: DueLens | None = None
+    ) -> tuple[DueLens, ...]:
+        query: Final[LiteralString] = _DUE_QUERY if after is None else _DUE_AFTER_QUERY
+        parameters: Final[tuple[object, ...]] = (
+            (
                 scope.all_teams,
                 scope.team_id,
                 scope.api_key_hash,
                 now.isoformat(),
                 limit,
             )
+            if after is None
+            else (
+                scope.all_teams,
+                scope.team_id,
+                scope.api_key_hash,
+                now.isoformat(),
+                limit,
+                after.due_at,
+                after.lens.id,
+            )
         )
-        return tuple(Lens.model_validate(row.data) for row in rows)
+        rows: Final = _DUE_ROWS.validate_python(await self.db.query_raw(query, *parameters), from_attributes=True)
+        return tuple(DueLens(lens=Lens.model_validate(row.data), due_at=row.due_at) for row in rows)
 
     async def get(self, lens_id: str) -> Lens | None:
         rows: Final = _ROWS.validate_python(

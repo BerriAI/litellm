@@ -141,17 +141,53 @@ async def test_due_filters_by_schedule_and_scope(lens_db: Prisma) -> None:
             worker_key,
         )
         team_due: Final = await repo.due(worker_scope, worker_now, 20)
-        assert tuple(lens.id for lens in team_due) == tuple(
+        assert tuple(candidate.lens.id for candidate in team_due) == tuple(
             lens.id for lens in sorted((due_lens, expired_lens), key=lambda lens: (due_at(lens), lens.id))
         )
-        assert team_due[0].scope == worker_scope
-        assert await repo.due(Scope(api_key_hash=worker_key), worker_now, 20) == (key_lens,)
+        assert team_due[0].lens.scope == worker_scope
+        key_due: Final = await repo.due(Scope(api_key_hash=worker_key), worker_now, 20)
+        assert tuple(candidate.lens.id for candidate in key_due) == (key_lens.id,)
         all_due: Final = await repo.due(Scope(all_teams=True), worker_now, 20)
-        assert {lens.id for lens in all_due} == {due_lens.id, expired_lens.id, other_lens.id, key_lens.id}
+        assert {candidate.lens.id for candidate in all_due} == {
+            due_lens.id,
+            expired_lens.id,
+            other_lens.id,
+            key_lens.id,
+        }
     finally:
         await lens_db.execute_raw(
             'DELETE FROM "LiteLLM_Lens" WHERE id=ANY($1::text[])',
             tuple(lens.id for lens in candidates),
+        )
+
+
+@pytest.mark.asyncio
+async def test_due_pages_lenses_with_equal_due_at_without_skipping_or_repeating(lens_db: Prisma) -> None:
+    now: Final = datetime.now(timezone.utc).replace(microsecond=0)
+    scope: Final = Scope(team_id=uuid4().hex)
+    repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
+    lenses: Final = tuple(
+        _scheduled_lens(uuid4().hex, scope, now, now - timedelta(minutes=1)) for _ in range(45)
+    )
+    await asyncio.gather(*(repo.create(lens) for lens in lenses))
+    try:
+        await lens_db.execute_raw(
+            """UPDATE "LiteLLM_Lens"
+            SET due_at=$2::timestamp
+            WHERE id=ANY($1::text[])""",
+            tuple(lens.id for lens in lenses),
+            "1970-01-01 00:00:00",
+        )
+        first: Final = await repo.due(scope, now, 20)
+        second: Final = await repo.due(scope, now, 20, first[-1])
+        third: Final = await repo.due(scope, now, 20, second[-1])
+        assert tuple(len(page) for page in (first, second, third)) == (20, 20, 5)
+        ids: Final = tuple(candidate.lens.id for candidate in (*first, *second, *third))
+        assert ids == tuple(sorted(lens.id for lens in lenses))
+    finally:
+        await lens_db.execute_raw(
+            'DELETE FROM "LiteLLM_Lens" WHERE id=ANY($1::text[])',
+            tuple(lens.id for lens in lenses),
         )
 
 
@@ -255,11 +291,11 @@ async def test_sync_due_repairs_legacy_rows_and_ignores_stale_versions(lens_db: 
             past.isoformat(),
         )
         legacy_due: Final = await repo.due(scope, now, 20)
-        assert {lens.id for lens in legacy_due} == {lens.id for lens in candidates}
-        for lens in legacy_due:
-            await repo.sync_due(lens)
+        assert {candidate.lens.id for candidate in legacy_due} == {lens.id for lens in candidates}
+        for candidate in legacy_due:
+            await repo.sync_due(candidate.lens)
         repaired_due: Final = await repo.due(scope, now, 20)
-        assert {lens.id for lens in repaired_due} == {due_idle.id, queued_lens.id, expired_lens.id}
+        assert {candidate.lens.id for candidate in repaired_due} == {due_idle.id, queued_lens.id, expired_lens.id}
         await asyncio.gather(*(_assert_due_column(repo, lens.id) for lens in candidates))
         stale: Final = await repo.get(future_idle.id)
         assert stale is not None
@@ -532,6 +568,13 @@ def test_db_push_creates_fresh_lens_tables_and_preserves_them_on_restart(monkeyp
                 ).fetchone()[0]
                 is not None
             )
+            due_index: Final = connection.execute(
+                """SELECT indexdef FROM pg_indexes
+                WHERE schemaname=%s AND tablename='LiteLLM_Lens' AND indexname='LiteLLM_Lens_due_at_idx'""",
+                (schema,),
+            ).fetchone()
+            assert due_index is not None
+            assert "WHERE" not in due_index[0]
         finally:
             connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
 

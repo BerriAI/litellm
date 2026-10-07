@@ -51,7 +51,7 @@ class MeasuredDatabase:
 
     async def query_raw(self, query: LiteralString, *args: object) -> object:
         rows: Final = await self.database.query_raw(query, *args)
-        if 'SELECT data FROM "LiteLLM_Lens"' in query and "WHERE id" not in query:
+        if 'FROM "LiteLLM_Lens"' in query and "WHERE id" not in query:
             documents: Final = TypeAdapter(tuple[Row, ...]).validate_python(rows)
             self.meter.record(
                 tuple(len(json.dumps(row.data, separators=(",", ":")).encode("utf-8")) for row in documents)
@@ -101,8 +101,56 @@ def _large_lens(lens_id: str, scope: Scope, now: datetime, next_run_at: datetime
     )
 
 
+def _due_lens(lens_id: str, scope: Scope, now: datetime, model: str, next_run_at: datetime) -> Lens:
+    return Lens(
+        id=lens_id,
+        scope=scope,
+        settings=LensSettings(
+            name="Claim paging test",
+            model=model,
+            context="Find unexpected behavior",
+            enabled=True,
+        ),
+        created_at=now,
+        next_run_at=next_run_at,
+        budget_month=now.strftime("%Y-%m"),
+    )
+
+
 async def _supports_model(_worker: Worker, _settings: LensSettings) -> bool:
     return True
+
+
+async def _supports_supported_model(_worker: Worker, settings: LensSettings) -> bool:
+    return settings.model == "supported"
+
+
+@pytest.mark.asyncio
+async def test_claim_due_reaches_a_supported_lens_behind_a_full_page_of_unsupported_ones(
+    lens_db: Prisma,
+) -> None:
+    now: Final = datetime.now(timezone.utc).replace(microsecond=0)
+    scope: Final = Scope(team_id=uuid4().hex)
+    worker: Final = Worker(id=uuid4().hex, name="paging-test-worker", scope=scope, last_seen=now)
+    unsupported_at: Final = now - timedelta(minutes=5)
+    supported_at: Final = now - timedelta(minutes=1)
+    unsupported: Final = tuple(
+        _due_lens(uuid4().hex, scope, now, "unsupported", unsupported_at) for _ in range(25)
+    )
+    supported: Final = _due_lens(uuid4().hex, scope, now, "supported", supported_at)
+    candidates: Final = (*unsupported, supported)
+    repository: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
+    await asyncio.gather(*(repository.create(candidate) for candidate in candidates))
+    try:
+        claim: Final = await claim_due(worker, now, repository, _supports_supported_model)
+        assert claim is not None
+        assert claim.lens_id == supported.id
+        assert claim.job.status == "running"
+    finally:
+        await lens_db.execute_raw(
+            'DELETE FROM "LiteLLM_Lens" WHERE id=ANY($1::text[])',
+            tuple(candidate.id for candidate in candidates),
+        )
 
 
 @pytest.mark.asyncio
