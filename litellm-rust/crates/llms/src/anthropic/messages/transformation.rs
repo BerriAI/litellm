@@ -1,7 +1,8 @@
 use litellm_auth::CredentialPlacement;
 use litellm_llms_types::{
     formats::messages::{
-        ContextEdit, ContextManagement, Message, MessagesOptionalParams, MessagesRequest, Speed,
+        ContextEdit, ContextManagement, ContextTrigger, Message, MessagesOptionalParams,
+        MessagesRequest, Speed,
     },
     providers::anthropic::{AnthropicBeta, BetaSet},
     recognized::Recognized,
@@ -190,12 +191,16 @@ fn context_management_betas(
 }
 
 fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
-    params.output_format.is_some()
+    params
+        .output_format
+        .as_ref()
+        .is_some_and(|format| !matches!(format, Recognized::Unrecognized(Value::Null)))
         || params
             .output_config
             .as_ref()
             .and_then(Recognized::known)
-            .is_some_and(|config| config.format.is_some())
+            .and_then(|config| config.format.as_ref())
+            .is_some_and(|format| !matches!(format, Recognized::Unrecognized(Value::Null)))
 }
 
 fn messages_carry_output_config(messages: &[Message]) -> bool {
@@ -280,20 +285,27 @@ fn compact_edit_from_openai(entry: &Map<String, Value>) -> Option<ContextEdit> {
     if entry.get("type").and_then(Value::as_str) != Some("compaction") {
         return None;
     }
+    let threshold_trigger =
+        entry
+            .get("compact_threshold")
+            .and_then(Value::as_f64)
+            .map(|threshold| {
+                Recognized::Known(ContextTrigger::InputTokens {
+                    value: Recognized::Known(threshold as i64),
+                    extra: Map::new(),
+                })
+            });
     let trigger = entry
-        .get("compact_threshold")
-        .and_then(Value::as_f64)
-        .map(|threshold| json!({"type": "input_tokens", "value": threshold as i64}));
+        .get("trigger")
+        .map(|value| Recognized::Unrecognized(value.clone()))
+        .or(threshold_trigger);
     let passthrough = entry
         .iter()
-        .filter(|(key, _)| !matches!(key.as_str(), "type" | "compact_threshold"))
+        .filter(|(key, _)| !matches!(key.as_str(), "type" | "compact_threshold" | "trigger"))
         .map(|(key, value)| (key.clone(), value.clone()));
     Some(ContextEdit::Compact {
-        extra: trigger
-            .map(|trigger| ("trigger".to_string(), trigger))
-            .into_iter()
-            .chain(passthrough)
-            .collect(),
+        trigger,
+        extra: passthrough.collect(),
     })
 }
 
@@ -629,6 +641,14 @@ mod tests {
             {"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 1000}},
             {"type": "compact_20260112", "instructions": "second"}
         ]}))
+    )]
+    #[case::explicit_trigger_wins_over_threshold(
+        json!([{"type":"compaction","compact_threshold":1000,"trigger":{"type":"future","value":null}}]),
+        Some(json!({"edits":[{"type":"compact_20260112","trigger":{"type":"future","value":null}}]}))
+    )]
+    #[case::explicit_null_trigger(
+        json!([{"type":"compaction","compact_threshold":1000,"trigger":null}]),
+        Some(json!({"edits":[{"type":"compact_20260112","trigger":null}]}))
     )]
     #[case::list_without_compaction(json!([{"type": "other"}]), None)]
     #[case::empty_list(json!([]), None)]

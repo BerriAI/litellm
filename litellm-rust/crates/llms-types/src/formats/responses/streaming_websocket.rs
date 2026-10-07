@@ -1,3 +1,6 @@
+use super::ResponsesOutputItem;
+use crate::recognized::Recognized;
+use crate::serde_compat::deserialize_present;
 use serde_json::{Map, Value};
 
 #[derive(
@@ -40,21 +43,36 @@ impl ResponsesWsEventType {
 pub struct ResponsesWsEvent {
     #[serde(rename = "type")]
     pub event_type: ResponsesWsEventType,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    pub model: Option<Recognized<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    pub response: Option<Recognized<ResponsesEventResponse>>,
     #[serde(flatten)]
     pub data: Map<String, Value>,
 }
 
 impl ResponsesWsEvent {
     pub fn model(&self) -> Option<&str> {
-        let model = self.data.get("model").and_then(Value::as_str);
-        if model.is_some() {
-            return model;
-        }
-        self.data
-            .get("response")
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("model"))
-            .and_then(Value::as_str)
+        self.model
+            .as_ref()
+            .and_then(Recognized::known)
+            .map(String::as_str)
+            .or_else(|| {
+                self.response
+                    .as_ref()
+                    .and_then(Recognized::known)
+                    .and_then(|response| response.model.as_ref())
+                    .and_then(Recognized::known)
+                    .map(String::as_str)
+            })
     }
 
     pub fn is_response_create(&self) -> bool {
@@ -121,4 +139,20 @@ mod tests {
         let event: ResponsesWsEvent = serde_json::from_value(payload).expect("valid event");
         assert_eq!(event.model(), expected);
     }
+}
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct ResponsesEventResponse {
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub id: Option<Recognized<String>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub model: Option<Recognized<String>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub status: Option<Recognized<String>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub output: Option<Recognized<Vec<Recognized<ResponsesOutputItem>>>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }

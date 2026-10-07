@@ -4,6 +4,14 @@ use serde::{
 };
 use serde_with::DeserializeAs;
 
+pub fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 pub struct LaxI64;
 pub struct FiniteF64;
 
@@ -110,4 +118,34 @@ fn integral_float(value: f64) -> Option<i64> {
         && value >= i64::MIN as f64
         && value < -(i64::MIN as f64))
         .then_some(value as i64)
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Copy, Eq)]
+#[serde(untagged)]
+pub enum Nullable<T> {
+    Value(T),
+    Null,
+}
+
+impl<T> Nullable<T> {
+    pub fn value(&self) -> Option<&T> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Null => None,
+        }
+    }
+
+    pub fn into_value(self) -> Option<T> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Null => None,
+        }
+    }
+}
+
+impl<T: std::ops::Deref> Nullable<T> {
+    pub fn as_deref(&self) -> Option<&T::Target> {
+        self.value().map(std::ops::Deref::deref)
+    }
 }

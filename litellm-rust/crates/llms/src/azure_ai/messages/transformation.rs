@@ -4,6 +4,7 @@ use litellm_llms_types::formats::messages::{
     CacheControl, ContentBlock, Message, MessageContent, MessagesOptionalParams, MessagesRequest,
     SystemPrompt,
 };
+use litellm_llms_types::serde_compat::Nullable;
 
 use crate::{
     Error,
@@ -131,10 +132,15 @@ pub fn complete_azure_anthropic_url(
 
 fn strip_scope_from_block(block: ContentBlock) -> ContentBlock {
     ContentBlock {
-        cache_control: block.cache_control.map(|cache_control| CacheControl {
-            scope: None,
-            ..cache_control
-        }),
+        cache_control: block
+            .cache_control
+            .map(|cache_control| match cache_control {
+                Nullable::Value(cache_control) => Nullable::Value(CacheControl {
+                    scope: None,
+                    ..cache_control
+                }),
+                Nullable::Null => Nullable::Null,
+            }),
         ..block
     }
 }

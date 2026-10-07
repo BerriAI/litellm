@@ -170,7 +170,7 @@ async fn caller_headers_and_provider_scoped_headers_are_forwarded(call: Messages
     let upstream = upstream([message_response()]).await;
     let scoped = |provider: &str, value: &str| ProviderSpecificHeader {
         custom_llm_provider: provider.into(),
-        extra_headers: object(json!({"x-scoped": value})),
+        extra_headers: serde_json::from_value(json!({"x-scoped": value})).unwrap(),
     };
 
     run_message(MessagesCall {

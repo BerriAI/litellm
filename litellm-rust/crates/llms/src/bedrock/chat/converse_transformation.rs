@@ -420,10 +420,8 @@ fn has_blank_text(message: &ChatMessage) -> bool {
     match &message.content {
         None => false,
         Some(ChatMessageContent::Text(text)) => text.trim().is_empty(),
-        Some(ChatMessageContent::Parts(parts)) => parts.iter().any(|part| {
-            part.get("text")
-                .and_then(Value::as_str)
-                .is_none_or(|text| text.trim().is_empty())
-        }),
+        Some(ChatMessageContent::Parts(parts)) => parts
+            .iter()
+            .any(|part| part.text().is_none_or(|text| text.trim().is_empty())),
     }
 }

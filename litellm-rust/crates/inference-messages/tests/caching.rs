@@ -88,7 +88,7 @@ async fn messages_cache_identity_includes_provider_native_parameters(
             .unwrap();
         assert_eq!(response.id, expected_call.to_string());
         assert_eq!(
-            response.content[0]["text"],
+            serde_json::to_value(&response.content[0]).unwrap()["text"],
             format!("answer {expected_call}")
         );
     }

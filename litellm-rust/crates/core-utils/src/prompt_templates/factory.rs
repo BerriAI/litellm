@@ -59,7 +59,7 @@ fn message_texts(content: &ChatMessageContent) -> Vec<String> {
         ChatMessageContent::Text(text) => vec![text.clone()],
         ChatMessageContent::Parts(parts) => parts
             .iter()
-            .filter_map(|part| part.get("text").and_then(|text| text.as_str()))
+            .filter_map(|part| part.text())
             .map(str::to_string)
             .collect(),
     }
