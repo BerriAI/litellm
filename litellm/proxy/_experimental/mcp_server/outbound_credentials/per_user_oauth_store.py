@@ -15,6 +15,8 @@ from collections.abc import Callable, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Final
 
+from fastapi import HTTPException
+
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_identity_binding import credential_binding_matches
 from litellm.proxy._experimental.mcp_server.outbound_credentials.authz_code_refresher import (
@@ -76,6 +78,8 @@ async def _persist_credential(
     expires_in: int | None,
     scopes: tuple[str, ...] | None,
     identity_binding_proof: str | None = None,
+    *,
+    expected_credential: OAuthToken,
 ) -> None:
     from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
         store_user_oauth_credential,
@@ -83,8 +87,8 @@ async def _persist_credential(
     from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
 
     if prisma_client is None:
-        return
-    await store_user_oauth_credential(
+        raise TokenStoreUnavailable("Database not connected")
+    saved: Final = await store_user_oauth_credential(
         prisma_client=prisma_client,
         user_id=user_id,
         server_id=server_id,
@@ -94,7 +98,10 @@ async def _persist_credential(
         scopes=list(scopes) if scopes else None,
         skip_byok_guard=True,
         identity_binding_proof=identity_binding_proof,
+        expected_credential=expected_credential,
     )
+    if not saved:
+        raise HTTPException(status_code=403, detail="OAuth credential changed during refresh")
 
 
 async def _post_token_endpoint(url: str, form: dict[str, str], headers: dict[str, str]) -> dict[str, object] | None:

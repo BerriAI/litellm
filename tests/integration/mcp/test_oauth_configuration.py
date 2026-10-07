@@ -20,6 +20,69 @@ from pydantic import TypeAdapter
 _Upstream = Callable[[Request], Reply]
 
 
+def test_pending_refresh_cannot_restore_disconnected_credential(gateway: Gateway, tmp_path: Path) -> None:
+    entered: Final = threading.Event()
+    release: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        form: Final = parse_qs(request.body.decode())
+        assert form["grant_type"] == ["refresh_token"]
+        entered.set()
+        assert release.wait(20), "Refresh response not released"
+        return Reply(
+            body=json.dumps(
+                {"access_token": "rotated-real-http-token", "refresh_token": "rotated-refresh", "expires_in": 3600}
+            ).encode()
+        )
+
+    with wire_server(respond) as issuer, mcp_peer() as peer, gateway.scenario() as scenario:
+        server_id: Final = register_mcp(
+            scenario,
+            peer,
+            "refresh" + uuid.uuid4().hex,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            authorization_url=issuer.url + "/authorize",
+            token_url=issuer.url + "/token",
+            credentials={"client_id": "local-test-client"},
+        )
+        user_id: Final = scenario.user(user_role="internal_user")
+        key: Final = scenario.key(user_id=user_id, object_permission={"mcp_servers": [server_id]})
+        path: Final = f"/v1/mcp/server/{server_id}/oauth-user-credential"
+        expired: Final = {
+            "access_token": "expired-real-http-token",
+            "refresh_token": "original-refresh",
+            "expires_in": -60,
+        }
+        created: Final = gateway.request("POST", path, expired, key=key)
+        assert created.status_code == 200, created.text
+        scenario.cleanups.callback(gateway.request, "DELETE", path, key=key)
+        with owned_proxy(gateway, tmp_path / "refresh-proxy-b", {}) as other:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending: Final = pool.submit(
+                    other.request, "GET", "/mcp-rest/tools/list", key=key, params={"server_id": server_id}
+                )
+                try:
+                    assert entered.wait(15), "Real refresh HTTP request was not reached"
+                    removed: Final = gateway.request("DELETE", path, key=key)
+                    assert removed.status_code == 200 and removed.json()["has_credential"] is False, removed.text
+                    status_before: Final = gateway.request("GET", path + "/status", key=key)
+                    assert status_before.json()["has_credential"] is False
+                finally:
+                    release.set()
+                finished: Final = pending.result(timeout=25)
+            assert finished.status_code == 401, finished.text
+            status_after: Final = gateway.request("GET", path + "/status", key=key)
+            assert status_after.json()["has_credential"] is False
+            later: Final = other.request("GET", "/mcp-rest/tools/list", key=key, params={"server_id": server_id})
+            assert later.status_code == 401, later.text
+            reconnected: Final = gateway.request("POST", path, expired, key=key)
+            assert reconnected.status_code == 200, reconnected.text
+            assert tool_names(other, key, server_id)
+            status_reconnected: Final = gateway.request("GET", path + "/status", key=key)
+            assert status_reconnected.json()["has_credential"] is True
+
+
 @pytest.mark.covers("other.mcp.oauth.discovery_cannot_erase_configured_authorization_endpoint")
 def test_partial_discovery_and_unrelated_edit_keep_actual_authorization_destination(
     gateway: Gateway, tmp_path: Path

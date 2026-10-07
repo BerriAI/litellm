@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from prisma import models as prisma_db_models
     from prisma import types as prisma_db_types
 
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -1761,7 +1762,8 @@ async def store_user_oauth_credential(
     scopes: list[str] | None = None,
     skip_byok_guard: bool = False,
     identity_binding_proof: str | None = None,
-) -> None:
+    expected_credential: "OAuthToken | None" = None,
+) -> bool:
     """Persist an OAuth2 access token for a user+server pair.
 
     The payload is JSON-serialised and stored encrypted in the same
@@ -1813,7 +1815,26 @@ async def store_user_oauth_credential(
             )
 
     encoded: Final = encrypt_value_helper(json.dumps(payload))
+    if expected_credential is not None:
+        original: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id)
+        if original is None:
+            return False
+        current: Final = _decode_oauth_payload(original.credential_b64)
+        if current is None:
+            return False
+        if (
+            current.get("access_token") != expected_credential.access_token
+            or current.get("refresh_token") != expected_credential.refresh_token
+            or current.get("connected_at") != expected_credential.connected_at
+        ):
+            return False
+        changed: Final = await _user_credential_actions(prisma_client).update_many(
+            where={"user_id": user_id, "server_id": server_id, "credential_b64": original.credential_b64},
+            data={"credential_b64": encoded},
+        )
+        return changed == 1
     await _db_upsert_user_credential_row(prisma_client, user_id, server_id, encoded)
+    return True
 
 
 def is_oauth_credential_expired(cred: OAuthCredentialPayload, buffer_seconds: int = 0) -> bool:

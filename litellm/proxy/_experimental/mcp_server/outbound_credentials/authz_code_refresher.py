@@ -47,6 +47,8 @@ class CredentialPersist(Protocol):
         expires_in: int | None,
         scopes: tuple[str, ...] | None,
         identity_binding_proof: str | None = None,
+        *,
+        expected_credential: OAuthToken,
     ) -> None: ...
 
 
@@ -164,9 +166,18 @@ class AuthorizationCodeRefresher:
                 expires_in,
                 scopes or None,
                 identity_binding_proof=binding_proof,
+                expected_credential=token,
             )
         else:
-            await self._persist(user_id, server_id, access_token, new_refresh, expires_in, scopes or None)
+            await self._persist(
+                user_id,
+                server_id,
+                access_token,
+                new_refresh,
+                expires_in,
+                scopes or None,
+                expected_credential=token,
+            )
         return OAuthToken(
             access_token=access_token,
             expires_at=self._clock() + expires_in if expires_in is not None else None,
