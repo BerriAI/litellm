@@ -172,6 +172,12 @@ def _body(request: Request) -> dict[str, JsonValue]:
     return JSON_OBJECT.validate_json(request.body)
 
 
+def _forwarded_body(sent: httpx.Request, text: str) -> dict[str, JsonValue]:
+    asked: Final = JSON_OBJECT.validate_json(sent.content)
+    encoding: Final = {"encoding_format": asked["encoding_format"]} if "encoding_format" in asked else {}
+    return {"input": [text], **encoding, "model": SERVED_MODEL}
+
+
 def _signed_headers(request: Request) -> tuple[str, ...]:
     authorization: Final = request.headers["authorization"]
     assert authorization.startswith(f"AWS4-HMAC-SHA256 Credential={ACCESS_KEY}/"), authorization
@@ -243,7 +249,7 @@ def test_every_embeddings_alias_reaches_the_inference_component(
     assert _spend_row(response)["status"] == "success"
 
 
-def test_openai_sdk_sync_client_reads_the_base64_vectors_the_container_returned(proxy: Gateway, wire: Wire) -> None:
+def test_openai_sdk_sync_client_reads_the_vectors_in_the_encoding_it_asked_for(proxy: Gateway, wire: Wire) -> None:
     text: Final = _text()
     raw: Final = _sdk(proxy).embeddings.with_raw_response.create(
         model="sm-openai", input=[text], extra_body={"cache": _NO_CACHE}
@@ -254,13 +260,13 @@ def test_openai_sdk_sync_client_reads_the_base64_vectors_the_container_returned(
     assert (created.usage.prompt_tokens, created.usage.total_tokens) == (7, 7), created
     request: Final = _only_request(wire)
     assert request.headers[COMPONENT_HEADER] == COMPONENT, dict(request.headers)
-    assert _body(request) == {"input": [text], "encoding_format": "base64", "model": SERVED_MODEL}, request.body
+    assert _body(request) == _forwarded_body(raw.http_request, text), request.body
     call_id: Final = raw.headers["x-litellm-call-id"]
     rows: Final = eventually(lambda: read_rows(_SPEND_ROW, (call_id,)), lambda found: len(found) == 1, seconds=70)
     assert rows[0]["status"] == "success", rows
 
 
-async def test_openai_sdk_async_client_reads_the_base64_vectors_the_container_returned(
+async def test_openai_sdk_async_client_reads_the_vectors_in_the_encoding_it_asked_for(
     proxy: Gateway, wire: Wire
 ) -> None:
     text: Final = _text()
@@ -272,7 +278,7 @@ async def test_openai_sdk_async_client_reads_the_base64_vectors_the_container_re
     assert created.model == "sm-openai", created
     request: Final = _only_request(wire)
     assert request.headers[COMPONENT_HEADER] == COMPONENT, dict(request.headers)
-    assert _body(request) == {"input": [text], "encoding_format": "base64", "model": SERVED_MODEL}, request.body
+    assert _body(request) == _forwarded_body(raw.http_request, text), request.body
     call_id: Final = raw.headers["x-litellm-call-id"]
     rows: Final = eventually(lambda: read_rows(_SPEND_ROW, (call_id,)), lambda found: len(found) == 1, seconds=70)
     assert rows[0]["status"] == "success", rows

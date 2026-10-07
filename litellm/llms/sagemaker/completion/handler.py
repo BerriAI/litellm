@@ -296,9 +296,7 @@ class SagemakerLLM(BaseAWSLLM):
         except Exception as e:
             verbose_logger.error("Sagemaker error %s", str(e))
             status_code, error_message = client_error_details(e)
-            raise SagemakerError(
-                status_code=status_code, message=with_inference_component_hint(error_message, call="litellm.completion")
-            )
+            raise SagemakerError(status_code=status_code, message=error_message)
 
         return sagemaker_config.transform_response(
             model=model,
@@ -518,8 +516,7 @@ class SagemakerLLM(BaseAWSLLM):
                 )
                 raise e
         except Exception as e:
-            error_message: Final = with_inference_component_hint(str(e), call="litellm.completion")
-            raise SagemakerError(status_code=500, message=error_message)
+            raise SagemakerError(status_code=500, message=str(e))
         return sagemaker_config.transform_response(
             model=model,
             raw_response=response,
@@ -612,9 +609,7 @@ class SagemakerLLM(BaseAWSLLM):
             response = client.invoke_endpoint(**invoke_kwargs)
         except Exception as e:
             status_code, error_message = client_error_details(e)
-            raise SagemakerError(
-                status_code=status_code, message=with_inference_component_hint(error_message, call="litellm.embedding")
-            )
+            raise SagemakerError(status_code=status_code, message=with_inference_component_hint(error_message))
 
         response = json.loads(response["Body"].read().decode("utf8"))
         ## LOGGING
