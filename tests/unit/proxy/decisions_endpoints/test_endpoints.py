@@ -324,3 +324,48 @@ def test_with_lazy_routes_disabled_a_config_pass_through_at_v1_decisions_still_w
         assert client.post("/v1/decisions", json={"model": "gpt-6-luna"}).json() == {"served_by": "pass-through"}
     assert _serving_endpoint(bare, "/v1/decisions") is pass_through
     assert _serving_endpoint(bare, "/decisions") is decisions
+
+
+@pytest.mark.parametrize("endpoint", ("/v1/decisions", "/decisions"))
+def test_proxy_openai_decisions_routes_alias_and_reports_input_only_cost(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+) -> None:
+    native_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "luna-decisions",
+                "litellm_params": {
+                    "model": "openai/gpt-6-luna",
+                    "api_key": "provider-key",
+                    "api_base": "https://api.openai.com/v1",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", native_router)
+    body: Final = {
+        "model": "gpt-6-luna",
+        "answers": [{"type": "predicate", "name": "damaged", "probability": 0.9}],
+        "usage": {"input_tokens": 164, "output_tokens": 0, "total_tokens": 164},
+    }
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=body)
+    question: Final = {"type": "predicate", "name": "damaged", "instructions": "Is this damaged?"}
+    response: Final = client.post(
+        endpoint, json={"model": "luna-decisions", "input": "Broken screen", "questions": [question]}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == body["answers"]
+    assert response.json()["usage"] == body["usage"]
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(
+        164 * float(litellm.model_cost["gpt-6-luna"]["input_cost_per_token"])
+    )
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": "Broken screen",
+        "questions": [question],
+    }
+    assert route.calls[0].request.headers["authorization"] == "Bearer provider-key"

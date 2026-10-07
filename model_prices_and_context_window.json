@@ -34523,6 +34523,7 @@
         },
         "source": "https://developers.openai.com/api/docs/pricing",
         "supported_endpoints": [
+            "/v1/decisions",
             "/v1/chat/completions",
             "/v1/batch",
             "/v1/responses"

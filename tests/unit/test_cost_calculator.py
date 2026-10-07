@@ -5839,3 +5839,72 @@ def test_completion_cost_bills_base_when_gemini_serves_on_demand(
     )
 
     assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)
+
+
+@pytest.mark.parametrize("call_type", ("decisions", "adecisions"))
+@pytest.mark.parametrize("input_tokens", (367, 300_000))
+@pytest.mark.parametrize("region", (None, "eu"))
+def test_openai_decisions_prices_only_input_with_long_context_and_region(
+    call_type: str,
+    input_tokens: int,
+    region: str | None,
+) -> None:
+    from litellm.types.decisions import DecisionsResponse, DecisionsUsage
+
+    response: Final = DecisionsResponse(
+        model="gpt-6-luna",
+        answers=[],
+        usage=DecisionsUsage(
+            input_tokens=input_tokens,
+            output_tokens=17,
+            input_tokens_details={"cached_tokens": 100, "cache_write_tokens": 20},
+        ),
+    )
+    response.hidden_params.update({"custom_llm_provider": "openai", "model": "openai/gpt-6-luna"})
+    row: Final = litellm.model_cost["gpt-6-luna"]
+    rate: Final = (
+        row["input_cost_per_token_above_272k_tokens"] if input_tokens > 272_000 else row["input_cost_per_token"]
+    )
+    uplift: Final = row["regional_processing_uplift_multiplier_eu"] if region == "eu" else 1
+    logging_obj: Final = Logging(
+        model="openai/gpt-6-luna",
+        messages=[],
+        stream=False,
+        call_type=call_type,
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="decisions-rates",
+        function_id="decisions-rates",
+    )
+    cost: Final = completion_cost(
+        completion_response=response,
+        call_type=call_type,
+        data_residency=region,
+        litellm_logging_obj=logging_obj,
+    )
+    assert cost == pytest.approx(input_tokens * float(rate) * float(uplift))
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["input_cost"] == pytest.approx(cost)
+    assert logging_obj.cost_breakdown["output_cost"] == 0
+    rates: Final = logging_obj.billed_token_rates
+    assert rates is not None
+    assert rates.input_cost_per_token == pytest.approx(float(rate) * float(uplift))
+    assert (
+        rates.output_cost_per_token,
+        rates.cache_read_input_token_cost,
+        rates.cache_creation_input_token_cost,
+        rates.output_cost_per_reasoning_token,
+    ) == (0, 0, 0, 0)
+
+
+def test_openai_decisions_infers_call_type_and_preserves_custom_input_price() -> None:
+    from litellm.types.decisions import DecisionsResponse, DecisionsUsage
+
+    response: Final = DecisionsResponse(
+        model="gpt-6-luna", answers=[], usage=DecisionsUsage(input_tokens=10, output_tokens=20)
+    )
+    response.hidden_params.update({"custom_llm_provider": "openai", "model": "openai/gpt-6-luna"})
+    cost: Final = completion_cost(
+        completion_response=response,
+        custom_cost_per_token={"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+    )
+    assert cost == pytest.approx(10 * 0.001)

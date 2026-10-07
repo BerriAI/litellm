@@ -11,21 +11,25 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.decisions.transformation import DecisionsProviderConfig
 from litellm.llms.cloudflare.decisions.transformation import CLOUDFLARE_DECISIONS_ENDPOINT
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client, get_async_httpx_client
+from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.llms.openai.decisions.transformation import OPENAI_DECISIONS_ENDPOINT
 from litellm.llms.openrouter.decisions.transformation import OPENROUTER_DECISIONS_ENDPOINT
 from litellm.llms.perplexity.decisions.transformation import PERPLEXITY_DECISIONS_ENDPOINT
 from litellm.llms.strands_decider.decisions.transformation import STRANDS_DECIDER_DECISIONS_ENDPOINT
 from litellm.llms.typesafe.decisions.transformation import TYPESAFE_DECISIONS_ENDPOINT
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
-    DecisionQuestion,
     DecisionsJSON,
+    DecisionsQuestions,
     DecisionsRequest,
     DecisionsResponse,
+    OpenAIDecisionsRequestBody,
 )
 from litellm.utils import client
 
 DECISIONS_ENDPOINTS: Final[Mapping[str, DecisionsProviderConfig]] = MappingProxyType(
     {
+        "openai": OPENAI_DECISIONS_ENDPOINT,
         "perplexity": PERPLEXITY_DECISIONS_ENDPOINT,
         "typesafe": TYPESAFE_DECISIONS_ENDPOINT,
         "openrouter": OPENROUTER_DECISIONS_ENDPOINT,
@@ -35,6 +39,7 @@ DECISIONS_ENDPOINTS: Final[Mapping[str, DecisionsProviderConfig]] = MappingProxy
 )
 
 _DECISIONS_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequest]] = TypeAdapter(DecisionsRequest)
+_OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionsRequestBody]] = TypeAdapter(OpenAIDecisionsRequestBody)
 _DECISIONS_PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 _DECISIONS_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
 
@@ -51,7 +56,11 @@ class _PreparedDecisionsRequest:
 
 
 def _resolve_provider_model(model: str, custom_llm_provider: str | None) -> tuple[str, str]:
-    provider: Final = model.partition("/")[0] if custom_llm_provider is None else custom_llm_provider
+    provider: Final = (
+        (litellm.get_llm_provider(model)[1] if "/" not in model else model.partition("/")[0])
+        if custom_llm_provider is None
+        else custom_llm_provider
+    )
     if provider not in DECISIONS_ENDPOINTS:
         supported: Final = ", ".join(DECISIONS_ENDPOINTS)
         raise litellm.BadRequestError(
@@ -79,9 +88,10 @@ def _resolve_api_key(
     if api_key is not None:
         return api_key
 
-    server_api_key: Final = next(
-        (key for key in (get_secret_str(name) for name in endpoint.api_key_env) if key),
-        None,
+    server_api_key: Final = (
+        litellm.OpenAIGPTConfig.get_api_key()
+        if provider == "openai"
+        else next((key for key in (get_secret_str(name) for name in endpoint.api_key_env) if key), None)
     )
     if server_api_key is None:
         if not endpoint.api_key_required:
@@ -99,7 +109,8 @@ def _prepare_request(
     *,
     model: str,
     state: DecisionsJSON,
-    questions: Mapping[str, DecisionQuestion | Mapping[str, object]],
+    input: DecisionsJSON | None,
+    questions: DecisionsQuestions | None,
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
@@ -107,8 +118,14 @@ def _prepare_request(
 ) -> _PreparedDecisionsRequest:
     provider, upstream_model = _resolve_provider_model(model, custom_llm_provider)
     try:
-        validated_request: Final = _DECISIONS_REQUEST_ADAPTER.validate_python(
-            {"model": model, "state": state, "questions": questions}
+        validated_body: Final = (
+            _OPENAI_REQUEST_ADAPTER.validate_python({"input": input, "questions": questions}).model_dump(
+                mode="json", exclude_none=True
+            )
+            if provider == "openai"
+            else _DECISIONS_REQUEST_ADAPTER.validate_python(
+                {"model": model, "state": state, "questions": questions}
+            ).model_dump(mode="json", exclude_none=True, exclude={"model"})
         )
     except ValidationError as error:
         raise litellm.BadRequestError(
@@ -120,7 +137,11 @@ def _prepare_request(
     endpoint: Final = DECISIONS_ENDPOINTS[provider]
     env_api_base: Final = get_secret_str(endpoint.api_base_env)
     default_api_base: Final = endpoint.default_api_base()
-    resolved_api_base: Final = api_base or env_api_base or default_api_base
+    resolved_api_base: Final = (
+        litellm.OpenAIGPTConfig.get_api_base(api_base)
+        if provider == "openai"
+        else api_base or env_api_base or default_api_base
+    )
     if resolved_api_base is None:
         raise litellm.BadRequestError(
             message=endpoint.missing_api_base_message(provider),
@@ -150,11 +171,7 @@ def _prepare_request(
     body: Final = MappingProxyType(
         {
             "model": endpoint.request_model(canonical_model),
-            "state": validated_request.state,
-            "questions": {
-                name: question.model_dump(mode="json", exclude_none=True)
-                for name, question in validated_request.questions.items()
-            },
+            **validated_body,
         }
     )
     return _PreparedDecisionsRequest(
@@ -181,6 +198,7 @@ def _log_request(
         litellm_params={
             "litellm_call_id": kwargs.get("litellm_call_id"),
             "api_base": prepared.url,
+            "data_residency": infer_openai_data_residency(prepared.provider, prepared.url),
         },
         custom_llm_provider=prepared.provider,
     )
@@ -227,18 +245,20 @@ def _map_upstream_exception(error: Exception, prepared: _PreparedDecisionsReques
 @client
 async def adecisions(
     model: str,
-    state: DecisionsJSON,
-    questions: Mapping[str, DecisionQuestion | Mapping[str, object]],
+    state: DecisionsJSON = "",
+    questions: DecisionsQuestions | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
+    input: DecisionsJSON | None = None,
     **kwargs: object,
 ) -> DecisionsResponse:
     prepared: Final = _prepare_request(
         model=model,
         state=state,
+        input=input,
         questions=questions,
         api_key=api_key,
         api_base=api_base,
@@ -263,18 +283,20 @@ async def adecisions(
 @client
 def decisions(
     model: str,
-    state: DecisionsJSON,
-    questions: Mapping[str, DecisionQuestion | Mapping[str, object]],
+    state: DecisionsJSON = "",
+    questions: DecisionsQuestions | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
+    input: DecisionsJSON | None = None,
     **kwargs: object,
 ) -> DecisionsResponse:
     prepared: Final = _prepare_request(
         model=model,
         state=state,
+        input=input,
         questions=questions,
         api_key=api_key,
         api_base=api_base,

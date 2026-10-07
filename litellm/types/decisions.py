@@ -62,18 +62,6 @@ class DecisionsRequest(DecisionsRequestBody):
     model: str
 
 
-@with_config(ConfigDict(extra="allow"))
-class DecisionsCallParams(TypedDict, total=False):
-    model: Required[ReadOnly[str]]
-    state: Required[ReadOnly[DecisionsJSON]]
-    questions: Required[ReadOnly[DecisionQuestionMap]]
-    api_key: ReadOnly[str | None]
-    api_base: ReadOnly[str | None]
-    timeout: ReadOnly[float | None]
-    custom_llm_provider: ReadOnly[str | None]
-    extra_headers: ReadOnly[Mapping[str, str] | None]
-
-
 class NoulAnswer(LiteLLMPydanticObjectBase):
     type: Literal["noul"]
     noul: float
@@ -106,6 +94,131 @@ DecisionAnswer: TypeAlias = Annotated[
 ]
 
 
+class OpenAIPredicateQuestion(LiteLLMPydanticObjectBase):
+    type: Literal["predicate"]
+    instructions: str
+    name: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIChoice(LiteLLMPydanticObjectBase):
+    value: str | int | float | bool
+    description: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIChoiceQuestion(LiteLLMPydanticObjectBase):
+    type: Literal["choice"]
+    instructions: str
+    choices: Annotated[Sequence[OpenAIChoice], Field(min_length=1)]
+    name: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIScoreLevel(LiteLLMPydanticObjectBase):
+    description: str
+    label: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIScoreQuestion(LiteLLMPydanticObjectBase):
+    type: Literal["score"]
+    instructions: str
+    levels: Annotated[Sequence[OpenAIScoreLevel], Field(min_length=1)]
+    name: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+OpenAIDecisionQuestion: TypeAlias = Annotated[
+    OpenAIPredicateQuestion | OpenAIChoiceQuestion | OpenAIScoreQuestion,
+    Field(discriminator="type"),
+]
+DecisionsQuestions: TypeAlias = (
+    Mapping[str, DecisionQuestion | Mapping[str, object]] | Sequence[OpenAIDecisionQuestion | Mapping[str, object]]
+)
+
+
+@with_config(ConfigDict(extra="allow"))
+class DecisionsCallParams(TypedDict, total=False):
+    model: Required[ReadOnly[str]]
+    state: ReadOnly[DecisionsJSON]
+    input: ReadOnly[DecisionsJSON]
+    questions: Required[ReadOnly[DecisionsQuestions]]
+    api_key: ReadOnly[str | None]
+    api_base: ReadOnly[str | None]
+    timeout: ReadOnly[float | None]
+    custom_llm_provider: ReadOnly[str | None]
+    extra_headers: ReadOnly[Mapping[str, str] | None]
+
+
+class OpenAIDecisionsRequestBody(LiteLLMPydanticObjectBase):
+    input: DecisionsJSON
+    questions: Annotated[Sequence[OpenAIDecisionQuestion], Field(min_length=1)]
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIPredicateAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["predicate"]
+    probability: float
+    name: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIChoiceProbability(LiteLLMPydanticObjectBase):
+    value: str | int | float | bool
+    probability: float
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIChoiceAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["choice"]
+    choice: str | int | float | bool
+    probabilities: Sequence[OpenAIChoiceProbability]
+    confidence: float
+    name: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIScoreProbability(LiteLLMPydanticObjectBase):
+    value: int
+    probability: float
+    label: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIScoreAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["score"]
+    score: float
+    probabilities: Sequence[OpenAIScoreProbability]
+    confidence: float
+    name: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIRefusalAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["refusal"]
+    name: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+OpenAIDecisionAnswer: TypeAlias = Annotated[
+    OpenAIPredicateAnswer | OpenAIChoiceAnswer | OpenAIScoreAnswer | OpenAIRefusalAnswer,
+    Field(discriminator="type"),
+]
+
+
 class DecisionsUsage(LiteLLMPydanticObjectBase):
     input_tokens: int = 0
     output_tokens: int = 0
@@ -115,7 +228,7 @@ class DecisionsUsage(LiteLLMPydanticObjectBase):
 
 class DecisionsResponse(LiteLLMPydanticObjectBase):
     model: str | None = None
-    answers: Mapping[str, DecisionAnswer]
+    answers: Mapping[str, DecisionAnswer] | Sequence[OpenAIDecisionAnswer]
     usage: DecisionsUsage | None = None
 
     model_config = ConfigDict(extra="allow", frozen=True)

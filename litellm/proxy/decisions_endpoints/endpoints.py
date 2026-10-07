@@ -7,11 +7,13 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.exceptions import BadRequestError
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.types.decisions import DecisionsRequestBody
+from litellm.types.decisions import DecisionsRequestBody, OpenAIDecisionsRequestBody
 
 router: Final = APIRouter()
 _REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
-_DECISIONS_REQUEST_BODY_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
+_DECISIONS_REQUEST_BODY_ADAPTER: Final[TypeAdapter[DecisionsRequestBody | OpenAIDecisionsRequestBody]] = TypeAdapter(
+    DecisionsRequestBody | OpenAIDecisionsRequestBody
+)
 _GENERAL_SETTINGS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _OPTIONAL_FLOAT_ADAPTER: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)

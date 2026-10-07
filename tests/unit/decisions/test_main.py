@@ -599,3 +599,158 @@ async def test_strands_decider_provider_resolution_and_router_dispatch(
     assert provider_resolution[:2] == ("strands-decider-2B-hobson-v19", "strands_decider")
     assert route.called
     assert response.model == _STRANDS_RESPONSE["model"]
+
+
+_OPENAI_QUESTIONS: Final = (
+    {"type": "predicate", "name": "defect", "instructions": "Is this damaged?"},
+    {
+        "type": "choice",
+        "name": "urgent",
+        "instructions": "Is this urgent?",
+        "choices": [{"value": True}, {"value": False}],
+    },
+    {
+        "type": "score",
+        "name": "severity",
+        "instructions": "How severe?",
+        "levels": [{"description": "low"}, {"description": "high"}],
+    },
+)
+_OPENAI_RESPONSE: Final = {
+    "model": "gpt-6-luna",
+    "answers": [
+        {"type": "predicate", "name": "defect", "probability": 0.9},
+        {
+            "type": "choice",
+            "name": "urgent",
+            "choice": True,
+            "confidence": 0.8,
+            "probabilities": [{"value": True, "probability": 0.9}, {"value": False, "probability": 0.1}],
+        },
+        {
+            "type": "score",
+            "name": "severity",
+            "score": 0.8,
+            "confidence": 0.7,
+            "probabilities": [
+                {"value": 0, "label": "low", "probability": 0.2},
+                {"value": 1, "label": "high", "probability": 0.8},
+            ],
+        },
+        {"type": "refusal", "name": "unsafe", "reason": "refused"},
+    ],
+    "usage": {
+        "input_tokens": 367,
+        "output_tokens": 0,
+        "total_tokens": 367,
+        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        "output_tokens_details": {"reasoning_tokens": 0},
+    },
+}
+
+
+@pytest.mark.parametrize("async_call", (False, True))
+@pytest.mark.asyncio
+async def test_openai_decisions_preserves_text_images_answers_and_usage(
+    async_call: bool,
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    input: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Please inspect this"},
+                {"type": "input_image", "image_url": "data:image/png;base64,aW1hZ2U="},
+            ],
+        }
+    ]
+    response: Final = (
+        await litellm.adecisions(
+            model="openai/gpt-6-luna",
+            input=input,
+            questions=_OPENAI_QUESTIONS,
+            api_key="caller-key",
+            internal_kwarg="must-not-leak",
+        )
+        if async_call
+        else litellm.decisions(
+            model="gpt-6-luna",
+            input=input,
+            questions=_OPENAI_QUESTIONS,
+            api_key="caller-key",
+            internal_kwarg="must-not-leak",
+        )
+    )
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": input,
+        "questions": list(_OPENAI_QUESTIONS),
+    }
+    assert route.calls[0].request.headers["authorization"] == "Bearer caller-key"
+    assert response.model_dump(exclude_unset=True) == _OPENAI_RESPONSE
+    assert response.hidden_params["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_openai_decisions_reports_tokens_and_cost_in_standard_logs(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    logger: Final = _RecordingLogger()
+    litellm.callbacks = [logger]
+    await litellm.adecisions(
+        model="openai/gpt-6-luna", input="Broken screen", questions=_OPENAI_QUESTIONS, api_key="caller-key"
+    )
+    await _drain_logging_worker()
+    assert logger.standard_logging_object is not None
+    expected: Final = 367 * float(litellm.model_cost["gpt-6-luna"]["input_cost_per_token"])
+    assert logger.standard_logging_object["prompt_tokens"] == 367
+    assert logger.standard_logging_object["completion_tokens"] == 0
+    assert logger.standard_logging_object["response_cost"] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("api_base", ("https://egress.example", "https://egress.example/v1"))
+def test_openai_decisions_uses_server_key_at_configured_base(
+    api_base: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "server-key")
+    route: Final = respx_mock.post("https://egress.example/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    litellm.decisions(model="openai/gpt-6-luna", input="review", questions=_OPENAI_QUESTIONS, api_base=api_base)
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == "Bearer server-key"
+
+
+@pytest.mark.parametrize("questions", ([], [{"type": "predicate"}], {"invalid": {"type": "noul", "instructions": "?"}}))
+def test_openai_decisions_rejects_invalid_questions_before_http(
+    questions: object,
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request"):
+        litellm.decisions(
+            model="openai/gpt-6-luna",
+            input="review",
+            api_key="caller-key",
+            questions=questions,  # pyright: ignore[reportArgumentType]  # deliberately invalid wire payload
+        )
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize("base_env", ("OPENAI_BASE_URL", "OPENAI_API_BASE"))
+def test_openai_decisions_uses_the_shared_openai_environment_settings(
+    base_env: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setenv(base_env, "https://egress.example/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "server-key")
+    route: Final = respx_mock.post("https://egress.example/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    litellm.decisions(model="gpt-6-luna", input="review", questions=_OPENAI_QUESTIONS)
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == "Bearer server-key"

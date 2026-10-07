@@ -836,3 +836,29 @@ async def test_ahealth_check_without_mode_reports_the_real_failure(
     assert expected_error in result["error"], result["error"]
     assert "Missing `mode`" not in result["error"]
     assert "raw_request_typed_dict" in result
+
+
+@pytest.mark.asyncio
+async def test_openai_evaluation_health_check_uses_native_decisions(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(
+        json={
+            "model": "gpt-6-luna",
+            "answers": [{"type": "predicate", "name": "reachable", "probability": 1.0}],
+            "usage": {"input_tokens": 10, "output_tokens": 0, "total_tokens": 10},
+        }
+    )
+    result: Final = await ahealth_check(
+        {"model": "openai/gpt-6-luna", "api_key": "provider-key", "api_base": "https://api.openai.com/v1"},
+        mode="evaluation",
+    )
+    assert "error" not in result
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": "health check",
+        "questions": [{"type": "predicate", "name": "reachable", "instructions": "Is the service reachable?"}],
+    }
