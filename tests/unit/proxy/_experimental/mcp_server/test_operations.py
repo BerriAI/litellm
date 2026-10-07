@@ -352,7 +352,7 @@ async def test_mcp_server_rpm_limits_every_catalog_operation(operation: str) -> 
     manager_method: Final = operation_to_manager_method[operation]
     manager: Final = operations.global_mcp_server_manager
     rate_limit_error: Final = ProxyRateLimitError(detail="server RPM exceeded")
-    enforce_rate_limit: Final = AsyncMock(side_effect=[None, rate_limit_error])
+    enforce_rate_limit: Final = AsyncMock(side_effect=[None, rate_limit_error, rate_limit_error])
     proxy_logging: Final = MagicMock(enforce_mcp_server_rate_limits=enforce_rate_limit)
     is_protocol_listing: Final = operation.endswith("/list")
     context: Final = prepare_context(caller, mcp_servers=[server.server_id])
@@ -393,12 +393,24 @@ async def test_mcp_server_rpm_limits_every_catalog_operation(operation: str) -> 
                 await invoke()
             assert rejected.value.error.code == INVALID_REQUEST
             assert rejected.value.error.message == "server RPM exceeded"
+            if operation == "tools/list":
+                with pytest.raises(ProxyRateLimitError) as rejected:
+                    await operations._get_tools_from_mcp_servers(
+                        user_api_key_auth=caller,
+                        mcp_auth_header=None,
+                        mcp_servers=[server.server_id],
+                        params=None,
+                    )
+                assert rejected.value is rate_limit_error
+                assert upstream.await_count == 1
+                assert enforce_rate_limit.await_count == 3
         else:
             with pytest.raises(ProxyRateLimitError):
                 await invoke()
 
     assert upstream.await_count == 1
-    assert enforce_rate_limit.await_count == 2
+    if operation != "tools/list":
+        assert enforce_rate_limit.await_count == 2
 
 
 @pytest.mark.asyncio
