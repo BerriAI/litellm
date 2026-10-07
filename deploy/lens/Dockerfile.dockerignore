@@ -10,3 +10,8 @@
 !litellm/proxy/lens/*.py
 !litellm/proxy/lens/prompts/
 !litellm/proxy/lens/prompts/**
+!.cargo/
+!.cargo/**
+!litellm-rust/
+!litellm-rust/**
+litellm-rust/target/
