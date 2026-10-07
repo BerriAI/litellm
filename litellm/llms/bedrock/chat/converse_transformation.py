@@ -221,7 +221,8 @@ class AmazonConverseConfig(BaseConfig):
                 new_content = []
                 for item in content:
                     if isinstance(item, dict) and item.get("type") == "text":
-                        new_item = {"type": "guarded_text", "text": item["text"]}
+                        new_item = {**item}
+                        new_item["type"] = "guarded_text"
                         new_content.append(new_item)
                     else:
                         new_content.append(item)
@@ -229,7 +230,10 @@ class AmazonConverseConfig(BaseConfig):
                 messages_copy[user_message_index]["content"] = new_content
             elif isinstance(content, str):
                 # If content is a string, convert it to guarded_text
-                messages_copy[user_message_index]["content"] = [{"type": "guarded_text", "text": content}]
+                new_item = {"type": "guarded_text", "text": content}
+                if "cache_control" in user_message:
+                    new_item["cache_control"] = user_message["cache_control"]
+                messages_copy[user_message_index]["content"] = [new_item]
 
         return messages_copy
 

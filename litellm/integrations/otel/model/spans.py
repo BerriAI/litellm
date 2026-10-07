@@ -353,6 +353,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_LensRun",
         "LiteLLM_LensReview",
         "LiteLLM_LensWorker",
+        "LiteLLM_BackgroundInteractionSettlement",
     )
 )
 PRISMA_RELATIONS: Final[frozenset[str]] = _PRISMA_MODELS | _PRISMA_VIEWS
