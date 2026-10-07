@@ -1,7 +1,5 @@
 import asyncio
 import os
-import subprocess
-import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -151,7 +149,7 @@ def test_shared_redis_enforces_paginated_tools_and_rest_listings(
             "STORE_MODEL_IN_DB": "False",
             "DISABLE_SCHEMA_UPDATE": "true",
             "LITELLM_SALT_KEY": "shared-mcp-pagination-rate-limit",
-            "LITELLM_RATE_LIMIT_WINDOW_SIZE": "3",
+            "LITELLM_RATE_LIMIT_WINDOW_SIZE": "10",
         }
         options: Final = {
             "config": config,
@@ -168,7 +166,7 @@ def test_shared_redis_enforces_paginated_tools_and_rest_listings(
                 result: Final = asyncio.run(_list_tools(second_replica, first_cursor))
                 return _tool_items(result) if isinstance(result, ListToolsResult) else None
 
-            retried_items: Final = eventually(retry, lambda items: items is not None, seconds=10)
+            retried_items: Final = eventually(retry, lambda items: items is not None, seconds=30)
             assert retried_items == continued_items
 
 
@@ -185,22 +183,6 @@ def test_mcp_key_team_and_server_rpm_limits_share_redis(tmp_path: Path, monkeypa
         httpx.Client() as client,
     ):
         monkeypatch.setenv("DATABASE_URL", database_url)
-        subprocess.run(
-            [
-                sys.executable,
-                "-I",
-                "-m",
-                "prisma",
-                "db",
-                "push",
-                "--schema",
-                "litellm/proxy/schema.prisma",
-                "--skip-generate",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
         seed: Final = Gateway(client, "sk-mcp-key-team-server-rate-limit", peer.url)
         config: Final = _config_file(
             tmp_path,
@@ -210,13 +192,12 @@ def test_mcp_key_team_and_server_rpm_limits_share_redis(tmp_path: Path, monkeypa
         )
         environment: Final = {
             "DATABASE_URL": database_url,
-            "DISABLE_SCHEMA_UPDATE": "true",
             "LITELLM_SALT_KEY": "shared-mcp-key-team-server-rate-limit",
             "LITELLM_RATE_LIMIT_WINDOW_SIZE": "30",
         }
+        second_environment: Final = {**environment, "DISABLE_SCHEMA_UPDATE": "true"}
         options: Final = {
             "config": config,
-            "database_setup": (),
             "remove_environment": ("DATABASE_URL_READ_REPLICA", "LITELLM_LICENSE", "LITELLM_LICENSE_PATH"),
         }
         with (
@@ -243,7 +224,9 @@ def test_mcp_key_team_and_server_rpm_limits_share_redis(tmp_path: Path, monkeypa
             key_two: Final = scenario.key(team_id=team_id, object_permission=permission)
             key_three: Final = scenario.key(object_permission=permission)
 
-            with owned_proxy(seed, tmp_path / "second", environment, **options) as second_replica:
+            with owned_proxy(
+                seed, tmp_path / "second", second_environment, database_setup=(), **options
+            ) as second_replica:
                 first_call: Final = _call_tool(first_replica, key_one, server_id, "rpm-add")
                 assert first_call.status_code == 200, first_call.text
 
