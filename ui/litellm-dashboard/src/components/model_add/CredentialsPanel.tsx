@@ -19,19 +19,7 @@ import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import { toast } from "@/lib/toast";
 import CredentialModal from "./CredentialModal";
 import CredentialsTable from "./CredentialsTable";
-
-const restrictedFields = ["credential_name", "custom_llm_provider"];
-
-const buildCredential = (values: Record<string, unknown>, credentialValues: Record<string, unknown>) => ({
-  credential_name: values.credential_name as string,
-  credential_values: credentialValues,
-  credential_info: {
-    custom_llm_provider: values.custom_llm_provider as string,
-  },
-});
-
-const withoutRestrictedFields = (values: Record<string, unknown>): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(values).filter(([key]) => !restrictedFields.includes(key)));
+import { buildCredential, withoutRestrictedFields } from "./credential_form_helpers";
 
 export default function CredentialsPanel() {
   const { accessToken, userRole } = useAuthorized();
@@ -47,13 +35,16 @@ export default function CredentialsPanel() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isCredentialDeleting, setIsCredentialDeleting] = useState(false);
 
-  const handleUpdateCredential = async (values: Record<string, unknown>) => {
+  const handleUpdateCredential = async (values: Record<string, unknown>, valuesToDelete: readonly string[] = []) => {
     if (!accessToken) {
       return;
     }
     try {
       const newCredential = buildCredential(values, stripMaskedSecrets(withoutRestrictedFields(values)));
-      await credentialUpdateCall(accessToken, values.credential_name as string, newCredential);
+      await credentialUpdateCall(accessToken, values.credential_name as string, {
+        ...newCredential,
+        ...(valuesToDelete.length > 0 ? { credential_values_to_delete: valuesToDelete } : {}),
+      });
       toast.success("Credential updated successfully");
       setIsUpdateModalOpen(false);
       await refetchCredentials();
