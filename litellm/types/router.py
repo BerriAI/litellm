@@ -504,6 +504,14 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         default=False,
         description="Use stored xAI OAuth credentials when no xAI API key is configured.",
     )
+    xai_oauth_token_file: str | None = Field(
+        default=None,
+        description=(
+            "Per-deployment xAI OAuth token file, relative to XAI_OAUTH_TOKEN_DIR or an absolute path inside it. "
+            "With use_xai_oauth=True the deployment authenticates as that account, enabling multi-account "
+            "SuperGrok routing. Deployment config only: the proxy rejects it in request bodies."
+        ),
+    )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
     model_info: dict | None = None

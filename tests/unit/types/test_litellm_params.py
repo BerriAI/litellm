@@ -85,6 +85,7 @@ CONNECTION_NAMES: Final = (
     "litellm_credential_name",
     "configurable_clientside_auth_params",
     "use_xai_oauth",
+    "xai_oauth_token_file",
     "aws_batch_role_arn",
     "s3_bucket_name",
     "s3_region_name",

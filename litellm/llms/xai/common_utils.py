@@ -1,3 +1,4 @@
+from http import HTTPStatus
 from typing import Final
 
 import httpx
@@ -9,6 +10,14 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ProviderSpecificModelInfo
 
 USD_TICKS_PER_DOLLAR: Final = 10_000_000_000
+XAI_SPENDING_LIMIT_ERROR_MARKER: Final = "spending-limit"
+
+
+def xai_error_status_code(status_code: int, error_message: str) -> int:
+    """xAI rejects requests past an account's spending limit with a 403; report it as a 429 so routers fail over"""
+    if status_code == HTTPStatus.FORBIDDEN and XAI_SPENDING_LIMIT_ERROR_MARKER in error_message:
+        return HTTPStatus.TOO_MANY_REQUESTS.value
+    return status_code
 
 
 def xai_reported_cost_in_usd(cost_in_usd_ticks: object) -> float | None:
