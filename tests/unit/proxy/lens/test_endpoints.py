@@ -31,6 +31,7 @@ from litellm.proxy.lens.endpoints import (
 from litellm.proxy.lens.models import (
     ActivitySelection,
     Coverage,
+    Execution,
     Lens,
     LensSettings,
     Result,
@@ -48,8 +49,13 @@ from litellm.proxy.lens.state import claim_job, queue_job, replace_job
 from litellm.rust_bridge.trace.generated.models import ExecutionRow, LensSampleParams
 from litellm.rust_bridge.trace.storage import ClickHouseStorage
 from litellm.tracing.remote import RemoteTraceStore
-from tests.unit.proxy.lens.test_agent_workspace import execution
 from tests.unit.proxy.lens.test_state import NOW, lens, worker
+
+
+def execution(identity: str) -> Execution:
+    return Execution(
+        id=identity, source="traces", trace_id=identity, team_id="", name=identity, start_time="", span_count=1
+    )
 
 
 class ResultDatabase:
@@ -656,11 +662,9 @@ def test_run_now_with_a_lookback_scans_that_lookback_instead_of_since_last_run()
 
 @pytest.mark.parametrize("provider", (False, True))
 def test_model_errors_reach_worker_with_status_and_redacted_provider_message(provider: bool) -> None:
-    import httpx
 
     from litellm.proxy._types import ProxyException
     from litellm.proxy.lens.endpoints import model_failure
-    from litellm.proxy.lens.worker import failure_message
 
     message: Final = "Token rate limit exceeded. api_key=secret-example-value-123456 Retry in 60 seconds."
     error: Final = model_failure(
@@ -668,15 +672,10 @@ def test_model_errors_reach_worker_with_status_and_redacted_provider_message(pro
         if provider
         else HTTPException(429, message, headers={"retry-after": "60"})
     )
-    request: Final = httpx.Request("POST", "https://proxy.test/lens/worker/lens/run/model")
-    response: Final = httpx.Response(error.status_code, json={"detail": error.detail}, request=request)
-    with pytest.raises(httpx.HTTPStatusError) as caught:
-        response.raise_for_status()
-    diagnostic: Final = failure_message(caught.value)
-    assert diagnostic.startswith("Model request failed (HTTP 429):")
-    assert "Token rate limit exceeded." in diagnostic
-    assert "Retry in 60 seconds." in diagnostic
-    assert "secret-example" not in diagnostic
+    assert error.status_code == 429
+    assert "Token rate limit exceeded." in error.detail["lens_error"]
+    assert "Retry in 60 seconds." in error.detail["lens_error"]
+    assert "secret-example" not in error.detail["lens_error"]
     assert error.headers == {"retry-after": "60"}
 
 

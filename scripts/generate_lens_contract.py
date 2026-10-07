@@ -5,11 +5,17 @@ from typing import Final
 
 from pydantic import BaseModel, JsonValue
 
-from litellm.proxy.lens.agent_context import Checkpoint
-from litellm.proxy.lens.agent_review import Findings
-from litellm.proxy.lens.agent_runtime import PythonAgentTurn
-from litellm.proxy.lens.agent_workspace import EvidenceReply, EvidenceRequest, PythonRequest
-from litellm.proxy.lens.analysis import Candidate, Clusters
+from litellm.proxy.lens.agent_contract import (
+    Candidate,
+    Checkpoint,
+    Clusters,
+    EvidenceReply,
+    EvidenceRequest,
+    FindingGroups,
+    Findings,
+    PythonAgentTurn,
+    PythonRequest,
+)
 from litellm.proxy.lens.models import (
     Claim,
     ExecutionContent,
@@ -20,7 +26,6 @@ from litellm.proxy.lens.models import (
     Result,
     Sample,
 )
-from litellm.proxy.lens.reconciliation import FindingGroups
 from litellm.proxy.lens.release import PROTOCOL_VERSION
 
 MODELS: Final[tuple[type[BaseModel], ...]] = (

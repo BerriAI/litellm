@@ -205,6 +205,7 @@ The Rust receiver bounds each upload and its decompressed body to 16 MiB and per
 Run the checked-in cases against a configured real model. Expected labels are used only for scoring, never passed to the model. Dev and held-out cases include missing outcomes, failed tools, recovery, handoffs, unsupported claims, repeated work, long evidence and prompt injection. The background option adds clean arithmetic traces to test rare-issue discovery at scale; those repeated synthetic cases do not establish accuracy on every production workload
 
 ```bash
+cargo build --manifest-path litellm-rust/Cargo.toml -p litellm-lens --example worker_once --locked
 python -m tests.proxy_behavior.lens.evaluate --api-base "$LITELLM_URL" \
   --model your-model-alias --split all --background 1000 --concurrency 16 \
   --output /tmp/lens-quality.json
