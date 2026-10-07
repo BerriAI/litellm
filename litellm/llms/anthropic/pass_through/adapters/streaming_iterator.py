@@ -336,8 +336,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self._message_id: str = f"msg_{uuid.uuid4()}"
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
-        # Read back at the mid-stream error boundary to tell a proxy-managed
-        # stream from standalone SDK consumption.
         self.litellm_logging_obj = litellm_logging_obj
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
@@ -1046,22 +1044,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
             verbose_logger.exception("Anthropic Adapter - mid-stream error: %s", e)
             logging_obj: Final = self.litellm_logging_obj
-            detached_failure_hook: Final = (
-                getattr(logging_obj, "_on_detached_stream_failure", None) if logging_obj is not None else None
-            )
-            if detached_failure_hook is not None:
-                # The proxy's streaming boundary owns failure bookkeeping for this
-                # stream: it writes the failure spend row, runs the failure
-                # callbacks, and serializes the error frame. Re-raise so that runs
-                # exactly once instead of being duplicated here.
+            if logging_obj is not None and logging_obj.on_detached_stream_failure is not None:
                 raise
             if logging_obj is not None:
-                # Standalone SDK consumption has no proxy boundary downstream, so
-                # dispatch_failure_handlers (not async_failure_handler) is what
-                # covers both litellm.failure_callback and
-                # litellm._async_failure_callback. Preferring the async handlers
-                # keeps this from falling into the sync-SDK shortcut, which would
-                # block the event loop.
                 try:
                     await logging_obj.dispatch_failure_handlers(
                         exception=e,

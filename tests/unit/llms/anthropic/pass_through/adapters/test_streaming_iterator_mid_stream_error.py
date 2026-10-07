@@ -154,8 +154,7 @@ class _RecordingLoggingObj:
         self.recorded_message_ids: list[str] = []
         self.failure_calls: list[BaseException] = []
         self.sync_failure_callback_ran = False
-        if proxy_managed:
-            self._on_detached_stream_failure = self._detached_failure_hook
+        self.on_detached_stream_failure = self._detached_failure_hook if proxy_managed else None
 
     async def _detached_failure_hook(self, exc: BaseException) -> None:
         return None
@@ -186,7 +185,7 @@ def _failing_wrapper(logging_obj) -> AnthropicStreamWrapper:
 
 @pytest.mark.asyncio
 async def test_mid_stream_error_reraises_for_proxy_managed_stream():
-    """The proxy arms ``_on_detached_stream_failure`` on the logging object, which
+    """The proxy arms ``on_detached_stream_failure`` on the logging object, which
     makes its streaming boundary the owner of failure bookkeeping. Re-raising lets
     that boundary write the failure spend row and serialize the error frame, so the
     adapter must neither swallow the error nor report it a second time."""
