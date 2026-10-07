@@ -64,6 +64,22 @@ describe("useTraceAgents", () => {
     expect(spies.agents).toHaveBeenCalledWith({ startMs: RANGE.anchorMs - 24 * 3_600_000, endMs: RANGE.anchorMs });
   });
 
+  it("asks again with the new window when the range changes", async () => {
+    const { api, spies } = fakeApi(
+      async () => ({ data: [], next_cursor: null }),
+      async ({ endMs }) => (endMs === RANGE.anchorMs ? ["claude-code"] : ["research-agent"]),
+    );
+    const { result, rerender } = renderHook(
+      ({ range }) => useTraceAgents({ accessToken: "sk", range, enabled: true }),
+      { wrapper: wrapperFor(api), initialProps: { range: RANGE } },
+    );
+    await waitFor(() => expect(result.current).toEqual(["claude-code"]));
+    const earlier = { hours: 1, anchorMs: RANGE.anchorMs - 3_600_000 };
+    rerender({ range: earlier });
+    await waitFor(() => expect(result.current).toEqual(["research-agent"]));
+    expect(spies.agents).toHaveBeenLastCalledWith({ startMs: earlier.anchorMs - 3_600_000, endMs: earlier.anchorMs });
+  });
+
   it("falls back to no extra agents when the list cannot be read", async () => {
     const { api, spies } = fakeApi(
       async () => ({ data: [], next_cursor: null }),
