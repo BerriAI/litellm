@@ -15711,9 +15711,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "provider_specific_entry": {
-            "fast": 2.0
-        },
+        "provider_specific_entry": {"us":1.1,"fast":2},
         "supports_output_config": true,
         "supports_speed": true,
         "supports_fast_mode": true,
