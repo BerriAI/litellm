@@ -5678,6 +5678,7 @@ class BaseDailySpendTransaction(TypedDict):
     failed_requests: int
     total_response_time_ms: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
     timed_requests: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
+    timed_completion_tokens: NotRequired[int | None]
 
 
 class DailyTeamSpendTransaction(BaseDailySpendTransaction):

@@ -366,6 +366,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "autorouter_savings_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
+        "timed_completion_tokens": 0,
         "failed_requests": 0,
     }
     mock_rows = [
@@ -950,6 +951,7 @@ def test_update_breakdown_metrics_includes_user_email():
         autorouter_savings_spend=0,
         total_response_time_ms=0,
         timed_requests=0,
+        timed_completion_tokens=0,
         total_tokens=2,
         api_requests=1,
         successful_requests=1,
@@ -1031,6 +1033,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_1.autorouter_savings_spend = 0.0
     mock_record_1.total_response_time_ms = 18_000
     mock_record_1.timed_requests = 9
+    mock_record_1.timed_completion_tokens = 200
     mock_record_1.api_requests = 10
     mock_record_1.successful_requests = 9
     mock_record_1.failed_requests = 1
@@ -1057,6 +1060,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_2.autorouter_savings_spend = 0.0
     mock_record_2.total_response_time_ms = 2_500
     mock_record_2.timed_requests = 5
+    mock_record_2.timed_completion_tokens = 100
     mock_record_2.api_requests = 5
     mock_record_2.successful_requests = 5
     mock_record_2.failed_requests = 0
@@ -1129,6 +1133,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "autorouter_savings_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
+        "timed_completion_tokens": 0,
         "failed_requests": 0,
     }
     mock_rows = [
@@ -1225,6 +1230,7 @@ async def test_aggregated_activity_flags_only_keys_that_key_info_can_still_resol
         "autorouter_savings_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
+        "timed_completion_tokens": 0,
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
@@ -1295,6 +1301,7 @@ def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_gr
         autorouter_savings_spend=0.0,
         total_response_time_ms=0,
         timed_requests=0,
+        timed_completion_tokens=0,
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
@@ -1444,6 +1451,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "autorouter_savings_spend": None,
             "total_response_time_ms": None,
             "timed_requests": None,
+            "timed_completion_tokens": None,
             "api_requests": None,
             "successful_requests": None,
             "failed_requests": None,
@@ -1492,6 +1500,7 @@ def _no_spend_record():
         autorouter_savings_spend=None,
         total_response_time_ms=None,
         timed_requests=None,
+        timed_completion_tokens=None,
         api_requests=None,
         successful_requests=None,
         failed_requests=None,
@@ -1631,6 +1640,7 @@ def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=
         autorouter_savings_spend=0,
         total_response_time_ms=0,
         timed_requests=0,
+        timed_completion_tokens=0,
         total_tokens=0,
         api_requests=0,
         successful_requests=0,
@@ -1675,6 +1685,10 @@ def _grouping_row(
     endpoint=None,
     spend=0.0,
     ptu_flat_cost=0.0,
+    completion_tokens=0,
+    timed_completion_tokens=0,
+    total_response_time_ms=0,
+    timed_requests=0,
 ):
     return GroupingSetsRow(
         date="2024-01-01",
@@ -1689,7 +1703,8 @@ def _grouping_row(
         spend=spend,
         ptu_flat_cost=ptu_flat_cost,
         prompt_tokens=0,
-        completion_tokens=0,
+        completion_tokens=completion_tokens,
+        timed_completion_tokens=timed_completion_tokens,
         cache_read_input_tokens=0,
         cache_creation_input_tokens=0,
         compression_saved_tokens=0,
@@ -1697,8 +1712,8 @@ def _grouping_row(
         prompt_caching_savings_spend=0.0,
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
-        total_response_time_ms=0,
-        timed_requests=0,
+        total_response_time_ms=total_response_time_ms,
+        timed_requests=timed_requests,
         api_requests=0,
         successful_requests=0,
         failed_requests=0,
@@ -1794,6 +1809,108 @@ def test_grouping_sets_dispatcher_populates_every_breakdown_level(ptu_cost_attri
     assert "real-key" in day.breakdown.endpoints["/v1/chat/completions"].api_key_breakdown
 
 
+def test_grouping_sets_dispatcher_returns_provider_throughput_for_models_and_model_groups():
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_MODEL_GROUP_PROVIDER,
+        _GROUP_DATE_MODEL_PROVIDER,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [
+        _grouping_row(
+            _GROUP_DATE_MODEL_PROVIDER,
+            model="gpt-4o",
+            custom_llm_provider="openai",
+            completion_tokens=1900,
+            timed_completion_tokens=900,
+            total_response_time_ms=3000,
+            timed_requests=3,
+        ),
+        _grouping_row(
+            _GROUP_DATE_MODEL_PROVIDER,
+            model="gpt-4o",
+            custom_llm_provider="azure",
+            completion_tokens=400,
+            timed_completion_tokens=400,
+            total_response_time_ms=2000,
+            timed_requests=2,
+        ),
+        _grouping_row(
+            _GROUP_DATE_MODEL_GROUP_PROVIDER,
+            model_group="public-gpt-4o",
+            custom_llm_provider="openai",
+            completion_tokens=900,
+            timed_completion_tokens=900,
+            total_response_time_ms=3000,
+            timed_requests=3,
+        ),
+    ]
+
+    day = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})["results"][0]
+
+    assert day.breakdown.models["gpt-4o"].provider_breakdown["openai"].model_dump() == {
+        "timed_completion_tokens": 900,
+        "total_response_time_ms": 3000,
+        "timed_requests": 3,
+        "output_tokens_per_second": 300.0,
+    }
+    assert day.breakdown.models["gpt-4o"].provider_breakdown["azure"].output_tokens_per_second == 200.0
+    assert day.breakdown.model_groups["public-gpt-4o"].provider_breakdown["openai"].output_tokens_per_second == 300.0
+
+
+def test_grouping_sets_dispatcher_returns_zero_for_timed_requests_without_completion_tokens():
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_MODEL_PROVIDER,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [
+        _grouping_row(
+            _GROUP_DATE_MODEL_PROVIDER,
+            model="gpt-4o",
+            completion_tokens=900,
+            timed_completion_tokens=0,
+            total_response_time_ms=3000,
+            timed_requests=1,
+        )
+    ]
+
+    day = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})["results"][0]
+
+    assert day.breakdown.models["gpt-4o"].provider_breakdown["openai"].output_tokens_per_second == 0.0
+
+
+def test_grouping_sets_dispatcher_returns_no_throughput_for_legacy_rows_without_timed_tokens():
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_MODEL_PROVIDER,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [
+        _grouping_row(
+            _GROUP_DATE_MODEL_PROVIDER,
+            model="gpt-4o",
+            completion_tokens=900,
+            timed_completion_tokens=None,
+            total_response_time_ms=3000,
+            timed_requests=1,
+        )
+    ]
+
+    day = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})["results"][0]
+
+    assert day.breakdown.models["gpt-4o"].provider_breakdown["openai"].output_tokens_per_second is None
+
+
+def test_combined_timed_tokens_propagates_unknown_measurements():
+    from litellm.proxy.management_endpoints.common_daily_activity import _combined_timed_completion_tokens
+    from litellm.types.proxy.management_endpoints.common_daily_activity import ProviderThroughputMetrics
+
+    existing = ProviderThroughputMetrics(timed_completion_tokens=10)
+
+    assert _combined_timed_completion_tokens(existing, None) is None
+
+
 def test_grouping_sets_dispatcher_keeps_ptu_flat_cost_out_of_the_provider_breakdown():
     """Sentinel rows carry no provider, so their flat cost must not surface under the
     "unknown" provider - the per-row path skips them for exactly the same reason."""
@@ -1851,7 +1968,7 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
         endpoint="/v1/chat/completions",
         spend=5.0,
         prompt_tokens=0,
-        completion_tokens=0,
+        completion_tokens=600,
         cache_read_input_tokens=0,
         cache_creation_input_tokens=0,
         compression_saved_tokens=0,
@@ -1859,8 +1976,9 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
-        total_response_time_ms=0,
-        timed_requests=0,
+        total_response_time_ms=2000,
+        timed_requests=2,
+        timed_completion_tokens=600,
         total_tokens=0,
         api_requests=0,
         successful_requests=0,
@@ -1874,6 +1992,8 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
     assert "real-key" in breakdown.mcp_servers["srv/tool"].api_key_breakdown
     assert "/v1/chat/completions" in breakdown.endpoints
     assert "azure" in breakdown.providers
+    assert breakdown.models["gpt-4o-mini-ptu"].provider_breakdown["azure"].output_tokens_per_second == 300.0
+    assert breakdown.model_groups["grp"].provider_breakdown["azure"].output_tokens_per_second == 300.0
     assert "team-1" in breakdown.entities
     assert "real-key" in breakdown.entities["team-1"].api_key_breakdown
 
@@ -2216,6 +2336,7 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
         "autorouter_savings_spend": 0.0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
+        "timed_completion_tokens": 0,
         "failed_requests": 0,
         "prompt_tokens": 0,
         "completion_tokens": 0,

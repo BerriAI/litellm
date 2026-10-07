@@ -91,6 +91,7 @@ _COUNTER_COLUMNS: Final = (
     "compression_saved_tokens",
     "total_response_time_ms",
     "timed_requests",
+    "timed_completion_tokens",
 )
 _SPEND_COLUMNS: Final = (
     "spend",
@@ -124,6 +125,23 @@ def _as_float(value: object) -> float:
     return float(value) if isinstance(value, (int, float)) else 0.0
 
 
+def _counter_total(column: str, group: Sequence[SpendRow]) -> int | None:
+    values: Final = tuple(row.get(column) for row in group)
+    has_unknown_timed_tokens: Final = column == "timed_completion_tokens" and any(
+        row.get("timed_completion_tokens") is None and _as_int(row.get("timed_requests")) > 0 for row in group
+    )
+    if has_unknown_timed_tokens:
+        return None
+    return sum(_as_int(value) for value in values)
+
+
+def _counter_value(column: str, transaction: SpendRow) -> int | None:
+    value: Final = transaction.get(column)
+    if column == "timed_completion_tokens" and value is None and _as_int(transaction.get("timed_requests")) > 0:
+        return None
+    return _as_int(value)
+
+
 def conflict_key(table: DailySpendTable, transaction: SpendRow) -> tuple[str, ...]:
     """The tuple the database arbitrates the upsert on, normalized free of NULLs."""
     return tuple(_as_text(transaction.get(column)) for column in (table.entity_id_column, *_KEY_COLUMNS))
@@ -134,7 +152,7 @@ def _merge(group: Sequence[SpendRow]) -> SpendRow:
         return group[0]
     return {
         **group[0],
-        **{column: sum(_as_int(row.get(column)) for row in group) for column in _COUNTER_COLUMNS},
+        **{column: _counter_total(column, group) for column in _COUNTER_COLUMNS},
         **{column: sum(_as_float(row.get(column)) for row in group) for column in _SPEND_COLUMNS},
     }
 
@@ -165,7 +183,7 @@ def _row_params(
         str(uuid.uuid4()),
         *key,
         None if transaction.get("model_group") is None else _as_text(transaction.get("model_group")),
-        *(_as_int(transaction.get(column)) for column in _COUNTER_COLUMNS),
+        *(_counter_value(column, transaction) for column in _COUNTER_COLUMNS),
         *(_as_float(transaction.get(column)) for column in _SPEND_COLUMNS),
         *((None if request_id is None else _as_text(request_id),) if table.carries_request_id else ()),
     )
@@ -199,9 +217,18 @@ def build_bulk_upsert(
         + ", (NOW() AT TIME ZONE 'UTC'))"
         for row_index in range(len(batch))
     )
-    increments: Final = ", ".join(
-        f'"{column}" = {quoted_table}."{column}" + EXCLUDED."{column}"'
-        for column in (*_COUNTER_COLUMNS, *_SPEND_COLUMNS)
+    regular_increment_columns: Final = tuple(
+        column for column in (*_COUNTER_COLUMNS, *_SPEND_COLUMNS) if column != "timed_completion_tokens"
+    )
+    regular_increments: Final = ", ".join(
+        f'"{column}" = {quoted_table}."{column}" + EXCLUDED."{column}"' for column in regular_increment_columns
+    )
+    timed_completion_tokens_increment: Final = (
+        f'"timed_completion_tokens" = CASE '
+        f'WHEN ({quoted_table}."timed_requests" > 0 AND {quoted_table}."timed_completion_tokens" IS NULL) '
+        'OR (EXCLUDED."timed_requests" > 0 AND EXCLUDED."timed_completion_tokens" IS NULL) THEN NULL '
+        f'ELSE COALESCE({quoted_table}."timed_completion_tokens", 0) '
+        '+ COALESCE(EXCLUDED."timed_completion_tokens", 0) END'
     )
     # request_id names one arbitrary contributing request, so an entry carrying none must
     # not blank out the one already recorded.
@@ -214,7 +241,7 @@ def build_bulk_upsert(
         f'INSERT INTO {quoted_table} ({_quoted(columns)}, "updated_at")\n'
         f"VALUES {rows}\n"
         f"ON CONFLICT ({_quoted((table.entity_id_column, *_KEY_COLUMNS))}) DO UPDATE SET\n"
-        f"  {increments}{request_id_update},\n"
+        f"  {regular_increments}, {timed_completion_tokens_increment}{request_id_update},\n"
         f"  \"updated_at\" = (NOW() AT TIME ZONE 'UTC')"
     )
     return sql, tuple(value for key, transaction in batch for value in _row_params(table, key, transaction))

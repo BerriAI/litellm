@@ -38432,6 +38432,10 @@ export interface components {
                 [key: string]: unknown;
             };
             metrics: components["schemas"]["SpendMetrics"];
+            /** Provider Breakdown */
+            provider_breakdown?: {
+                [key: string]: components["schemas"]["ProviderThroughputMetrics"];
+            };
         };
         /** Mode */
         Mode: {
@@ -41727,6 +41731,23 @@ export interface components {
             required: boolean;
             /** Tooltip */
             tooltip?: string | null;
+        };
+        /** ProviderThroughputMetrics */
+        ProviderThroughputMetrics: {
+            /** Output Tokens Per Second */
+            output_tokens_per_second?: number | null;
+            /** Timed Completion Tokens */
+            timed_completion_tokens?: number | null;
+            /**
+             * Timed Requests
+             * @default 0
+             */
+            timed_requests: number;
+            /**
+             * Total Response Time Ms
+             * @default 0
+             */
+            total_response_time_ms: number;
         };
         /**
          * ProxyChatCompletionRequest

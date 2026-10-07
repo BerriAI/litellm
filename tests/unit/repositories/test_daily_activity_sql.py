@@ -237,6 +237,7 @@ def test_aggregate_query_sums_all_savings_drivers_and_response_time() -> None:
     fields: Final = tuple(field for field in SpendMetrics.model_fields if field.endswith("_savings_spend")) + (
         "total_response_time_ms",
         "timed_requests",
+        "timed_completion_tokens",
     )
 
     assert fields

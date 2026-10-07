@@ -871,6 +871,7 @@ model LiteLLM_DailyUserSpend {
   failed_requests     BigInt      @default(0)
   total_response_time_ms BigInt   @default(0)
   timed_requests      BigInt      @default(0)
+  timed_completion_tokens BigInt?
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -940,6 +941,7 @@ model LiteLLM_DailyOrganizationSpend {
   failed_requests     BigInt      @default(0)
   total_response_time_ms BigInt   @default(0)
   timed_requests      BigInt      @default(0)
+  timed_completion_tokens BigInt?
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -978,6 +980,7 @@ model LiteLLM_DailyEndUserSpend {
   failed_requests     BigInt      @default(0)
   total_response_time_ms BigInt   @default(0)
   timed_requests      BigInt      @default(0)
+  timed_completion_tokens BigInt?
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
   @@unique([end_user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
@@ -1015,6 +1018,7 @@ model LiteLLM_DailyAgentSpend {
   failed_requests     BigInt      @default(0)
   total_response_time_ms BigInt   @default(0)
   timed_requests      BigInt      @default(0)
+  timed_completion_tokens BigInt?
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
   @@unique([agent_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
@@ -1052,6 +1056,7 @@ model LiteLLM_DailyTeamSpend {
   failed_requests     BigInt      @default(0)
   total_response_time_ms BigInt   @default(0)
   timed_requests      BigInt      @default(0)
+  timed_completion_tokens BigInt?
   ptu_flat_cost       Float    @default(0.0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
@@ -1092,6 +1097,7 @@ model LiteLLM_DailyTagSpend {
   failed_requests     BigInt      @default(0)
   total_response_time_ms BigInt   @default(0)
   timed_requests      BigInt      @default(0)
+  timed_completion_tokens BigInt?
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
