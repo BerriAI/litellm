@@ -30,7 +30,6 @@ export interface TraceWindow {
 }
 
 export interface TraceListRequest extends TraceWindow {
-  /** Only runs this agent took part in; empty or missing lists every run. */
   readonly agent?: string;
 }
 
@@ -44,7 +43,6 @@ export interface TracesApi {
   readonly live: boolean;
   handoff(traceId: string, spanId?: string | null, traceRef?: string): TraceHandoff;
   list(request: TraceListRequest): Promise<TracePage>;
-  /** Every agent with a run in the window, for the agent filter. */
   agents(window: TraceWindow): Promise<readonly string[]>;
   findings(traces: TraceFindingsRequest["traces"]): Promise<TraceFindingCount[]>;
   signals(traces: TraceFindingsRequest["traces"]): Promise<TraceSignals[]>;
