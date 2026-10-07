@@ -2498,8 +2498,6 @@ async def test_user_rate_limit_update_reaches_cached_user_on_every_worker(
         )
         assert prisma_client.update_data_payload is not None
         assert prisma_client.update_data_payload[field] == new_limit
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
 
     remote_subscriber: Final = AuthCacheInvalidationSubscriber(
         redis_cache=cast("RedisCache", _FakeRedisCache()),
