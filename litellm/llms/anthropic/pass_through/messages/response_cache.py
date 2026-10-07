@@ -45,7 +45,7 @@ class AnthropicMessagesStreamCacheWriter:
         self.collected_chunks: list[bytes] = []  # mutable-ok: rebuilding a tuple per SSE chunk is quadratic
         self.persisted = False
         self._hidden_params: dict[str, object] = dict(  # mutable-ok: callers stamp cache_key in here
-            stream._hidden_params if isinstance(stream, AnthropicMessagesStreamingResponse) else _EMPTY_MAPPING
+            stream.hidden_params if isinstance(stream, AnthropicMessagesStreamingResponse) else _EMPTY_MAPPING
         )
 
     @property
@@ -94,7 +94,7 @@ class AnthropicMessagesStreamCacheWriter:
             return
         self.persisted = True
 
-        if not self.caching_handler._should_store_result_in_cache(
+        if not self.caching_handler.should_store_result_in_cache(
             original_function=self.caching_handler.original_function,
             kwargs=self.caching_handler.request_kwargs,
         ):

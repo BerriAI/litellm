@@ -159,10 +159,23 @@ fn exported_tool_results(attributes: &BTreeMap<String, String>) -> String {
     let Ok(body) = serde_json::from_str::<Value>(attr(attributes, "body")) else {
         return json!({"warning": "Claude's API body export is missing or truncated. Some tool results may be unavailable."}).to_string();
     };
-    let results: Vec<Value> = body.get("messages").and_then(Value::as_array)
-        .and_then(|messages| messages.last())
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .and_then(|message| message.get("content").and_then(Value::as_array))
+    let message = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .and_then(|messages| {
+            messages
+                .iter()
+                .rev()
+                .find(|message| message.get("role").and_then(Value::as_str) != Some("system"))
+        })
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"));
+    let Some(content) = message.and_then(|message| message.get("content")) else {
+        return json!({"warning": "Claude's API body export has an unexpected message shape. Some tool results may be unavailable."}).to_string();
+    };
+    if !content.is_array() && !content.is_string() {
+        return json!({"warning": "Claude's API body export has an unexpected content shape. Some tool results may be unavailable."}).to_string();
+    }
+    let results: Vec<Value> = content.as_array()
         .into_iter()
         .flatten()
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))

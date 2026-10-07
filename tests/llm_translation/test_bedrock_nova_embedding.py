@@ -10,13 +10,9 @@ Tests cover:
 - Error handling
 """
 
-import json
-from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-
-import litellm
 from litellm.llms.bedrock.embed.amazon_nova_transformation import (
     AmazonNovaEmbeddingConfig,
 )
@@ -532,100 +528,11 @@ class TestNovaTransformationResponse:
 class TestNovaEmbeddingIntegration:
     """Integration tests for Nova embeddings through LiteLLM."""
 
-    @pytest.mark.skip(reason="Requires AWS credentials and actual API calls")
-    def test_sync_text_embedding_e2e(self):
-        """End-to-end test for synchronous text embedding."""
-        response = litellm.embedding(
-            model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
-            input=["Hello, world!"],
-            aws_region_name="us-east-1",
-        )
 
-        assert response is not None
-        assert len(response.data) == 1
-        assert len(response.data[0].embedding) > 0
 
-    @pytest.mark.skip(reason="Requires AWS credentials and actual API calls")
-    def test_async_text_embedding_e2e(self):
-        """End-to-end test for asynchronous text embedding."""
-        response = litellm.embedding(
-            model="bedrock/async_invoke/amazon.nova-2-multimodal-embeddings-v1:0",
-            input=["Long text content for segmentation..."],
-            aws_region_name="us-east-1",
-            output_s3_uri="s3://my-bucket/output/",
-            segmentation_config={"maxLengthChars": 10000},
-        )
 
-        assert response is not None
-        assert hasattr(response, "_hidden_params")
-        assert hasattr(response._hidden_params, "_invocation_arn")
 
-    @pytest.mark.skip(reason="Requires AWS credentials and actual API calls")
-    def test_image_embedding_e2e(self):
-        """End-to-end test for image embedding."""
-        response = litellm.embedding(
-            model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
-            input=["s3://my-bucket/image.png"],
-            aws_region_name="us-east-1",
-            input_type="image",
-            format="png",
-            embedding_purpose="IMAGE_RETRIEVAL",
-        )
 
-        assert response is not None
-        assert len(response.data) == 1
-
-    @pytest.mark.skip(reason="Requires AWS credentials and actual API calls")
-    def test_video_embedding_e2e(self):
-        """End-to-end test for video embedding."""
-        response = litellm.embedding(
-            model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
-            input=["s3://my-bucket/video.mp4"],
-            aws_region_name="us-east-1",
-            input_type="video",
-            format="mp4",
-            embedding_mode="AUDIO_VIDEO_COMBINED",
-            embedding_purpose="VIDEO_RETRIEVAL",
-        )
-
-        assert response is not None
-        assert len(response.data) == 1
-
-    @pytest.mark.skip(reason="Requires AWS credentials and actual API calls")
-    def test_different_dimensions(self):
-        """Test different embedding dimensions."""
-        for dimension in [256, 384, 1024, 3072]:
-            response = litellm.embedding(
-                model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
-                input=["Test text"],
-                aws_region_name="us-east-1",
-                dimensions=dimension,
-            )
-
-            assert response is not None
-            assert len(response.data[0].embedding) == dimension
-
-    @pytest.mark.skip(reason="Requires AWS credentials and actual API calls")
-    def test_different_embedding_purposes(self):
-        """Test different embedding purposes."""
-        purposes = [
-            "GENERIC_INDEX",
-            "GENERIC_RETRIEVAL",
-            "TEXT_RETRIEVAL",
-            "CLASSIFICATION",
-            "CLUSTERING",
-        ]
-
-        for purpose in purposes:
-            response = litellm.embedding(
-                model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
-                input=["Test text"],
-                aws_region_name="us-east-1",
-                embedding_purpose=purpose,
-            )
-
-            assert response is not None
-            assert len(response.data) == 1
 
 
 class TestNovaProviderDetection:
