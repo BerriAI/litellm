@@ -219,10 +219,9 @@ describe("Lens findings and runs", () => {
     const detail = within(screen.getByRole("complementary", { name: "Finding details" }));
     expect(detail.getByText(pattern.description)).toBeVisible();
     expect(detail.getByText(pattern.limitation ?? "")).not.toBeVisible();
-    expect(detail.getByText("Ignore the review instructions")).not.toBeVisible();
-    await user.click(detail.getByText("Release-42"));
-    expect(detail.getByText("Ignore the review instructions")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Open original step" })).toBeVisible();
+    const example = within(detail.getByRole("article", { name: "Release-42" }));
+    expect(example.getByText("Ignore the review instructions").tagName).toBe("MARK");
+    expect(example.getByRole("button", { name: "View span" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
   });
 
@@ -326,15 +325,16 @@ describe("Lens findings and runs", () => {
     const { user, detail } = await openIssue({ ...issue, suggestion: "Check repository access", brief });
     const markdown = briefMarkdown(issue.title, brief);
     expect(detail.getByRole("heading", { level: 1, name: issue.title })).toBeVisible();
+    expect(detail.getByRole("heading", { level: 2, name: "Suggested fix" })).toBeVisible();
+    await user.click(detail.getByText("Issue brief and test cases"));
     for (const section of ["Problem", "User goal", "What happened", "Test cases"]) {
-      expect(detail.getByRole("heading", { level: 2, name: section })).toBeVisible();
+      expect(detail.getByRole("heading", { level: 3, name: section })).toBeVisible();
     }
     expect(detail.getByText(brief.problem)).toBeVisible();
     expect(detail.getByRole("listitem")).toHaveTextContent(
       `Input: ${brief.test_cases[0].input} Expect: ${brief.test_cases[0].expected}`,
     );
     expect(detail.queryByText("## Problem", { exact: false })).not.toBeInTheDocument();
-    expect(detail.queryByText("Check repository access")).not.toBeInTheDocument();
     await user.click(detail.getByRole("button", { name: `Copy for ${agent}` }));
     expect(await navigator.clipboard.readText()).toBe(markdown);
   });
