@@ -914,3 +914,66 @@ async def test_request_scoped_exclusion_preserves_session_pin():
     assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-a"}, (
         "a request-only exclusion must not drop the pin, so ordinary turns keep the warm deployment"
     )
+
+
+@pytest.mark.asyncio
+async def test_team_scoped_request_preserves_session_pin():
+    """A team-scoped turn that excludes the pinned deployment must not migrate the session."""
+    cache: Final = DualCache()
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+    deployments: Final = [
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-a"},
+            "model_info": {"id": "dep-a"},
+        },
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-b"},
+            "model_info": {"id": "dep-b"},
+        },
+    ]
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-a"})
+
+    team_kwargs: Final = {"metadata": {"session_id": "s1", "user_api_key_team_id": "team-1"}}
+    filtered: Final = await callback.async_filter_deployments(
+        model="group",
+        healthy_deployments=[deployments[1]],
+        messages=[],
+        request_kwargs=team_kwargs,
+    )
+    assert [d["model_info"]["id"] for d in filtered] == ["dep-b"], (
+        "the team-scoped turn still routes to a deployment on its team"
+    )
+    assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-a"}, (
+        "a request-only exclusion must not drop the pin, so ordinary turns keep the warm deployment"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_pin_drop_never_breaks_routing_on_cache_failure():
+    """A cache failure during stale-pin cleanup must not break the request."""
+    cache: Final = DualCache()
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-a"})
+
+    with patch.object(DualCache, "async_delete_cache", new=AsyncMock(side_effect=RuntimeError("cache down"))):
+        await callback._drop_stale_pin(cache_key=session_cache_key, stale_model_id="dep-a")
+
+    assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-a"}, (
+        "a failed cleanup must leave the pin untouched and never raise"
+    )
