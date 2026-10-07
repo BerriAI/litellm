@@ -213,7 +213,8 @@ class DriverResult:
     duration_ms: Optional[int] = None
 
 
-def _run_claude(
+@step("Run Claude Code headless against {model} through the proxy")
+def run_claude(
     *,
     prompt: Optional[str],
     model: str,
@@ -313,7 +314,7 @@ def _run_claude(
 
     # Throttle by provider *before* launching the CLI. Doing this here
     # (rather than per-test) means every code path that lands on
-    # `_run_claude` is rate-limited automatically — including
+    # `run_claude` is rate-limited automatically — including
     # `run_claude_models_parallel`, which is the hot path during the
     # full matrix run.
     limiter = rate_limiter if rate_limiter is not None else get_default_limiter()
@@ -361,8 +362,6 @@ def _run_claude(
         usage=usage,
     )
 
-
-run_claude = step("Run Claude Code headless against {model} through the proxy")(_run_claude)
 
 ModelResult = Union[DriverResult, ClaudeCLIError]
 
@@ -416,7 +415,7 @@ def run_claude_models_parallel(
     rate_limit_backoff_seconds: Optional[float] = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Dict[str, ModelResult]:
-    """Invoke `_run_claude` for every `models[i]` concurrently and collect outcomes.
+    """Invoke `run_claude` for every `models[i]` concurrently and collect outcomes.
 
     Each `claude` CLI invocation is a long-lived subprocess that spends
     almost all of its time waiting on the upstream API; running the
@@ -432,12 +431,12 @@ def run_claude_models_parallel(
     per model up to `rate_limit_retries` times, sleeping
     `rate_limit_backoff_seconds` before each retry so per-minute quota
     windows can reset; both default to the `LITELLM_COMPAT_RATE_LIMIT_*`
-    env knobs. Each retry goes back through `_run_claude`, so it
+    env knobs. Each retry goes back through `run_claude`, so it
     re-acquires a token from the provider rate limiter like any other
     invocation. `sleep` is an injection seam for unit tests.
 
     Returns a dict keyed by model id. Each value is either the
-    `DriverResult` produced by `_run_claude` or the `ClaudeCLIError`
+    `DriverResult` produced by `run_claude` or the `ClaudeCLIError`
     that aborted that model's run — callers decide how to map either
     into a `compat_result` entry. The shared kwargs (prompt, env, args,
     timeout, runner) are forwarded verbatim so the per-model wire is
@@ -459,7 +458,7 @@ def run_claude_models_parallel(
 
     def _run_once(model: str) -> ModelResult:
         try:
-            return _run_claude(
+            return run_claude(
                 prompt=prompt,
                 model=model,
                 base_url=base_url,
