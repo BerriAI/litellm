@@ -43,8 +43,8 @@ _STRANDS_RESPONSE: Final[Mapping[str, object]] = {
 }
 _REQUEST: Final[Mapping[str, object]] = {
     "model": "decider",
-    "state": {"source": "proxy-test"},
-    "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    "input": "proxy-test",
+    "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
 }
 
 
@@ -88,7 +88,7 @@ def test_proxy_decisions_route_returns_answers_and_cost(
     response: Final = client.post(endpoint, json=_REQUEST)
 
     assert response.status_code == 200, response.text
-    assert response.json()["answers"] == _RESPONSE["answers"]
+    assert response.json()["answers"] == [{"type": "predicate", "name": "is_defect", "probability": 0.9}]
     assert "_hidden_params" not in response.json()
     perplexity_cost: Final = litellm.model_cost["perplexity/pplx-decider-v1-27b"]
     expected_cost: Final = _INPUT_TOKENS * float(perplexity_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
@@ -100,7 +100,7 @@ def test_proxy_decisions_route_returns_answers_and_cost(
     assert upstream.called
     assert json.loads(upstream.calls[0].request.content) == {
         "model": "pplx-decider-v1-27b",
-        "state": {"source": "proxy-test"},
+        "state": "proxy-test",
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
     assert upstream.calls[0].request.headers["authorization"] == "Bearer test-key"
@@ -129,17 +129,17 @@ def test_proxy_decisions_dispatches_typesafe_deployment(
         "/v1/decisions",
         json={
             "model": "jev",
-            "state": {"source": "proxy-test"},
-            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            "input": "proxy-test",
+            "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
         },
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["answers"] == _RESPONSE["answers"]
+    assert response.json()["answers"] == [{"type": "predicate", "name": "is_defect", "probability": 0.9}]
     assert upstream.called
     assert json.loads(upstream.calls[0].request.content) == {
         "model": "jev-latest",
-        "state": {"source": "proxy-test"},
+        "state": "proxy-test",
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
 
@@ -180,8 +180,8 @@ def test_proxy_decisions_unknown_model_is_a_client_error(
         "/v1/decisions",
         json={
             "model": "missing-model",
-            "state": "review",
-            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            "input": "review",
+            "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
         },
     )
 
@@ -194,14 +194,14 @@ def test_proxy_decisions_unknown_model_is_a_client_error(
     (
         {
             "model": "decider",
-            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
         },
         {
             "model": "decider",
-            "state": {"source": "proxy-test"},
+            "input": "proxy-test",
         },
     ),
-    ids=("missing_state", "missing_questions"),
+    ids=("missing_input", "missing_questions"),
 )
 def test_proxy_decisions_missing_required_field_is_a_client_error(
     client: TestClient,
@@ -241,17 +241,17 @@ def test_proxy_decisions_dispatches_strands_decider(
         "/v1/decisions",
         json={
             "model": "strands",
-            "state": {"source": "proxy-test"},
-            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            "input": "proxy-test",
+            "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
         },
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["answers"] == _STRANDS_RESPONSE["answers"]
+    assert response.json()["answers"] == [{"type": "predicate", "name": "is_defect", "probability": 0.9}]
     assert upstream.called
     assert json.loads(upstream.calls[0].request.content) == {
         "model": "strands-decider-2B-hobson-v19",
-        "state": {"source": "proxy-test"},
+        "state": "proxy-test",
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
     assert "authorization" not in upstream.calls[0].request.headers
@@ -270,7 +270,7 @@ def test_proxy_decisions_without_model_uses_the_proxy_default_model(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["answers"] == _RESPONSE["answers"]
+    assert response.json()["answers"] == [{"type": "predicate", "name": "is_defect", "probability": 0.9}]
     assert upstream.called
     assert json.loads(upstream.calls[0].request.content)["model"] == "pplx-decider-v1-27b"
 

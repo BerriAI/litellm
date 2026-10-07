@@ -6,11 +6,15 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.decisions.systemone import (
+    SYSTEM_ONE_RESPONSE_ADAPTER,
+    decisions_response,
+    system_one_request,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import DecisionsRequest, DecisionsResponse
 
 PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
-_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
 _RESERVED_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "content-type"})
 
 
@@ -58,14 +62,7 @@ class BaseDecisionsConfig(ABC):
         request: DecisionsRequest,
         custom_llm_provider: str,
     ) -> dict[str, object]:
-        return {
-            "model": self.request_model(model),
-            "state": request.state,
-            "questions": {
-                name: question.model_dump(mode="json", exclude_none=True)
-                for name, question in request.questions.items()
-            },
-        }
+        return system_one_request(self.request_model(model), request, custom_llm_provider)
 
     def unwrap_response(self, payload: object) -> object:
         return payload
@@ -79,12 +76,13 @@ class BaseDecisionsConfig(ABC):
     ) -> DecisionsResponse:
         payload: Final[object] = PAYLOAD_ADAPTER.validate_json(raw_response.content)
         try:
-            response: Final = _RESPONSE_ADAPTER.validate_python(self.unwrap_response(payload))
+            system_one: Final = SYSTEM_ONE_RESPONSE_ADAPTER.validate_python(self.unwrap_response(payload))
         except ValidationError as error:
             raise BaseLLMException(
                 status_code=500,
                 message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: {error}",
             ) from error
+        response: Final = decisions_response(system_one, request, custom_llm_provider)
         self.set_hidden_params(response, model, custom_llm_provider)
         return response
 

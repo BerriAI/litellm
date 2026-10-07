@@ -13,7 +13,7 @@ from litellm.llms.base_llm.decisions.systemone import (
     question_keys,
     system_one_request,
 )
-from litellm.types.openai_decisions import ChoiceAnswer, DecisionsRequest, PredicateAnswer, ScoreAnswer
+from litellm.types.decisions import ChoiceAnswer, DecisionsRequest, PredicateAnswer, ScoreAnswer
 
 _INPUT: Final = "The export job hangs at 99% and never finishes"
 _QUESTIONS: Final[Sequence[Mapping[str, object]]] = (

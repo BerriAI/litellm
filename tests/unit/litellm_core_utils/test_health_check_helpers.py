@@ -636,8 +636,8 @@ async def test_ahealth_check_evaluation_uses_configured_probe_state_and_question
         {
             "model": "perplexity/pplx-decider-v1-27b",
             "api_key": "sk-test",
-            "state": "custom probe",
-            "questions": {"ok": {"type": "noul", "instructions": "Is it ok?"}},
+            "input": "custom probe",
+            "questions": [{"type": "predicate", "name": "ok", "instructions": "Is it ok?"}],
         },
         mode=None,
     )

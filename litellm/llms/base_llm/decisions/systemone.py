@@ -12,8 +12,7 @@ from typing import Final, Literal, TypeAlias
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.base import LiteLLMPydanticObjectBase
-from litellm.types.openai_decisions import (
+from litellm.types.decisions import (
     ChoiceAnswer,
     ChoiceProbability,
     ChoiceQuestion,
@@ -33,6 +32,7 @@ from litellm.types.openai_decisions import (
     ScoreProbability,
     ScoreQuestion,
 )
+from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 SystemOneJSON: TypeAlias = str | Mapping[str, object] | Sequence[object]
 

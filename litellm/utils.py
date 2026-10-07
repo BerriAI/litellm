@@ -1219,8 +1219,12 @@ def function_setup(
                 else search_query
             )
         elif call_type in (CallTypes.decisions.value, CallTypes.adecisions.value):
-            decisions_state: Final = args[1] if len(args) > 1 else kwargs.get("state", "")
-            messages = decisions_state if isinstance(decisions_state, str) else json.dumps(decisions_state)
+            decisions_input: Final = args[1] if len(args) > 1 else kwargs.get("input", "")
+            messages = (
+                decisions_input
+                if isinstance(decisions_input, str)
+                else json.dumps(decisions_input, default=convert_to_dict)
+            )
         elif call_type in (CallTypes.image_edit.value, CallTypes.aimage_edit.value):
             messages = args[1] if len(args) > 1 else kwargs.get("prompt")
         elif call_type in (CallTypes.ocr.value, CallTypes.aocr.value):

@@ -6,7 +6,7 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.types.openai_decisions import (
+from litellm.types.decisions import (
     ChoiceAnswer,
     DecisionsRequestBody,
     DecisionsResponse,

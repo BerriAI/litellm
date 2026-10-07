@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final
 
@@ -11,7 +11,7 @@ from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.decisions import (
     DecisionQuestion,
-    DecisionsJSON,
+    DecisionsInput,
     DecisionsRequest,
     DecisionsResponse,
 )
@@ -61,8 +61,9 @@ def _provider_config(model: str, custom_llm_provider: str) -> BaseDecisionsConfi
 def _prepare_call(
     *,
     model: str,
-    state: DecisionsJSON,
-    questions: Mapping[str, DecisionQuestion | Mapping[str, object]],
+    input: DecisionsInput | Sequence[Mapping[str, object]],
+    questions: Sequence[DecisionQuestion | Mapping[str, object]],
+    safety_identifier: str | None = None,
     api_key: str | None,
     api_base: str | None,
     timeout: float | httpx.Timeout | None,
@@ -86,7 +87,7 @@ def _prepare_call(
         )
     try:
         request: Final = _DECISIONS_REQUEST_ADAPTER.validate_python(
-            {"model": canonical_model, "state": state, "questions": questions}
+            {"model": canonical_model, "input": input, "questions": questions, "safety_identifier": safety_identifier}
         )
     except ValidationError as error:
         raise litellm.BadRequestError(
@@ -145,8 +146,9 @@ def _map_upstream_exception(error: Exception, call: _DecisionsCall) -> Exception
 @client
 async def adecisions(
     model: str,
-    state: DecisionsJSON,
-    questions: Mapping[str, DecisionQuestion | Mapping[str, object]],
+    input: DecisionsInput | Sequence[Mapping[str, object]],
+    questions: Sequence[DecisionQuestion | Mapping[str, object]],
+    safety_identifier: str | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
@@ -156,8 +158,9 @@ async def adecisions(
 ) -> DecisionsResponse:
     call: Final = _prepare_call(
         model=model,
-        state=state,
+        input=input,
         questions=questions,
+        safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,
@@ -184,8 +187,9 @@ async def adecisions(
 @client
 def decisions(
     model: str,
-    state: DecisionsJSON,
-    questions: Mapping[str, DecisionQuestion | Mapping[str, object]],
+    input: DecisionsInput | Sequence[Mapping[str, object]],
+    questions: Sequence[DecisionQuestion | Mapping[str, object]],
+    safety_identifier: str | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
@@ -195,8 +199,9 @@ def decisions(
 ) -> DecisionsResponse:
     call: Final = _prepare_call(
         model=model,
-        state=state,
+        input=input,
         questions=questions,
+        safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,

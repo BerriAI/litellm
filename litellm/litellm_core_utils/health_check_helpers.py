@@ -299,8 +299,10 @@ class HealthCheckHelpers:
             "evaluation": lambda: litellm.adecisions(
                 **DECISIONS_CALL_PARAMS.validate_python(
                     {
-                        "state": prompt or "health check",
-                        "questions": {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
+                        "input": prompt or "health check",
+                        "questions": [
+                            {"type": "predicate", "name": "reachable", "instructions": "Is the service reachable?"}
+                        ],
                         **_filter_model_params(model_params=model_params),
                     }
                 )

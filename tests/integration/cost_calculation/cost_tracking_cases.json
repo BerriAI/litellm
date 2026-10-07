@@ -31210,15 +31210,14 @@
       "endpoint": "/v1/decisions",
       "request": {
         "model": "$MODEL",
-        "state": {
-          "source": "cost-tracking"
-        },
-        "questions": {
-          "is_defect": {
-            "type": "noul",
+        "input": "cost-tracking",
+        "questions": [
+          {
+            "type": "predicate",
+            "name": "is_defect",
             "instructions": "Is this a defect?"
           }
-        }
+        ]
       },
       "response": {
         "content_type": "application/json",

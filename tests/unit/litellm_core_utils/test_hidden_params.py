@@ -189,8 +189,8 @@ def test_hidden_params_model_view_excludes_unset_fields() -> None:
     fallback_response: Final = PlainResponse()
     setattr(fallback_response, HIDDEN_PARAMS_ATTR, HiddenParams())
     fallback_view: Final = get_or_create_hidden_params(fallback_response)
-    merged_after_fallback: Final = {**fallback_view, **{"model_id": "m1"}}
-    merged_before_fallback: Final = {**{"model_id": "m1"}, **fallback_view}
+    merged_after_fallback: Final = {**fallback_view, "model_id": "m1"}
+    merged_before_fallback: Final = {"model_id": "m1", **fallback_view}
 
     assert merged_after_fallback == {"model_id": "m1"}
     assert merged_before_fallback == {"model_id": "m1"}
@@ -243,7 +243,7 @@ def test_get_hidden_params_returns_none_for_non_dict_storage() -> None:
 
 
 def test_set_hidden_params_replaces_frozen_decisions_response_private_attr() -> None:
-    response: Final = DecisionsResponse(model="decider", answers={}, usage=None)
+    response: Final = DecisionsResponse(model="decider", answers=(), usage=None)
     replacement: Final = {"replacement": True}
 
     set_hidden_params(response, replacement)

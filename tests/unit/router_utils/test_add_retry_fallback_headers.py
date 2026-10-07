@@ -259,7 +259,7 @@ def test_add_fallback_headers_when_no_existing_additional_headers():
 
 
 def test_add_fallback_headers_to_frozen_decisions_response() -> None:
-    response: Final = DecisionsResponse(model="decider", answers={}, usage=None)
+    response: Final = DecisionsResponse(model="decider", answers=(), usage=None)
 
     result: Final = add_fallback_headers_to_response(response=response, attempted_fallbacks=1)
 
@@ -268,7 +268,7 @@ def test_add_fallback_headers_to_frozen_decisions_response() -> None:
 
 
 def test_ensure_response_additional_headers_updates_frozen_decisions_response() -> None:
-    response: Final = DecisionsResponse(model="decider", answers={}, usage=None)
+    response: Final = DecisionsResponse(model="decider", answers=(), usage=None)
 
     additional_headers: Final = ensure_response_additional_headers(response)
 

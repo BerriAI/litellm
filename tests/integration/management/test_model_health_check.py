@@ -32,9 +32,24 @@ _STRANDS_PROBE_REPLY: Final = JsonResponse(
         "usage": {"input_tokens": 10, "output_tokens": 1},
     },
 )
-_CONFIGURED_STATE: Final[dict[str, JsonValue]] = {"ticket": "health probe"}
-_CONFIGURED_QUESTIONS: Final[dict[str, JsonValue]] = {
-    "alive": {"type": "choice", "criteria": {"yes": "the service answers", "no": "the service is down"}}
+_CONFIGURED_INPUT: Final = "health probe"
+_CONFIGURED_QUESTIONS: Final[list[JsonValue]] = [
+    {
+        "type": "choice",
+        "name": "alive",
+        "instructions": "Does the service answer?",
+        "choices": [
+            {"value": "yes", "description": "the service answers"},
+            {"value": "no", "description": "the service is down"},
+        ],
+    }
+]
+_CONFIGURED_UPSTREAM_QUESTIONS: Final[dict[str, JsonValue]] = {
+    "alive": {
+        "type": "choice",
+        "instructions": "Does the service answer?",
+        "criteria": {"yes": "the service answers", "no": "the service is down"},
+    }
 }
 
 
@@ -104,7 +119,7 @@ def test_evaluation_mode_health_check_resolves_the_mode_from_the_cost_map_and_se
         ]
 
 
-def test_evaluation_mode_health_check_sends_the_configured_state_and_questions(gateway: Gateway) -> None:
+def test_evaluation_mode_health_check_sends_the_configured_input_and_questions(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         handle: Final = register_scenario(f"health-decisions-{uuid.uuid4().hex[:12]}", _CONFIGURED_PROBE_REPLY)
         scenario.cleanups.callback(delete_scenario, handle)
@@ -113,7 +128,7 @@ def test_evaluation_mode_health_check_sends_the_configured_state_and_questions(g
             api_base=handle.api_base(),
             model_info={
                 "mode": "evaluation",
-                "health_check_params": {"state": _CONFIGURED_STATE, "questions": _CONFIGURED_QUESTIONS},
+                "health_check_params": {"input": _CONFIGURED_INPUT, "questions": _CONFIGURED_QUESTIONS},
             },
         )
         report: Final = _health_report(gateway, model)
@@ -121,7 +136,7 @@ def test_evaluation_mode_health_check_sends_the_configured_state_and_questions(g
         assert _probes_sent_to(gateway, handle) == [
             (
                 f"/{handle.scenario_id}/v1/systemone",
-                {"model": "jev-custom", "state": _CONFIGURED_STATE, "questions": _CONFIGURED_QUESTIONS},
+                {"model": "jev-custom", "state": _CONFIGURED_INPUT, "questions": _CONFIGURED_UPSTREAM_QUESTIONS},
             )
         ]
 
