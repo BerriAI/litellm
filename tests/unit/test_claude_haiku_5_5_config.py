@@ -62,6 +62,8 @@ def test_haiku_5_5_rows_allow_disabling_thinking_and_forced_tools(model_name):
     backup = GetModelCostMap.load_local_model_cost_map()
     assert model_name in root
     row = root[model_name]
+    # https://platform.claude.com/docs/en/models/haiku-5-5/whats-new-haiku-5-5 (2026-10-07):
+    # thinking can be disabled, forced tool_choice accepted
     assert row["thinking_always_on"] is False
     assert row["supports_forced_tool_use"] is True
     assert backup[model_name] == row
