@@ -1,59 +1,29 @@
 """
-OpenRouter Image Edit Support
+OpenRouter image edit, served by ``POST {api_base}/images``.
 
-OpenRouter provides image editing through chat completion endpoints.
-The source image is sent as a base64 data URL in the message content,
-and the response contains edited images in the message's images array.
-
-Request format:
-{
-    "model": "google/gemini-2.5-flash-image",
-    "messages": [{
-        "role": "user",
-        "content": [
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
-            {"type": "text", "text": "Edit this image by..."}
-        ]
-    }],
-    "modalities": ["image", "text"]
-}
-
-Response format:
-{
-    "choices": [{
-        "message": {
-            "content": "Here is the edited image.",
-            "role": "assistant",
-            "images": [{
-                "image_url": {"url": "data:image/png;base64,..."},
-                "type": "image_url"
-            }]
-        }
-    }],
-    "usage": {
-        "completion_tokens": 1299,
-        "prompt_tokens": 300,
-        "total_tokens": 1599,
-        "completion_tokens_details": {"image_tokens": 1290},
-        "cost": 0.0387243
-    }
-}
+The source image travels in ``input_references`` as a base64 data URL. Models whose only output
+modality is ``image`` (``openai/gpt-image-*``, ``krea/*``, ...) are reachable only there.
 """
 
 import base64
+import re
+from collections.abc import Mapping
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ValidationError
 
 import litellm
+from litellm.exceptions import UnsupportedParamsError
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.openrouter.common_utils import OpenRouterException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
+from litellm.types.llms.openrouter import OpenRouterImagesResponse, OpenRouterImageUsage
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     FileTypes,
@@ -70,18 +40,29 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_DEFAULT_OPENROUTER_API_BASE: Final = "https://openrouter.ai/api/v1"
+
+_SUPPORTED_ASPECT_RATIOS: Final[tuple[tuple[int, int], ...]] = (
+    (1, 1),
+    (2, 3),
+    (3, 2),
+    (3, 4),
+    (4, 3),
+    (4, 5),
+    (5, 4),
+    (9, 16),
+    (16, 9),
+    (21, 9),
+)
+
+_PIXEL_SIZE_PATTERN: Final = re.compile(r"(\d+)x(\d+)")
+
+_NON_BODY_PARAMS: Final = frozenset({"model", "prompt", "extra_headers", "input_references"})
+
 
 class OpenRouterImageEditConfig(BaseImageEditConfig):
-    """
-    Configuration for OpenRouter image editing via chat completions.
-
-    OpenRouter uses the chat completions endpoint for image editing.
-    The source image is sent as a base64 data URL in the message content,
-    and the response contains edited images in the message's images array.
-    """
-
     def get_supported_openai_params(self, model: str) -> list:
-        return ["size", "quality", "n"]
+        return ["background", "n", "quality", "response_format", "size"]
 
     def map_openai_params(
         self,
@@ -89,26 +70,14 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params: Final = self.get_supported_openai_params(model)
-        mapped_params: Final[dict[str, object]] = {}
-        image_config: Final[dict[str, str]] = {}
+        response_format: Final = image_edit_optional_params.get("response_format")
+        if response_format is not None:
+            _reject_unsupported_response_format(value=str(response_format), model=model, drop_params=drop_params)
 
-        for key, value in image_edit_optional_params.items():
-            if key in supported_params:
-                if key == "size":
-                    if "image_config" not in mapped_params:
-                        mapped_params["image_config"] = image_config
-                    image_config["aspect_ratio"] = self._map_size_to_aspect_ratio(cast(str, value))
-                elif key == "quality":
-                    image_size = self._map_quality_to_image_size(cast(str, value))
-                    if image_size:
-                        if "image_config" not in mapped_params:
-                            mapped_params["image_config"] = image_config
-                        image_config["image_size"] = image_size
-                else:
-                    mapped_params[key] = value
-
-        return mapped_params
+        translated: Final = (
+            _translate_param(key=key, value=value) for key, value in image_edit_optional_params.items()
+        )
+        return {key: value for key, value in translated if key is not None}
 
     def validate_environment(
         self,
@@ -118,18 +87,12 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         litellm_params: dict | None = None,
         api_base: str | None = None,
     ) -> dict:
-        api_key = api_key or litellm.api_key or get_secret_str("OPENROUTER_API_KEY")
-        if not api_key:
+        resolved_api_key: Final = api_key or litellm.api_key or get_secret_str("OPENROUTER_API_KEY")
+        if not resolved_api_key:
             raise ValueError("OPENROUTER_API_KEY is not set")
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            }
-        )
-        return headers
+        return {**headers, "Authorization": f"Bearer {resolved_api_key}"}
 
     def use_multipart_form_data(self) -> bool:
-        """OpenRouter uses JSON requests, not multipart/form-data."""
         return False
 
     def get_complete_url(
@@ -138,11 +101,11 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         api_base: str | None,
         litellm_params: dict,
     ) -> str:
-        base_url = api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
-        base_url = base_url.rstrip("/")
-        if not base_url.endswith("/chat/completions"):
-            return f"{base_url}/chat/completions"
-        return base_url
+        configured: Final = api_base or get_secret_str("OPENROUTER_API_BASE") or _DEFAULT_OPENROUTER_API_BASE
+        base_url: Final = configured.rstrip("/").removesuffix("/chat/completions")
+        if base_url.endswith("/images"):
+            return base_url
+        return f"{base_url}/images"
 
     def transform_image_edit_request(
         self,
@@ -153,46 +116,21 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[dict, RequestFiles]:
-        content_parts: Final[list[dict[str, object]]] = []
+        candidates: Final = image if isinstance(image, list) else [image]
+        images: Final = tuple(img for img in candidates if img is not None)
+        if not images:
+            raise ValueError("An image is required to edit; OpenRouter has no image-less edit mode.")
 
-        # Add source image(s) as base64 data URLs
-        if image is not None:
-            images: Final = image if isinstance(image, list) else [image]
-            for img in images:
-                if img is None:
-                    continue
-                mime_type = ImageEditRequestUtils.get_image_content_type(img)
-                image_bytes = self._read_image_bytes(img)
-                b64_data = base64.b64encode(image_bytes).decode("utf-8")
-                content_parts.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime_type};base64,{b64_data}"},
-                    }
-                )
-
-        # Add the text prompt
-        if prompt:
-            content_parts.append({"type": "text", "text": prompt})
-
-        request_body: Final[dict[str, object]] = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": content_parts,
-                }
-            ],
-            "modalities": ["image", "text"],
+        passthrough: Final = {
+            key: value for key, value in image_edit_optional_request_params.items() if key not in _NON_BODY_PARAMS
         }
-
-        # Add mapped optional params (image_config, n, etc.)
-        for key, value in image_edit_optional_request_params.items():
-            if key not in ("model", "messages", "modalities"):
-                request_body[key] = value
-
-        empty_files: Final = cast(RequestFiles, [])
-        return request_body, empty_files
+        request_body: Final = {
+            "model": model,
+            **({"prompt": prompt} if prompt is not None else {}),
+            **passthrough,
+            "input_references": [_input_reference(img) for img in images],
+        }
+        return request_body, cast(RequestFiles, [])
 
     def transform_image_edit_response(
         self,
@@ -200,60 +138,16 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
-        try:
-            response_json: Final = raw_response.json()
-        except Exception as e:
-            raise OpenRouterException(
-                message=f"Error parsing OpenRouter response: {e}",
-                status_code=raw_response.status_code,
-                headers=raw_response.headers,
-            )
-
-        model_response: Final = ImageResponse()
-        model_response.data = []
-
-        try:
-            choices: Final = response_json.get("choices", [])
-
-            for choice in choices:
-                message = choice.get("message", {})
-                images = message.get("images", [])
-
-                for image_data in images:
-                    image_url_obj = image_data.get("image_url", {})
-                    image_url = image_url_obj.get("url")
-
-                    if image_url:
-                        if image_url.startswith("data:"):
-                            # Extract base64 data from data URL
-                            parts = image_url.split(",", 1)
-                            b64_data = parts[1] if len(parts) > 1 else None
-
-                            model_response.data.append(
-                                ImageObject(
-                                    b64_json=b64_data,
-                                    url=None,
-                                    revised_prompt=None,
-                                )
-                            )
-                        else:
-                            model_response.data.append(
-                                ImageObject(
-                                    b64_json=None,
-                                    url=image_url,
-                                    revised_prompt=None,
-                                )
-                            )
-
-        except Exception as e:
-            raise OpenRouterException(
-                message=f"Error transforming OpenRouter image edit response: {e}",
-                status_code=500,
-                headers={},
-            )
-
-        self._set_usage_and_cost(model_response, response_json, model)
-        return model_response
+        parsed: Final = _parse_images_response(raw_response)
+        return ImageResponse(
+            created=parsed.created,
+            data=[
+                ImageObject(b64_json=image.b64_json, url=image.url, revised_prompt=image.revised_prompt)
+                for image in parsed.data
+            ],
+            usage=_image_usage(parsed.usage) if parsed.usage is not None else None,
+            hidden_params=_hidden_params(parsed=parsed, model=model),
+        )
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return OpenRouterException(
@@ -262,107 +156,98 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
             headers=headers,
         )
 
-    # Private helper methods
 
-    def _map_size_to_aspect_ratio(self, size: str) -> str:
-        """
-        Map OpenAI size format to OpenRouter aspect_ratio format.
+def _map_size_to_aspect_ratio(size: str) -> str | None:
+    match: Final = _PIXEL_SIZE_PATTERN.fullmatch(size.strip())
+    if match is None:
+        return None
 
-        Uses the same mapping as image generation since OpenRouter
-        handles both through the same chat completions endpoint.
-        """
-        size_to_aspect_ratio: Final = {
-            "256x256": "1:1",
-            "512x512": "1:1",
-            "1024x1024": "1:1",
-            "1536x1024": "3:2",
-            "1792x1024": "16:9",
-            "1024x1536": "2:3",
-            "1024x1792": "9:16",
-            "auto": "1:1",
-        }
-        return size_to_aspect_ratio.get(size, "1:1")
+    width: Final = int(match.group(1))
+    height: Final = int(match.group(2))
+    if width == 0 or height == 0:
+        return None
 
-    def _map_quality_to_image_size(self, quality: str) -> str | None:
-        """
-        Map OpenAI quality to OpenRouter image_size format.
+    target: Final = width / height
+    closest: Final = min(_SUPPORTED_ASPECT_RATIOS, key=lambda ratio: abs(ratio[0] / ratio[1] - target))
+    return f"{closest[0]}:{closest[1]}"
 
-        Uses the same mapping as image generation since OpenRouter
-        handles both through the same chat completions endpoint.
-        """
-        quality_to_image_size: Final = {
-            "low": "1K",
-            "standard": "1K",
-            "medium": "2K",
-            "high": "4K",
-            "hd": "4K",
-            "auto": "1K",
-        }
-        return quality_to_image_size.get(quality)
 
-    def _set_usage_and_cost(
-        self,
-        model_response: ImageResponse,
-        response_json: dict,
-        model: str,
-    ) -> None:
-        """Extract and set usage and cost information from OpenRouter response."""
-        usage_data: Final = response_json.get("usage", {})
-        if usage_data:
-            prompt_tokens: Final = usage_data.get("prompt_tokens", 0)
-            total_tokens: Final = usage_data.get("total_tokens", 0)
+def _translate_param(key: str, value: object) -> tuple[str | None, object]:
+    if key == "response_format":
+        return None, None
+    if key != "size":
+        return key, value
+    aspect_ratio: Final = _map_size_to_aspect_ratio(str(value))
+    return ("aspect_ratio", aspect_ratio) if aspect_ratio is not None else (None, None)
 
-            completion_tokens_details: Final = usage_data.get("completion_tokens_details", {})
-            image_tokens: Final = completion_tokens_details.get("image_tokens", 0)
 
-            # For image edit, input may include image tokens
-            input_image_tokens = 0
-            prompt_tokens_details: Final = usage_data.get("prompt_tokens_details", {})
-            if prompt_tokens_details:
-                input_image_tokens = prompt_tokens_details.get("image_tokens", 0)
+def _reject_unsupported_response_format(value: str, model: str, drop_params: bool) -> None:
+    if value == "b64_json" or drop_params:
+        return
+    raise UnsupportedParamsError(
+        model=model,
+        llm_provider="openrouter",
+        message=(
+            f"OpenRouter's image API always returns base64 image data, so response_format="
+            f"'{value}' is not supported. Request 'b64_json', or set `drop_params: true` to ignore it."
+        ),
+    )
 
-            model_response.usage = ImageUsage(
-                input_tokens=prompt_tokens,
-                input_tokens_details=ImageUsageInputTokensDetails(
-                    image_tokens=input_image_tokens,
-                    text_tokens=prompt_tokens - input_image_tokens,
-                ),
-                output_tokens=image_tokens,
-                total_tokens=total_tokens,
-            )
 
-            cost: Final = usage_data.get("cost")
-            if cost is not None:
-                if not hasattr(model_response, "_hidden_params"):
-                    model_response._hidden_params = {}
-                if "additional_headers" not in model_response._hidden_params:
-                    model_response._hidden_params["additional_headers"] = {}
-                model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
-                    cost
-                )
+def _input_reference(image: FileTypes) -> dict[str, object]:
+    mime_type: Final = ImageEditRequestUtils.get_image_content_type(image)
+    b64_data: Final = base64.b64encode(_read_image_bytes(image)).decode("utf-8")
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:{mime_type};base64,{b64_data}"},
+    }
 
-            cost_details: Final = usage_data.get("cost_details", {})
-            if cost_details:
-                if "response_cost_details" not in model_response._hidden_params:
-                    model_response._hidden_params["response_cost_details"] = {}
-                model_response._hidden_params["response_cost_details"].update(cost_details)
 
-        model_response._hidden_params["model"] = response_json.get("model", model)
-
-    def _read_image_bytes(self, image: FileTypes) -> bytes:
-        """Read raw bytes from various image input types."""
-        if isinstance(image, bytes):
-            return image
-        if isinstance(image, BytesIO):
-            current_pos = image.tell()
-            image.seek(0)
-            data = image.read()
-            image.seek(current_pos)
-            return data
-        if isinstance(image, BufferedReader):
-            current_pos = image.tell()
-            image.seek(0)
-            data = image.read()
-            image.seek(current_pos)
-            return data
+def _read_image_bytes(image: FileTypes) -> bytes:
+    if isinstance(image, bytes):
+        return image
+    if not isinstance(image, (BytesIO, BufferedReader)):
         raise ValueError("Unsupported image type for OpenRouter image edit.")
+    current_pos: Final = image.tell()
+    image.seek(0)
+    data: Final = image.read()
+    image.seek(current_pos)
+    return data
+
+
+def _parse_images_response(raw_response: httpx.Response) -> OpenRouterImagesResponse:
+    try:
+        return OpenRouterImagesResponse.model_validate(raw_response.json())
+    except (ValueError, ValidationError) as e:
+        raise OpenRouterException(
+            message=f"Error parsing OpenRouter image response: {e}",
+            status_code=raw_response.status_code if raw_response.status_code >= 400 else 502,
+            headers=raw_response.headers,
+        ) from e
+
+
+def _image_usage(usage: OpenRouterImageUsage) -> ImageUsage:
+    details: Final = usage.completion_tokens_details
+    output_image_tokens: Final = details.image_tokens if details is not None else None
+    prompt_details: Final = usage.prompt_tokens_details
+    input_image_tokens: Final = (prompt_details.image_tokens or 0) if prompt_details is not None else 0
+    return ImageUsage(
+        input_tokens=usage.prompt_tokens,
+        input_tokens_details=ImageUsageInputTokensDetails(
+            image_tokens=input_image_tokens,
+            text_tokens=usage.prompt_tokens - input_image_tokens,
+        ),
+        output_tokens=output_image_tokens if output_image_tokens is not None else usage.completion_tokens,
+        total_tokens=usage.total_tokens,
+    )
+
+
+def _hidden_params(parsed: OpenRouterImagesResponse, model: str) -> dict[str, object]:
+    usage: Final = parsed.usage
+    cost: Final = usage.cost if usage is not None else None
+    cost_details: Final[Mapping[str, float | None] | None] = usage.cost_details if usage is not None else None
+    return {
+        "model": parsed.model or model,
+        **({"additional_headers": {"llm_provider-x-litellm-response-cost": cost}} if cost is not None else {}),
+        **({"response_cost_details": dict(cost_details)} if cost_details else {}),
+    }
