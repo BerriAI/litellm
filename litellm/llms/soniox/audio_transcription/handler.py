@@ -458,7 +458,7 @@ class SonioxAudioTranscriptionHandler:
             self._safe_log_post_call(logging_obj, audio_file, api_key, body, payload)
 
             audio_duration_ms: Final = transcription_meta.get("audio_duration_ms")
-            response._hidden_params.update(
+            response.hidden_params.update(
                 {
                     "model": model,
                     "custom_llm_provider": "soniox",
@@ -692,7 +692,7 @@ class SonioxAudioTranscriptionHandler:
             self._safe_log_post_call(logging_obj, audio_file, api_key, body, payload)
 
             audio_duration_ms: Final = transcription_meta.get("audio_duration_ms")
-            response._hidden_params.update(
+            response.hidden_params.update(
                 {
                     "model": model,
                     "custom_llm_provider": "soniox",

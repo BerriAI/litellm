@@ -204,7 +204,7 @@ class OpenAITextCompletion(BaseLLM):
             )
             ## RESPONSE OBJECT
             response_obj: Final = TextCompletionResponse(**response_json)
-            response_obj._hidden_params.original_response = json.dumps(response_json)
+            response_obj.hidden_params.original_response = json.dumps(response_json)
             return response_obj
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
