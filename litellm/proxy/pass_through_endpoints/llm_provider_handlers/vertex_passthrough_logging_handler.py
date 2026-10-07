@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
     InteractionsUsageObjectTransformation,
 )
@@ -769,11 +770,16 @@ class VertexPassthroughLoggingHandler:
 
         """
 
+        # A routed call carries the deployment it was routed to; price it at
+        # that deployment's custom pricing, as the Anthropic handler does,
+        # rather than at the cost map's shared entry for the backend model.
         response_cost: Final = litellm.completion_cost(
             completion_response=litellm_model_response,
             model=model,
             custom_llm_provider=custom_llm_provider,
             vertex_location=vertex_location,
+            custom_pricing=use_custom_pricing_for_model(litellm_params=getattr(logging_obj, "litellm_params", None)),
+            router_model_id=logging_obj.get_router_model_id(),
         )
 
         kwargs["response_cost"] = response_cost
