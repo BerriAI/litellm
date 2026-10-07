@@ -6,6 +6,8 @@ import random
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, Protocol
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 import litellm
@@ -15,7 +17,9 @@ from litellm.router_backends.selection import select_backend
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.types.router import RouterRateLimitError
-from litellm.types.utils import ModelResponse
+from litellm.exceptions import MidStreamFallbackError
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.types.utils import ModelResponse, ModelResponseStream
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -178,3 +182,69 @@ async def test_the_facade_serves_a_supported_config_from_the_rust_backend() -> N
     assert backend.get_model_names() == ["g"]
     with pytest.raises(NotImplementedError, match=r"Router\.upsert_deployment"):
         _ = backend.upsert_deployment
+
+
+class _FailingStream(CustomStreamWrapper):
+    """A provider stream that dies before its first chunk, as a 500 mid-stream does."""
+
+    def __init__(self, model: str) -> None:
+        super().__init__(completion_stream=object(), model=model, custom_llm_provider="openai", logging_obj=MagicMock())
+
+    def __aiter__(self) -> _FailingStream:
+        return self
+
+    async def __anext__(self) -> ModelResponseStream:
+        raise MidStreamFallbackError(
+            message=f"provider 500 from {self.model}",
+            model=str(self.model),
+            llm_provider="openai",
+            is_pre_first_chunk=True,
+            original_exception=litellm.InternalServerError(
+                message=f"provider 500 from {self.model}", model=str(self.model), llm_provider="openai"
+            ),
+        )
+
+
+class _OkStream(_FailingStream):
+    def __init__(self, model: str) -> None:
+        super().__init__(model)
+        self._replies: Final = iter(
+            (
+                ModelResponseStream(choices=[{"index": 0, "delta": {"role": "assistant"}}]),
+                ModelResponseStream(choices=[{"index": 0, "delta": {"content": f"ok-from-{model}"}}]),
+            )
+        )
+
+    async def __anext__(self) -> ModelResponseStream:
+        reply: Final = next(self._replies, None)
+        if reply is None:
+            raise StopAsyncIteration
+        return reply
+
+
+async def _fake_stream(**kwargs: object) -> CustomStreamWrapper:  # kwargs-ok: litellm.acompletion's surface
+    model: Final = str(kwargs["model"])
+    return _OkStream(model) if "fb2" in model else _FailingStream(model)
+
+
+async def test_a_stream_failing_before_content_walks_the_fallback_chain_on_both_backends() -> None:
+    arguments: Final = {
+        "model_list": (
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "k"}},
+            {"model_name": "fb1", "litellm_params": {"model": "openai/fb1-model", "api_key": "k"}},
+            {"model_name": "fb2", "litellm_params": {"model": "openai/fb2-model", "api_key": "k"}},
+        ),
+        "fallbacks": [{"primary": ["fb1", "fb2"]}],
+        "num_retries": 2,
+    }
+    observed: Final[list[tuple[str, tuple[str, ...]]]] = []  # mutable-ok: one observation per backend
+    for build in BACKENDS:
+        backend = build(arguments, 1)
+        with patch("litellm.acompletion", side_effect=_fake_stream) as acompletion:
+            response = await backend.acompletion("primary", MESSAGES, stream=True)
+            content = "".join([chunk.choices[0].delta.content or "" async for chunk in response])  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownVariableType]  # stream chunks
+        groups = tuple(str(call.kwargs["metadata"]["model_group"]) for call in acompletion.call_args_list)
+        observed.append((content, groups))
+
+    assert observed[0] == observed[1]
+    assert observed[1] == ("ok-from-openai/fb2-model", ("primary", "fb1", "fb2"))

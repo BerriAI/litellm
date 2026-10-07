@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     cooldown::{self, status_is_retryable},
-    failure::{Classified, ExceptionClass, Failure, Raised},
+    failure::{Classified, ExceptionClass, Failure, Raised, StreamFailure},
     fallback::{chain_for_groups, generic_targets},
     host::{
         Attempt, HopStamp, Invoked, MockFailure, Op, RetryStamp, RouterHost, Target, TypedFallback,
@@ -308,7 +308,8 @@ impl<'a, H: RouterHost> Run<'a, H> {
             Ok(success) => return Ok(success),
             Err(stop) => self.failed(stop).map_err(Stop::Host)?,
         };
-        if failure.classified.guardrail_intervention {
+        if failure.classified.guardrail_intervention || failure.classified.stream_failure.is_some()
+        {
             return Err(Stop::Failed(failure));
         }
         if self.call.num_retries.is_none()
@@ -350,6 +351,9 @@ impl<'a, H: RouterHost> Run<'a, H> {
                 }
                 Err(stop) => self.failed(stop).map_err(Stop::Host)?,
             };
+            if failure.classified.stream_failure.is_some() {
+                return Err(Stop::Failed(failure));
+            }
             self.log_retry(hop, &failure);
             let remaining = num_retries - attempt - 1;
             healthy = self.healthy_counts(&hop.group).await.0;
@@ -530,7 +534,10 @@ impl<'a, H: RouterHost> Run<'a, H> {
         hop: &Hop,
         failure: Box<Failure<H::Error>>,
     ) -> Attempted<H::Response, H::Error, H::Fault> {
-        if self.call.disable_fallbacks || failure.classified.guardrail_intervention {
+        if self.call.disable_fallbacks
+            || failure.classified.guardrail_intervention
+            || failure.classified.stream_failure == Some(StreamFailure::Terminal)
+        {
             return Err(Stop::Failed(failure));
         }
         let top_level = hop.depth == 0;

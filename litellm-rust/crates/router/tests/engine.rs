@@ -5,7 +5,7 @@ use std::{
 
 use litellm_router::{
     engine::{Engine, Override, RouteError, RouterCall},
-    failure::{Classified, ExceptionClass, Raised},
+    failure::{Classified, ExceptionClass, Raised, StreamFailure},
     host::{Attempt, Invoked, Op, RouterHost, Target},
     operation::Operation,
     pyrepr::PyNumber,
@@ -20,6 +20,7 @@ use rstest::rstest;
 enum Scripted {
     Ok,
     Fail(i64, ExceptionClass),
+    Stream(StreamFailure),
 }
 
 /// Answers each deployment's attempts from its own script; an unscripted attempt succeeds.
@@ -112,6 +113,13 @@ impl RouterHost for ScriptedHost {
             Scripted::Fail(status, class) => Invoked::Failure {
                 error: format!("{id}#{index}"),
                 classified: classified(status, class),
+            },
+            Scripted::Stream(failure) => Invoked::Failure {
+                error: format!("{id}#{index}"),
+                classified: Classified {
+                    stream_failure: Some(failure),
+                    ..classified(503, ExceptionClass::ServiceUnavailable)
+                },
             },
         })
     }
@@ -420,4 +428,47 @@ async fn exhausted_retries_stamp_the_latest_error() {
             .map(op_name)
             .any(|op| op == format!("stamp({}, 2)", raised(&error)))
     );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_stream_failing_before_content_falls_back_without_retrying_the_group() {
+    let mut settings = settings();
+    settings.fallbacks = Some(vec![chain("g", &["h"])]);
+    let engine = engine(
+        vec![
+            deployment("a", "g"),
+            deployment("b", "g"),
+            deployment("c", "h"),
+        ],
+        settings,
+    );
+    let before_content = Scripted::Stream(StreamFailure::BeforeContent);
+    let host = ScriptedHost::default()
+        .script("a", &[before_content.clone()])
+        .script("b", &[before_content]);
+
+    let routed = engine.route(&host, call("g")).await.ok().unwrap();
+
+    assert_eq!(host.attempts().len(), 2);
+    assert_eq!(host.attempts()[1], "c");
+    assert_eq!(routed.outcome.model_group, "h");
+    assert!(host.sleeps.lock().unwrap().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_terminal_stream_failure_is_raised_without_retries_or_fallbacks() {
+    let mut settings = settings();
+    settings.fallbacks = Some(vec![chain("g", &["h"])]);
+    let engine = engine(vec![deployment("a", "g"), deployment("c", "h")], settings);
+    let host = ScriptedHost::default().script("a", &[Scripted::Stream(StreamFailure::Terminal)]);
+
+    let Err(RouteError::Failed(failed)) = engine.route(&host, call("g")).await else {
+        panic!("a terminal stream failure is raised");
+    };
+
+    assert_eq!(host.attempts(), ["a"]);
+    assert_eq!(raised(&failed.error), "a#1");
+    assert!(failed.ops.is_empty());
 }

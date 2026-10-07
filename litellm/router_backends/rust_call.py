@@ -17,12 +17,18 @@ from typing import Final, Literal, Protocol, TypeAlias, cast
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,  # pyright: ignore[reportPrivateUsage]  # the header reader the cooldown callback uses
 )
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.router_backends.python_router import (
+    FallbackAwareStreamWrapper,
+    _stream_chunks_have_generated_content,  # pyright: ignore[reportPrivateUsage]  # the content rule Python's stream wrapper applies
+)
 from litellm.router_strategy.complexity_router.context_compaction import compact_to_fit
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -39,7 +45,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_caller_timeout_408,
 )
 from litellm.types.router import RouterErrors, RouterRateLimitError
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import (
     _get_retry_after_from_exception_header,  # pyright: ignore[reportPrivateUsage]  # the Retry-After parser retries and cooldowns use
 )
@@ -200,6 +206,73 @@ def classify(error: BaseException, kwargs: Mapping[str, object], callbacks_ran: 
     }
 
 
+class _StreamFailed(Exception):
+    """A stream that failed before its first content chunk."""
+
+    def __init__(self, error: BaseException, kind: Literal["before_content", "terminal"]) -> None:
+        super().__init__(str(error))
+        self.error: Final = error
+        self.kind: Final = kind
+
+
+class ReplayStream(FallbackAwareStreamWrapper):
+    """The attempt's stream, replaying the chunks read while waiting for its first content.
+
+    After content has reached the caller the stream cannot fall back, so a mid-stream
+    fallback error surfaces as the error that caused it, as the Python router's wrapper does.
+    """
+
+    def __init__(self, inner: CustomStreamWrapper, buffered: Sequence[ModelResponseStream]) -> None:
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # CustomStreamWrapper's untyped constructor
+            completion_stream=cast(object, inner.completion_stream),  # cast-ok: untyped attribute
+            model=cast(object, inner.model),  # cast-ok: untyped attribute
+            custom_llm_provider=inner.custom_llm_provider,
+            logging_obj=inner.logging_obj,
+            _response_headers=getattr(inner, "_response_headers", None),
+        )
+        self._inner: Final = inner
+        self._replay: Final = iter(tuple(buffered))
+        self.chunks = cast(list[ModelResponseStream], inner.chunks)  # cast-ok: untyped attribute
+        self._hidden_params = dict(cast(Mapping[str, object], inner._hidden_params))  # pyright: ignore[reportPrivateUsage]  # cast-ok: the stream's own untyped metadata
+
+    def __aiter__(self) -> ReplayStream:
+        return self
+
+    async def __anext__(self) -> ModelResponseStream:
+        buffered: Final = next(self._replay, None)
+        if buffered is not None:
+            return buffered
+        try:
+            return await self._inner.__anext__()
+        except MidStreamFallbackError as error:
+            if error.original_exception is not None:
+                raise error.original_exception from error
+            raise
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+def _not_fetched(stream: CustomStreamWrapper) -> bool:
+    return cast(object, stream.completion_stream) is None and stream.make_call is not None  # cast-ok: untyped attribute
+
+
+async def _replay_from_first_content(stream: CustomStreamWrapper) -> ReplayStream:
+    """Reads `stream` until a chunk carries content, so a failure before then can still go to
+    another deployment; the chunks read so far replay ahead of the rest."""
+    buffered: Final[list[ModelResponseStream]] = []  # mutable-ok: chunks read before the first content
+    try:
+        async for chunk in stream:
+            buffered.append(chunk)
+            if _stream_chunks_have_generated_content([chunk]):
+                break
+    except MidStreamFallbackError as error:
+        raise _StreamFailed(error, "before_content") from error
+    except Exception as error:
+        raise _StreamFailed(error, "terminal") from error
+    return ReplayStream(stream, buffered)
+
+
 class _AttemptFailed(Exception):
     """An attempt's error that litellm did not raise, so its failure callbacks never ran for it."""
 
@@ -244,6 +317,12 @@ class RoutedCall:
             return self._mock(parsed, kwargs)
         try:
             response: Final = await self._acompletion(parsed, kwargs)
+        except _StreamFailed as failed:
+            return (
+                "error",
+                failed.error,
+                {**classify(failed.error, kwargs, callbacks_ran=True), "stream_failure": failed.kind},
+            )
         except _AttemptFailed as failed:
             return ("error", failed.error, classify(failed.error, kwargs, callbacks_ran=False))
         except Exception as error:
@@ -382,8 +461,14 @@ class RoutedCall:
                         message="Response output was blocked.", model=attempt.model_group, llm_provider=""
                     )
                 )
+            if isinstance(response, CustomStreamWrapper) and _not_fetched(response):
+                await response.fetch_stream()
             normalizer.success_calls[model_name] += 1
+            if isinstance(response, CustomStreamWrapper):
+                return await _replay_from_first_content(response)
             return response
+        except _StreamFailed:
+            raise
         except _AttemptFailed as failed:
             self._stamp(failed.error, deployment, kwargs, model_name)
             raise

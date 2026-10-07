@@ -19,6 +19,17 @@ pub enum ExceptionClass {
     ApiConnection,
 }
 
+/// How a streamed attempt failed before its first content chunk reached the caller.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamFailure {
+    /// A failure the stream can fall back from (`MidStreamFallbackError`). Chat goes straight
+    /// to the fallback chain, without retrying in the group, as Python's stream wrapper does.
+    BeforeContent,
+    /// Any other stream error, which reaches the caller as raised.
+    Terminal,
+}
+
 /// What the host learned about an exception an attempt raised. The host computes the facts
 /// that depend on Python objects (header parsing, logging state); routing reads only these.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -45,6 +56,8 @@ pub struct Classified {
     pub exempt_from_cooldown: bool,
     /// `type(e) in litellm.LITELLM_EXCEPTION_TYPES`, which gates the exhausted-retry stamp.
     pub exact_litellm_type: bool,
+    #[serde(default)]
+    pub stream_failure: Option<StreamFailure>,
 }
 
 impl Classified {
