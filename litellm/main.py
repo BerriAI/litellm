@@ -8230,8 +8230,6 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
-            # The synchronous provider already ran inside run_in_executor above;
-            # re-running it would call the provider twice and bill the user twice.
             response = init_response
         return response
     except Exception as e:
