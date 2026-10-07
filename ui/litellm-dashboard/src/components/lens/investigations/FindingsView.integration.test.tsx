@@ -118,3 +118,38 @@ it("opens a grouped finding from a link to any of its owning investigations", as
   expect(within(panel).getByRole("heading", { name: issue.title })).toBeVisible();
   expect(screen.getByRole("row", { name: issue.title })).toHaveAttribute("aria-selected", "true");
 });
+
+it("ranks findings under high, medium and low priority headings with the highest first", async () => {
+  const at = (id: string, priority: "high" | "medium" | "low", last_seen: string) => ({
+    ...issue,
+    id,
+    check_id: id,
+    title: `${priority} ${id}`,
+    priority,
+    last_seen,
+  });
+  const findings = [
+    at("newest-low", "low", "2026-10-06T00:00:00Z"),
+    at("old-high", "high", "2026-09-01T00:00:00Z"),
+    at("medium", "medium", "2026-10-05T00:00:00Z"),
+    at("new-high", "high", "2026-10-04T00:00:00Z"),
+  ];
+  proxy.get.mockImplementation(async (path) =>
+    path === "/lens" ? { lenses: [{ ...support, findings }], workers: [], tracing_enabled: true } : { data: [] },
+  );
+  renderWithLens(<FindingsView readOnly />, { searchParams: "?tab=findings" });
+  const groups = await screen.findAllByRole("rowgroup");
+  expect(groups.map((group) => group.getAttribute("aria-label"))).toEqual([
+    "High priority findings",
+    "Medium priority findings",
+    "Low priority findings",
+  ]);
+  const titles = (group: HTMLElement) =>
+    within(group)
+      .getAllByRole("row")
+      .map((row) => row.getAttribute("aria-label"))
+      .filter(Boolean);
+  expect(titles(groups[0])).toEqual(["high new-high", "high old-high"]);
+  expect(groups[0]).toHaveTextContent(/High priority\s*2/);
+  expect(titles(groups[2])).toEqual(["low newest-low"]);
+});
