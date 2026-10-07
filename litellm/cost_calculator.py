@@ -1547,7 +1547,14 @@ def completion_cost(
                     completion_tokens = token_counter(model=model, text=completion)
 
                 # Handle A2A calls before model check - A2A doesn't require a model
-                if call_type in _A2A_CALL_TYPES:
+                if call_type in _A2A_CALL_TYPES or (
+                    custom_llm_provider == "a2a"
+                    and litellm_logging_obj is not None
+                    and (litellm_logging_obj.model_call_details.get("litellm_params") or MappingProxyType({})).get(
+                        "cost_per_query"
+                    )
+                    is not None
+                ):
                     from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 
                     return A2ACostCalculator.calculate_a2a_cost(litellm_logging_obj=litellm_logging_obj)

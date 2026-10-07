@@ -597,6 +597,26 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     data.pop("enable_tag_filtering", None)
 
+    agent_request_data: Final[Mapping[str, object]] = data
+    agent_model: Final = agent_request_data.get("model")
+    if isinstance(agent_model, str) and _is_a2a_agent_model(agent_model):
+        from litellm.proxy.agent_endpoints.a2a_routing import route_a2a_agent_request
+        from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
+
+        registered_agent: Final = await get_agent_with_read_through(agent_model[4:])
+        if registered_agent is not None:
+            agent_response: Final = await route_a2a_agent_request(
+                agent_request_data,
+                route_type,
+                user_api_key_dict=user_api_key_dict,
+                registered_agent=registered_agent,
+                llm_router=llm_router,
+            )
+            if agent_response is not None:
+                return agent_response
+    if user_api_key_dict is not None and user_api_key_dict.invoked_agent_policy is not None:
+        raise HTTPException(503, "Agent dispatch does not match its admission")
+
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.model_names if llm_router is not None else []
     is_proxy_admin_without_team: Final = team_id is None and is_proxy_admin_request(data)
@@ -830,7 +850,9 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                     route_a2a_agent_request,
                 )
 
-                result: Final = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
+                result: Final = await route_a2a_agent_request(
+                    agent_request_data, route_type, user_api_key_dict=user_api_key_dict, llm_router=llm_router
+                )
                 if result is not None:
                     return result
                 # Fall through to raise exception below if result is None

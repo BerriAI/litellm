@@ -73,10 +73,10 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
         }
 
         # Call the method
+        previous_tasks: Final = asyncio.all_tasks()
         await db_writer.update_database(**test_data)
-
-        # Let the single batched task run
-        await asyncio.sleep(0)
+        batch_tasks: Final = tuple(task for task in asyncio.all_tasks() if task not in previous_tasks)
+        await asyncio.gather(*batch_tasks)
 
         # Verify that _insert_spend_log_to_db was NOT called (since disable_spend_logs is True)
         db_writer._insert_spend_log_to_db.assert_not_called()
@@ -121,6 +121,7 @@ async def test_update_database_attributes_router_rejected_failure_to_model_group
             "litellm.proxy.proxy_server.llm_router", llm_router
         ),  # test-quality-ok: get_llm_router reads this proxy_server module global at call time; no injection seam
     ):
+        previous_tasks: Final = asyncio.all_tasks()
         await db_writer.update_database(
             token="test-token",
             user_id="test-user",
@@ -138,7 +139,8 @@ async def test_update_database_attributes_router_rejected_failure_to_model_group
             end_time=datetime.now(timezone.utc),
             response_cost=0.0,
         )
-        await asyncio.sleep(0)
+        batch_tasks: Final = tuple(task for task in asyncio.all_tasks() if task not in previous_tasks)
+        await asyncio.gather(*batch_tasks)
 
     payload: Final = db_writer.add_spend_log_transaction_to_daily_user_transaction.call_args[1]["payload"]
     assert payload["model_group"] == "openai-outage"
@@ -1007,7 +1009,7 @@ async def test_commit_spend_updates_to_db_increments_agent_spend():
 
     mock_batcher.litellm_agentstable.update_many.assert_called_once()
     call_kwargs = mock_batcher.litellm_agentstable.update_many.call_args[1]
-    assert call_kwargs["where"] == {"agent_id": agent_id}
+    assert call_kwargs["where"] == {"agent_id": agent_id, "spend_window": None}
     assert call_kwargs["data"] == {"spend": {"increment": response_cost}}
 
 
@@ -1596,7 +1598,10 @@ async def test_add_spend_log_transaction_to_daily_end_user_transaction_skips_whe
 
 
 @pytest.mark.asyncio
-async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agent_id_and_queues_update():
+@pytest.mark.parametrize("billing_agent_id", [None, "caller"])
+async def test_add_spend_log_transaction_to_daily_agent_transaction_uses_invoked_agent_id(
+    billing_agent_id: str | None,
+) -> None:
     """
     Ensure agent_id is injected and queued for daily aggregation.
     """
@@ -1604,10 +1609,11 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agen
     mock_prisma = MagicMock()
     mock_prisma.get_request_status = MagicMock(return_value="success")
 
-    agent_id = "agent-123"
-    payload = {
+    agent_id: Final = "target"
+    payload: Final = {
         "request_id": "req-123",
         "agent_id": agent_id,
+        "billing_agent_id": billing_agent_id,
         "user": "test-user",
         "startTime": "2024-01-01T12:00:00",
         "api_key": "test-key",
@@ -1635,6 +1641,7 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agen
     for key, transaction in update_dict.items():
         assert key == f"{agent_id}_2024-01-01_test-key_gpt-4_openai_"
         assert transaction["agent_id"] == agent_id
+        assert transaction["spend"] == 0.3
         assert transaction["date"] == "2024-01-01"
         assert transaction["api_key"] == "test-key"
         assert transaction["model"] == "gpt-4"
@@ -2249,6 +2256,7 @@ async def test_daily_agent_receives_deepcopied_payload():
             return_value=fake_payload,
         ),
     ):
+        previous_tasks: Final = asyncio.all_tasks()
         await db_writer.update_database(
             token="test-token",
             user_id="test-user",
@@ -2262,8 +2270,8 @@ async def test_daily_agent_receives_deepcopied_payload():
             response_cost=0.1,
         )
 
-        # Let the single batched task run
-        await asyncio.sleep(0)
+        batch_tasks: Final = tuple(task for task in asyncio.all_tasks() if task not in previous_tasks)
+        await asyncio.gather(*batch_tasks)
 
     # The agent handler should have been called
     assert len(captured_agent_payloads) == 1
@@ -2741,6 +2749,7 @@ async def test_update_database_does_not_deepcopy_on_request_path():
             counting_deepcopy,
         ),
     ):
+        previous_tasks: Final = asyncio.all_tasks()
         await db_writer.update_database(
             token="test-token",
             user_id="test-user",
@@ -2762,8 +2771,8 @@ async def test_update_database_does_not_deepcopy_on_request_path():
         assert captured_spend_log["model_at_call"] == "gpt-4"
         assert fake_payload["spend"] == 0.1
 
-        # Now let the batch background task run; the deepcopy happens here.
-        await asyncio.sleep(0)
+        batch_tasks: Final = tuple(task for task in asyncio.all_tasks() if task not in previous_tasks)
+        await asyncio.gather(*batch_tasks)
 
     assert len(deepcopy_calls) >= 1
     assert len(captured_batch_payloads) == 1
@@ -4978,6 +4987,218 @@ async def test_shutdown_drain_that_lands_before_the_interrupted_tag_commit_resol
     assert redis_buffer.restored == [drained], "a tag batch whose COMMIT came back failed must be restored to Redis"
     (upsert,) = _daily_upserts(final_db, "LiteLLM_DailyTagSpend")
     assert _row_values(upsert, "api_requests") == [1]
+
+
+@pytest.mark.asyncio
+async def test_agent_spend_queue_keeps_admission_windows_separate():
+    from litellm.types.agents import agent_budget_counter_key
+
+    writer = DBSpendUpdateWriter()
+    client = MagicMock()
+    old_key = agent_budget_counter_key("window-agent", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    new_key = agent_budget_counter_key("window-agent", datetime(2026, 1, 2, tzinfo=timezone.utc))
+    await writer._update_agent_db(0.4, "window-agent", client, counter_key=old_key)
+    await writer._update_agent_db(0.1, "window-agent", client, counter_key=new_key)
+    await writer._update_agent_db(0.2, "window-agent", client, counter_key=new_key)
+    transactions = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["agent_list_transactions"] == {old_key: 0.4, new_key: pytest.approx(0.3)}
+
+
+@pytest.mark.asyncio
+async def test_agent_admission_window_survives_logging_payload_and_background_queue() -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.types.agents import agent_budget_counter_key
+
+    now: Final = datetime.now(timezone.utc)
+    counter: Final = agent_budget_counter_key("window-agent", now)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "demo-model",
+            "litellm_params": {
+                "metadata": {
+                    "billing_agent_id": "window-agent",
+                    "billing_agent_counter_key": counter,
+                }
+            },
+        },
+        response_obj={},
+        start_time=now,
+        end_time=now,
+    )
+    assert json.loads(payload["metadata"])["billing_agent_counter_key"] == counter
+    writer: Final = DBSpendUpdateWriter()
+    await writer._batch_database_updates(
+        response_cost=0.4,
+        user_id=None,
+        hashed_token=None,
+        team_id=None,
+        org_id=None,
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload=payload,
+    )
+    transactions: Final = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["agent_list_transactions"] == {counter: 0.4}
+
+
+@pytest.mark.asyncio
+async def test_target_agent_counter_key_queues_spend_for_billing_and_target_agents() -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    now: Final = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    billing_counter: Final = "spend:agent:billing-agent"
+    target_counter: Final = "spend:agent:target-agent"
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "demo-model",
+            "litellm_params": {
+                "metadata": {
+                    "billing_agent_id": "billing-agent",
+                    "billing_agent_counter_key": billing_counter,
+                    "target_agent_id": "target-agent",
+                    "target_agent_counter_key": target_counter,
+                }
+            },
+        },
+        response_obj={},
+        start_time=now,
+        end_time=now,
+    )
+    assert json.loads(payload["metadata"])["target_agent_counter_key"] == target_counter
+
+    writer: Final = DBSpendUpdateWriter()
+    await writer._batch_database_updates(
+        response_cost=0.4,
+        user_id=None,
+        hashed_token=None,
+        team_id=None,
+        org_id=None,
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload=payload,
+    )
+    transactions: Final = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["agent_list_transactions"] == {
+        billing_counter: 0.4,
+        target_counter: 0.4,
+    }
+
+
+@pytest.mark.asyncio
+async def test_target_agent_counter_key_queues_spend_when_billing_counter_mismatches_agent() -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    now: Final = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    billing_counter: Final = "spend:agent:other-billing-agent"
+    target_counter: Final = "spend:agent:target-agent"
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "demo-model",
+            "litellm_params": {
+                "metadata": {
+                    "billing_agent_id": "billing-agent",
+                    "billing_agent_counter_key": billing_counter,
+                    "target_agent_id": "target-agent",
+                    "target_agent_counter_key": target_counter,
+                }
+            },
+        },
+        response_obj={},
+        start_time=now,
+        end_time=now,
+    )
+    writer: Final = DBSpendUpdateWriter()
+    await writer._batch_database_updates(
+        response_cost=0.4,
+        user_id=None,
+        hashed_token=None,
+        team_id=None,
+        org_id=None,
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload=payload,
+    )
+    transactions: Final = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["agent_list_transactions"] == {target_counter: 0.4}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("counter", ["spend:agent:another-agent", "spend:agent_window:malformed:window-agent"])
+async def test_invalid_agent_window_cannot_charge_another_agent(counter: str) -> None:
+    writer: Final = DBSpendUpdateWriter()
+    with pytest.raises(ValueError, match="does not match"):
+        await writer._update_agent_db(0.4, "window-agent", MagicMock(), counter_key=counter)
+    transactions: Final = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["agent_list_transactions"] == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "captured_window", [None, datetime(2026, 1, 1, tzinfo=timezone.utc), datetime(2026, 1, 2, tzinfo=timezone.utc)]
+)
+async def test_agent_settlement_charges_only_the_matching_current_window(captured_window):
+    from litellm.types.agents import agent_budget_counter_key
+
+    active_window = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    row = {"agent_id": "window-agent", "spend_window": active_window, "spend": 0.2}
+
+    def apply_update(*, where, data):
+        if all(row[key] == value for key, value in where.items()):
+            row["spend"] += data["spend"]["increment"]
+
+    batcher = MagicMock()
+    batcher.litellm_agentstable.update_many.side_effect = apply_update
+    transaction = AsyncMock()
+    transaction.batch_ = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=batcher)))
+    client = MagicMock()
+    client.db.tx.return_value = AsyncMock(__aenter__=AsyncMock(return_value=transaction))
+    key = agent_budget_counter_key("window-agent", captured_window)
+    await DBSpendUpdateWriter._update_entity_spend_in_db(
+        entity_name="Agent",
+        transactions={key: 0.4},
+        table_accessor="litellm_agentstable",
+        where_field="agent_id",
+        n_retry_times=0,
+        prisma_client=client,
+        proxy_logging_obj=MagicMock(),
+    )
+    assert row["spend"] == pytest.approx(0.6 if captured_window == active_window else 0.2)
+    assert batcher.litellm_agentstable.update_many.call_args.kwargs["where"] == {
+        "agent_id": "window-agent",
+        "spend_window": captured_window,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("captured_budget", ("current", "retired"))
+async def test_lifetime_settlement_preserves_history_without_charging_another_budget(captured_budget: str) -> None:
+    from types import SimpleNamespace
+
+    row: Final = SimpleNamespace(
+        agent_id="agent", budget_id="current", spend_window=None, spend=12.5, lifetime_budget_spend=0.25
+    )
+
+    def apply_update(*, where: dict[str, object], data: dict[str, dict[str, float]]) -> None:
+        if all(getattr(row, key) == value for key, value in where.items()):
+            for field, operation in data.items():
+                setattr(row, field, getattr(row, field) + operation["increment"])
+
+    batcher: Final = MagicMock()
+    batcher.litellm_agentstable.update_many.side_effect = apply_update
+    transaction: Final = AsyncMock()
+    transaction.batch_ = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=batcher)))
+    client: Final = MagicMock()
+    client.db.tx.return_value = AsyncMock(__aenter__=AsyncMock(return_value=transaction))
+    await DBSpendUpdateWriter._update_entity_spend_in_db(
+        entity_name="Agent", transactions={f"spend:agent_lifetime:{captured_budget}:agent": 0.25},
+        table_accessor="litellm_agentstable", where_field="agent_id", n_retry_times=0,
+        prisma_client=client, proxy_logging_obj=MagicMock(),
+    )
+    assert row.spend == 12.75
+    assert row.lifetime_budget_spend == (0.5 if captured_budget == "current" else 0.25)
 
 
 def _lock_timeout_error() -> PrismaDataError:

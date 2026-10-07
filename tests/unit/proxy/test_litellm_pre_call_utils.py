@@ -8592,6 +8592,42 @@ def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
     assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}
 
 
+@pytest.mark.parametrize("bound", [False, True])
+def test_agent_budget_window_metadata_is_owned_by_authenticated_policy(bound: bool) -> None:
+    from litellm.types.agents import AgentResponse
+
+    auth: Final = UserAPIKeyAuth(agent_id="agent" if bound else None)
+    if bound:
+        auth.billing_agent_policy = AgentResponse(
+            agent_id="agent",
+            agent_name="Agent",
+            agent_card_params={},
+            litellm_budget_table={"budget_id": "budget", "budget_reset_at": "2026-01-02T00:00:00Z"},
+        )
+        auth.target_agent_budget_policy = AgentResponse(
+            agent_id="target",
+            agent_name="Target",
+            agent_card_params={},
+            litellm_budget_table={"budget_id": "target-budget", "max_budget": 0.02},
+        )
+    result: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        {
+            "metadata": {
+                "billing_agent_counter_key": "spend:agent:victim",
+                "target_agent_counter_key": "spend:agent:victim",
+            }
+        },
+        auth,
+        "metadata",
+    )
+    assert result["metadata"]["billing_agent_counter_key"] == (
+        "spend:agent_window:20260102T000000.000000Z:agent" if bound else None
+    )
+    assert result["metadata"]["target_agent_counter_key"] == (
+        "spend:agent_lifetime:target-budget:target" if bound else None
+    )
+
+
 def test_arize_otlp_protocol_on_a_key_logging_entry_reaches_the_destination(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.proxy.litellm_pre_call_utils import resolve_tenant_otel_destinations

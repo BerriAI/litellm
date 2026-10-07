@@ -11128,3 +11128,30 @@ async def test_authoritative_group_grants_propagate_policy_outages(
             await _get_agent_ids_from_access_groups(["group"], check_db_only=True)
     else:
         assert await _get_agent_ids_from_access_groups(["group"]) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("skip", [False, True])
+async def test_explicit_budget_skip_applies_to_agent_budget(skip: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import AgentBudgetState
+
+    auth: Final = UserAPIKeyAuth()
+    auth.billing_agent_policy = AgentResponse(
+        agent_id="agent", agent_name="Agent", agent_card_params={},
+        litellm_budget_table=AgentBudgetState(budget_id="budget", max_budget=0),
+    )
+    monkeypatch.setattr(proxy_server, "get_current_spend", AsyncMock(return_value=0))
+    checks: Final = common_checks(
+        request_body={"model": "gpt-4"}, team_object=None, user_object=None,
+        end_user_object=None, global_proxy_spend=None, general_settings={},
+        route="/v1/chat/completions", llm_router=None, proxy_logging_obj=MagicMock(),
+        valid_token=auth, request=MagicMock(spec=Request), skip_budget_checks=skip,
+    )
+    if skip:
+        assert await checks is True
+    else:
+        with pytest.raises(litellm.BudgetExceededError, match="Agent budget exceeded"):
+            await checks

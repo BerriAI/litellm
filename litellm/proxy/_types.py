@@ -3472,6 +3472,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     invoked_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
     agent_invocation_cost: float | None = Field(default=None, exclude=True)
     billing_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
+    target_agent_budget_policy: AgentResponse | None = Field(default=None, exclude=True)
     _managed_delegation_verified: bool = PrivateAttr(default=False)
     managed_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
     managed_agent_context: ManagedAgentContext | None = Field(default=None, exclude=True)
@@ -3526,6 +3527,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("invoked_agent_policy", None)
         values.pop("agent_invocation_cost", None)
         values.pop("billing_agent_policy", None)
+        values.pop("target_agent_budget_policy", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
             if isinstance(values.get("api_key"), str):
@@ -4222,6 +4224,8 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    billing_agent_counter_key: ReadOnly[NotRequired[str | None]]
+    target_agent_counter_key: ReadOnly[NotRequired[str | None]]
     actor_agent_id: ReadOnly[NotRequired[str | None]]
     target_agent_id: ReadOnly[NotRequired[str | None]]
     billing_agent_id: ReadOnly[NotRequired[str | None]]

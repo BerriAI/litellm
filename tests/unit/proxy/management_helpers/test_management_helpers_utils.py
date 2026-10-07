@@ -274,7 +274,10 @@ async def test_handle_budget_for_entity_updates_only_cleared_or_supplied_fields(
     budget_update: Final = AsyncMock()
     prisma_client: Final = cast(
         PrismaClient,
-        SimpleNamespace(db=SimpleNamespace(litellm_budgettable=SimpleNamespace(update=budget_update))),
+        SimpleNamespace(
+            db=SimpleNamespace(litellm_budgettable=SimpleNamespace(update=budget_update)),
+            writer_db=SimpleNamespace(litellm_agentstable=SimpleNamespace(find_first=AsyncMock(return_value=None))),
+        ),
     )
 
     with (
@@ -906,6 +909,7 @@ async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
     db: Final = _FakeDb()
     prisma_client: Final = MagicMock()
     prisma_client.db = db
+    prisma_client.writer_db.litellm_agentstable.find_first = AsyncMock(return_value=None)
     admin: Final = UserAPIKeyAuth(user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN)
     team_id: Final = "team-shared-default"
     default_budget: Final = await db.litellm_budgettable.create(data={"budget_id": "team-default", "max_budget": 100.0})

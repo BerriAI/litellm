@@ -33,6 +33,7 @@ from litellm.proxy.a2a.version_convert import (
     normalize_request_params,
     normalize_stream_event,
 )
+from litellm.proxy.agent_endpoints.auth.managed_authorization import agent_invocation_policy
 from litellm.proxy.agent_endpoints.databricks_oauth import (
     DATABRICKS_OAUTH_PARAM,
     resolve_databricks_app_auth_header,
@@ -709,9 +710,10 @@ async def invoke_agent_a2a(
                 params.pop(key)
 
         # Find the agent
-        agent: Final = await _get_agent(agent_id)
-        if agent is None:
+        registered: Final = await _get_agent(agent_id)
+        if registered is None:
             return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found", 404)
+        agent: Final = agent_invocation_policy(user_api_key_dict, registered)
 
         served_version: Final = _served_version(agent, request, original_method)
 
@@ -735,7 +737,10 @@ async def invoke_agent_a2a(
         agent_name: Final = agent_card_params.get("name", agent_id)
 
         # Get litellm_params (may include custom_llm_provider for completion bridge)
-        litellm_params: dict[str, object] = agent.litellm_params or {}
+        litellm_params: Mapping[str, object] = {
+            **(agent.litellm_params or MappingProxyType({})),
+            "cost_per_query": user_api_key_dict.agent_invocation_cost,
+        }
         custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
 
         # Hand the authenticated key hash to the completion bridge so provider

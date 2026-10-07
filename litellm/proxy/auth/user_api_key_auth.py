@@ -11,7 +11,7 @@ import asyncio
 import fnmatch
 import re
 import secrets
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Final, NamedTuple, Protocol, Union, cast
 
@@ -3083,12 +3083,16 @@ async def _run_centralized_common_checks(
             keep_token_limits=user_custom_auth is not None,
         )
 
+    from litellm.proxy.spend_tracking.budget_reservation import invoked_agent_models
+
     skip_budget_checks: Final = _should_skip_budget_checks(
         request_data=request_data,
         route=route,
         request=request,
         llm_router=llm_router,
         team_id=user_api_key_auth_obj.team_id,
+        agent_invocation_cost=user_api_key_auth_obj.agent_invocation_cost,
+        invoked_agent_models=invoked_agent_models(user_api_key_auth_obj),
     )
 
     # Pin the metadata variable name (litellm_metadata vs metadata) before
@@ -3248,6 +3252,7 @@ async def _reserve_budget_after_common_checks(
             fail_closed_budget_enforcement=(
                 general_settings.get("fail_closed_budget_enforcement") is True
                 or user_api_key_auth_obj.billing_agent_policy is not None
+                or user_api_key_auth_obj.target_agent_budget_policy is not None
             ),
             raw_body=await read_raw_json_body(request=request),
         )
@@ -3262,7 +3267,11 @@ def _should_skip_budget_checks(
     request: Request | None,
     llm_router: litellm.Router | None,
     team_id: str | None = None,
+    agent_invocation_cost: float | None = None,
+    invoked_agent_models: Sequence[str] = (),
 ) -> bool:
+    if agent_invocation_cost is not None and agent_invocation_cost > 0:
+        return False
     model: Final = _get_model_from_request_context(
         request_data=request_data,
         route=route,
@@ -3271,7 +3280,8 @@ def _should_skip_budget_checks(
         team_id=team_id,
     )
     if model is not None and llm_router is not None:
-        return _is_model_cost_zero(model=model, llm_router=llm_router)
+        request_models: Final = [model] if isinstance(model, str) else list(model)
+        return _is_model_cost_zero(model=[*request_models, *invoked_agent_models], llm_router=llm_router)
     return False
 
 
@@ -3332,7 +3342,14 @@ async def _authorize_authenticated_request(
             prepare_agent_invocation,
         )
         from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
-        from litellm.proxy.proxy_server import general_settings, prisma_client, user_model
+        from litellm.proxy.proxy_server import (
+            general_settings,
+            llm_router,
+            prisma_client,
+            proxy_config,
+            proxy_logging_obj,
+            user_model,
+        )
 
         store: Final = AgentIdentityStore.from_client(prisma_client) if prisma_client is not None else None
         if user_api_key_auth_obj.agent_id is not None:
@@ -3341,26 +3358,44 @@ async def _authorize_authenticated_request(
             route, request.method
         ):
             raise HTTPException(403, "Agent identities can only access inference and agent discovery routes")
-        authorized_data: Final = (
-            managed_inference_request(
-                route,
-                request_data,
-                general_settings,
-                user_model,
-                request.path_params.get("model") or request.path_params.get("model_name"),
-                request.query_params.get("model"),
+        router_settings: Final[Mapping[str, object] | None] = (
+            await proxy_config.get_hierarchical_router_settings(
+                user_api_key_dict=user_api_key_auth_obj,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
             )
-            if user_api_key_auth_obj.managed_agent_policy is not None
+            if llm_router is not None and RouteChecks.is_llm_api_route(route=route)
+            else None
+        )
+        query_params: Final[Mapping[str, object]] = _safe_get_request_query_params(request)
+        inference_data: Final = managed_inference_request(
+            route,
+            request_data,
+            general_settings,
+            user_model,
+            request.path_params.get("model") or request.path_params.get("model_name"),
+            query_params.get("model"),
+            model_group_alias=router_settings.get("model_group_alias") if router_settings is not None else None,
+            auth=user_api_key_auth_obj,
+            require_model=user_api_key_auth_obj.managed_agent_policy is not None,
+        )
+        target_name: Final = invocation_target(route, inference_data)
+        authorized_data: Final = (
+            inference_data
+            if target_name is not None or user_api_key_auth_obj.managed_agent_policy is not None
             else request_data
         )
-        target_name: Final = invocation_target(route, authorized_data)
         if target_name is not None:
             await prepare_agent_invocation(
                 user_api_key_auth_obj,
                 target_name,
                 store,
-                billable=request_data.get("method")
-                in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage"),
+                billable=request.method == "POST"
+                and (
+                    not RouteChecks.check_route_access(route, ("/a2a/{agent_id}", "/v1/a2a/{agent_id}"))
+                    or request_data.get("method")
+                    in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage")
+                ),
             )
         await _run_centralized_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,

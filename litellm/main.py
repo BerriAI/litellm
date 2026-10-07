@@ -5686,6 +5686,7 @@ def completion(
             preset_cache_key=preset_cache_key,
             no_log=no_log,
             cost_per_second=cost_per_second,
+            cost_per_query=kwargs.get("cost_per_query"),
             input_cost_per_second=input_cost_per_second,
             input_cost_per_token=input_cost_per_token,
             output_cost_per_second=output_cost_per_second,

@@ -117,6 +117,7 @@ class CostLogger(CustomLogger):
 
     def __init__(self):
         self.response_cost: Optional[float] = None
+        self.logged: asyncio.Event = asyncio.Event()
         super().__init__()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -125,6 +126,7 @@ class CostLogger(CustomLogger):
             self.response_cost = (
                 slp.get("response_cost") if isinstance(slp, dict) else getattr(slp, "response_cost", None)
             )
+        self.logged.set()
 
 
 @pytest.mark.asyncio
@@ -449,3 +451,207 @@ async def test_asend_message_streaming_triggers_callbacks():
     assert callback_logger.agent_id == test_agent_id, (
         f"Expected agent_id '{test_agent_id}', got '{callback_logger.agent_id}'"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("claimed_fee", (None, -1000.0, 0.0, 99.0))
+@pytest.mark.parametrize("fee_field", ("cost_per_query", "litellm_params"))
+@pytest.mark.parametrize("changed_after_admission", (False, True))
+@pytest.mark.parametrize("configured_fee", (None, 0.0, 0.25))
+async def test_chat_adapter_settles_the_admitted_agent_fee_without_model_pricing(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, claimed_fee: float | None,
+    changed_after_admission: bool, configured_fee: float | None, fee_field: str
+) -> None:
+    import json
+    from typing import Final
+
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.a2a_routing import route_a2a_agent_request
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+    from litellm.types.agents import AgentResponse
+
+    await _reset_callbacks_and_settle_pending_logs()
+    logger: Final = CostLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    target: Final = AgentResponse(
+        agent_id="fee-target", agent_name="fee-target",
+        agent_card_params={"url": "https://agent.test/", "capabilities": {"streaming": True}},
+        litellm_params={"cost_per_query": configured_fee} if configured_fee is not None else {},
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(target)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    auth: Final = UserAPIKeyAuth(user_role="proxy_admin")
+    await prepare_agent_invocation(auth, "fee-target", None)
+    assert auth.agent_invocation_cost == configured_fee
+    if changed_after_admission:
+        registry.deregister_agent(target.agent_name)
+        registry.register_agent(target.model_copy(update={"litellm_params": {"cost_per_query": 0.5}}))
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        assert body["method"] == ("message/stream" if stream else "message/send")
+        result: Final = {
+            "jsonrpc": "2.0", "id": body["id"],
+            "result": {"kind": "message", "messageId": "reply", "role": "agent",
+                       "parts": [{"kind": "text", "text": "Paid reply"}]},
+        }
+        if stream:
+            return httpx.Response(200, text=f"data: {json.dumps(result)}\n\n", headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, json=result)
+
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(reply))
+    try:
+        pending: Final = await route_a2a_agent_request(
+            data={"model": "a2a/fee-target", "messages": [{"role": "user", "content": "Hello"}],
+                  "stream": stream, "client": client,
+                  **({fee_field: claimed_fee if fee_field == "cost_per_query" else {"cost_per_query": claimed_fee}}
+                     if claimed_fee is not None else {})},
+            route_type="acompletion", user_api_key_dict=auth,
+        )
+        response: Final = await pending
+        if stream:
+            chunks: Final = tuple([chunk async for chunk in response])
+            assert any(chunk.choices[0].delta.content == "Paid reply" for chunk in chunks)
+        else:
+            assert response.choices[0].message.content == "Paid reply"
+        await asyncio.wait_for(logger.logged.wait(), timeout=10.0)
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+        if configured_fee is None:
+            assert logger.response_cost in (None, 0.0)
+        else:
+            assert logger.response_cost == pytest.approx(configured_fee)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admitted_target", (None, "other"))
+async def test_chat_agent_dispatch_rejects_missing_or_different_admission(
+    monkeypatch: pytest.MonkeyPatch,
+    admitted_target: str | None,
+) -> None:
+    from typing import Final
+    from unittest.mock import Mock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.a2a_routing import route_a2a_agent_request
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+    from litellm.types.agents import AgentResponse
+
+    registry: Final = agent_registry.AgentRegistry()
+    for name in ("paid", "other"):
+        registry.register_agent(
+            AgentResponse(
+                agent_id=name,
+                agent_name=name,
+                agent_card_params={"url": "https://agent.test/"},
+                litellm_params={"cost_per_query": 0.25},
+            )
+        )
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    auth: Final = UserAPIKeyAuth(user_role="proxy_admin")
+    if admitted_target is not None:
+        await prepare_agent_invocation(auth, admitted_target, None)
+    provider: Final = Mock(return_value=None)
+    monkeypatch.setattr(litellm, "acompletion", provider)
+    with pytest.raises(HTTPException) as exc:
+        await route_a2a_agent_request(
+            data={"model": "a2a/paid", "messages": [{"role": "user", "content": "Hello"}]},
+            route_type="acompletion",
+            user_api_key_dict=auth,
+        )
+    assert exc.value.status_code == 503
+    assert "admission" in str(exc.value.detail).lower()
+    provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("configured_fee", (None, 0.0, 0.25))
+@pytest.mark.parametrize("pricing_source", ("model_map", "router", "other_agent_router"))
+async def test_chat_adapter_preserves_model_pricing_without_a_fixed_fee(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, configured_fee: float | None, pricing_source: str
+) -> None:
+    import json
+    from typing import Final
+
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+    from litellm.proxy.route_llm_request import route_request
+    from litellm.types.agents import AgentResponse
+
+    await _reset_callbacks_and_settle_pending_logs()
+    logger: Final = CostLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(litellm, "model_cost", {
+        **{key: value for key, value in litellm.model_cost.items() if key != "a2a/token-target"},
+        **({"a2a/token-target": {
+            "input_cost_per_token": 0.0, "output_cost_per_token": 0.125,
+            "litellm_provider": "a2a", "mode": "chat",
+        }} if pricing_source != "router" else {}),
+    })
+    router: Final = litellm.Router(model_list=[{
+        "model_name": "a2a/token-target",
+        "litellm_params": {
+            "model": "a2a/other-agent" if pricing_source == "other_agent_router" else "a2a/token-target",
+            "api_base": "https://wrong-agent.test/",
+            "input_cost_per_token": 0.0, "output_cost_per_token": 0.125,
+        },
+    }]) if pricing_source != "model_map" else None
+    target: Final = AgentResponse(
+        agent_id="token-target", agent_name="token-target",
+        agent_card_params={"url": "https://agent.test/", "capabilities": {"streaming": True}},
+        litellm_params={"cost_per_query": configured_fee} if configured_fee is not None else {},
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(target)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    auth: Final = UserAPIKeyAuth(user_role="proxy_admin")
+    auth.billing_agent_policy = AgentResponse(agent_id="caller", agent_name="caller", agent_card_params={})
+    await prepare_agent_invocation(auth, target.agent_id, None)
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "agent.test", "Dispatch must use the admitted agent destination"
+        body: Final = json.loads(request.content)
+        result: Final = {
+            "jsonrpc": "2.0", "id": body["id"],
+            "result": {"kind": "message", "messageId": "reply", "role": "agent",
+                       "parts": [{"kind": "text", "text": "Hello"}]},
+        }
+        if stream:
+            return httpx.Response(200, text=f"data: {json.dumps(result)}\n\n", headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, json=result)
+
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(reply))
+    try:
+        pending: Final = await route_request(
+            data={"model": "a2a/token-target", "messages": [{"role": "user", "content": "Hi"}],
+                  "stream": stream, "client": client},
+            route_type="acompletion", user_api_key_dict=auth, llm_router=router, user_model=None,
+        )
+        response: Final = await pending
+        if stream:
+            chunks: Final = tuple([chunk async for chunk in response])
+            assert any(chunk.choices[0].delta.content == "Hello" for chunk in chunks)
+        else:
+            assert response.choices[0].message.content == "Hello"
+        await asyncio.wait_for(logger.logged.wait(), timeout=10.0)
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+        assert logger.response_cost == pytest.approx(0.125 if configured_fee is None else configured_fee)
+    finally:
+        await client.close()
+        if router is not None:
+            router.discard()

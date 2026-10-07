@@ -2149,7 +2149,7 @@ class TestGigachatProxyRoute:
         mock_request.headers = {"content-type": "application/json"}
         mock_request.query_params = {}
         mock_fastapi_response = MagicMock(spec=Response)
-        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict = UserAPIKeyAuth()
         mock_llm_router.allm_passthrough_route = AsyncMock(
             return_value=httpx.Response(200, json={"response": "success"})
         )

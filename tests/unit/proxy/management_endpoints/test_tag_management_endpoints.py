@@ -34,6 +34,10 @@ class _BudgetState:
         return SimpleNamespace(**self._values)
 
 
+def _writer_db_without_agent_budgets() -> SimpleNamespace:
+    return SimpleNamespace(litellm_agentstable=SimpleNamespace(find_first=AsyncMock(return_value=None)))
+
+
 class FakeVerificationTokenTable:
     """Stand-in for ``prisma_client.db.litellm_verificationtoken``.
 
@@ -322,7 +326,8 @@ async def test_update_tag_clears_or_sets_only_provided_budget_fields(
                 litellm_tagtable=SimpleNamespace(find_unique=find_tag, update=update_tag_row),
                 litellm_proxymodeltable=SimpleNamespace(find_many=find_models),
                 litellm_budgettable=SimpleNamespace(update=update_budget),
-            )
+            ),
+            writer_db=_writer_db_without_agent_budgets(),
         ),
     )
 
@@ -379,7 +384,7 @@ async def test_update_tag_explicit_null_clears_budget_duration():
         created_by="admin",
     )
     mock_db = Mock()
-    mock_prisma = SimpleNamespace(db=mock_db)
+    mock_prisma = SimpleNamespace(db=mock_db, writer_db=_writer_db_without_agent_budgets())
     mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
     mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
     mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)

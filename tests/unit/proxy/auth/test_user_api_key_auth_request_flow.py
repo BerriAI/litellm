@@ -6936,6 +6936,7 @@ async def test_user_api_key_auth_sets_end_user_id_when_builder_skips_it():
             "type": "http",
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
+            "query_string": b"",
             "path": "/chat/completions",
         }
     )
@@ -6991,6 +6992,7 @@ async def test_user_api_key_auth_does_not_overwrite_end_user_id_set_by_builder()
             "type": "http",
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
+            "query_string": b"",
             "path": "/chat/completions",
         }
     )
@@ -9068,7 +9070,7 @@ _DDTRACE_AUTH_PROBE = dedent(
 
 
     async def auth(api_key):
-        request = Request(scope={"type": "http", "headers": [], "method": "POST", "path": "/chat/completions"})
+        request = Request(scope={"type": "http", "headers": [], "method": "POST", "path": "/chat/completions", "query_string": b""})
         request._url = URL(url="/chat/completions")
         try:
             await user_api_key_auth(
@@ -10353,6 +10355,242 @@ async def test_enterprise_custom_auth_key_return_stays_a_proxy_validated_key(mon
     )
     assert admitted.authenticated_by_custom_auth is False
     assert admitted.via_virtual_key is True
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "http_method,route,body,billed",
+    [
+        ("GET", "/a2a/agent/.well-known/agent-card.json", {}, False),
+        ("POST", "/a2a/agent", {"jsonrpc": "2.0", "id": "1", "method": "tasks/get", "params": {"id": "t"}}, False),
+        ("POST", "/a2a/agent", {"jsonrpc": "2.0", "id": "1", "method": "message/send", "params": {}}, True),
+        ("POST", "/a2a/agent", {"jsonrpc": "2.0", "id": "1", "method": "message/stream", "params": {}}, True),
+        ("POST", "/a2a/agent", {"method": "message/send", "model": "free-model", "params": {}}, True),
+        ("POST", "/a2a/agent", {"method": "message/stream", "model": "free-model", "params": {}}, True),
+        ("POST", "/v1/chat/completions", {"model": "a2a/agent", "method": "tasks/get"}, True),
+        ("POST", "/chat/completions", {"model": "a2a/agent", "method": "tasks/cancel", "stream": True}, True),
+        ("POST", "/v1/a2a/agent/message/send", {"method": "tasks/get", "params": {}}, True),
+    ],
+)
+async def test_human_agent_discovery_does_not_reserve_target_budget_but_send_and_stream_do(
+    monkeypatch: pytest.MonkeyPatch, http_method: str, route: str, body: dict, billed: bool
+) -> None:
+    from typing import Final
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    target: Final = AgentResponse(
+        agent_id="agent",
+        agent_name="Agent",
+        agent_card_params={},
+        identity_managed=True,
+        execution_mode="both",
+        litellm_params={"cost_per_query": 0.25},
+        litellm_budget_table={"budget_id": "agent-budget", "max_budget": 10.0},
+        identity=AgentIdentityBinding(
+            agent_id="agent",
+            provider="microsoft_entra",
+            tenant_id="tenant",
+            client_id="client",
+            service_principal_id="principal",
+            issuer="issuer",
+            revision="current",
+        ),
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(target)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
+    for name, value in {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": database,
+        "llm_router": litellm.Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                    "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
+                }
+            ]
+        )
+        if body.get("model")
+        else None,
+        "proxy_logging_obj": MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
+    }.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    request = _alias_request(route, body)
+    request.scope["method"] = http_method
+    auth: Final = UserAPIKeyAuth(
+        api_key="human-key",
+        user_id="human",
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=["agent"]),
+    )
+    database.get_data = AsyncMock(return_value=auth)
+    proxy_server.proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock(return_value=None)
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
+        new_callable=AsyncMock,
+        return_value=None,
+    ) as reserve:
+        assert await _authorize_authenticated_request(auth, request, body, route, "human-key") is None
+    assert auth.invoked_agent_id == "agent"
+    assert auth.agent_invocation_cost == pytest.approx(0.25 if billed else 0.0), (http_method, body.get("method"))
+    if billed:
+        assert auth.billing_agent_policy is not None and auth.billing_agent_policy.agent_id == "agent"
+    else:
+        assert auth.billing_agent_policy is None, (http_method, body.get("method"))
+    reserve.assert_awaited_once()
+    reserved: Final = reserve.call_args.kwargs["valid_token"]
+    assert reserved is auth and (reserved.billing_agent_policy is not None) is billed, (http_method, body.get("method"))
+
+
+@pytest.mark.parametrize(
+    "invocation_cost,invoked_agent_models,skipped",
+    [
+        (None, (), True),
+        (0.0, (), True),
+        (0.25, (), False),
+        (None, ("free-model",), True),
+        (None, ("paid-model",), False),
+    ],
+)
+def test_free_model_only_waives_budgets_without_a_paid_agent_invocation(
+    invocation_cost: float | None,
+    invoked_agent_models: tuple[str, ...],
+    skipped: bool,
+) -> None:
+    from typing import Final
+
+    from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "free-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
+            },
+            {
+                "model_name": "paid-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+            },
+        ]
+    )
+    assert (
+        _should_skip_budget_checks(
+            request_data={"model": "free-model"},
+            route="/chat/completions",
+            request=None,
+            llm_router=router,
+            agent_invocation_cost=invocation_cost,
+            invoked_agent_models=invoked_agent_models,
+        )
+        is skipped
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selection",
+    (
+        "body",
+        "query",
+        "path",
+        "cli",
+        "default",
+        "key-alias",
+        "team-alias",
+        "global-alias",
+        "alias-chain",
+        "query-alias",
+        "query-over-alias",
+        "different-agent",
+        "router-alias",
+        "query-router-alias",
+    ),
+)
+async def test_agent_admission_prices_the_model_selected_for_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    selection: str,
+) -> None:
+    from typing import Final
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+    from litellm.types.agents import AgentResponse
+
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(
+        AgentResponse(
+            agent_id="paid",
+            agent_name="Paid",
+            agent_card_params={},
+            litellm_params={"cost_per_query": 0.25},
+        )
+    )
+    registry.register_agent(
+        AgentResponse(
+            agent_id="other",
+            agent_name="Other",
+            agent_card_params={},
+            litellm_params={"cost_per_query": 0.75},
+        )
+    )
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(litellm, "model_alias_map", {"global": "a2a/paid"})
+    for name, value in {
+        **_proxy_attrs_for_centralized_checks(),
+        "user_model": "a2a/paid" if selection == "cli" else None,
+        "llm_router": litellm.Router(model_list=[]) if "router-alias" in selection else None,
+        "general_settings": {"completion_model": "a2a/paid"} if selection == "default" else {},
+        "proxy_logging_obj": MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
+    }.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    body: Final = {
+        "model": {
+            "body": "a2a/paid",
+            "key-alias": "alias",
+            "team-alias": "team-alias",
+            "global-alias": "global",
+            "alias-chain": "team-alias",
+            "query-over-alias": "alias",
+            "different-agent": "a2a/other",
+            "router-alias": "router-alias",
+        }.get(selection, "gpt-4o"),
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+    route: Final = "/openai/deployments/a2a/paid/chat/completions" if selection == "path" else "/v1/chat/completions"
+    request: Final = _alias_request(route, body, path_params={"model": "a2a/paid"} if selection == "path" else {})
+    if selection in ("query", "query-over-alias", "different-agent", "query-alias"):
+        request.scope["query_string"] = b"model=alias" if selection == "query-alias" else b"model=a2a%2Fpaid"
+    if selection == "query-router-alias":
+        request.scope["query_string"] = b"model=router-alias"
+    auth: Final = UserAPIKeyAuth(
+        router_settings={"model_group_alias": {"router-alias": "a2a/paid"}},
+        user_role="proxy_admin",
+        aliases={"alias": "global" if selection == "alias-chain" else "a2a/paid"},
+        team_model_aliases={"team-alias": "alias" if selection == "alias-chain" else "a2a/paid"},
+    )
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
+        new_callable=AsyncMock,
+        return_value=None,
+    ) as reserve:
+        assert await _authorize_authenticated_request(auth, request, body, route, "test-key") is None
+    assert auth.invoked_agent_id == "paid"
+    assert auth.agent_invocation_cost == pytest.approx(0.25)
+    reserve.assert_awaited_once()
+    assert reserve.call_args.kwargs["valid_token"].agent_invocation_cost == pytest.approx(0.25)
+    assert reserve.call_args.kwargs["request_body"]["model"] == "a2a/paid"
 
 
 @pytest.mark.asyncio
