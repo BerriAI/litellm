@@ -650,6 +650,7 @@ class _SessionAggRow(LiteLLMBaseModel):
     ttl_5m_turns: int = 0
     ttl_1h_turns: int = 0
     total_tokens: int = 0
+    day_total_tokens: int | None = None
     session_seconds: float = 0.0
     turns: int = 0
     spend: float = 0.0
@@ -724,6 +725,7 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
     return AutoRouterBenchmarkTotals(
         sessions=sessions,
         turns=row.turns,
+        total_tokens=row.day_total_tokens,
         avg_turns_per_session=_per_session(row, row.session_turns),
         avg_session_seconds=_per_session(row, row.session_seconds),
         avg_tokens_per_session=_per_session(row, row.total_tokens),
@@ -759,6 +761,7 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         tier_turns=row.tier_turns,
         sessions=totals.sessions,
         turns=totals.turns,
+        total_tokens=totals.total_tokens,
         avg_turns_per_session=totals.avg_turns_per_session,
         avg_session_seconds=totals.avg_session_seconds,
         avg_tokens_per_session=totals.avg_tokens_per_session,
@@ -796,6 +799,11 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         ttl_5m_turns=sum(row.ttl_5m_turns for row in rows),
         ttl_1h_turns=sum(row.ttl_1h_turns for row in rows),
         total_tokens=sum(row.total_tokens for row in rows),
+        day_total_tokens=(
+            sum(row.day_total_tokens or 0 for row in rows)
+            if all(row.day_total_tokens is not None for row in rows)
+            else None
+        ),
         spend=sum(row.spend for row in rows),
         saved_spend=sum(row.saved_spend for row in rows),
         savings_estimated_turns=sum(row.savings_estimated_turns for row in rows),
