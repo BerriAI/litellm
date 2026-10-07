@@ -34,6 +34,17 @@ def init_guardrails_v2(
                 source="config",
             )
         except (ValueError, TypeError) as init_error:
+            if _is_default_on(guardrail):
+                # A default_on guardrail runs on every request. Starting without it is
+                # fail-open: every request reaches the provider carrying whatever this
+                # guardrail was configured to block or redact, and the only sign is one
+                # log line at startup. That is the case for a config written for a newer
+                # LiteLLM (a guardrail type this release does not know) as much as for a
+                # bad parameter, so the proxy stops here instead.
+                raise ValueError(
+                    f"Guardrail '{guardrail.get('guardrail_name')}' is default_on and could not be "
+                    f"initialized, so the proxy will not start without it: {init_error}"
+                ) from init_error
             verbose_proxy_logger.error(
                 "Skipping guardrail '%s': invalid configuration, proxy is starting WITHOUT this guardrail: %s",
                 guardrail.get("guardrail_name"),
@@ -47,6 +58,14 @@ def init_guardrails_v2(
 
     # Populate router's guardrail_list for load balancing support
     _populate_router_guardrail_list(guardrail_list=guardrail_list)
+
+
+def _is_default_on(guardrail: dict) -> bool:
+    """Whether a config entry asks to run on every request (`litellm_params.default_on`)."""
+    litellm_params = guardrail.get("litellm_params")
+    if isinstance(litellm_params, dict):
+        return litellm_params.get("default_on") is True
+    return getattr(litellm_params, "default_on", None) is True
 
 
 def _populate_router_guardrail_list(guardrail_list: list[Guardrail]) -> None:
