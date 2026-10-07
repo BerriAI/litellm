@@ -71,15 +71,20 @@ describe("signal settings", () => {
     renderWithLens(<SignalForm saved={customConfig} />);
 
     const question = await screen.findByRole("textbox", { name: "Question for Tool failure" });
-    const tile = screen.getByRole("button", { name: /^Tool failure/ });
     expect(question).toHaveValue(customQuestion);
-    expect(tile).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: /^Tool failure/ })).toHaveAttribute("aria-pressed", "false");
 
-    await user.click(tile);
-    expect(tile).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: /^Tool failure/ }));
+    expect(screen.getByRole("button", { name: /^Tool failure/ })).toHaveAttribute("aria-pressed", "true");
     expect(question).toHaveValue(customQuestion);
-    await user.click(tile);
-    expect(tile).toHaveAttribute("aria-pressed", "false");
-    expect(question).toHaveValue(customQuestion);
+
+    const editedQuestion = "Does this edited custom failure condition apply?";
+    fireEvent.change(question, { target: { value: editedQuestion } });
+    expect(question).toHaveValue(editedQuestion);
+    expect(screen.getByRole("button", { name: /^Tool failure/ })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Remove Tool failure" }));
+    expect(screen.queryByRole("textbox", { name: "Question for Tool failure" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Tool failure/ })).toHaveAttribute("aria-pressed", "true");
   });
 });

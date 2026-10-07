@@ -179,7 +179,7 @@ export function SignalForm({ saved }: { saved: SignalConfig }) {
       ...SIGNAL_LIBRARY.filter((signal) => next.has(signal.id)).map(
         (signal) =>
           draft.rows.find((row) => row.question === signal.question) ?? {
-            key: signal.id,
+            key: crypto.randomUUID(),
             id: draft.rows.some((row) => row.id === signal.id) ? "" : signal.id,
             name: signal.name,
             question: signal.question,
