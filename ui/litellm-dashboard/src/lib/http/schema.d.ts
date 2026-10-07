@@ -44642,6 +44642,11 @@ export interface components {
         RunSource: {
             /** Title */
             title: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "slack" | "teams" | "discord" | "linear" | "github" | "jira" | "custom";
             /** Url */
             url: string;
         };
