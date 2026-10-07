@@ -1,7 +1,8 @@
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Final
 
+from integration._support.client import object_value, string_value
 from integration._support.wire import Reply, Request
 from pydantic import JsonValue
 
@@ -116,3 +117,12 @@ def function_tools() -> list[JsonValue]:
             },
         }
     ]
+
+
+def chat_content(frames: Sequence[Mapping[str, JsonValue]]) -> str:
+    def deltas() -> Iterator[str]:
+        for chunk in frames:
+            for choice in chunk.get("choices") or []:
+                yield string_value(object_value(object_value(choice)["delta"]).get("content") or "")
+
+    return "".join(deltas())

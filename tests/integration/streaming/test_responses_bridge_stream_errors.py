@@ -27,6 +27,7 @@ from integration._support.responses_stream import (
     OPENAI_TARGET,
     RATE_LIMIT_MESSAGE,
     azure_rate_limit,
+    chat_content,
     created,
     delta,
     error_event,
@@ -214,11 +215,7 @@ def test_bridged_in_stream_rate_limit_falls_back_to_the_healthy_deployment(fallb
     ):
         response: Final = _chat(fallback_proxy.gateway, chat_body(_PRIMARY, identity))
         assert response.status_code == 200, response.text
-        content: Final = "".join(
-            string_value(object_value(object_value(choice)["delta"]).get("content") or "")
-            for frame in data_frames(response.text)
-            for choice in frame.get("choices") or []
-        )
+        content: Final = chat_content(data_frames(response.text))
         assert content == "fallback answer", response.text
         assert len(primary.drain()) == 1 and len(spare.drain()) == 1
         row: Final = spend_row(response.headers["x-litellm-call-id"])
@@ -320,11 +317,7 @@ def test_bridged_rate_limit_after_output_is_a_provider_typed_error_frame_behind_
     response, _ = _in_stream_error_status(gateway, stream)
     assert response.status_code == 200, response.text
     frames: Final = data_frames(response.text)
-    content: Final = "".join(
-        string_value(object_value(object_value(choice)["delta"]).get("content") or "")
-        for frame in frames
-        for choice in frame.get("choices") or []
-    )
+    content: Final = chat_content(frames)
     assert content == "Hello there", response.text
     error: Final = object_value(frames[-1]["error"])
     assert str(error["code"]) == "429", error

@@ -26,7 +26,13 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
-from integration._support.responses_stream import AZURE_TARGET, function_tools, healthy_stream, rate_limited_stream
+from integration._support.responses_stream import (
+    AZURE_TARGET,
+    chat_content,
+    function_tools,
+    healthy_stream,
+    rate_limited_stream,
+)
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
@@ -206,19 +212,11 @@ def _sse_events(text: str) -> tuple[tuple[str, Mapping[str, JsonValue]], ...]:
     return tuple(parse(block) for block in text.strip().split("\n\n") if "event: " in block)
 
 
-def _chat_content(frames: Sequence[Mapping[str, JsonValue]]) -> str:
-    def deltas(frame: Mapping[str, JsonValue]) -> Iterator[str]:
-        for choice in frame.get("choices") or []:
-            yield string_value(object_value(object_value(choice)["delta"]).get("content") or "")
-
-    return "".join(piece for frame in frames for piece in deltas(frame))
-
-
 def _assert_answered_in_its_own_shape(served: _Served) -> None:
     match served.call.kind:
         case "chat_healthy":
             assert served.status == 200, served.text
-            assert _chat_content(_data_frames(served.text)) == f"answer marker-{served.call.marker}", served.text
+            assert chat_content(_data_frames(served.text)) == f"answer marker-{served.call.marker}", served.text
         case "chat_limited":
             assert served.status == 429, served.text
             error: Final = object_value(JSON_OBJECT.validate_json(served.text)["error"])
