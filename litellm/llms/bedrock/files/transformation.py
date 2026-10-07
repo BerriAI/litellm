@@ -8,9 +8,10 @@ from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypeAlias, TypedDict
+from typing import Any, Final, Literal, TypeAlias, TypedDict, cast
 from urllib.parse import quote, unquote, urlencode
 
 import httpx
@@ -70,10 +71,50 @@ from ..common_utils import (
 )
 
 S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
+S3_RETRIEVE_FILE_ID_PARAM: Final = "_s3_retrieve_file_id"
+S3_RETRIEVE_FILE_KEY_PARAM: Final = "_s3_retrieve_file_key"
 
 LIST_FILES_PURPOSE_PARAM: Final = "_s3_list_files_purpose"
 
 LIST_FILES_LOCATION_PARAM: Final = "_s3_list_files_location"
+
+
+def _retrieved_s3_file_size(raw_response: Response) -> int:
+    status_code: Final = raw_response.status_code
+    if status_code == 206:
+        content_range: Final = cast(str, raw_response.headers.get("Content-Range", ""))
+        range_parts: Final = content_range.removeprefix("bytes 0-0/")
+        if content_range.startswith("bytes 0-0/") and range_parts.isdigit():
+            return int(range_parts)
+        raise BedrockError(
+            status_code=status_code,
+            message=f"Invalid S3 Content-Range header: {content_range}",
+            headers=raw_response.headers,
+            response=raw_response,
+        )
+    if status_code == 200:
+        content_length: Final = cast(str, raw_response.headers.get("Content-Length", ""))
+        if content_length.isdigit():
+            return int(content_length)
+        raise BedrockError(
+            status_code=status_code,
+            message=f"Invalid S3 Content-Length header: {content_length}",
+            headers=raw_response.headers,
+            response=raw_response,
+        )
+    if status_code >= 400:
+        raise BedrockError(
+            status_code=status_code,
+            message=raw_response.text,
+            headers=raw_response.headers,
+            response=raw_response,
+        )
+    raise BedrockError(
+        status_code=status_code,
+        message=f"S3 file retrieval returned HTTP {status_code}",
+        headers=raw_response.headers,
+        response=raw_response,
+    )
 
 
 class _S3DeleteContext(LiteLLMBaseModel):
@@ -1276,18 +1317,52 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     def transform_retrieve_file_request(
         self,
         file_id: str,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> tuple[str, dict]:
-        raise NotImplementedError("BedrockFilesConfig does not support file retrieval")
+        optional_params: Mapping[str, object],
+        litellm_params: MutableMapping[str, object],
+    ) -> tuple[str, dict[str, str]]:
+        _, object_key = _resolve_managed_s3_object(file_id=file_id, litellm_params=litellm_params)
+        url, params = self._transform_s3_file_request(
+            file_id=file_id,
+            method="GET",
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
+        signed_headers_object: Final = litellm_params.get(S3_SIGNED_REQUEST_HEADERS_PARAM)
+        if not isinstance(signed_headers_object, Mapping):
+            raise ValueError("S3 request signing did not produce request headers")
+        signed_headers: Final = cast(Mapping[str, str], signed_headers_object)
+        litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = MappingProxyType({**signed_headers, "Range": "bytes=0-0"})
+        litellm_params[S3_RETRIEVE_FILE_ID_PARAM] = file_id
+        litellm_params[S3_RETRIEVE_FILE_KEY_PARAM] = object_key
+        return url, params
 
     def transform_retrieve_file_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
-        raise NotImplementedError("BedrockFilesConfig does not support file retrieval")
+        file_id: Final = litellm_params.get(S3_RETRIEVE_FILE_ID_PARAM)
+        object_key: Final = litellm_params.get(S3_RETRIEVE_FILE_KEY_PARAM)
+        if not isinstance(file_id, str) or not isinstance(object_key, str):
+            raise ValueError("S3 retrieve response is missing request context")
+
+        file_size: Final = _retrieved_s3_file_size(raw_response)
+
+        configured_bucket_name: Final = _listing_bucket_name(litellm_params, "batch_output")
+        _, configured_prefix = split_configured_cloud_bucket_name(configured_bucket_name)
+        relative_key: Final = object_key[len(configured_prefix) + 1 :] if configured_prefix else object_key
+        last_modified: Final = cast(str, raw_response.headers.get("Last-Modified", ""))
+        created_at: Final = int(parsedate_to_datetime(last_modified).timestamp()) if last_modified else 0
+        return OpenAIFileObject(
+            id=file_id,
+            bytes=file_size,
+            created_at=created_at,
+            filename=posixpath.basename(object_key),
+            object="file",
+            purpose="batch_output" if relative_key.startswith(BEDROCK_MANAGED_S3_OUTPUT_PREFIX) else "batch",
+            status="processed",
+        )
 
     def transform_delete_file_request(
         self,

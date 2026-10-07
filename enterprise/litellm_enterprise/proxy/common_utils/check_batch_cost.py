@@ -2,7 +2,6 @@
 Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if the cost has been tracked.
 """
 
-import time
 from collections.abc import Sequence
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
@@ -20,7 +19,6 @@ from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
-from litellm.types.llms.openai import OpenAIFileObject
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -47,19 +45,6 @@ TERMINAL_MANAGED_OBJECT_STATUSES: Final[Tuple[str, ...]] = (
     *PROVIDER_TERMINAL_BATCH_STATUSES,
     "stale_expired",
 )
-
-
-def _batch_output_file_object(unified_file_id: str, raw_file_id: str, size_bytes: int) -> OpenAIFileObject:
-    filename: Final = raw_file_id.rsplit("/", 1)[-1] or raw_file_id
-    return OpenAIFileObject(
-        id=unified_file_id,
-        object="file",
-        purpose="batch_output",
-        filename=filename,
-        created_at=int(time.time()),
-        bytes=size_bytes,
-        status="processed",
-    )
 
 
 class _ManagedObjectRow(Protocol):
@@ -830,15 +815,14 @@ class CheckBatchCost:
             custom_llm_provider=custom_llm_provider,
         )
 
-        # CheckBatchCost bypasses async_post_call_success_hook, so convert raw
-        # output/error file IDs to managed base64 IDs before the DB write here.
-        managed_files_hook = self.proxy_logging_obj.get_proxy_hook("managed_files")
-        if managed_files_hook is not None:
+        from litellm.proxy.openai_files_endpoints.common_utils import ManagedBatchOutputFileWriter
+
+        managed_files_hook: Final = self.proxy_logging_obj.get_proxy_hook("managed_files")
+        if isinstance(managed_files_hook, ManagedBatchOutputFileWriter):
+            managed_file_writer: Final = managed_files_hook
             from litellm.proxy._types import UserAPIKeyAuth
 
-            managed_file_model_name = self._get_managed_file_model_name(
-                job=job, deployment_info=deployment_info
-            )
+            managed_file_model_name = self._get_managed_file_model_name(job=job, deployment_info=deployment_info)
             _minimal_auth = UserAPIKeyAuth(
                 user_id=job.created_by or "default-user-id",
                 team_id=getattr(job, "team_id", None),
@@ -847,21 +831,18 @@ class CheckBatchCost:
                 _raw_file_id = cast(str | None, getattr(response, _file_attr, None))
                 if _raw_file_id and not _is_base64_encoded_unified_file_id(_raw_file_id):
                     try:
-                        _unified_file_id = managed_files_hook.get_unified_output_file_id(
+                        _unified_file_id = managed_file_writer.get_unified_output_file_id(
                             output_file_id=_raw_file_id,
                             model_id=model_id,
                             model_name=managed_file_model_name,
                         )
-                        await managed_files_hook.store_unified_file_id(
-                            file_id=_unified_file_id,
-                            file_object=_batch_output_file_object(
-                                unified_file_id=_unified_file_id,
-                                raw_file_id=_raw_file_id,
-                                size_bytes=len(content_bytes or b"") if _file_attr == "output_file_id" else 0,
-                            ),
+                        await managed_file_writer.store_batch_output_file(
+                            unified_file_id=_unified_file_id,
+                            provider_file_id=_raw_file_id,
+                            model_id=model_id,
+                            owner=_minimal_auth,
                             litellm_parent_otel_span=None,
-                            model_mappings={model_id: _raw_file_id},
-                            user_api_key_dict=_minimal_auth,
+                            size_bytes=len(content_bytes) if _file_attr == "output_file_id" else None,
                         )
                         setattr(response, _file_attr, _unified_file_id)
                         verbose_proxy_logger.info(

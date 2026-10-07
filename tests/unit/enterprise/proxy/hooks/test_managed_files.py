@@ -525,6 +525,8 @@ async def test_output_file_id_for_batch_retrieve():
     proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=AsyncMock()
     )
+    proxy_managed_files.get_unified_file_id = AsyncMock(return_value=None)
+    proxy_managed_files.store_unified_file_id = AsyncMock()
 
     response = await proxy_managed_files.async_post_call_success_hook(
         data={},
@@ -585,6 +587,8 @@ async def test_output_file_id_preserves_target_model_names_when_model_name_missi
     proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=AsyncMock()
     )
+    proxy_managed_files.get_unified_file_id = AsyncMock(return_value=None)
+    proxy_managed_files.store_unified_file_id = AsyncMock()
 
     provider_output_file = OpenAIFileObject(
         id="file-provider-output-id",
@@ -661,6 +665,8 @@ async def test_error_file_id_for_failed_batch():
     proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=AsyncMock()
     )
+    proxy_managed_files.get_unified_file_id = AsyncMock(return_value=None)
+    proxy_managed_files.store_unified_file_id = AsyncMock()
 
     # Create a proper OpenAIFileObject for the error file
     error_file_object = OpenAIFileObject(
@@ -1515,6 +1521,145 @@ async def test_store_unified_file_id_updates_file_metadata_on_existing_row():
 
 
 @pytest.mark.asyncio
+async def test_store_batch_output_file_skips_existing_file_object():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=MagicMock(),
+        prisma_client=AsyncMock(),
+    )
+    proxy_managed_files.get_unified_file_id = AsyncMock(
+        return_value=MagicMock(
+            file_object=OpenAIFileObject(
+                id="existing",
+                object="file",
+                bytes=1,
+                created_at=1,
+                filename="output.jsonl",
+                purpose="batch_output",
+            )
+        )
+    )
+    proxy_managed_files.store_unified_file_id = AsyncMock()
+
+    with patch("litellm.afile_retrieve", new_callable=AsyncMock) as retrieve:
+        await proxy_managed_files.store_batch_output_file(
+            unified_file_id="unified-output",
+            provider_file_id="provider-output",
+            model_id="model-123",
+            owner=UserAPIKeyAuth(user_id="user-123"),
+            litellm_parent_otel_span=None,
+        )
+
+    retrieve.assert_not_called()
+    proxy_managed_files.store_unified_file_id.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_store_batch_output_file_stores_provider_object_with_unified_id():
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    provider_file_object = OpenAIFileObject(
+        id="provider-output",
+        object="file",
+        bytes=123,
+        created_at=456,
+        filename="output.jsonl",
+        purpose="batch_output",
+    )
+    router = MagicMock()
+    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=MagicMock(),
+        prisma_client=AsyncMock(),
+    )
+    proxy_managed_files.get_unified_file_id = AsyncMock(return_value=MagicMock(file_object=None))
+    proxy_managed_files.store_unified_file_id = AsyncMock()
+
+    with (
+        patch.object(proxy_server_module, "llm_router", router),
+        patch("litellm.afile_retrieve", new_callable=AsyncMock, return_value=provider_file_object) as retrieve,
+    ):
+        await proxy_managed_files.store_batch_output_file(
+            unified_file_id="unified-output",
+            provider_file_id="provider-output",
+            model_id="model-123",
+            owner=UserAPIKeyAuth(user_id="user-123"),
+            litellm_parent_otel_span=None,
+        )
+
+    retrieve.assert_awaited_once()
+    stored_object = proxy_managed_files.store_unified_file_id.await_args.kwargs["file_object"]
+    assert stored_object.id == "unified-output"
+    assert stored_object.bytes == 123
+
+
+@pytest.mark.asyncio
+async def test_store_batch_output_file_falls_back_when_provider_retrieve_raises():
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = MagicMock()
+    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=MagicMock(),
+        prisma_client=AsyncMock(),
+    )
+    proxy_managed_files.get_unified_file_id = AsyncMock(return_value=MagicMock(file_object=None))
+    proxy_managed_files.store_unified_file_id = AsyncMock()
+
+    with (
+        patch.object(proxy_server_module, "llm_router", router),
+        patch("litellm.afile_retrieve", new_callable=AsyncMock, side_effect=RuntimeError("provider unavailable")),
+    ):
+        await proxy_managed_files.store_batch_output_file(
+            unified_file_id="unified-output",
+            provider_file_id="s3://bucket/output.jsonl",
+            model_id="model-123",
+            owner=UserAPIKeyAuth(user_id="user-123"),
+            litellm_parent_otel_span=None,
+            size_bytes=321,
+        )
+
+    stored_object = proxy_managed_files.store_unified_file_id.await_args.kwargs["file_object"]
+    assert stored_object.id == "unified-output"
+    assert stored_object.filename == "output.jsonl"
+    assert stored_object.bytes == 321
+    assert stored_object.purpose == "batch_output"
+
+
+@pytest.mark.asyncio
+async def test_store_batch_output_file_falls_back_without_model_id():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=MagicMock(),
+        prisma_client=AsyncMock(),
+    )
+    proxy_managed_files.get_unified_file_id = AsyncMock(return_value=MagicMock(file_object=None))
+    proxy_managed_files.store_unified_file_id = AsyncMock()
+
+    with patch("litellm.afile_retrieve", new_callable=AsyncMock) as retrieve:
+        await proxy_managed_files.store_batch_output_file(
+            unified_file_id="unified-error",
+            provider_file_id="error.jsonl",
+            model_id=None,
+            owner=UserAPIKeyAuth(user_id="user-123"),
+            litellm_parent_otel_span=None,
+        )
+
+    retrieve.assert_not_called()
+    stored_object = proxy_managed_files.store_unified_file_id.await_args.kwargs["file_object"]
+    assert stored_object.id == "unified-error"
+    assert stored_object.filename == "error.jsonl"
+    assert stored_object.bytes == 0
+    assert stored_object.purpose == "batch_output"
+
+
+@pytest.mark.asyncio
 async def test_afile_delete_returns_provider_response_when_stored_file_object_none():
     """
     Test that afile_delete returns the provider's delete response when the
@@ -1956,7 +2101,7 @@ async def test_afile_list_returns_persisted_batch_output_file():
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[row])
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -3491,8 +3636,10 @@ async def test_post_call_batch_sync_does_not_claim_ownership():
     prisma_client = AsyncMock()
     prisma_client.db.litellm_managedobjecttable.update_many.return_value = 0
     proxy_managed_files = PROXY_LiteLLMManagedFiles(
-        MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client
+        MagicMock(async_get_cache=AsyncMock(return_value=None), async_set_cache=AsyncMock()),
+        prisma_client=prisma_client,
     )
+    prisma_client.db.litellm_managedfiletable.find_first.return_value = None
 
     await proxy_managed_files.async_post_call_success_hook(
         data={"batch_id": MODEL_ENCODED_BATCH_ID},
@@ -3515,22 +3662,16 @@ async def test_post_call_batch_sync_updates_existing_row():
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
     )
-    proxy_managed_files = PROXY_LiteLLMManagedFiles(
-        MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client
-    )
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client)
 
     await proxy_managed_files.async_post_call_success_hook(
         data={"batch_id": MODEL_ENCODED_BATCH_ID},
-        user_api_key_dict=UserAPIKeyAuth(
-            user_id="user_a", team_id="team_a", parent_otel_span=MagicMock()
-        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="user_a", team_id="team_a", parent_otel_span=MagicMock()),
         response=_batch_response(MODEL_ENCODED_BATCH_ID),
     )
 
     update_call = prisma_client.db.litellm_managedobjecttable.update_many.await_args
-    assert update_call.kwargs["where"] == {
-        "unified_object_id": MODEL_ENCODED_BATCH_ID
-    }
+    assert update_call.kwargs["where"] == {"unified_object_id": MODEL_ENCODED_BATCH_ID}
     assert update_call.kwargs["data"]["status"] == "completed"
     prisma_client.db.litellm_managedobjecttable.upsert.assert_not_awaited()
 
@@ -3550,8 +3691,10 @@ async def test_post_call_batch_sync_stores_output_file_ownership_from_batch_row(
         _owned_record(created_by="user_a", team_id="team_a")
     )
     proxy_managed_files = PROXY_LiteLLMManagedFiles(
-        MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client
+        MagicMock(async_get_cache=AsyncMock(return_value=None), async_set_cache=AsyncMock()),
+        prisma_client=prisma_client,
     )
+    prisma_client.db.litellm_managedfiletable.find_first.return_value = None
 
     await proxy_managed_files.async_post_call_success_hook(
         data={"batch_id": MODEL_ENCODED_BATCH_ID},

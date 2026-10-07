@@ -24,7 +24,7 @@ _CLAIM_OUTPUT_FILE_ID = "file-output-123"
 
 
 def test_batch_output_file_object_derives_metadata():
-    from litellm_enterprise.proxy.common_utils.check_batch_cost import _batch_output_file_object
+    from litellm_enterprise.proxy.hooks.managed_files import _batch_output_file_object
 
     output_file = _batch_output_file_object(
         unified_file_id="unified-output",
@@ -1039,9 +1039,11 @@ class TestCheckBatchCost:
         )
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=response)
 
-        mock_hook = MagicMock()
+        from litellm.proxy.openai_files_endpoints.common_utils import ManagedBatchOutputFileWriter
+
+        mock_hook = MagicMock(spec=ManagedBatchOutputFileWriter)
         mock_hook.get_unified_output_file_id.side_effect = [unified_error_file_id]
-        mock_hook.store_unified_file_id = AsyncMock()
+        mock_hook.store_batch_output_file = AsyncMock()
         check_batch_cost_instance.proxy_logging_obj.get_proxy_hook.return_value = mock_hook
 
         await check_batch_cost_instance.check_batch_cost()
@@ -1051,14 +1053,17 @@ class TestCheckBatchCost:
             model_id="model-123",
             model_name="gpt-5-batch",
         )
-        stored = {
-            next(iter(c.kwargs["model_mappings"].values())): c.kwargs["file_id"]
-            for c in mock_hook.store_unified_file_id.call_args_list
-        }
-        assert stored == {raw_error_file_id: unified_error_file_id}
-        for store_call in mock_hook.store_unified_file_id.call_args_list:
-            assert store_call.kwargs["user_api_key_dict"].user_id == "user-1"
-            assert store_call.kwargs["user_api_key_dict"].team_id == "team-1"
+        mock_hook.store_batch_output_file.assert_awaited_once_with(
+            unified_file_id=unified_error_file_id,
+            provider_file_id=raw_error_file_id,
+            model_id="model-123",
+            owner=mock_hook.store_batch_output_file.await_args.kwargs["owner"],
+            litellm_parent_otel_span=None,
+            size_bytes=None,
+        )
+        owner = mock_hook.store_batch_output_file.await_args.kwargs["owner"]
+        assert owner.user_id == "user-1"
+        assert owner.team_id == "team-1"
 
         assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
         update_call = mock_prisma_client.db.litellm_managedobjecttable.update.call_args
@@ -1529,6 +1534,8 @@ class TestCheckBatchCost:
         Without this, GET /batches/{id} returns a raw file ID that cannot be routed
         through the proxy, causing API_KEY errors when clients call GET /files/{id}/content.
         """
+        from litellm.proxy.openai_files_endpoints.common_utils import ManagedBatchOutputFileWriter
+
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
@@ -1563,12 +1570,12 @@ class TestCheckBatchCost:
         mock_deployment.model_info.model_dump.return_value = {}
         mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
 
-        mock_hook = MagicMock()
+        mock_hook = MagicMock(spec=ManagedBatchOutputFileWriter)
         mock_hook.get_unified_output_file_id.side_effect = [
             fake_managed_output_id,
             fake_managed_error_id,
         ]
-        mock_hook.store_unified_file_id = AsyncMock()
+        mock_hook.store_batch_output_file = AsyncMock()
         check_batch_cost_instance.proxy_logging_obj.get_proxy_hook.return_value = mock_hook
 
         mock_file_content = MagicMock()
@@ -1631,28 +1638,21 @@ class TestCheckBatchCost:
             model_id="model-123",
             model_name="gpt-5-batch",
         )
-        assert mock_hook.store_unified_file_id.await_count == 2
-        # {raw_file_id: managed_file_id} for each store call
+        assert mock_hook.store_batch_output_file.await_count == 2
         stored = {
-            next(iter(c[1]["model_mappings"].values())): c[1]["file_id"]
-            for c in mock_hook.store_unified_file_id.call_args_list
+            c.kwargs["provider_file_id"]: c.kwargs["unified_file_id"]
+            for c in mock_hook.store_batch_output_file.call_args_list
         }
         assert stored == {
             raw_output_file_id: fake_managed_output_id,
             raw_error_file_id: fake_managed_error_id,
         }
-        for store_call in mock_hook.store_unified_file_id.call_args_list:
-            file_object = store_call.kwargs["file_object"]
-            assert file_object is not None
-            assert file_object.object == "file"
-            assert file_object.purpose == "batch_output"
-            assert file_object.id == store_call.kwargs["file_id"]
-        stored_file_objects = {
-            next(iter(c.kwargs["model_mappings"].values())): c.kwargs["file_object"]
-            for c in mock_hook.store_unified_file_id.call_args_list
+        stored_sizes = {
+            c.kwargs["provider_file_id"]: c.kwargs["size_bytes"]
+            for c in mock_hook.store_batch_output_file.call_args_list
         }
-        assert stored_file_objects[raw_output_file_id].bytes == len(mock_file_content.content)
-        assert stored_file_objects[raw_error_file_id].bytes == 0
+        assert stored_sizes[raw_output_file_id] == len(mock_file_content.content)
+        assert stored_sizes[raw_error_file_id] is None
         assert mock_response.output_file_id == fake_managed_output_id
         assert mock_response.error_file_id == fake_managed_error_id
 
@@ -2227,10 +2227,10 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
         from litellm_enterprise.proxy.common_utils.check_batch_cost import (
             CheckBatchCost,
         )
+
+        from enterprise.litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+        from litellm.proxy.openai_files_endpoints.common_utils import ManagedBatchOutputFileWriter
         from litellm.types.utils import LiteLLMBatch
-        from enterprise.litellm_enterprise.proxy.hooks.managed_files import (
-            PROXY_LiteLLMManagedFiles,
-        )
 
         router = MagicMock()
         router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
@@ -2241,13 +2241,13 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
         deployment.model_info.model_dump.return_value = {}
         router.get_deployment = MagicMock(return_value=deployment)
 
-        hook = MagicMock()
+        hook = MagicMock(spec=ManagedBatchOutputFileWriter)
         hook.get_unified_output_file_id = lambda output_file_id, model_id, model_name: (
             PROXY_LiteLLMManagedFiles.get_unified_output_file_id(
                 None, output_file_id=output_file_id, model_id=model_id, model_name=model_name
             )
         )
-        hook.store_unified_file_id = AsyncMock()
+        hook.store_batch_output_file = AsyncMock()
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.get_proxy_hook.return_value = hook
 
