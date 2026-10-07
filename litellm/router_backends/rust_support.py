@@ -60,8 +60,10 @@ SUPPORTED_ARGUMENTS: Final = frozenset(
         "fallback_access_check",
         "fallback_budget_check",
         "auto_router_capability_limit",
+        "cache_responses",
     }
 )
+_REDIS_ARGUMENTS: Final = ("redis_url", "redis_host", "redis_port", "redis_password")
 _UNSET: Final = object()
 
 _UNSUPPORTED_DEPLOYMENT_KEYS: Final = frozenset({"tpm", "rpm", "max_parallel_requests"})
@@ -74,6 +76,13 @@ _CALLBACK_HOOKS: Final = (
     "async_pre_call_check",
     "log_success_fallback_event",
     "log_failure_fallback_event",
+)
+_PASS_THROUGH_HOOKS: Final = frozenset(
+    {
+        # The proxy's per-key model budget limiter returns every deployment unchanged, to opt out
+        # of its parent's provider budget filter; it charges spend from its success callback.
+        "litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter.async_filter_deployments",
+    }
 )
 _FALLBACK_ARGUMENTS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "default_fallbacks")
 
@@ -105,6 +114,7 @@ def unsupported_reason(arguments: Mapping[str, object]) -> str | None:
                 _argument_reason(arguments),
                 _fallbacks_reason(arguments),
                 _model_list_reason(arguments.get("model_list"), arguments.get("ignore_invalid_deployments") is True),
+                _response_cache_reason(arguments),
                 _global_reason(),
             )
             if reason is not None
@@ -214,15 +224,32 @@ def _deployment_reason(deployment: _RawDeployment) -> str | None:
     return None
 
 
+def _response_cache_reason(arguments: Mapping[str, object]) -> str | None:
+    """`cache_responses` builds `litellm.cache` from the router's Redis arguments when nothing else
+    has, and the Python side that serves it here is built without them."""
+    if not arguments.get("cache_responses") or litellm.cache is not None:
+        return None
+    if any(arguments.get(name) is not None for name in _REDIS_ARGUMENTS):
+        return "cache_responses with the router's Redis as the response cache"
+    return None
+
+
 def _global_reason() -> str | None:
     if litellm.model_alias_map:
         return "litellm.model_alias_map is set"
     hooked: Final = tuple(
         type(callback).__name__
         for callback in _CALLBACKS.validate_python(cast(object, litellm.callbacks))  # cast-ok: untyped global
-        if isinstance(callback, CustomLogger)
-        and any(getattr(type(callback), hook) is not getattr(CustomLogger, hook) for hook in _CALLBACK_HOOKS)
+        if isinstance(callback, CustomLogger) and any(_hooks(type(callback), hook) for hook in _CALLBACK_HOOKS)
     )
     if hooked:
         return f"callbacks {', '.join(hooked)} filter or pre-check deployments"
     return None
+
+
+def _hooks(callback_type: type[CustomLogger], hook: str) -> bool:
+    """Whether `callback_type` overrides `hook` with something other than a known pass-through."""
+    method: Final = cast(object, getattr(callback_type, hook))  # cast-ok: getattr is typed Any
+    if method is cast(object, getattr(CustomLogger, hook)):  # cast-ok: as above
+        return False
+    return f"{getattr(method, '__module__', '')}.{getattr(method, '__qualname__', '')}" not in _PASS_THROUGH_HOOKS

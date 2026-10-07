@@ -93,3 +93,37 @@ def test_callbacks_that_filter_deployments_are_unsupported_but_plain_loggers_are
 
 def test_bind_arguments_maps_positional_and_keyword_arguments_by_name() -> None:
     assert bind_arguments(([_deployment()],), {"num_retries": 1}) == {"model_list": [_deployment()], "num_retries": 1}
+
+
+def test_the_proxys_pass_through_budget_filter_does_not_count_as_filtering(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.hooks.model_max_budget_limiter import _PROXY_VirtualKeyModelMaxBudgetLimiter
+
+    monkeypatch.setattr(litellm, "callbacks", [_PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())])
+
+    assert unsupported_reason({}) is None
+
+
+def test_an_unreadable_deployment_is_skipped_when_invalid_deployments_are_ignored() -> None:
+    unreadable: Final = {"litellm_params": {"model": "m"}}
+
+    assert unsupported_reason({"model_list": [_deployment(), unreadable], "ignore_invalid_deployments": True}) is None
+    assert unsupported_reason(
+        {"model_list": [unreadable, _deployment({"tpm": 1})], "ignore_invalid_deployments": True}
+    ) == ("deployment 'gpt' sets tpm")
+
+
+@pytest.mark.parametrize(
+    ("global_cache", "arguments", "supported"),
+    (
+        pytest.param(False, {"cache_responses": True}, True, id="local-response-cache"),
+        pytest.param(False, {"cache_responses": True, "redis_host": "h", "redis_port": 1}, False, id="router-redis"),
+        pytest.param(True, {"cache_responses": True, "redis_host": "h", "redis_port": 1}, True, id="global-cache-set"),
+    ),
+)
+def test_cache_responses_is_served_unless_the_router_would_build_a_redis_response_cache(
+    monkeypatch: pytest.MonkeyPatch, global_cache: bool, arguments: Mapping[str, object], supported: bool
+) -> None:
+    monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local") if global_cache else None)
+
+    assert (unsupported_reason(arguments) is None) is supported

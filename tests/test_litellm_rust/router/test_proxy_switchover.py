@@ -141,6 +141,7 @@ _READS: Final = (
     ("deployment_names", lambda router: router.deployment_names),
     ("is_recognized_model", lambda router: router.is_recognized_model("h")),
     ("get_fully_blocked_model_names", lambda router: router.get_fully_blocked_model_names()),
+    ("_zero_cost_cache", lambda router: getattr(router, "_zero_cost_cache", None)),
 )
 
 
@@ -233,3 +234,13 @@ def test_the_proxys_constructor_arguments_stay_on_rust_and_read_like_python() ->
     assert isinstance(rust.backend, RustRouter)
     assert (rust.model_names, rust.get_model_list()) == (python.model_names, python.get_model_list())
     assert rust.router_general_settings.async_only_mode is True
+
+
+async def test_the_proxys_anthropic_messages_entry_point_is_served_by_rust() -> None:
+    router: Final = _facade(_TWO_GROUPS)
+
+    response: Final = await router.anthropic_messages(model="h", messages=list(MESSAGES), max_tokens=10)
+
+    assert isinstance(response, Mapping)
+    assert response["content"][0]["text"] == "from c"
+    assert isinstance(router.backend, RustRouter)

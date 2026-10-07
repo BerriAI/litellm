@@ -80,6 +80,7 @@ if TYPE_CHECKING:
 Bucket: TypeAlias = MutableMapping[str, object]
 Kwargs: TypeAlias = dict[str, object]
 Operation: TypeAlias = Literal["completion", "responses", "anthropic_messages"]
+_SyncRunner: TypeAlias = Callable[[Callable[[], Awaitable[object]]], object]
 ResumeRoute: TypeAlias = Callable[[Mapping[str, object], Kwargs], Awaitable[object]]
 
 
@@ -846,9 +847,7 @@ class RoutedCall:
 
 
 def _run_sync(start: Callable[[], Awaitable[object]]) -> object:
-    run: Final = cast(
-        Callable[[Callable[[], Awaitable[object]]], object], run_async_function
-    )  # cast-ok: untyped helper
+    run: Final = cast(_SyncRunner, run_async_function)  # cast-ok: untyped helper
     return run(start)
 
 

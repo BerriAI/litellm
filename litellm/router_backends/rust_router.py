@@ -15,6 +15,7 @@ from litellm import constants
 from litellm._logging import verbose_router_logger
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import RUNTIME_UPDATABLE_ROUTER_SETTINGS
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router_backends.python_router import PythonRouter
 from litellm.router_backends.rust_call import (
     AttemptRouter,
@@ -126,6 +127,8 @@ class NormalizerView(AttemptRouter, Protocol):
 
     def update_settings(self, **kwargs: object) -> None: ...  # kwargs-ok: PythonRouter.update_settings' surface
 
+    async def arefresh_model_info(self, *, client: AsyncHTTPHandler | None = None) -> None: ...
+
     def get_settings(self) -> Mapping[str, object]: ...
 
     def _update_redis_cache(self, cache: RedisCache) -> None: ...
@@ -139,20 +142,32 @@ class PythonServing(Protocol):
     """The `PythonRouter` methods a request the Rust router does not serve is forwarded to, typed."""
 
     async def acompletion(
-        self, model: str, messages: Sequence[Mapping[str, object]], **kwargs: object
-    ) -> object: ...  # kwargs-ok: forwards Router.acompletion's kwargs
+        self,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        **kwargs: object,  # kwargs-ok: forwards Router.acompletion's kwargs
+    ) -> object: ...
 
     def completion(
-        self, model: str, messages: Sequence[Mapping[str, object]], **kwargs: object
-    ) -> object: ...  # kwargs-ok: forwards Router.completion's kwargs
+        self,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        **kwargs: object,  # kwargs-ok: forwards Router.completion's kwargs
+    ) -> object: ...
 
     async def aresponses(
-        self, custom_llm_provider: str | None = None, client: object = None, **kwargs: object
-    ) -> object: ...  # kwargs-ok: forwards Router.aresponses' kwargs
+        self,
+        custom_llm_provider: str | None = None,
+        client: object = None,
+        **kwargs: object,  # kwargs-ok: forwards Router.aresponses' kwargs
+    ) -> object: ...
 
     async def aanthropic_messages(
-        self, custom_llm_provider: str | None = None, client: object = None, **kwargs: object
-    ) -> object: ...  # kwargs-ok: forwards Router.aanthropic_messages' kwargs
+        self,
+        custom_llm_provider: str | None = None,
+        client: object = None,
+        **kwargs: object,  # kwargs-ok: forwards Router.aanthropic_messages' kwargs
+    ) -> object: ...
 
 
 def _serving(python: PythonRouter) -> PythonServing:
@@ -263,9 +278,8 @@ def adopted_redis_url(cache: RedisCache) -> str | None:
     """The URL of a `RedisCache` the proxy hands the router, or None when it connects some other
     way (cluster, sentinel, TLS) that the native store does not open. Client tuning (timeouts,
     pool size) is left to the native store's own defaults."""
-    configured: Final = _REDIS_KWARGS.validate_python(
-        cast(object, cache.redis_kwargs)
-    )  # cast-ok: RedisCache leaves it untyped
+    raw: Final = cast(object, cache.redis_kwargs)  # cast-ok: RedisCache leaves it untyped
+    configured: Final = _REDIS_KWARGS.validate_python(raw)
     kwargs: Final = {key: value for key, value in configured.items() if value is not None}
     if not kwargs.keys() <= _PLAIN_REDIS_KWARGS | _CLIENT_TUNING_REDIS_KWARGS:
         return None
@@ -408,9 +422,9 @@ class RustRouter:
 
     @property
     def _reader(self) -> NormalizerView:
-        return (
-            cast(NormalizerView, self._handed_to) if self._handed_to is not None else self._normalizer
-        )  # cast-ok: a PythonRouter
+        if self._handed_to is None:
+            return self._normalizer
+        return cast(NormalizerView, self._handed_to)  # cast-ok: a PythonRouter
 
     def discard(self) -> None:
         if self._handed_to is not None:
@@ -420,6 +434,17 @@ class RustRouter:
         """Python's routing reads batch their Redis lookups through this; the native router reads its own."""
         if self._handed_to is not None:
             self._handed_to.arm_routing_read_prefetch(model, dict(request_kwargs or {}))
+
+    async def arefresh_model_info(self, *, client: AsyncHTTPHandler | None = None) -> None:
+        """The token limits OpenAI-compatible deployments advertise, refreshed into the Python side's
+        model list, which the native snapshot is then rebuilt from."""
+        if self._handed_to is not None:
+            await self._handed_to.arefresh_model_info(client=client)
+            return
+        await self._normalizer.arefresh_model_info(client=client)
+        self._native.replace(
+            [_project(deployment) for deployment in self._normalizer.model_list], _settings(self._normalizer)
+        )
 
     def _update_redis_cache(self, cache: RedisCache) -> None:
         """The proxy's Redis, attached after construction: the native router reconnects to it, which
@@ -539,6 +564,9 @@ class RustRouter:
                 custom_llm_provider=custom_llm_provider, client=client, **kwargs
             )
         return await self._route(self._call("anthropic_messages", _model(kwargs), kwargs), True)
+
+    anthropic_messages = aanthropic_messages
+    """`PythonRouter` binds both names to the same async wrapper; the proxy calls this one."""
 
     def _python_for(self, kwargs: Kwargs) -> PythonRouter | None:
         """The `PythonRouter` to serve this request instead: the one this instance handed over to,

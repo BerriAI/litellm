@@ -56,6 +56,7 @@ def select_backend(
         case Decision.RUST_WITH_FALLBACK | Decision.RUST_REQUIRED:
             built: Final = build_rust_router(bind_arguments(args, kwargs), required=selected is Decision.RUST_REQUIRED)
             if isinstance(built, RustRouter):
+                verbose_router_logger.info("Routing with the Rust router")
                 return built
             return _declined(built, selected, args, kwargs)
         case _:
