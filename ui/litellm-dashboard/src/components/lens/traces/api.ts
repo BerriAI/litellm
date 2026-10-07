@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useMemo } from "react";
 import {
+  agentTraceAgentsCall,
   agentTraceCall,
   agentTraceListCall,
   agentTraceSpanCall,
@@ -28,6 +29,11 @@ export interface TraceWindow {
   readonly cursor?: string | null;
 }
 
+export interface TraceListRequest extends TraceWindow {
+  /** Only runs this agent took part in; empty or missing lists every run. */
+  readonly agent?: string;
+}
+
 export interface TraceHandoff {
   readonly text: string;
   readonly copied: string;
@@ -37,7 +43,9 @@ export interface TracesApi {
   /** False for a fixed snapshot: nothing new arrives, so live tail and tracing setup don't apply. */
   readonly live: boolean;
   handoff(traceId: string, spanId?: string | null, traceRef?: string): TraceHandoff;
-  list(window: TraceWindow): Promise<TracePage>;
+  list(request: TraceListRequest): Promise<TracePage>;
+  /** Every agent with a run in the window, for the agent filter. */
+  agents(window: TraceWindow): Promise<readonly string[]>;
   findings(traces: TraceFindingsRequest["traces"]): Promise<TraceFindingCount[]>;
   signals(traces: TraceFindingsRequest["traces"]): Promise<TraceSignals[]>;
   anyRecorded(): Promise<boolean>;
@@ -78,7 +86,8 @@ export function liveTracesApi(accessToken: string): TracesApi {
       text: agentHandoffText(traceId, spanId, traceRef),
       copied: "Command copied",
     }),
-    list: (window) => agentTraceListCall({ accessToken, ...window }),
+    list: (request) => agentTraceListCall({ accessToken, ...request }),
+    agents: async ({ startMs, endMs }) => (await agentTraceAgentsCall({ accessToken, startMs, endMs })).data,
     findings: (traces) =>
       apiClient.post<TraceFindingCount[]>("/lens/traces/findings", {
         accessToken,
