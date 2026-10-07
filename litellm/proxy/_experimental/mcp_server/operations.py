@@ -1189,7 +1189,6 @@ async def _get_tools_from_mcp_servers(
                 record_listing=record_listing,
                 enforce_rate_limits=enforce_rate_limits,
             )
-
         all_tools: Final = aggregated.tools
         server_outcomes: Final = aggregated.outcomes
 
@@ -1279,9 +1278,13 @@ async def _get_prompts_from_mcp_servers(
         mcp_servers=mcp_servers,
         client_ip=client_ip,
     )
+
     # Get prompts from each allowed server
     all_prompts: Final = []
     for server in allowed_mcp_servers:
+        if server is None:
+            continue
+
         server_auth_header, extra_headers = _prepare_mcp_server_headers(
             server=server,
             mcp_server_auth_headers=mcp_server_auth_headers,
@@ -1331,8 +1334,12 @@ async def _get_resources_from_mcp_servers(
         mcp_servers=mcp_servers,
         client_ip=client_ip,
     )
+
     all_resources: Final[list[Resource]] = []
     for server in allowed_mcp_servers:
+        if server is None:
+            continue
+
         server_auth_header, extra_headers = _prepare_mcp_server_headers(
             server=server,
             mcp_server_auth_headers=mcp_server_auth_headers,
@@ -1380,8 +1387,12 @@ async def _get_resource_templates_from_mcp_servers(
         mcp_servers=mcp_servers,
         client_ip=client_ip,
     )
+
     all_resource_templates: Final[list[ResourceTemplate]] = []
     for server in allowed_mcp_servers:
+        if server is None:
+            continue
+
         server_auth_header, extra_headers = _prepare_mcp_server_headers(
             server=server,
             mcp_server_auth_headers=mcp_server_auth_headers,
