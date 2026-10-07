@@ -4,8 +4,11 @@ Unit tests for AttachmentRegistry - tests policy attachment matching.
 Tests the main entry point: get_attached_policies()
 """
 
-import time
+import sys
+from collections.abc import Sequence
 from datetime import datetime, timezone
+from types import FrameType
+from typing import Final, Protocol
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -16,6 +19,28 @@ from litellm.proxy.policy_engine.attachment_registry import (
 )
 from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyGuardrails, PolicyMatchContext
+
+
+class _TraceFunction(Protocol):
+    def __call__(self, frame: FrameType, event: str, arg: object) -> "_TraceFunction | None": ...
+
+
+def _lines_run_resolving(registry: AttachmentRegistry, context: PolicyMatchContext) -> tuple[Sequence[str], int]:
+    lines_run = 0  # rebind-ok: the trace hook counts line events into this closure cell
+
+    def trace(frame: FrameType, event: str, arg: object) -> _TraceFunction | None:
+        nonlocal lines_run
+        if event == "line":
+            lines_run += 1  # rebind-ok: the trace hook counts line events into this closure cell
+        return trace
+
+    previous_tracer: Final = sys.gettrace()
+    sys.settrace(trace)
+    try:
+        attached: Final = registry.get_attached_policies(context)
+    finally:
+        sys.settrace(previous_tracer)
+    return attached, lines_run
 
 
 class TestGetAttachedPolicies:
@@ -267,17 +292,28 @@ class TestGetAttachedPolicies:
         assert attached.count("multi-policy") == 1
 
     def test_many_distinct_policies_resolve_in_linear_time(self):
-        policy_count = 20_000
-        registry = AttachmentRegistry()
-        registry.load_attachments([{"policy": f"policy-{index}", "scope": "*"} for index in range(policy_count)])
-        context = PolicyMatchContext(team_alias="team", key_alias="key", model="gpt-4")
+        small_policy_count: Final = 1_000
+        small_registry: Final = AttachmentRegistry()
+        small_registry.load_attachments(
+            [{"policy": f"policy-{index}", "scope": "*"} for index in range(small_policy_count)]
+        )
+        small_context: Final = PolicyMatchContext(team_alias="team", key_alias="key", model="gpt-4")
+        small_attached, small_lines = _lines_run_resolving(small_registry, small_context)
 
-        started = time.perf_counter()
-        attached = registry.get_attached_policies(context)
-        elapsed = time.perf_counter() - started
+        large_policy_count: Final = 4_000
+        large_registry: Final = AttachmentRegistry()
+        large_registry.load_attachments(
+            [{"policy": f"policy-{index}", "scope": "*"} for index in range(large_policy_count)]
+        )
+        large_context: Final = PolicyMatchContext(team_alias="team", key_alias="key", model="gpt-4")
+        large_attached, large_lines = _lines_run_resolving(large_registry, large_context)
 
-        assert attached == [f"policy-{index}" for index in range(policy_count)]
-        assert elapsed < 1.0, f"{policy_count} attachments took {elapsed:.2f}s, dedup is no longer one pass"
+        assert small_attached == [f"policy-{index}" for index in range(small_policy_count)]
+        assert large_attached == [f"policy-{index}" for index in range(large_policy_count)]
+        assert large_lines < 8 * small_lines, (
+            f"{large_lines} line events for {large_policy_count} policies vs {small_lines} for {small_policy_count}, "
+            "dedup is no longer one pass"
+        )
 
     def test_no_attachments_returns_empty(self):
         """Test empty attachments returns empty list."""
