@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use crate::{
     normalize::ObservationType,
     query::named::{ListTracesRow, SpendByResponseIdsRow as SpendRow, TraceSpansRow},
-    view::{AgentNode, Span, SpanStatus, SpendMatch, Trace, TraceSummary},
+    view::{AgentNode, RunSource, Span, SpanStatus, SpendMatch, Trace, TraceSummary},
 };
 
 use super::{
@@ -138,6 +138,13 @@ pub fn iso_time(ms: i64) -> String {
     )
 }
 
+fn source(row: &TraceSpansRow) -> Option<RunSource> {
+    row.source_url.starts_with("https://").then(|| RunSource {
+        url: row.source_url.clone(),
+        title: row.source_title.clone(),
+    })
+}
+
 fn sorted_unique<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
     values
         .filter(|value| !value.is_empty())
@@ -229,6 +236,12 @@ pub fn resolve_trace(
         models: sorted_unique(calls.iter().map(|call| rows[*call].model.as_str())),
         spend: priced.spend,
         priced_calls: priced.priced_calls,
+        source: source(&rows[root]).or_else(|| {
+            rows.iter()
+                .filter_map(|row| Some((row.start_ns, source(row)?)))
+                .min_by_key(|(start_ns, _)| *start_ns)
+                .map(|(_, source)| source)
+        }),
     };
     Some(Trace {
         summary,
@@ -266,5 +279,6 @@ pub fn listed_summary(row: &ListTracesRow) -> TraceSummary {
         models: row.models.clone(),
         spend: None,
         priced_calls: 0,
+        source: None,
     }
 }
