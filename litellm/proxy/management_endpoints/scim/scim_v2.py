@@ -2652,8 +2652,6 @@ async def create_group(
         # Extract and validate group members (all users must exist)
         member_result: Final = await _extract_group_member_ids(group)
 
-        # The team row is created empty and its roster written in one bulk transaction,
-        # so a 500-member group is a bounded number of statements instead of thousands
         created_team: Final = await new_team(
             data=_new_team_request_with_defaults(
                 team_id=team_id,
@@ -3056,8 +3054,6 @@ async def patch_group(
             patch_ops, existing_team, prisma_client
         )
 
-        # A replace declares the whole roster; add and remove are deltas the sync applies
-        # onto the roster as it stands under the team's lock
         snapshot_members: Final = frozenset(await _get_team_member_user_ids_from_team(existing_team))
         plan: Final[RosterPlan] = (
             RosterTarget(member_ids=frozenset(replace_target))

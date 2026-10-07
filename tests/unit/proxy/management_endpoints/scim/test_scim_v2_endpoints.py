@@ -6241,6 +6241,33 @@ async def test_process_group_patch_operations_rejects_pathless_op_it_cannot_appl
 _LARGE_PUSH: Final = tuple(f"user-{index:03d}" for index in range(500))
 
 
+async def _group_listing_the_roster(team: LiteLLM_TeamTable) -> SCIMGroup:
+    return SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=team.team_id,
+        displayName=team.team_alias or team.team_id,
+        members=[SCIMMember(value=member.user_id) for member in team.members_with_roles if member.user_id is not None],
+    )
+
+
+async def _push_group(verb: str, group_id: str, scim_group: SCIMGroup) -> SCIMGroup:
+    match verb:
+        case "POST":
+            return await create_group(group=scim_group)
+        case "PUT":
+            return await update_group(group_id=group_id, group=scim_group)
+        case "PATCH":
+            patch_ops: Final = SCIMPatchOp(
+                schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+                Operations=[
+                    SCIMPatchOperation(op="add", path="members", value=[{"value": user_id} for user_id in _LARGE_PUSH])
+                ],
+            )
+            return await patch_group(group_id=group_id, patch_ops=patch_ops)
+        case _:
+            raise AssertionError(verb)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "verb, expected_plan",
@@ -6282,24 +6309,13 @@ async def test_group_push_of_500_members_reads_the_user_table_once_and_writes_th
     mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles", AsyncMock())
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_team_to_scim_group",
-        AsyncMock(return_value=scim_group),
+        AsyncMock(side_effect=_group_listing_the_roster),
     )
     sync_mock = _stub_roster_sync(mocker, existing_team)
 
-    match verb:
-        case "POST":
-            await create_group(group=scim_group)
-        case "PUT":
-            await update_group(group_id=group_id, group=scim_group)
-        case "PATCH":
-            patch_ops = SCIMPatchOp(
-                schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-                Operations=[
-                    SCIMPatchOperation(op="add", path="members", value=[{"value": user_id} for user_id in _LARGE_PUSH])
-                ],
-            )
-            await patch_group(group_id=group_id, patch_ops=patch_ops)
+    response = await _push_group(verb, group_id, scim_group)
 
+    assert (response.id, sorted(member.value for member in response.members)) == (group_id, sorted(_LARGE_PUSH))
     assert sync_mock.await_args_list == [call(group_id, expected_plan, prisma_client)]
     assert prisma_client.db.litellm_usertable.find_many.await_count == 1
     prisma_client.db.litellm_usertable.find_unique.assert_not_awaited()

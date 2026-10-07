@@ -134,7 +134,11 @@ def test_group_pushes_of_500_members_run_as_many_statements_as_pushes_of_5(
         gateway.scenario() as scenario,
         statement_counting_relay(os.environ["DATABASE_URL"]) as (relay, relayed_url),
         owned_proxy_process(
-            gateway, tmp_path, {"DATABASE_URL": relayed_url}, remove_environment=("DATABASE_URL_READ_REPLICA",)
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": relayed_url},
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+            workers=2,
         ) as owned,
     ):
         candidate: Final = owned.gateway
