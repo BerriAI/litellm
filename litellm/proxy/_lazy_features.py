@@ -11,6 +11,7 @@ import importlib
 from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -252,6 +253,11 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=("/v1/evals", "/evals"),
     ),
     LazyFeature(
+        name="decisions",
+        module_path="litellm.proxy.decisions_endpoints.endpoints",
+        path_prefixes=("/v1/decisions", "/decisions"),
+    ),
+    LazyFeature(
         name="claude_code_marketplace",
         module_path="litellm.proxy.anthropic_endpoints.claude_code_endpoints",
         path_prefixes=("/claude-code",),
@@ -359,6 +365,10 @@ class LazyFeatureMiddleware:
 
 def _lazy_slots(app: "FastAPI") -> Mapping[str, BaseRoute | None]:
     return app.state.lazy_slots if hasattr(app.state, "lazy_slots") else MappingProxyType({})
+
+
+def _lazy_routes(app: "FastAPI") -> Mapping[str, tuple[BaseRoute, ...]]:
+    return app.state.lazy_routes if hasattr(app.state, "lazy_routes") else MappingProxyType({})
 
 
 def reserve_lazy_slot(app: "FastAPI", name: str, features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> None:
@@ -510,6 +520,13 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
         }
 
     return router
+
+
+def lazy_owned_routes(app: "FastAPI") -> frozenset[int]:
+    """ids of the routes lazy features have registered on this app. A route added later at
+    one of their paths (a config pass-through at /v1/decisions) goes ahead of them, the
+    precedence lazy mode gives it when the feature has not loaded by the time the config is read."""
+    return frozenset(id(route) for route in chain.from_iterable(_lazy_routes(app).values()))
 
 
 def loaded_lazy_modules(app: "FastAPI") -> frozenset[str]:

@@ -170,6 +170,7 @@ class HealthCheckHelpers:
             "batch",
             "responses",
             "ocr",
+            "evaluation",
         ],
         Callable,
     ]:
@@ -192,7 +193,7 @@ class HealthCheckHelpers:
         from litellm.litellm_core_utils.audio_utils.utils import (
             get_audio_file_for_health_check,
         )
-        from litellm.litellm_core_utils.health_check_utils import _filter_model_params
+        from litellm.litellm_core_utils.health_check_utils import DECISIONS_CALL_PARAMS, _filter_model_params
         from litellm.realtime_api.main import _realtime_health_check
 
         return {
@@ -258,5 +259,14 @@ class HealthCheckHelpers:
             "ocr": lambda: litellm.aocr(
                 **_filter_model_params(model_params=model_params),
                 document=_ocr_health_check_document(model=model, custom_llm_provider=custom_llm_provider),
+            ),
+            "evaluation": lambda: litellm.adecisions(
+                **DECISIONS_CALL_PARAMS.validate_python(
+                    {
+                        "state": prompt or "health check",
+                        "questions": {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
+                        **_filter_model_params(model_params=model_params),
+                    }
+                )
             ),
         }

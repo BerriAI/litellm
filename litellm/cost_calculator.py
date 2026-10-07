@@ -98,6 +98,7 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
+from litellm.types.decisions import DecisionsResponse, DecisionsUsage
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -1016,6 +1017,7 @@ def _is_known_usage_objects(usage_obj):
     return (
         isinstance(usage_obj, litellm.Usage)
         or isinstance(usage_obj, ResponseAPIUsage)
+        or isinstance(usage_obj, DecisionsUsage)
         or TranscriptionUsageObjectTransformation.is_transcription_usage_object(usage_obj)
     )
 
@@ -1433,7 +1435,12 @@ def completion_cost(
                             "usage",
                             litellm.Usage(**_usage_for_dump.model_dump()),
                         )
-                    if usage_obj is None:
+                    if isinstance(usage_obj, DecisionsUsage):
+                        _usage = {
+                            "prompt_tokens": usage_obj.input_tokens,
+                            "completion_tokens": usage_obj.output_tokens,
+                        }
+                    elif usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
                         _usage = cast(BaseModel, usage_obj).model_dump()
@@ -1933,7 +1940,8 @@ def response_cost_calculator(
     | LiteLLMRealtimeStreamLoggingObject
     | OpenAIModerationResponse
     | Response
-    | SearchResponse,
+    | SearchResponse
+    | DecisionsResponse,
     model: str,
     custom_llm_provider: str | None,
     call_type: Literal[
@@ -1955,6 +1963,8 @@ def response_cost_calculator(
         "arerank",
         "search",
         "asearch",
+        "decisions",
+        "adecisions",
     ],
     optional_params: dict,
     cache_hit: bool | None = None,

@@ -8062,6 +8062,61 @@
       }
     }
   },
+  "decisions": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {
+      "/decisions": {
+        "post": {
+          "operationId": "decisions_decisions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Decisions",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
+      "/v1/decisions": {
+        "post": {
+          "operationId": "decisions_v1_decisions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Decisions",
+          "tags": [
+            "decisions"
+          ]
+        }
+      }
+    }
+  },
   "evals": {
     "components": {
       "schemas": {

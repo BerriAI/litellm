@@ -1,5 +1,6 @@
 """Test health check helper functions"""
 
+import json
 import socket
 import struct
 import zlib
@@ -8,6 +9,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 
 import litellm
 from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
@@ -528,3 +530,100 @@ def test_ocr_health_check_document_raises_without_the_extension():
             _ocr_health_check_document(model="mistral/mistral-ocr-latest", custom_llm_provider="mistral")
     finally:
         NATIVE_OCR_HEALTH_CHECK_DOCUMENT.reset()
+
+
+@pytest.mark.parametrize(
+    ("model", "upstream_url"),
+    (
+        ("perplexity/pplx-decider-v1-27b", "https://api.perplexity.ai/v1/decisions"),
+        ("cloudflare/clef", "https://api.cloudflare.com/client/v4/accounts/acct-1/ai/run/@cf/cloudflare/clef"),
+    ),
+)
+async def test_ahealth_check_probes_evaluation_models_through_the_decisions_api(
+    model: str,
+    upstream_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(upstream_url).respond(
+        json={
+            "model": model,
+            "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+        }
+    )
+
+    result: Final = await ahealth_check({"model": model, "api_key": "sk-test"}, mode=None)
+
+    assert "error" not in result, result
+    assert upstream.called
+    sent: Final = json.loads(upstream.calls[0].request.content)
+    assert sent["state"] == "health check"
+    assert sent["questions"]["reachable"]["type"] == "noul"
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_evaluation_uses_configured_probe_state_and_questions(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(
+        json={
+            "model": "perplexity/pplx-decider-v1-27b",
+            "answers": {"ok": {"type": "noul", "noul": 1.0}},
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+        }
+    )
+
+    result: Final = await ahealth_check(
+        {
+            "model": "perplexity/pplx-decider-v1-27b",
+            "api_key": "sk-test",
+            "state": "custom probe",
+            "questions": {"ok": {"type": "noul", "instructions": "Is it ok?"}},
+        },
+        mode=None,
+    )
+
+    assert "error" not in result, result
+    assert upstream.called
+    sent: Final = json.loads(upstream.calls[0].request.content)
+    assert sent["state"] == "custom probe"
+    assert set(sent["questions"]) == {"ok"}
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_probes_strands_through_decisions_without_mode(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    monkeypatch.delenv("STRANDS_DECIDER_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("http://strands.local:8080/v1/systemone").respond(
+        json={
+            "model": "strands-decider-2B-hobson-v19",
+            "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+        }
+    )
+
+    result: Final = await ahealth_check(
+        {
+            "model": "strands_decider/strands-decider-2B-hobson-v19",
+            "api_base": "http://strands.local:8080",
+        },
+        mode=None,
+    )
+
+    assert "error" not in result, result
+    assert upstream.called
+    assert "authorization" not in upstream.calls[0].request.headers
