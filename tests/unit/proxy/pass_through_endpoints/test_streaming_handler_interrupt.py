@@ -860,6 +860,9 @@ async def test_chunk_processor_logs_a_provider_error_frame_as_a_failure_when_clo
     assert received == list(frames)
     assert recorder.success_kwargs == []
     assert logging_obj.model_call_details.get("has_dispatched_final_stream_success") is not True
+    assert "combined_usage_object" not in logging_obj.model_call_details
+    assert "response_cost" not in logging_obj.model_call_details
+    assert logging_obj.should_run_logging("async_failure")
     assert len(recorder.failure_kwargs) == 1
     failure_payload = recorder.failure_kwargs[0]["standard_logging_object"]
     assert failure_payload["status"] == "failure"
@@ -869,6 +872,88 @@ async def test_chunk_processor_logs_a_provider_error_frame_as_a_failure_when_clo
         assert failure_payload["response_cost"] > 0
     else:
         assert failure_payload["response_cost"] == 0
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_logs_a_stream_that_ended_at_the_provider_error_frame_through_the_success_route():
+    """A provider error frame that ends a stream nobody closed early is the request's final answer, and that
+    stream keeps logging the way it always has: once, through the success route, with the usage it carried."""
+    recorder = _EventRecorder()
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="test-final-error-frame",
+        function_id="test-final-error-frame",
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    frames = (_anthropic_message_start_frame(), _anthropic_overloaded_error_frame())
+    received = [
+        chunk
+        async for chunk in PassThroughStreamingHandler.chunk_processor(
+            response=_anthropic_stream_of(frames),
+            request_body={"model": "claude-sonnet-5", "stream": True},
+            litellm_logging_obj=logging_obj,
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/v1/messages",
+        )
+    ]
+    await _settle(recorder.success_kwargs)
+
+    assert received == list(frames)
+    assert recorder.failure_kwargs == []
+    success_payload = recorder.success_kwargs[0]["standard_logging_object"]
+    assert success_payload["status"] == "success"
+    assert success_payload["prompt_tokens"] == 52
+    assert logging_obj.model_call_details["prompt_cache_response_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_superseded_attempt_failure_log_keeps_its_own_deployment_when_the_retry_rebinds_the_logging_object():
+    """The router rebinds the shared logging object to the retry's deployment right after closing the superseded
+    stream, before the logging worker runs. The failure log of the superseded attempt must still name the
+    deployment that served it, or the router's cooldown lands on the deployment serving the retry."""
+    recorder = _EventRecorder()
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="test-superseded-deployment",
+        function_id="test-superseded-deployment",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="claude-sonnet-5", litellm_params={"model_info": {"id": "deployment-1"}}, optional_params={}
+    )
+    superseded = PassThroughStreamingHandler.chunk_processor(
+        response=_anthropic_stream_of((_anthropic_message_start_frame(), _anthropic_overloaded_error_frame())),
+        request_body={"model": "claude-sonnet-5", "stream": True},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+    )
+    async for chunk in superseded:
+        if b"event: error" in chunk:
+            break
+    await superseded.aclose()
+    logging_obj.update_environment_variables(
+        model="claude-sonnet-5-retry", litellm_params={"model_info": {"id": "deployment-2"}}, optional_params={}
+    )
+    await _settle(recorder.failure_kwargs)
+
+    failure_kwargs = recorder.failure_kwargs[0]
+    assert failure_kwargs["litellm_params"]["model_info"]["id"] == "deployment-1"
+    assert failure_kwargs["model"] == "claude-sonnet-5"
+    assert logging_obj.model_call_details["litellm_params"]["model_info"]["id"] == "deployment-2"
 
 
 @pytest.mark.asyncio

@@ -257,16 +257,15 @@ class AnthropicPassthroughLoggingHandler:
 
     @staticmethod
     async def log_error_frame_as_failure(
-        litellm_logging_obj: LiteLLMLoggingObj,
+        attempt_logging_obj: LiteLLMLoggingObj,
         request_body: Mapping[str, object],
         all_chunks: Sequence[str | bytes],
         error_event: tuple[str, str, int],
     ) -> None:
-        """A stream that ended in the provider's `event: error` frame is one failed attempt of the request:
-        it logs through a copy of the logging object so the usage it consumed never reaches the success log
-        of the attempt the router opens in its place."""
+        """A stream closed at the provider's `event: error` frame is one failed attempt of the request: it logs
+        through the attempt-scoped copy its caller took at the close, so the usage it consumed never reaches
+        the success log of the attempt the router opens in its place."""
         error_type, message, status_code = error_event
-        attempt_logging_obj: Final = litellm_logging_obj.attempt_scoped_copy()
         await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
             litellm_logging_obj=attempt_logging_obj, request_body=request_body, all_chunks=all_chunks
         )

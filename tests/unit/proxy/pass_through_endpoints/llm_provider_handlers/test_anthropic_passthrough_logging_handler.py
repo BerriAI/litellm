@@ -2545,9 +2545,9 @@ class _FailureRecorder(CustomLogger):
 
 
 class TestLogErrorFrameAsFailure:
-    """A stream the provider ended with `event: error` is one failed attempt: its failure log bills the usage
-    streamed before the frame, and the request's shared logging state stays as it was, so the attempt the
-    router opens next logs with nothing left behind."""
+    """A stream closed at the provider's `event: error` frame is one failed attempt: its failure log bills the
+    usage streamed before the frame on the attempt-scoped copy its caller hands it, and the request's shared
+    logging state stays as it was, so the attempt the router opens next logs with nothing left behind."""
 
     @pytest.mark.asyncio
     async def test_logs_a_failure_with_the_usage_streamed_before_the_frame_and_leaves_the_request_state_alone(self):
@@ -2570,7 +2570,7 @@ class TestLogErrorFrameAsFailure:
         ]
 
         await AnthropicPassthroughLoggingHandler.log_error_frame_as_failure(
-            litellm_logging_obj=logging_obj,
+            attempt_logging_obj=logging_obj.attempt_scoped_copy(),
             request_body={"model": "claude-sonnet-5", "stream": True},
             all_chunks=chunks,
             error_event=("overloaded_error", "Overloaded", 529),
