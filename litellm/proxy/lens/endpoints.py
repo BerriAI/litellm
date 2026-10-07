@@ -74,6 +74,7 @@ router: Final = APIRouter(prefix="/lens", tags=["Lens"])
 _bearer: Final = HTTPBearer()
 Auth: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 StorageDep: TypeAlias = Annotated[Storage | None, Depends(provide_storage)]
+SAMPLE_PAGE_SIZE: Final = 10_000
 
 
 def repository() -> LensRepository:
@@ -548,6 +549,7 @@ async def sample(lens_id: str, job_id: str, worker: WorkerAuth, storage: Storage
             job.settings,
             int(job.start.timestamp() * 1000),
             int(job.end.timestamp() * 1000),
+            page_size=SAMPLE_PAGE_SIZE,
             cursor=cursor,
         )
         pages.append(page)
