@@ -16,8 +16,10 @@ from types import MappingProxyType
 from typing import Annotated, Final
 
 import requests
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
 from pydantic.types import StringConstraints
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 PI_CONFIG_DIR_ENV: Final = "PI_CODING_AGENT_DIR"
 PI_PROVIDER_NAME: Final = "litellm"
@@ -55,14 +57,14 @@ class ModelLimits:
 _NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
 
 
-class ListedModel(BaseModel):
+class ListedModel(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: _NonEmptyString
     source_model: _NonEmptyString | None = None
 
 
-class _ModelList(BaseModel):
+class _ModelList(LiteLLMBaseModel):
     data: tuple[ListedModel, ...]
 
     @model_validator(mode="after")
@@ -73,13 +75,13 @@ class _ModelList(BaseModel):
         return self
 
 
-class _ModelGroup(BaseModel):
+class _ModelGroup(LiteLLMBaseModel):
     model_group: str
     max_input_tokens: float | None = None
     max_output_tokens: float | None = None
 
 
-class _ModelGroupList(BaseModel):
+class _ModelGroupList(LiteLLMBaseModel):
     data: tuple[_ModelGroup, ...]
 
 

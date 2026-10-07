@@ -74,7 +74,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         )
         from litellm.responses.utils import ResponseAPILoggingUtils
 
-        chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(raw_usage)
+        chat_usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_usage)
         return LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage(chat_usage)
 
     # ------------------------------------------------------------------ #
@@ -257,7 +257,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     )
                 elif isinstance(content, list):
                     user_parts: list[Mapping[str, object]] = []
-                    tool_image_parts: list[dict[str, Any]] = []  # mutable-ok: json content parts
+                    tool_image_parts: list[dict[str, object]] = []  # mutable-ok: json content parts
                     for block in content:
                         if not isinstance(block, dict):
                             continue
@@ -367,7 +367,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         for _, group in groupby(enumerate(blocks), key=self._assistant_block_group_key)
                         for item in self._assistant_group_to_input_items(tuple(block for _, block in group))
                     )
-                    asst_parts: list[dict[str, Any]] = [  # mutable-ok: API message payload
+                    asst_parts: list[dict[str, object]] = [  # mutable-ok: API message payload
                         {"type": "output_text", "text": block.get("text", "")}
                         for block in blocks
                         if block.get("type") == "text"
@@ -533,7 +533,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 },
             )
 
-        responses_kwargs: Final[dict[str, Any]] = {
+        responses_kwargs: Final[dict[str, object]] = {
             "model": model,
             "input": input_items,
         }

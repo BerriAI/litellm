@@ -5,7 +5,7 @@ from typing import Annotated, Final, Literal, NamedTuple, Protocol, TypeAlias
 from uuid import uuid4
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -23,13 +23,14 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.typesafe_passthr
     TypeSafePassthroughLoggingHandler,
 )
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS as _DEFAULT_JEV_INSTRUCTIONS
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 
 JevProbability: TypeAlias = Annotated[float, Field(ge=0.0, le=1.0)]
 DEFAULT_JEV_INSTRUCTIONS: Final = _DEFAULT_JEV_INSTRUCTIONS
 
 
-class JevChoiceQuestion(BaseModel):
+class JevChoiceQuestion(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["choice"] = "choice"
@@ -37,7 +38,7 @@ class JevChoiceQuestion(BaseModel):
     criteria: Mapping[str, str]
 
 
-class JevSystemOneRequest(BaseModel):
+class JevSystemOneRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     state: str
@@ -45,7 +46,7 @@ class JevSystemOneRequest(BaseModel):
     questions: Mapping[str, JevChoiceQuestion]
 
 
-class JevChoiceAnswer(BaseModel):
+class JevChoiceAnswer(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     type: Literal["choice"]
@@ -54,14 +55,14 @@ class JevChoiceAnswer(BaseModel):
     confidence: JevProbability
 
 
-class JevUsage(BaseModel):
+class JevUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     input_tokens: int = Field(default=0, ge=0, strict=True)
     output_tokens: int = Field(default=0, ge=0, strict=True)
 
 
-class JevSystemOneResponse(BaseModel):
+class JevSystemOneResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     model: str | None = None
@@ -84,7 +85,7 @@ class HttpJevClassifierClient:
         api_key: str | None,
         api_base: str,
         http_client: AsyncHTTPHandler,
-        provider: Literal["typesafe", "laya"] = "typesafe",
+        provider: Literal["typesafe", "laya", "bespoke"] = "typesafe",
     ) -> None:
         self._api_key = api_key
         self._api_base = api_base.rstrip("/")
@@ -201,10 +202,10 @@ class JevVerdict(NamedTuple):
     confidence: float
     model: str
     cost: float | None
-    provider: Literal["typesafe", "laya"] = "typesafe"
+    provider: Literal["typesafe", "laya", "bespoke"] = "typesafe"
 
 
-class _RegistryPricing(BaseModel):
+class _RegistryPricing(LiteLLMBaseModel):
     input_cost_per_token: float = 0.0
     output_cost_per_token: float = 0.0
 
@@ -225,7 +226,7 @@ def build_jev_request(
 
 
 def jev_classifier_cost(
-    response: JevSystemOneResponse, configured_model: str, provider: Literal["typesafe", "laya"] = "typesafe"
+    response: JevSystemOneResponse, configured_model: str, provider: Literal["typesafe", "laya", "bespoke"] = "typesafe"
 ) -> float | None:
     usage: Final = response.usage
     if usage is None:

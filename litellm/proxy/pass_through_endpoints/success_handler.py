@@ -336,7 +336,7 @@ class PassThroughEndpointLogging:
             kwargs = transcribe_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         elif (
             self.is_typesafe_route(custom_llm_provider)
-            or custom_llm_provider == "laya"
+            or custom_llm_provider in ("laya", "bespoke")
             or self.is_openrouter_decisions_route(url_route, custom_llm_provider)
         ):
             from .llm_provider_handlers.typesafe_passthrough_logging_handler import (
@@ -367,7 +367,9 @@ class PassThroughEndpointLogging:
             vertex_ai_live_handler: Final = VertexAILivePassthroughLoggingHandler()
 
             # For WebSocket responses, response_body should be a list of messages
-            websocket_messages: Final[list[dict[str, Any]]] = response_body if isinstance(response_body, list) else []
+            websocket_messages: Final[list[dict[str, object]]] = (
+                response_body if isinstance(response_body, list) else []
+            )
 
             vertex_ai_live_handler_result: Final = vertex_ai_live_handler.vertex_ai_live_passthrough_handler(
                 websocket_messages=websocket_messages,

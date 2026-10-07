@@ -302,12 +302,12 @@ def test_bedrock_process_file_message_malformed_raises_bad_request():
     """_process_file_message should raise BadRequestError (not KeyError)
     when the file object is missing the 'file' sub-field."""
     with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
-        BedrockConverseMessagesProcessor._process_file_message(MALFORMED_FILE_OBJECT)
+        BedrockConverseMessagesProcessor.process_file_message(MALFORMED_FILE_OBJECT)
 
 
 def test_bedrock_process_file_message_explicit_null_file_field_raises_bad_request():
     with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
-        BedrockConverseMessagesProcessor._process_file_message(EXPLICIT_NULL_FILE_OBJECT)
+        BedrockConverseMessagesProcessor.process_file_message(EXPLICIT_NULL_FILE_OBJECT)
 
 
 def test_bedrock_async_process_file_message_malformed_raises_bad_request():

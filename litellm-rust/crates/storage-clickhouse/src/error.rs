@@ -1,7 +1,9 @@
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid ClickHouse insert row")]
     InvalidRow,
+    #[error("{0} must be a positive integer")]
+    InvalidLimit(&'static str),
     #[error("invalid ClickHouse insert table")]
     InvalidTable,
     #[error("invalid ClickHouse HTTP URL")]
@@ -10,6 +12,8 @@ pub enum Error {
     InvalidSchema,
     #[error("SQL query must not be empty")]
     EmptySql,
+    #[error("invalid ClickHouse query parameters")]
+    InvalidParameters,
     #[error("unknown ClickHouse read query")]
     InvalidQuery,
     #[error("ClickHouse query failed with HTTP status {0}")]

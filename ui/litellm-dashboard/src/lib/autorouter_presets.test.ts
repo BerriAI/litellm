@@ -859,23 +859,28 @@ describe("autorouter_presets", () => {
   });
 
   describe("buildPresetPrefill", () => {
-    it("preserves JEV settings and drops inactive classifier settings when prefilling", () => {
+    it("preserves Laya settings and drops inactive classifier settings when prefilling", () => {
       const config = {
         tiers: { SIMPLE: ["fast"], MEDIUM: [], COMPLEX: [], REASONING: [] },
-        classifier_type: "jev" as const,
+        classifier_type: "oss_classifier" as const,
         classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
         modality_routing: false,
         modality_pin_override: false,
-        jev_classifier_config: { model: "jev-test", timeout_ms: 4000, circuit_breaker_enabled: false },
+        opensource_classifier_config: {
+          provider: "laya" as const,
+          model: "english",
+          timeout_ms: 4000,
+          circuit_breaker_enabled: false,
+        },
         classifier_llm_config: { model: "stale-judge", timeout_ms: 6000 },
         classifier_context_window_size: 6,
       };
       const prefill = buildPresetPrefill(config, groupsOnly(["fast"]));
       const expectedJevConfig = {
         classifier_type: "jev",
-        jev_classifier_config: config.jev_classifier_config,
+        jev_classifier_config: config.opensource_classifier_config,
         classifier_context_window_size: 6,
         classifier_llm_config: undefined,
       };
@@ -941,6 +946,27 @@ describe("autorouter_presets", () => {
       expect(prefill.complexityRouterConfig.enable_context_window_escalation).toBe(enabled);
       expect(prefill.complexityRouterConfig.context_window_escalation_buffer).toBe(0.9);
     });
+
+    it.each([undefined, false, true])(
+      "preserves cache-routing settings and scalar tier models from a preset: %s",
+      (enabled) => {
+        const config = {
+          ...getPresetByKey("anthropic_family")!.complexity_router_config,
+          tiers: { SIMPLE: "small", MEDIUM: "large", COMPLEX: "large", REASONING: "large" },
+          cache_aware_routing: enabled,
+          cache_aware_routing_output_tokens: 0,
+          cache_aware_routing_timeout_ms: 750,
+        };
+        const prefill = buildPresetPrefill(config, groupsOnly(["small", "large"]));
+        const expected = {
+          tiers: { SIMPLE: ["small"], MEDIUM: ["large"], COMPLEX: ["large"], REASONING: ["large"] },
+          cache_aware_routing: enabled,
+          cache_aware_routing_output_tokens: 0,
+          cache_aware_routing_timeout_ms: 750,
+        };
+        expect(prefill.complexityRouterConfig).toMatchObject(expected);
+      },
+    );
 
     it("carries a preset's classification_mode and defaults it when the preset omits one", () => {
       const tiers = { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] };
