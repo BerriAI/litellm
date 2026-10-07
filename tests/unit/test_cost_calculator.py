@@ -1,5 +1,4 @@
 import datetime
-import json
 import time
 from collections.abc import Mapping
 from types import MappingProxyType, SimpleNamespace
@@ -12,17 +11,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import TranscriptionResponse, model_cost
-from litellm.cost_calculator import (
-    BaseTokenUsageProcessor,
-    RealtimeAPITokenUsageProcessor,
-    ResponsesWebSocketTokenUsageProcessor,
-    batch_cost_calculator,
-    completion_cost,
-    cost_per_token,
-    handle_realtime_stream_cost_calculation,
-    response_cost_calculator,
-    select_model_name_for_cost_calc,
-)
+from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
@@ -31,28 +20,10 @@ from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUs
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
-from litellm.llms.vertex_ai.cost_calculator import cost_per_character
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
-from litellm.types.utils import (
-    CallTypes,
-    ChatCompletionAudioResponse,
-    Choices,
-    CompletionTokensDetailsWrapper,
-    EmbeddingResponse,
-    ImageObject,
-    ImageResponse,
-    ImageUsage,
-    ImageUsageInputTokensDetails,
-    LiteLLMRealtimeStreamLoggingObject,
-    Message,
-    ModelInfo,
-    ModelResponse,
-    PromptTokensDetails,
-    PromptTokensDetailsWrapper,
-    Usage,
-)
+from litellm.types.utils import CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.utils import supports_prompt_caching
 import os

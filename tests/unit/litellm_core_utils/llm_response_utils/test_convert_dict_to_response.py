@@ -1,7 +1,6 @@
 import asyncio
 import importlib
 import json
-import time
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -9,35 +8,8 @@ import pytest
 
 import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.exceptions import APIError
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    LiteLLMResponseObjectHandler,
-    _normalize_images_for_message,
-    convert_to_model_response_object,
-    convert_to_streaming_response,
-    convert_to_streaming_response_async,
-    handle_invalid_parallel_tool_calls,
-    safe_convert_created_field,
-    should_convert_tool_call_to_json_mode,
-)
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    convert_tool_call_to_json_mode as convert_fn,
-)
-from litellm.types.utils import (
-    ChatCompletionMessageCustomToolCall,
-    ChatCompletionMessageToolCall,
-    Choices,
-    CompletionTokensDetailsWrapper,
-    EmbeddingResponse,
-    Function,
-    ImageObject,
-    ImageResponse,
-    Message,
-    ModelResponse,
-    PromptTokensDetailsWrapper,
-    TranscriptionResponse,
-    Usage,
-)
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import LiteLLMResponseObjectHandler, convert_to_model_response_object, convert_to_streaming_response, handle_invalid_parallel_tool_calls, safe_convert_created_field, should_convert_tool_call_to_json_mode
+from litellm.types.utils import ChatCompletionMessageCustomToolCall, ChatCompletionMessageToolCall, Choices, CompletionTokensDetailsWrapper, Function, ImageObject, ImageResponse, Message, ModelResponse, PromptTokensDetailsWrapper, Usage
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 FIXED_TIME: Final[datetime] = datetime(2025, 1, 1, 12, 0, 0)

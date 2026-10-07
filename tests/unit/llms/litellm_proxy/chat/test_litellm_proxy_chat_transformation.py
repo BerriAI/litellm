@@ -8,7 +8,6 @@ import httpx
 from openai import AsyncOpenAI, OpenAI
 from openai.types import CreateEmbeddingResponse, Embedding
 from openai.types.create_embedding_response import Usage
-from pydantic import BaseModel
 import pytest
 
 import litellm

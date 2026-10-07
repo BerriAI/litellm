@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from openai import OpenAI
 from openai.types import CreateEmbeddingResponse, Embedding
 from openai.types.create_embedding_response import Usage as EmbeddingUsage
 

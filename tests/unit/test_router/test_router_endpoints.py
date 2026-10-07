@@ -5,9 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import litellm
 import pytest
 from litellm import Router
-from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
-from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
 
 
 @pytest.fixture

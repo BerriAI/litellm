@@ -12,7 +12,6 @@ from litellm.llms.bedrock.chat.invoke_transformations.amazon_moonshot_transforma
     AmazonMoonshotConfig,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.utils import CustomStreamWrapper
 import os
 
 AWS_AUTH_PARAMS = {

@@ -12,7 +12,6 @@ from pydantic import TypeAdapter
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.router import AllowedFailsPolicy, RetryPolicy
 import os
 

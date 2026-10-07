@@ -1,6 +1,5 @@
 import pytest
 from typing import Final
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.embed.amazon_nova_transformation import AmazonNovaEmbeddingConfig
 
 

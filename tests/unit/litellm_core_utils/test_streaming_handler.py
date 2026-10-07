@@ -15,7 +15,6 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
 )
-from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,

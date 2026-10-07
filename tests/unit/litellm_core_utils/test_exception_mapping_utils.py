@@ -17,7 +17,6 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
 )
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.fireworks_ai.common_utils import FireworksAIException
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.utils import LlmProviders
 import traceback

@@ -8,11 +8,11 @@ import httpx
 import pytest
 
 import litellm
-from litellm import CustomLLM, get_model_info
+from litellm import get_model_info
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import ModelInfoBase
-from litellm.utils import _invalidate_model_cost_lowercase_map, supports_function_calling
+from litellm.utils import _invalidate_model_cost_lowercase_map
 import os
 from unittest.mock import MagicMock, patch
 

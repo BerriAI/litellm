@@ -12,10 +12,9 @@ from pydantic import TypeAdapter
 import litellm
 from litellm import Router
 from litellm.litellm_core_utils import get_llm_provider_logic
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.router import Deployment, LiteLLM_Params
 from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
-from litellm.types.router import ModelInfo, RouterErrors
+from litellm.types.router import ModelInfo
 import json
 from unittest.mock import MagicMock
 

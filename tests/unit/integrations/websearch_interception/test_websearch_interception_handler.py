@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
-from litellm.integrations.websearch_interception import is_web_search_tool
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )

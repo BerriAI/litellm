@@ -4,7 +4,6 @@ from unittest import mock
 import litellm
 import pytest
 
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 
 

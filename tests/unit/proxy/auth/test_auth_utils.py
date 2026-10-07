@@ -33,7 +33,6 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route_template,
     is_request_body_safe,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.router import Router
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 

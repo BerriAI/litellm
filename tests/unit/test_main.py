@@ -13,16 +13,13 @@ from datetime import datetime
 from importlib import import_module
 from pathlib import Path
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
-import openai
 import pytest
 import respx
-from openai import APITimeoutError, AsyncAzureOpenAI, AzureOpenAI, OpenAI
-from openai.types.chat import ChatCompletionMessage
-from openai.types.chat.chat_completion import ChatCompletion, Choice
-from PIL import Image
+from openai import APITimeoutError
+from openai.types.chat.chat_completion import ChatCompletion
 
 import litellm
 from litellm import acompletion, completion
@@ -33,23 +30,12 @@ from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    anthropic_messages_pt,
-    parse_xml_params,
-)
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import (
-    ChatCompletionMessageToolCall,
-    Delta,
-    ModelResponseStream,
-    StandardCallbackDynamicParams,
-    StreamingChoices,
-    Usage,
-)
-from litellm.utils import _handle_invalid_parallel_tool_calls
+from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
 
 
 @pytest.fixture(autouse=True)

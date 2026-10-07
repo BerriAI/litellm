@@ -4,10 +4,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 import respx
 
-from litellm.llms.huggingface.chat.transformation import (
-    HuggingFaceChatConfig,
-    _build_chat_completion_url,
-)
 from litellm.llms.huggingface.common_utils import _fetch_inference_provider_mapping
 
 

@@ -9,7 +9,6 @@ import pytest
 
 import litellm
 from litellm import Router
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
 import time
 from unittest.mock import patch, MagicMock
 

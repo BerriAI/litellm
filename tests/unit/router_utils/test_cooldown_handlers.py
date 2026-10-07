@@ -2,7 +2,6 @@ import asyncio
 import importlib
 import random
 import time
-from collections import defaultdict
 from typing import Final
 from unittest.mock import MagicMock, patch
 

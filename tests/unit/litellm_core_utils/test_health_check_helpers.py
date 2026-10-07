@@ -1,6 +1,5 @@
 """Test health check helper functions"""
 
-import importlib
 import json
 import os
 import socket

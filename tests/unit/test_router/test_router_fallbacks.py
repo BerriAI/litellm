@@ -7,8 +7,6 @@ import pytest
 
 import litellm
 from litellm import Router
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 import os
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from litellm.integrations.custom_logger import CustomLogger
