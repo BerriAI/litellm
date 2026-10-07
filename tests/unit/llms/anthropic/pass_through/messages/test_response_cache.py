@@ -161,6 +161,26 @@ async def test_streaming_cache_is_not_shared_with_non_streaming(local_cache, req
 
 
 @pytest.mark.asyncio
+async def test_stream_without_content_blocks_is_not_cached(local_cache, request_kwargs, monkeypatch):
+    empty_events = [STREAM_EVENTS[0], STREAM_EVENTS[4], STREAM_EVENTS[5]]
+    fake_handler = _CountingHandler(
+        [_byte_stream(empty_events), _byte_stream(STREAM_EVENTS), _byte_stream([b"event: never_used\n\n"])]
+    )
+    monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
+
+    empty = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    await asyncio.sleep(0)
+    refilled = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    await asyncio.sleep(0)
+    replayed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+
+    assert empty == empty_events
+    assert refilled == STREAM_EVENTS
+    assert replayed == STREAM_EVENTS
+    assert len(fake_handler.calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_failed_stream_is_not_cached(local_cache, request_kwargs, monkeypatch):
     error_events = STREAM_EVENTS[:3] + [
         b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "overloaded"}}\n\n'

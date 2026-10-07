@@ -6,6 +6,7 @@ import types
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from functools import partial
 from typing import Any, Final, NoReturn, TypeAlias, overload
 
 from fastapi import HTTPException
@@ -62,6 +63,7 @@ from litellm.proxy._experimental.mcp_server.capabilities import (
     build_discovery,
     configured_versions,
 )
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.contracts import (
     AuthorizedToolCall,
     OperationContext,
@@ -73,15 +75,12 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPUpstreamAuthError,
 )
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
-    SERVER_OUTCOMES_META_KEY,
     AggregateToolListing,
     ServerListOk,
     ServerOutcome,
-    classify_list_exception,
     outcome_wire_value,
 )
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-    ListedToolsCaller,
     MCPServerManager,
     _caller_authorization_fans_out,
     _client_forwarded_authorization_headers,
@@ -627,6 +626,7 @@ def apply_display_name_overrides(
     return tools
 
 
+@catalog_operation(lambda: global_mcp_server_manager)
 async def _get_allowed_mcp_servers(
     user_api_key_auth: UserAPIKeyAuth | None,
     mcp_servers: Sequence[str] | None,
@@ -943,6 +943,7 @@ def _aggregate_server_key(server: MCPServer) -> str:
     return get_server_prefix(server) or "unknown"
 
 
+@catalog_operation(lambda: global_mcp_server_manager)
 async def _get_tools_from_mcp_servers(
     user_api_key_auth: UserAPIKeyAuth | None,
     mcp_auth_header: str | None,
@@ -956,6 +957,8 @@ async def _get_tools_from_mcp_servers(
     request_tags: list[str] | None = None,
     client_ip: str | None = None,
     mcp_proxy_mode: bool = False,
+    params: PaginatedRequestParams | None = None,
+    protocol_version: str | None = None,
     *,
     record_listing: bool = False,
 ) -> AggregateToolListing:
@@ -1065,149 +1068,54 @@ async def _get_tools_from_mcp_servers(
             await _prefetch_oauth_creds_for_user(user_api_key_auth) if _has_oauth2_server else {}
         )
 
-        async def _fetch_and_filter_server_tools(
-            server: MCPServer,
-        ) -> "tuple[list[MCPTool], ServerOutcome]":
-            """Fetch and filter tools from a single server, classifying any failure into that
-            server's outcome so the aggregate can keep serving the healthy subset without a
-            broken server masquerading as an empty one."""
-            if server is None:
-                return [], ServerListOk(tool_count=0)
+        from litellm.proxy._experimental.mcp_server.catalog import get_filtered_server_tools
 
-            server_auth_header, extra_headers = _prepare_mcp_server_headers(
-                server=server,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                mcp_auth_header=mcp_auth_header,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                user_api_key_auth=user_api_key_auth,
-                scope_servers=allowed_mcp_servers,
+        context: Final = OperationContext(
+            _caller=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_servers=tuple(mcp_servers) if mcp_servers is not None else None,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+            mcp_proxy_mode=mcp_proxy_mode,
+            protocol_version=protocol_version,
+        )
+
+        async def _fetch_and_filter_server_tools(server: MCPServer) -> tuple[Sequence[MCPTool], ServerOutcome]:
+            page, outcome = await get_filtered_server_tools(
+                server,
+                context=context,
+                allowed_mcp_servers=allowed_mcp_servers,
+                prefetched_oauth_creds=_prefetched_oauth_creds,
+                record_listing=record_listing,
             )
+            return page.tools, outcome
 
-            # Prefer server-stored per-user OAuth when configured, so a stale
-            # Authorization header from the MCP client cannot override Redis/DB
-            # (same issue as call_tool in mcp_server_manager: VS Code caches tokens).
-            from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415
-                to_server_spec,
+        if params is None:
+            results: Final = await asyncio.gather(
+                *(_fetch_and_filter_server_tools(server) for server in allowed_mcp_servers)
             )
+            aggregated = AggregateToolListing(
+                tools=[tool for tools, _ in results for tool in tools],
+                outcomes={
+                    _aggregate_server_key(server): outcome for server, (_, outcome) in zip(allowed_mcp_servers, results)
+                },
+            )
+        else:
+            from litellm.proxy._experimental.mcp_server.catalog import aggregate_gateway_tools
 
-            # A server migrated to the v2 resolver gets its token from the resolver at connect
-            # time; building it here would double-resolve and be shadowed by the v2 graft. The
-            # preemptive 401 already challenged a missing token, so one exists for the connect.
-            migrated_to_v2: Final = to_server_spec(server) is not None
-            if (
-                not migrated_to_v2
-                and server.auth_type == MCPAuth.oauth2
-                and getattr(server, "needs_user_oauth_token", False)
-                and user_api_key_auth is not None
-            ):
-                db_headers: Final = await _get_user_oauth_extra_headers_from_db(
-                    server,
-                    user_api_key_auth,
-                    prefetched_creds=_prefetched_oauth_creds,
-                )
-                if db_headers:
-                    extra_headers = db_headers
-
-            # If still no OAuth2 token, fall back to pre-fetched creds (non-stale-client path)
-            elif not migrated_to_v2 and extra_headers is None and server.auth_type == MCPAuth.oauth2:
-                extra_headers = await _get_user_oauth_extra_headers_from_db(
-                    server,
-                    user_api_key_auth,
-                    prefetched_creds=_prefetched_oauth_creds,
-                )
-
-            catalog_auth_header: Final = server_auth_header
-            if server.is_byok and server.auth_type != MCPAuth.oauth2 and server_auth_header is None:
-                server_auth_header = await _get_byok_credential(server, user_api_key_auth)
-
-            try:
-                from litellm.proxy.proxy_server import proxy_logging_obj
-
-                listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
-                tools: Final = list(
-                    await global_mcp_server_manager._get_tools_from_server(
-                        server=server,
-                        mcp_auth_header=server_auth_header,
-                        extra_headers=extra_headers,
-                        add_prefix=True,  # Always add server prefix
-                        raw_headers=raw_headers,
-                        client_ip=client_ip,
-                        user_api_key_auth=user_api_key_auth,
-                        oauth2_headers=oauth2_headers,
-                        proxy_logging_obj=proxy_logging_obj,
-                        catalog_auth_header=catalog_auth_header,
-                        record_listing=False,
-                    )
-                )
-                filtered_tools = filter_tools_by_allowed_tools(tools, server)
-
-                filtered_tools = await filter_tools_by_key_team_permissions(
-                    tools=filtered_tools,
-                    server_id=server.server_id,
-                    user_api_key_auth=user_api_key_auth,
-                )
-                global_mcp_server_manager.record_listed_tools(
-                    server,
-                    [
-                        tool.model_copy(update={"name": strip_known_server_prefix(tool.name, server)})
-                        for tool in filtered_tools
-                    ],
-                    ListedToolsCaller(
-                        user_api_key_auth=user_api_key_auth,
-                        mcp_auth_header=catalog_auth_header,
-                        raw_headers=raw_headers,
-                        oauth2_headers=oauth2_headers,
-                    ),
-                    listed_generation,
-                    record_listing=record_listing,
-                )
-
-                if mcp_proxy_mode:
-                    from litellm.proxy._experimental.mcp_server.tool_search import with_mcp_proxy_identity
-
-                    filtered_tools = [with_mcp_proxy_identity(tool, server.server_id) for tool in filtered_tools]
-                else:
-                    filtered_tools = apply_display_name_overrides(filtered_tools, server)
-
-                verbose_logger.debug(
-                    "Successfully fetched %s tools from server %s, %s after filtering",
-                    len(tools),
-                    server.name,
-                    len(filtered_tools),
-                )
-                return filtered_tools, ServerListOk(tool_count=len(filtered_tools))
-            except MCPUpstreamAuthError as e:
-                # Absorb so one unauthenticated server does not empty every other server's
-                # tools. Surfacing the upstream 401 to the client as a re-auth challenge is
-                # intentionally not done here: raising from this list handler cannot produce a
-                # 401 + WWW-Authenticate (the MCP session manager serializes it as a JSON-RPC
-                # error). Single-server routes surface it via the request-scope preemptive
-                # check in _raise_preemptive_401_for_unauthenticated_servers instead.
-                verbose_logger.debug("MCP list_tools: omitting %s; it needs upstream auth", server.name)
-                return [], classify_list_exception(e)
-            except Exception as e:
-                verbose_logger.exception("Error getting tools from server %s: %s", server.name, e)
-                return [], classify_list_exception(e)
-
-        # Fetch tools from all servers in parallel
-        tasks: Final = [_fetch_and_filter_server_tools(server) for server in allowed_mcp_servers]
-        results: Final = await asyncio.gather(*tasks)
-
-        # Flatten results into single list
-        all_tools: Final[list[MCPTool]] = [tool for tools, _ in results for tool in tools]
-        server_outcomes: Final[dict[str, ServerOutcome]] = {
-            _aggregate_server_key(server): outcome
-            for server, (_, outcome) in zip(allowed_mcp_servers, results)
-            if server is not None
-        }
+            aggregated = await aggregate_gateway_tools(
+                context, params, allowed_mcp_servers, _prefetched_oauth_creds, record_listing=record_listing
+            )
+        all_tools: Final = aggregated.tools
+        server_outcomes: Final = aggregated.outcomes
 
         # If logging is enabled, enrich spend_logs_metadata with counts
         if litellm_logging_obj:
-            per_server_tool_counts: Final[dict[str, int]] = {
-                _aggregate_server_key(server): len(server_tools)
-                for server, (server_tools, _) in zip(allowed_mcp_servers, results)
-                if server is not None
+            per_server_tool_counts: Final = {
+                key: outcome.tool_count if isinstance(outcome, ServerListOk) else 0
+                for key, outcome in server_outcomes.items()
             }
 
             metadata_dict: Final = litellm_logging_obj.model_call_details.get("metadata")
@@ -1240,7 +1148,7 @@ async def _get_tools_from_mcp_servers(
 
         verbose_logger.info("Successfully fetched %s tools total from all MCP servers", len(all_tools))
 
-        return AggregateToolListing(tools=all_tools, outcomes=server_outcomes)
+        return aggregated
     except Exception as e:
         # Only fire failure hook if logging was requested for this list-tools execution
         if log_list_tools_to_spendlogs and user_api_key_auth is not None:
@@ -1474,6 +1382,7 @@ async def filter_tools_by_key_team_permissions(
     ]
 
 
+@catalog_operation(lambda: global_mcp_server_manager)
 async def _list_mcp_tools(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1485,6 +1394,8 @@ async def _list_mcp_tools(
     list_tools_log_source: str | None = None,
     client_ip: str | None = None,
     mcp_proxy_mode: bool = False,
+    params: PaginatedRequestParams | None = None,
+    protocol_version: str | None = None,
     *,
     record_listing: bool = False,
 ) -> AggregateToolListing:
@@ -1505,6 +1416,8 @@ async def _list_mcp_tools(
         classified listing outcome
     """
 
+    from mcp.shared.exceptions import MCPError
+
     try:
         listing: Final = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
@@ -1518,17 +1431,22 @@ async def _list_mcp_tools(
             client_ip=client_ip,
             mcp_proxy_mode=mcp_proxy_mode,
             record_listing=record_listing,
+            params=params,
+            protocol_version=protocol_version,
         )
         verbose_logger.debug("Successfully fetched %s tools from managed MCP servers", len(listing.tools))
         return listing
-    except HTTPException:
+    except (HTTPException, MCPError):
         raise
     except Exception as e:
+        if params is not None and params.cursor is not None:
+            raise
         verbose_logger.exception("Error getting tools from managed MCP servers: %s", e)
         # Continue with an empty listing instead of failing completely
         return AggregateToolListing(tools=[], outcomes={})
 
 
+@catalog_operation(global_manager)
 async def _list_mcp_prompts(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1570,6 +1488,7 @@ async def _list_mcp_prompts(
     return managed_prompts
 
 
+@catalog_operation(global_manager)
 async def _list_mcp_resources(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1599,6 +1518,7 @@ async def _list_mcp_resources(
     return managed_resources
 
 
+@catalog_operation(global_manager)
 async def _list_mcp_resource_templates(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -2087,6 +2007,9 @@ async def _execute_mcp_tool(
                 ),
             )
 
+        if local_tool.server_id is not None and local_tool.server_id != mcp_server.server_id:
+            raise HTTPException(status_code=403, detail="User not allowed to call this tool.")
+
         # `pre_call_tool_check` calls into `proxy_logging_obj` for the
         # pre-call guardrail hooks, so source it from the canonical
         # `proxy_server` module the same way `_handle_managed_mcp_tool`
@@ -2216,6 +2139,12 @@ async def _execute_mcp_tool(
                         "Retry once the server is registered."
                     ),
                 )
+
+            if (
+                registered_local_tool.server_id is not None
+                and registered_local_tool.server_id != prefix_server.server_id
+            ):
+                raise HTTPException(status_code=403, detail="User not allowed to call this tool.")
 
             from litellm.proxy.proxy_server import proxy_logging_obj
 
@@ -2398,6 +2327,7 @@ async def fire_mcp_tool_call_failure_logging(
 
 
 @client
+@catalog_operation(lambda: global_mcp_server_manager)
 async def call_mcp_tool(
     name: str,
     arguments: dict[str, object] | None = None,
@@ -2694,6 +2624,15 @@ async def _handle_local_mcp_tool(
     tool: Final = global_mcp_tool_registry.get_tool(name)
     if not tool:
         raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")
+    server: Final = (
+        global_mcp_server_manager.get_mcp_server_by_id(tool.server_id)
+        if tool.server_id is not None
+        else global_mcp_server_manager.server_owning_tool_name_prefix(name)
+    )
+    if tool.server_id is not None and server is None:
+        raise HTTPException(status_code=503, detail="MCP server configuration changed; retry the operation")
+    if server is not None:
+        global_mcp_server_manager.catalog.assert_current(server)
 
     try:
         if inspect.iscoroutinefunction(tool.handler):
@@ -2733,16 +2672,13 @@ async def _execute_handle_list_tools(
     *,
     log_list_tools_to_spendlogs: bool = True,
 ) -> ListToolsResult:
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import INVALID_PARAMS
+
     try:
-        (
-            user_api_key_auth,
-            mcp_auth_header,
-            mcp_servers,
-            mcp_server_auth_headers,
-            oauth2_headers,
-            raw_headers,
-            _client_ip,
-        ) = context.legacy_auth()
+        user_api_key_auth: Final = context.user_api_key_auth
+        mcp_servers: Final = context.mcp_servers
+        mcp_server_auth_headers: Final = context.mcp_server_auth_headers
         verbose_logger.debug("MCP list_tools - User API Key Auth from context: %s", user_api_key_auth)
         verbose_logger.debug("MCP list_tools - MCP servers from context: %s", mcp_servers)
         verbose_logger.debug(
@@ -2757,41 +2693,39 @@ async def _execute_handle_list_tools(
         )
 
         if context.mcp_proxy_mode:
+            if params.cursor is not None:
+                raise MCPError(code=INVALID_PARAMS, message="Invalid pagination cursor; start a fresh listing")
             return ListToolsResult(tools=[Tool.model_validate(d) for d in get_mcp_proxy_tool_definitions()])
         if getattr(
             getattr(user_api_key_auth, "object_permission", None),
             "mcp_tool_search_enabled",
             False,
         ):
+            if params.cursor is not None:
+                raise MCPError(code=INVALID_PARAMS, message="Invalid pagination cursor; start a fresh listing")
             return ListToolsResult(tools=[Tool.model_validate(d) for d in get_virtual_tool_definitions()])
 
-        # Get mcp_servers from context variable
-        verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
-        listing: Final = await _list_mcp_tools(
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=mcp_auth_header,
-            mcp_servers=mcp_servers,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            oauth2_headers=oauth2_headers,
-            raw_headers=raw_headers,
-            log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
-            list_tools_log_source="mcp_protocol",
-            client_ip=_client_ip,
-            record_listing=True,
+        from litellm.proxy._experimental.mcp_server.catalog import list_gateway_catalog
+        from litellm.proxy._experimental.mcp_server.server_resolution import MCPServerTargetCatalog
+
+        catalog: Final = MCPServerTargetCatalog(
+            global_mcp_server_manager,
+            listing=partial(list_gateway_catalog, log_list_tools_to_spendlogs=log_list_tools_to_spendlogs),
         )
-        verbose_logger.info("MCP list_tools - Successfully returned %s tools", len(listing.tools))
-        if not listing.outcomes:
-            return ListToolsResult(tools=listing.tools)
-        outcome_meta: Final = {
-            SERVER_OUTCOMES_META_KEY: {key: outcome_wire_value(outcome) for key, outcome in listing.outcomes.items()}
-        }
-        return ListToolsResult.model_validate({"tools": listing.tools, "_meta": outcome_meta})
+        result: Final = await catalog.list(context, ListToolsRequest(params=params))
+        assert isinstance(result, ListToolsResult)
+        return result
+    except MCPError:
+        raise
     except HTTPException as e:
-        from mcp.shared.exceptions import MCPError
         from mcp.types import INVALID_REQUEST
 
         raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(e.detail)) from e
     except Exception as e:
+        if params.cursor is not None:
+            raise MCPError(
+                code=INVALID_PARAMS, message="Catalog continuation unavailable; start a fresh listing"
+            ) from e
         verbose_logger.exception("Error in list_tools endpoint: %s", e)
         # Return empty list instead of failing completely
         # This prevents the HTTP stream from failing and allows the client to get a response
@@ -2949,41 +2883,28 @@ async def _execute_mcp_server_tool_call(
 async def _execute_list_prompts(
     context: OperationContext, params: PaginatedRequestParams, host_progress_callback: ProgressCallback | None = None
 ) -> ListPromptsResult:
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import INVALID_PARAMS, INVALID_REQUEST
+
+    from litellm.proxy._experimental.mcp_server.catalog import list_gateway_catalog
+    from litellm.proxy._experimental.mcp_server.server_resolution import MCPServerTargetCatalog
+
     if context.mcp_proxy_mode:
         _reject_mcp_proxy_operation()
     try:
-        (
-            user_api_key_auth,
-            mcp_auth_header,
-            mcp_servers,
-            mcp_server_auth_headers,
-            oauth2_headers,
-            raw_headers,
-            _client_ip,
-        ) = context.legacy_auth()
-        verbose_logger.debug("MCP list_prompts - User API Key Auth from context: %s", user_api_key_auth)
-        verbose_logger.debug("MCP list_prompts - MCP servers from context: %s", mcp_servers)
-        verbose_logger.debug(
-            "MCP list_prompts - MCP server auth headers: %s",
-            list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None,
-        )
-        # Get mcp_servers from context variable
-        verbose_logger.debug("MCP list_prompts - Calling _list_prompts")
-        prompts: Final = await _list_mcp_prompts(
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=mcp_auth_header,
-            mcp_servers=mcp_servers,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            oauth2_headers=oauth2_headers,
-            raw_headers=raw_headers,
-            client_ip=_client_ip,
-        )
-        verbose_logger.info("MCP list_prompts - Successfully returned %s prompts", len(prompts))
-        return ListPromptsResult(prompts=prompts)
-    except Exception as e:
-        verbose_logger.exception("Error in list_prompts endpoint: %s", e)
-        # Return empty list instead of failing completely
-        # This prevents the HTTP stream from failing and allows the client to get a response
+        catalog: Final = MCPServerTargetCatalog(global_mcp_server_manager, listing=list_gateway_catalog)
+        result: Final = await catalog.list(context, ListPromptsRequest(params=params))
+        assert isinstance(result, ListPromptsResult)
+        return result
+    except MCPError:
+        raise
+    except HTTPException as error:
+        raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(error.detail)) from error
+    except Exception as error:
+        if params.cursor is not None:
+            raise MCPError(
+                code=INVALID_PARAMS, message="Catalog continuation unavailable; start a fresh listing"
+            ) from error
         return ListPromptsResult(prompts=[])
 
 
@@ -3019,78 +2940,56 @@ async def _execute_get_prompt(
 async def _execute_list_resources(
     context: OperationContext, params: PaginatedRequestParams, host_progress_callback: ProgressCallback | None = None
 ) -> ListResourcesResult:
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import INVALID_PARAMS, INVALID_REQUEST
+
+    from litellm.proxy._experimental.mcp_server.catalog import list_gateway_catalog
+    from litellm.proxy._experimental.mcp_server.server_resolution import MCPServerTargetCatalog
+
     if context.mcp_proxy_mode:
         _reject_mcp_proxy_operation()
     try:
-        (
-            user_api_key_auth,
-            mcp_auth_header,
-            mcp_servers,
-            mcp_server_auth_headers,
-            oauth2_headers,
-            raw_headers,
-            _client_ip,
-        ) = context.legacy_auth()
-        verbose_logger.debug("MCP list_resources - User API Key Auth from context: %s", user_api_key_auth)
-        verbose_logger.debug("MCP list_resources - MCP servers from context: %s", mcp_servers)
-        verbose_logger.debug(
-            "MCP list_resources - MCP server auth headers: %s",
-            list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None,
-        )
-
-        resources: Final = await _list_mcp_resources(
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=mcp_auth_header,
-            mcp_servers=mcp_servers,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            oauth2_headers=oauth2_headers,
-            raw_headers=raw_headers,
-            client_ip=_client_ip,
-        )
-        verbose_logger.info("MCP list_resources - Successfully returned %s resources", len(resources))
-        return ListResourcesResult(resources=resources)
-    except Exception as e:
-        verbose_logger.exception("Error in list_resources endpoint: %s", e)
+        catalog: Final = MCPServerTargetCatalog(global_mcp_server_manager, listing=list_gateway_catalog)
+        result: Final = await catalog.list(context, ListResourcesRequest(params=params))
+        assert isinstance(result, ListResourcesResult)
+        return result
+    except MCPError:
+        raise
+    except HTTPException as error:
+        raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(error.detail)) from error
+    except Exception as error:
+        if params.cursor is not None:
+            raise MCPError(
+                code=INVALID_PARAMS, message="Catalog continuation unavailable; start a fresh listing"
+            ) from error
         return ListResourcesResult(resources=[])
 
 
 async def _execute_list_resource_templates(
     context: OperationContext, params: PaginatedRequestParams, host_progress_callback: ProgressCallback | None = None
 ) -> ListResourceTemplatesResult:
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import INVALID_PARAMS, INVALID_REQUEST
+
+    from litellm.proxy._experimental.mcp_server.catalog import list_gateway_catalog
+    from litellm.proxy._experimental.mcp_server.server_resolution import MCPServerTargetCatalog
+
     if context.mcp_proxy_mode:
         _reject_mcp_proxy_operation()
     try:
-        (
-            user_api_key_auth,
-            mcp_auth_header,
-            mcp_servers,
-            mcp_server_auth_headers,
-            oauth2_headers,
-            raw_headers,
-            _client_ip,
-        ) = context.legacy_auth()
-        verbose_logger.debug("MCP list_resource_templates - User API Key Auth from context: %s", user_api_key_auth)
-        verbose_logger.debug("MCP list_resource_templates - MCP servers from context: %s", mcp_servers)
-        verbose_logger.debug(
-            "MCP list_resource_templates - MCP server auth headers: %s",
-            list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None,
-        )
-
-        resource_templates: Final = await _list_mcp_resource_templates(
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=mcp_auth_header,
-            mcp_servers=mcp_servers,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            oauth2_headers=oauth2_headers,
-            raw_headers=raw_headers,
-            client_ip=_client_ip,
-        )
-        verbose_logger.info(
-            "MCP list_resource_templates - Successfully returned %s resource templates", len(resource_templates)
-        )
-        return ListResourceTemplatesResult(resource_templates=resource_templates)
-    except Exception as e:
-        verbose_logger.exception("Error in list_resource_templates endpoint: %s", e)
+        catalog: Final = MCPServerTargetCatalog(global_mcp_server_manager, listing=list_gateway_catalog)
+        result: Final = await catalog.list(context, ListResourceTemplatesRequest(params=params))
+        assert isinstance(result, ListResourceTemplatesResult)
+        return result
+    except MCPError:
+        raise
+    except HTTPException as error:
+        raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(error.detail)) from error
+    except Exception as error:
+        if params.cursor is not None:
+            raise MCPError(
+                code=INVALID_PARAMS, message="Catalog continuation unavailable; start a fresh listing"
+            ) from error
         return ListResourceTemplatesResult(resource_templates=[])
 
 
@@ -3217,6 +3116,7 @@ class GatewayOperations:
     @overload
     async def execute(self, operation: ReadResourceRequest, context: OperationContext) -> ReadResourceResult: ...
 
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
             case DiscoverRequest():

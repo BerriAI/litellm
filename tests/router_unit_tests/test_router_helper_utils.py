@@ -613,7 +613,7 @@ def test_deployment_callback_respects_cooldown_time(model_list):
         },
     }
 
-    with patch("litellm.router._set_cooldown_deployments") as mock_set:
+    with patch("litellm.router.set_cooldown_deployments") as mock_set:
         router.deployment_callback_on_failure(
             kwargs=kwargs,
             completion_response=None,
@@ -1565,7 +1565,7 @@ async def test_set_response_headers_wraps_bare_async_generator(model_list):
 def test_get_all_deployments(model_list):
     """Test if the 'get_all_deployments' function is working correctly"""
     router = Router(model_list=model_list)
-    deployments = router._get_all_deployments(
+    deployments = router.get_all_deployments(
         model_name="gpt-5-mini", model_alias="gpt-5-mini"
     )
     assert len(deployments) > 0
@@ -1604,10 +1604,10 @@ def test_filter_cooldown_deployments(model_list):
     """Test if the 'filter_cooldown_deployments' function is working correctly"""
     router = Router(model_list=model_list)
     deployments = router._filter_cooldown_deployments(
-        healthy_deployments=router._get_all_deployments(model_name="gpt-5-mini"),  # type: ignore
+        healthy_deployments=router.get_all_deployments(model_name="gpt-5-mini"),  # type: ignore
         cooldown_deployments=[],
     )
-    assert len(deployments) == len(router._get_all_deployments(model_name="gpt-5-mini"))
+    assert len(deployments) == len(router.get_all_deployments(model_name="gpt-5-mini"))
 
 
 def test_track_deployment_metrics(model_list):
@@ -1780,7 +1780,7 @@ def test_get_model_from_alias(model_list):
         model_list=model_list,
         model_group_alias={"gpt-5.5": "gpt-5-mini"},
     )
-    model = router._get_model_from_alias(model="gpt-5.5")
+    model = router.get_model_from_alias(model="gpt-5.5")
     assert model == "gpt-5-mini"
 
 
@@ -1869,7 +1869,7 @@ def test_pattern_match_deployment_set_model_name(
     import re
 
     # Convert model_name into a proper regex
-    model_name_regex = pattern_router._pattern_to_regex(model_name)
+    model_name_regex = pattern_router.pattern_to_regex(model_name)
 
     # Match against the request
     match = re.match(model_name_regex, user_request_model)
@@ -2412,12 +2412,12 @@ def test_handle_clientside_credential_metadata_variable_name(
     model_list, function_name, metadata_key
 ):
     """Test that _handle_clientside_credential uses the correct metadata variable name based on function name"""
-    from litellm.router_utils.batch_utils import _get_router_metadata_variable_name
+    from litellm.router_utils.batch_utils import get_router_metadata_variable_name
 
     router = Router(model_list=model_list)
 
     # Verify the metadata variable name is correct for each function
-    expected_metadata_key = _get_router_metadata_variable_name(
+    expected_metadata_key = get_router_metadata_variable_name(
         function_name=function_name
     )
     assert expected_metadata_key == metadata_key
@@ -3095,7 +3095,7 @@ def test_sync_deployment_budget_config(monkeypatch):
 
     router._sync_deployment_budget_config(deployment=deployment)
 
-    budget_limiter = router._get_router_deployment_budget_limiter()
+    budget_limiter = router.get_router_deployment_budget_limiter()
     assert budget_limiter is not None
     config = budget_limiter._get_budget_config_for_deployment(
         "runtime-budget-deployment"
@@ -3131,7 +3131,7 @@ def test_sync_deployment_budget_config_clears_removed_limits(monkeypatch):
     )
 
     router._sync_deployment_budget_config(deployment=budgeted)
-    budget_limiter = router._get_router_deployment_budget_limiter()
+    budget_limiter = router.get_router_deployment_budget_limiter()
     assert budget_limiter is not None
     assert budget_limiter._get_budget_config_for_deployment(model_id) is not None
 
@@ -3166,7 +3166,7 @@ def test_upsert_deployment_clears_stale_budget_config(monkeypatch):
     )
 
     router.upsert_deployment(deployment=budgeted)
-    budget_limiter = router._get_router_deployment_budget_limiter()
+    budget_limiter = router.get_router_deployment_budget_limiter()
     assert budget_limiter is not None
     assert budget_limiter._get_budget_config_for_deployment(model_id) is not None
 

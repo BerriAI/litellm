@@ -253,7 +253,7 @@ describe("TopKeyView", () => {
         {...baseProps}
         topKeys={[
           {
-            api_key: "sk-1234567890abcdef",
+            api_key: "sk-9876543210fedcba",
             key_alias: "Test Key",
             user: null,
             spend: 100,
@@ -261,7 +261,7 @@ describe("TopKeyView", () => {
         ]}
       />,
     );
-    const keyId = screen.getByText("sk-1234567890abcdef");
+    const keyId = screen.getByText("sk-9876543210fedcba");
     expect(keyId).toBeInTheDocument();
     expect(keyId).toHaveClass("truncate");
   });

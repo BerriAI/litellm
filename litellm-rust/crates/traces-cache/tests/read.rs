@@ -260,6 +260,7 @@ fn access() -> ReadAccessParams {
 fn span(index: usize) -> TraceSpansRow {
     TraceSpansRow {
         trace_id: "trace".into(),
+        original_trace_id: String::new(),
         span_id: format!("span-{index}"),
         parent_span_id: if index == 0 {
             String::new()
@@ -523,6 +524,7 @@ fn spend_row(response_id: &str, cost: f64) -> SpendByResponseIdsRow {
         litellm_call_id: String::new(),
         response_id: response_id.into(),
         upstream_response_id: String::new(),
+        provider_request_id: String::new(),
         trace_id: String::new(),
         span_id: String::new(),
         team_id: "team".into(),
@@ -702,6 +704,54 @@ async fn failed_reads_are_not_cached() {
         .unwrap();
     assert_eq!(trace.spans.len(), 1);
     assert_eq!(store.calls(Operation::TraceSpans), 2);
+}
+
+#[rstest]
+#[case::claude_code("claude-code")]
+#[case::claude_agent_sdk("claude-agent-sdk")]
+#[tokio::test]
+async fn resumed_native_sessions_refresh_after_live_ttl(#[case] framework: &str) {
+    let original = TraceSpansRow {
+        framework: framework.into(),
+        ..span(0)
+    };
+    let store = FakeStore::with_spans("ref", vec![original.clone()]);
+    let reader = TraceReader::new(usize::MAX);
+    let access = access();
+    let first = reader
+        .get_trace(&store, &access, "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.spans.len(), 1);
+
+    store.state.lock().unwrap().trace_spans.insert(
+        "ref".into(),
+        vec![
+            original,
+            TraceSpansRow {
+                start_ns: now_ns(),
+                ..span(1)
+            },
+        ],
+    );
+    let cached = reader
+        .get_trace(&store, &access, "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cached.spans.len(), 1);
+    assert_eq!(store.calls(Operation::TraceSpans), 1);
+
+    tokio::time::sleep(LIVE_TTL + Duration::from_millis(200)).await;
+    let resumed = reader
+        .get_trace(&store, &access, "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resumed.spans.len(), 2);
+    assert_eq!(store.calls(Operation::TraceSpans), 2);
+    assert_eq!(first.spans.len(), 1);
 }
 
 #[rstest]

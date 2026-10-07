@@ -23,6 +23,7 @@ from mcp.types import (
     ResourceTemplate,
     TextContent,
     TextResourceContents,
+    Tool,
 )
 from mcp.types import Tool as MCPTool
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERSION, MODERN_PROTOCOL_VERSIONS
@@ -669,9 +670,9 @@ def test_prepare_mcp_server_headers_m2m_skips_authorization_from_raw_extra_heade
         server=server,
         mcp_server_auth_headers=None,
         mcp_auth_header=None,
-        oauth2_headers={"Authorization": "Bearer sk-1234"},
+        oauth2_headers={"Authorization": "Bearer sk-9876"},
         raw_headers={
-            "authorization": "Bearer sk-1234",
+            "authorization": "Bearer sk-9876",
             "x-custom": "trace",
         },
     )
@@ -833,8 +834,8 @@ async def test_call_tool_m2m_skips_authorization_headers():
             tasks=[],
             mcp_auth_header=None,
             mcp_server_auth_headers=None,
-            oauth2_headers={"Authorization": "Bearer sk-1234"},
-            raw_headers={"authorization": "Bearer sk-1234", "x-custom": "trace"},
+            oauth2_headers={"Authorization": "Bearer sk-9876"},
+            raw_headers={"authorization": "Bearer sk-9876", "x-custom": "trace"},
             proxy_logging_obj=None,
         )
 
@@ -1292,7 +1293,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     ):
         if server.name == "working_server":
             # Working server returns tools
-            tool1 = MagicMock()
+            tool1 = Tool(name="placeholder", inputSchema={})
             tool1.name = "working_tool_1"
             tool1.description = "Working tool 1"
             tool1.input_schema = {}
@@ -1308,12 +1309,12 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         mock_manager,
     ):
         with patch(
-            "litellm.proxy._experimental.mcp_server.operations.verbose_logger",
-        ) as mock_logger:
+            "litellm.proxy._experimental.mcp_server.catalog.verbose_logger",
+        ) as mock_logger, patch("litellm.proxy._experimental.mcp_server.operations.verbose_logger", mock_logger):
             # Test with server-specific auth headers
             mcp_server_auth_headers = {
-                "working": "Bearer working-token",
-                "failing": "Bearer failing-token",
+                "working": {"Authorization": "Bearer working-token"},
+                "failing": {"Authorization": "Bearer failing-token"},
             }
 
             result = await _get_tools_from_mcp_servers(
@@ -1404,12 +1405,12 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         mock_manager,
     ):
         with patch(
-            "litellm.proxy._experimental.mcp_server.operations.verbose_logger",
-        ) as mock_logger:
+            "litellm.proxy._experimental.mcp_server.catalog.verbose_logger",
+        ) as mock_logger, patch("litellm.proxy._experimental.mcp_server.operations.verbose_logger", mock_logger):
             # Test with server-specific auth headers
             mcp_server_auth_headers = {
-                "failing1": "Bearer failing1-token",
-                "failing2": "Bearer failing2-token",
+                "failing1": {"Authorization": "Bearer failing1-token"},
+                "failing2": {"Authorization": "Bearer failing2-token"},
             }
 
             result = await _get_tools_from_mcp_servers(
@@ -4381,7 +4382,7 @@ async def test_list_tools_single_server_unprefixed_names():
         raw_headers=None,
         **kwargs,
     ):
-        tool = MagicMock()
+        tool = Tool(name="placeholder", inputSchema={})
         tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
         tool.description = "desc"
         tool.input_schema = {}
@@ -4459,7 +4460,7 @@ async def test_list_tools_multiple_servers_prefixed_names():
         raw_headers=None,
         **kwargs,
     ):
-        tool = MagicMock()
+        tool = Tool(name="placeholder", inputSchema={})
         # When multiple servers, add_prefix should be True -> prefixed names
         tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
         tool.description = "desc"
@@ -4873,22 +4874,22 @@ async def test_list_tools_filters_by_key_team_permissions():
         **kwargs,
     ):
         # Return 4 tools, but only 2 should be allowed
-        tool1 = MagicMock()
+        tool1 = Tool(name="placeholder", inputSchema={})
         tool1.name = "tool1"
         tool1.description = "Tool 1"
         tool1.input_schema = {}
 
-        tool2 = MagicMock()
+        tool2 = Tool(name="placeholder", inputSchema={})
         tool2.name = "tool2"
         tool2.description = "Tool 2"
         tool2.input_schema = {}
 
-        tool3 = MagicMock()
+        tool3 = Tool(name="placeholder", inputSchema={})
         tool3.name = "tool3"
         tool3.description = "Tool 3 - not allowed"
         tool3.input_schema = {}
 
-        tool4 = MagicMock()
+        tool4 = Tool(name="placeholder", inputSchema={})
         tool4.name = "tool4"
         tool4.description = "Tool 4 - not allowed"
         tool4.input_schema = {}
@@ -4984,22 +4985,22 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
         **kwargs,
     ):
         # Return 4 tools
-        tool1 = MagicMock()
+        tool1 = Tool(name="placeholder", inputSchema={})
         tool1.name = "tool1"
         tool1.description = "Tool 1"
         tool1.input_schema = {}
 
-        tool2 = MagicMock()
+        tool2 = Tool(name="placeholder", inputSchema={})
         tool2.name = "tool2"
         tool2.description = "Tool 2"
         tool2.input_schema = {}
 
-        tool3 = MagicMock()
+        tool3 = Tool(name="placeholder", inputSchema={})
         tool3.name = "tool3"
         tool3.description = "Tool 3"
         tool3.input_schema = {}
 
-        tool4 = MagicMock()
+        tool4 = Tool(name="placeholder", inputSchema={})
         tool4.name = "tool4"
         tool4.description = "Tool 4"
         tool4.input_schema = {}
@@ -5081,17 +5082,17 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
         **kwargs,
     ):
         # Return 3 tools
-        tool1 = MagicMock()
+        tool1 = Tool(name="placeholder", inputSchema={})
         tool1.name = "tool1"
         tool1.description = "Tool 1"
         tool1.input_schema = {}
 
-        tool2 = MagicMock()
+        tool2 = Tool(name="placeholder", inputSchema={})
         tool2.name = "tool2"
         tool2.description = "Tool 2"
         tool2.input_schema = {}
 
-        tool3 = MagicMock()
+        tool3 = Tool(name="placeholder", inputSchema={})
         tool3.name = "tool3"
         tool3.description = "Tool 3"
         tool3.input_schema = {}
@@ -5182,22 +5183,22 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
         **kwargs,
     ):
         # Return tools WITH prefix (as they come from MCP server)
-        tool1 = MagicMock()
+        tool1 = Tool(name="placeholder", inputSchema={})
         tool1.name = "GITMCP-fetch_litellm_documentation"  # Prefixed
         tool1.description = "Fetch docs"
         tool1.input_schema = {}
 
-        tool2 = MagicMock()
+        tool2 = Tool(name="placeholder", inputSchema={})
         tool2.name = "GITMCP-search_litellm_documentation"  # Prefixed, not in allowed list
         tool2.description = "Search docs"
         tool2.input_schema = {}
 
-        tool3 = MagicMock()
+        tool3 = Tool(name="placeholder", inputSchema={})
         tool3.name = "GITMCP-search_litellm_code"  # Prefixed
         tool3.description = "Search code"
         tool3.input_schema = {}
 
-        tool4 = MagicMock()
+        tool4 = Tool(name="placeholder", inputSchema={})
         tool4.name = "GITMCP-fetch_generic_url_content"  # Prefixed, not in allowed list
         tool4.description = "Fetch URL"
         tool4.input_schema = {}
@@ -5405,7 +5406,9 @@ class TestMCPServerManagerReload:
         db_row = _make_db_mcp_server("server-1", timestamp)
 
         mock_prisma = MagicMock()
+        mock_prisma.writer_db = mock_prisma.db
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[db_row])
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
@@ -5447,7 +5450,9 @@ class TestMCPServerManagerReload:
         )
 
         mock_prisma = MagicMock()
+        mock_prisma.writer_db = mock_prisma.db
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[db_row])
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
@@ -5461,7 +5466,7 @@ class TestMCPServerManagerReload:
         ):
             await manager.reload_servers_from_database()
 
-        mock_build.assert_awaited_once_with(db_row, env_vars_are_encrypted=True)
+        mock_build.assert_awaited_once_with(db_row, env_vars_are_encrypted=True, register_oauth_discovery=False)
         assert manager.registry["server-1"] is rebuilt_server
 
     @pytest.mark.asyncio
@@ -5500,9 +5505,11 @@ class TestMCPServerManagerReload:
             return another_healthy_server
 
         mock_prisma = MagicMock()
+        mock_prisma.writer_db = mock_prisma.db
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
             return_value=[healthy_row, bad_row, another_healthy_row]
         )
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
@@ -5513,7 +5520,7 @@ class TestMCPServerManagerReload:
                 "build_mcp_server_from_table",
                 AsyncMock(side_effect=build_server),
             ),
-            patch.object(manager, "_maybe_register_openapi_tools", AsyncMock()),
+            patch.object(manager, "maybe_register_openapi_tools", AsyncMock()),
             caplog.at_level("ERROR", logger="LiteLLM"),
         ):
             await manager.reload_servers_from_database()
@@ -5572,7 +5579,9 @@ class TestMCPServerManagerReload:
                 raise RuntimeError("blocked address")
 
         mock_prisma = MagicMock()
+        mock_prisma.writer_db = mock_prisma.db
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[healthy_row, bad_openapi_row])
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
@@ -5585,7 +5594,7 @@ class TestMCPServerManagerReload:
             ),
             patch.object(
                 manager,
-                "_maybe_register_openapi_tools",
+                "maybe_register_openapi_tools",
                 AsyncMock(side_effect=register_openapi_tools),
             ),
             caplog.at_level("ERROR", logger="LiteLLM"),
@@ -5785,7 +5794,7 @@ async def test_get_tools_from_mcp_servers_returns_tools_when_success_logging_fai
     server_a.auth_type = None
     server_a.extra_headers = None
 
-    tool_1 = MagicMock()
+    tool_1 = Tool(name="placeholder", inputSchema={})
     tool_1.name = "server_a-tool_1"
 
     dummy_logging_obj = MagicMock()
@@ -6111,7 +6120,7 @@ async def test_get_tools_from_mcp_servers_injects_stored_oauth2_token():
     # Simulate the DB returning a valid credential for this user+server
     prefetched_creds = {SERVER_ID: {"access_token": STORED_TOKEN, "server_id": SERVER_ID}}
 
-    tool_1 = MagicMock()
+    tool_1 = Tool(name="placeholder", inputSchema={})
     tool_1.name = "atlassian_test-search"
 
     with (
@@ -6696,7 +6705,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     except ImportError:
         pytest.skip("MCP server not available")
 
-    user_auth = UserAPIKeyAuth(api_key="sk-1234", user_id="test-user")
+    user_auth = UserAPIKeyAuth(api_key="sk-9876", user_id="test-user")
 
     # Simulate a legacy DB row: OAuth2 with M2M credentials but oauth2_flow=None
     legacy_server = MagicMock(name="legacy_m2m_server")
@@ -6736,7 +6745,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
         )
     )
 
-    tool_1 = MagicMock()
+    tool_1 = Tool(name="placeholder", inputSchema={})
     tool_1.name = "legacy_m2m-tool"
 
     captured_extra_headers = None
@@ -6769,7 +6778,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
             mcp_auth_header=None,
             mcp_servers=["legacy_m2m"],
             mcp_server_auth_headers=None,
-            oauth2_headers={"Authorization": "Bearer sk-1234"},  # Caller's token
+            oauth2_headers={"Authorization": "Bearer sk-9876"},  # Caller's token
         )
 
     # With P1 fix: _get_allowed_mcp_servers applies _resolve_oauth2_flow,
@@ -6815,7 +6824,7 @@ async def test_call_tool_empty_extra_headers_returns_none():
     )
 
     raw_headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": "Bearer sk-9876",
         "Content-Type": "application/json",
     }
 
@@ -7754,8 +7763,8 @@ async def test_execute_mcp_tool_rest_server_id_injects_requested_server_credenti
         ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "get_registry",
-            return_value={
+            "registry",
+            {
                 requested_server.server_id: requested_server,
                 collision_server.server_id: collision_server,
             },
@@ -8019,6 +8028,7 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
     fake_tool.name = "list_pets"
     fake_tool.description = "test tool"
     fake_tool.input_schema = {"type": "object"}
+    fake_tool.server_id = fake_server.server_id
 
     start_time = datetime.now(timezone.utc)
     litellm_logging_obj, _ = function_setup(
@@ -9000,6 +9010,7 @@ async def test_stateful_mcp_tool_call_uses_current_requests_otel_destinations(_m
     server = MCPServer(
         server_id="otel-context-test",
         name="otelcontext",
+        server_name="otelcontext",
         transport=MCPTransport.http,
         allow_all_keys=True,
     )
@@ -9091,6 +9102,7 @@ async def test_get_active_submitted_mcp_server_ids_for_user_queries_active_rows(
     row.server_id = "submitted-1"
     prisma_client = MagicMock()
     prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
+    prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
     result = await get_active_submitted_mcp_server_ids_for_user(prisma_client, "submitter-user")
 
@@ -9111,6 +9123,7 @@ async def test_get_active_submitted_mcp_server_ids_for_user_empty_user_id_skips_
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_mcpservertable.find_many = AsyncMock()
+    prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
     assert await get_active_submitted_mcp_server_ids_for_user(prisma_client, "") == []
     prisma_client.db.litellm_mcpservertable.find_many.assert_not_awaited()
@@ -9497,7 +9510,7 @@ async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
     except ImportError:
         pytest.skip("MCP server not available")
 
-    user_auth = UserAPIKeyAuth(api_key="sk-1234", user_id="test-user")
+    user_auth = UserAPIKeyAuth(api_key="sk-9876", user_id="test-user")
 
     legacy_server = MCPServer(
         server_id="legacy-m2m-id",
@@ -9827,7 +9840,7 @@ async def test_aggregate_listing_reports_per_server_outcomes():
 
     async def mock_get_tools_from_server(server, **kwargs):
         if server.name == "working_server":
-            tool1 = MagicMock()
+            tool1 = Tool(name="placeholder", inputSchema={})
             tool1.name = "working_tool_1"
             tool1.description = "Working tool 1"
             tool1.input_schema = {}
@@ -10026,7 +10039,7 @@ class TestPreemptive401ModeAware:
         assert resolved.authorization_url == "https://idp.example.com/authorize"
         assert resolved.token_url == "https://idp.example.com/token"
         assert resolved.registration_url == "https://idp.example.com/register"
-        assert manager._oauth_discovery_slot(server.server_id) is None
+        assert manager.oauth_discovery_slot(server.server_id) is None
         assert exc.value.status_code == 401
 
     @pytest.mark.asyncio
@@ -10673,7 +10686,7 @@ async def test_list_tools_injects_byok_credential_for_non_oauth2_auth_types(auth
 
     async def mock_get_tools_from_server(server, mcp_auth_header=None, add_prefix=False, **kwargs):
         seen_auth_headers.append(mcp_auth_header)
-        tool = MagicMock()
+        tool = Tool(name="placeholder", inputSchema={})
         tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
         tool.description = "desc"
         tool.input_schema = {}

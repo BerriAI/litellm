@@ -1509,6 +1509,7 @@ class TestListToolsRestAPI:
             mcp_info={"server_name": "stub"},
         )
         stub_server.available_on_public_internet = True
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "registry", {"server-1": stub_server})
 
         mock_transport_ctx = AsyncMock()
         mock_transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
@@ -1577,9 +1578,8 @@ class TestListToolsRestAPI:
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "get_mcp_server_by_id",
-            lambda server_id: stub_server if server_id == "server-1" else None,
-            raising=False,
+            "registry",
+            {stub_server.server_id: stub_server},
         )
 
         request = _build_request(path="/mcp-rest/tools/list", method="GET")
@@ -4501,7 +4501,7 @@ class TestV1ResolvedOauth2Gate:
 
         headers = await rest_endpoints._get_user_oauth_extra_headers(
             server,
-            UserAPIKeyAuth(user_id="alice", api_key="sk-1234"),
+            UserAPIKeyAuth(user_id="alice", api_key="sk-9876"),
             prefetched_creds={"oauth2-srv": {"access_token": "stored-token"}},
         )
 

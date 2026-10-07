@@ -3,6 +3,7 @@ Tests for Key based logging callbacks
 
 """
 
+import os
 import httpx
 import pytest
 
@@ -16,7 +17,7 @@ async def test_key_logging_callbacks():
     # Generate a key with logging callback
     generate_url = "http://0.0.0.0:4000/key/generate"
     generate_headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
         "Content-Type": "application/json",
     }
     generate_payload = {

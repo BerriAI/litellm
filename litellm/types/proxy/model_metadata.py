@@ -3,7 +3,6 @@ from types import MappingProxyType
 from typing import Annotated, Final, cast  # noqa: TID251  # Pydantic runtime schema boundary
 
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Field,
     TypeAdapter,
@@ -13,11 +12,13 @@ from pydantic import (
     field_validator,
 )
 
+from litellm.types.llms.base import LiteLLMBaseModel
+
 _STRING_VALUES_ADAPTER: Final = TypeAdapter(tuple[str, ...])
 _VALIDATED_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
-class ModelRequestDefaults(BaseModel):
+class ModelRequestDefaults(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     output_token_budget: Annotated[int, Field(gt=0, strict=True)] | None = None
@@ -40,7 +41,7 @@ class ModelRequestDefaults(BaseModel):
         )
 
 
-class GatewayModelMetadata(BaseModel):
+class GatewayModelMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     context_window: int | None = Field(

@@ -5,13 +5,14 @@ from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias
 
 import httpx
-from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError, ValidationInfo, field_validator
+from pydantic import BeforeValidator, ConfigDict, ValidationError, ValidationInfo, field_validator
 
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.model_inventory import SupplierInventoryUnavailable, SupplierModelInventory
 from litellm.types.proxy.model_metadata import GatewayModelMetadata
-from litellm.utils import _add_path_to_api_base  # pyright: ignore[reportPrivateUsage]  # shared provider URL helper
+from litellm.utils import add_path_to_api_base
 
 MODEL_INFO_REFRESH_SECONDS: Final = 300
 MODEL_INFO_REFRESH_CONCURRENCY: Final = 8
@@ -32,27 +33,27 @@ def _positive_limit(value: object) -> int | None:
 _TokenLimit: TypeAlias = Annotated[int | None, BeforeValidator(_positive_limit)]
 
 
-class _Modalities(BaseModel):
+class _Modalities(LiteLLMBaseModel):
     input: Sequence[str] | None = None
     output: Sequence[str] | None = None
 
 
-class _Architecture(BaseModel):
+class _Architecture(LiteLLMBaseModel):
     input_modalities: Sequence[str] | None = None
     output_modalities: Sequence[str] | None = None
 
 
-class _TopProvider(BaseModel):
+class _TopProvider(LiteLLMBaseModel):
     context_length: _TokenLimit = None
     max_completion_tokens: _TokenLimit = None
 
 
-class _Reasoning(BaseModel):
+class _Reasoning(LiteLLMBaseModel):
     supported_efforts: Sequence[str] | None = None
     default_effort: str | None = None
 
 
-class _ReasoningOption(BaseModel):
+class _ReasoningOption(LiteLLMBaseModel):
     type: str
     values: Sequence[str] | None = None
 
@@ -163,7 +164,7 @@ class _ModelCard(GatewayModelMetadata):
         )
 
 
-class _ModelList(BaseModel):
+class _ModelList(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     data: tuple[_ModelCard, ...]
@@ -196,7 +197,7 @@ async def get_openai_compatible_model_inventory(
     cache: InMemoryCache,
     force_refresh: bool = False,
 ) -> SupplierModelInventory | SupplierInventoryUnavailable:
-    url: Final = _add_path_to_api_base(api_base, "/v1/models")
+    url: Final = add_path_to_api_base(api_base, "/v1/models")
     cache_key: Final = (
         "upstream_model_info:"
         + hashlib.sha256(json.dumps((provider, url, sorted(headers.items()))).encode()).hexdigest()

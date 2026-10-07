@@ -5,6 +5,7 @@ from fastapi import Request
 from litellm_enterprise.proxy.auth.user_api_key_auth import enterprise_custom_auth
 
 from litellm.proxy._types import UserAPIKeyAuth
+from tests._master_key import MASTER_KEY
 
 
 @pytest.mark.asyncio
@@ -56,7 +57,7 @@ async def test_enterprise_custom_auth_returns_string():
             "litellm.proxy.auth.user_api_key_auth.enterprise_custom_auth",
             mock_user_auth,
         ),
-        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
     ):
         # Verify the key is correctly handled in _user_api_key_auth_builder

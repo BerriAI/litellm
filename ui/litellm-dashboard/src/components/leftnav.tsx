@@ -1,3 +1,4 @@
+import { canViewProjectsPage, projectReaderRoles } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
@@ -25,7 +26,6 @@ import {
   Activity,
   Aperture,
   BarChart3,
-  Calculator,
   Bell,
   Blocks,
   Bot,
@@ -225,17 +225,6 @@ const menuGroups: MenuGroup[] = [
         ),
       },
       {
-        key: "roi-calculator",
-        page: "roi-calculator",
-        icon: <Calculator {...ICON} />,
-        roles: all_admin_roles,
-        label: (
-          <span className="flex items-center gap-2">
-            ROI Calculator <BetaBadge />
-          </span>
-        ),
-      },
-      {
         key: "cost-optimization",
         page: "cost-optimization",
         icon: <PiggyBank {...ICON} />,
@@ -275,7 +264,7 @@ const menuGroups: MenuGroup[] = [
           </span>
         ),
         icon: <Folder {...ICON} />,
-        roles: all_admin_roles,
+        roles: [...projectReaderRoles],
       },
       { key: "users", page: "users", label: "Internal Users", icon: <User {...ICON} />, roles: all_admin_roles },
       {
@@ -439,7 +428,7 @@ const prettify = (key: string): string =>
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 
-const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : prettify(item.key));
+export const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : prettify(item.key));
 
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
 export const getBreadcrumb = (pathname: string): { section: string | null; title: string } => {
@@ -512,7 +501,11 @@ const Sidebar_: React.FC<SidebarProps> = ({
           if (!isAdmin && enabledPagesInternalUsers != null) return enabledPagesInternalUsers.includes(item.page);
           return true;
         }
-        if (item.key === "projects" && !enableProjectsUI) return false;
+        if (
+          item.key === "projects" &&
+          !(enableProjectsUI && canViewProjectsPage({ userRole, isOrgAdmin, isTeamAdmin }))
+        )
+          return false;
         if (
           !isAdmin &&
           item.key === "agents" &&

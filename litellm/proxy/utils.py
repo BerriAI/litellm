@@ -52,6 +52,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
+    FILE_USAGE_MAX_TRACKED_COUNTERS,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
@@ -123,10 +124,11 @@ from litellm import (
     Router,
 )
 from litellm._internal_context import service_target
-from litellm._logging import _redact_string, verbose_proxy_logger
+from litellm._logging import redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import (
     GuardrailRaisedException,
     RejectedRequestError,
@@ -139,7 +141,7 @@ from litellm.integrations.custom_guardrail import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
-from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
@@ -254,7 +256,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointT
 from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionResult
 from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 from litellm.utils import (
-    _add_custom_logger_callback_to_specific_event,  # pyright: ignore[reportPrivateUsage]  # only string-to-logger helper
+    add_custom_logger_callback_to_specific_event,
 )
 
 if TYPE_CHECKING:
@@ -350,7 +352,7 @@ def print_verbose(print_statement: object):
 
     verbose_proxy_logger.debug("%s\n%s", print_statement, traceback.format_exc())
     if litellm.set_verbose:
-        print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa: T201
+        print(f"LiteLLM Proxy: {redact_string(str(print_statement))}")  # noqa: T201
 
 
 def _get_email_logger_class():
@@ -1215,6 +1217,9 @@ class ProxyLogging:
         self.internal_usage_cache: InternalUsageCache = InternalUsageCache(
             dual_cache=DualCache(default_in_memory_ttl=1)  # ping redis cache every 1s
         )
+        self.file_usage_cache: Final = InternalUsageCache(
+            dual_cache=DualCache(in_memory_cache=InMemoryCache(max_size_in_memory=FILE_USAGE_MAX_TRACKED_COUNTERS))
+        )
         self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler(self.internal_usage_cache)
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: list[str] | None = None
@@ -1356,6 +1361,7 @@ class ProxyLogging:
 
         if redis_cache is not None:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
+            self.file_usage_cache.dual_cache.redis_cache = redis_cache
             self.db_spend_update_writer.redis_update_buffer.redis_cache = redis_cache
             self.db_spend_update_writer.pod_lock_manager.redis_cache = redis_cache
 
@@ -1433,9 +1439,9 @@ class ProxyLogging:
         success_callbacks: Final = tuple(cb for cb in litellm.success_callback if isinstance(cb, str))
         failure_callbacks: Final = tuple(cb for cb in litellm.failure_callback if isinstance(cb, str))
         for callback in success_callbacks:
-            _add_custom_logger_callback_to_specific_event(callback, "success")
+            add_custom_logger_callback_to_specific_event(callback, "success")
         for callback in failure_callbacks:
-            _add_custom_logger_callback_to_specific_event(callback, "failure")
+            add_custom_logger_callback_to_specific_event(callback, "failure")
 
     async def update_request_status(self, litellm_call_id: str, status: Literal["success", "fail"]):
         # only use this if slack alerting is being used
@@ -3160,7 +3166,7 @@ class ProxyLogging:
         extra_kwargs: Final = {}
         alerting_metadata = {}
         if request_data is not None:
-            _url: Final = await _add_langfuse_trace_id_to_alert(request_data=request_data)
+            _url: Final = await add_langfuse_trace_id_to_alert(request_data=request_data)
 
             if _url is not None:
                 extra_kwargs["🪢 Langfuse Trace"] = _url
@@ -3207,7 +3213,7 @@ class ProxyLogging:
             error_message = str(original_exception)
         if isinstance(traceback_str, str):
             error_message += traceback_str[:1000]
-        error_message = _redact_string(error_message)
+        error_message = redact_string(error_message)
         asyncio.create_task(
             self.alerting_handler(
                 message=f"DB read/write call failed: {error_message}",
@@ -3281,7 +3287,7 @@ class ProxyLogging:
 
             asyncio.create_task(
                 self.alerting_handler(
-                    message=_redact_string(f"LLM API call failed: `{exception_str}`"),
+                    message=redact_string(f"LLM API call failed: `{exception_str}`"),
                     level="High",
                     alert_type=AlertType.llm_exceptions,
                     request_data=request_data,
@@ -3311,7 +3317,7 @@ class ProxyLogging:
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
 
-        redacted_traceback_str: Final = _redact_string(traceback_str) if traceback_str is not None else None
+        redacted_traceback_str: Final = redact_string(traceback_str) if traceback_str is not None else None
 
         # Track the first HTTPException returned or raised by any callback
         transformed_exception: HTTPException | None = None
@@ -7641,6 +7647,13 @@ async def update_daily_tag_spend(
         verbose_proxy_logger.error("Error updating daily tag spend: %s", e)
 
 
+def _rollup_batch_never_applied(e: Exception) -> bool:
+    """True when a drained rollup batch provably never reached its rows: Postgres had no
+    connection for it (53300) or cancelled it under ``lock_timeout`` before it took the row
+    lock (55P03). Either way re-sending the batch cannot double-count, so it is requeued."""
+    return PrismaDBExceptionHandler.is_database_capacity_error(e) or PrismaDBExceptionHandler.is_lock_timeout_error(e)
+
+
 async def update_spend_logs_job(
     prisma_client: PrismaClient,
     db_writer_client: AsyncHTTPHandler | None,
@@ -7706,9 +7719,11 @@ async def _run_spend_logs_job(
         )
 
     # Tool usage tracking: drain the request-time queue into the tool index and the
-    # LiteLLM_DailyToolSpend rollup. A batch Postgres had no connection for was never
-    # sent, so it is requeued and the job stops; any other failure is dropped because
-    # a replay could double-count the rollup.
+    # LiteLLM_DailyToolSpend rollup. A batch Postgres had no connection for, or whose
+    # rollup statement was cancelled by lock_timeout, never applied, so it is requeued;
+    # any other failure is dropped because a replay could double-count the rollup. Only
+    # a full server (53300) stops the job: a timed-out row belongs to this rollup alone,
+    # the writers below have their own rows and keep flushing.
     async with prisma_client._tool_usage_transactions_lock:
         tool_usage_to_process: Final = prisma_client.tool_usage_transactions[:MAX_LOGS_PER_INTERVAL]
         prisma_client.tool_usage_transactions = prisma_client.tool_usage_transactions[len(tool_usage_to_process) :]
@@ -7720,19 +7735,20 @@ async def _run_spend_logs_job(
             transactions=tool_usage_to_process,
         )
     except Exception as tool_tracking_err:
-        if PrismaDBExceptionHandler.is_database_capacity_error(tool_tracking_err):
+        if _rollup_batch_never_applied(tool_tracking_err):
             async with prisma_client._tool_usage_transactions_lock:
                 prisma_client.tool_usage_transactions = [
                     *tool_usage_to_process,
                     *prisma_client.tool_usage_transactions,
                 ]
             verbose_proxy_logger.warning(
-                "Spend tracking - database out of connections during tool usage flush, "
-                "requeued %s tool usage transactions for the next flush: %s",
+                "Spend tracking - database out of connections or rollup row lock timed out during tool usage "
+                "flush, requeued %s tool usage transactions for the next flush: %s",
                 len(tool_usage_to_process),
                 tool_tracking_err,
             )
-            raise
+            if PrismaDBExceptionHandler.is_database_capacity_error(tool_tracking_err):
+                raise
         else:
             verbose_proxy_logger.error(
                 "Spend tracking - tool usage flush failed; %s tool usage transactions dropped: %s",
@@ -7740,6 +7756,7 @@ async def _run_spend_logs_job(
                 tool_tracking_err,
             )
 
+    # Model usage rollup: same requeue and stop rules as the tool rollup above
     async with prisma_client._model_usage_transactions_lock:
         model_usage_to_process: Final = prisma_client.model_usage_transactions
         prisma_client.model_usage_transactions = []
@@ -7748,11 +7765,28 @@ async def _run_spend_logs_job(
 
         await flush_model_usage_transactions(prisma_client=prisma_client, transactions=model_usage_to_process)
     except Exception as model_usage_err:
-        verbose_proxy_logger.error(
-            "Spend tracking - model usage flush failed; %s model usage transactions dropped: %s",
-            len(model_usage_to_process),
-            model_usage_err,
-        )
+        if _rollup_batch_never_applied(model_usage_err):
+            async with (
+                prisma_client._model_usage_transactions_lock  # pyright: ignore[reportPrivateUsage]  # needed to requeue
+            ):
+                prisma_client.model_usage_transactions = [
+                    *model_usage_to_process,
+                    *prisma_client.model_usage_transactions,
+                ]
+            verbose_proxy_logger.warning(
+                "Spend tracking - database out of connections or rollup row lock timed out during model usage "
+                "flush, requeued %s model usage transactions for the next flush: %s",
+                len(model_usage_to_process),
+                model_usage_err,
+            )
+            if PrismaDBExceptionHandler.is_database_capacity_error(model_usage_err):
+                raise
+        else:
+            verbose_proxy_logger.error(
+                "Spend tracking - model usage flush failed; %s model usage transactions dropped: %s",
+                len(model_usage_to_process),
+                model_usage_err,
+            )
 
     await flush_baseline_accounting(prisma_client)
 
@@ -8319,7 +8353,7 @@ def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) 
     )
 
 
-def _premium_user_check(feature: str | None = None):
+def require_enterprise_license(feature: str | None = None) -> None:
     """
     Raises an HTTPException if the user is not a premium user
     """
@@ -8337,6 +8371,9 @@ def _premium_user_check(feature: str | None = None):
             status_code=403,
             detail={"error": detail_msg},
         )
+
+
+_premium_user_check: Final = require_enterprise_license
 
 
 def is_known_model(model: str | None, llm_router: Router | None) -> bool:

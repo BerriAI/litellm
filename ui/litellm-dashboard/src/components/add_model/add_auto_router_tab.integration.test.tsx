@@ -1,3 +1,4 @@
+import { normalizeTierModels } from "./complexity_router_tiers";
 import {
   openAutoRouterAdvanced,
   selectAutoRouterOption,
@@ -930,6 +931,39 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
+  it("creates the selected v2 chain after editing its threshold and local tier ceiling", async () => {
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    const actualSubmit = await vi.importActual<typeof import("./handle_add_auto_router_submit")>(
+      "./handle_add_auto_router_submit",
+    );
+    vi.mocked(handleAddAutoRouterSubmit).mockImplementationOnce(actualSubmit.handleAddAutoRouterSubmit);
+    renderWithProviders(<Harness />);
+    const setup = await screen.findByRole("button", { name: "Choose models for me" });
+    await waitFor(() => expect(setup).toBeEnabled());
+    await userEvent.click(setup);
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "chained-router" } });
+    await userEvent.click(screen.getByRole("radio", { name: "LLM" }));
+    await selectAutoRouterOption("Judge model", ALL_FAMILY_MODELS[0].model_group);
+    openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("Local checks before the judge", "Heuristic first");
+    await selectAutoRouterOption("Heuristic before the judge", "Heuristic v2");
+    fireEvent.click(screen.getByRole("button", { name: "Heuristic tuning" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "0.6" } });
+    await selectAutoRouterOption("Decide locally up to", "Medium");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(modelCreateCall).toHaveBeenCalledOnce());
+    const expectedConfig = {
+      classifier_type: "heuristic_first",
+      local_heuristic: "heuristic_v2",
+      heuristic_v2_success_threshold: 0.6,
+      heuristic_first_max_tier: "MEDIUM",
+    };
+    expect(vi.mocked(modelCreateCall).mock.calls.at(-1)?.[1].litellm_params.complexity_router_config).toMatchObject(
+      expectedConfig,
+    );
+  });
+
   it("preserves classifier tuning when choosing models automatically", async () => {
     const user = userEvent.setup();
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
@@ -974,6 +1008,32 @@ describe("AddAutoRouterTab", () => {
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).not.toHaveProperty(
       "heuristic_v2_success_threshold",
     );
+  });
+
+  it.each([false, true])("creates a router with cache routing only after an explicit opt-in: %s", async (enabled) => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    renderWithProviders(<Harness />);
+    const setup = await screen.findByRole("button", { name: "Choose models for me" });
+    await waitFor(() => expect(setup).toBeEnabled());
+    await user.click(setup);
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "cache-aware-router" } });
+    openAutoRouterAdvanced("Cache-aware routing");
+    const toggle = screen.getByRole("switch", { name: "Cache-aware routing" });
+    expect(toggle).not.toBeChecked();
+    if (enabled) {
+      await user.click(toggle);
+      fireEvent.change(screen.getByLabelText("Expected output tokens"), { target: { value: "512" } });
+      fireEvent.change(screen.getByLabelText("Prediction timeout (ms)"), { target: { value: "750" } });
+    }
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    const config = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config;
+    expect(config?.cache_aware_routing ?? false).toBe(enabled);
+    expect(config?.cache_aware_routing_output_tokens).toBe(enabled ? 512 : undefined);
+    expect(config?.cache_aware_routing_timeout_ms).toBe(enabled ? 750 : undefined);
+    expect(Object.values(config?.tiers ?? {}).every((models) => typeof models === "string")).toBe(enabled);
   });
 
   it("starts context-window escalation disabled and carries an explicit opt-in to the create payload", async () => {
@@ -1716,10 +1776,10 @@ describe("AddAutoRouterTab", () => {
       expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
         complexity_router_config: {
           tiers: {
-            SIMPLE: ANTHROPIC_TIERS.SIMPLE.map(nativeGroupFor),
-            MEDIUM: ANTHROPIC_TIERS.MEDIUM.map(nativeGroupFor),
-            COMPLEX: ANTHROPIC_TIERS.COMPLEX.map(nativeGroupFor),
-            REASONING: ANTHROPIC_TIERS.REASONING.map(nativeGroupFor),
+            SIMPLE: normalizeTierModels(ANTHROPIC_TIERS.SIMPLE).map(nativeGroupFor),
+            MEDIUM: normalizeTierModels(ANTHROPIC_TIERS.MEDIUM).map(nativeGroupFor),
+            COMPLEX: normalizeTierModels(ANTHROPIC_TIERS.COMPLEX).map(nativeGroupFor),
+            REASONING: normalizeTierModels(ANTHROPIC_TIERS.REASONING).map(nativeGroupFor),
           },
         },
       });
@@ -1811,10 +1871,10 @@ describe("AddAutoRouterTab", () => {
       expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
         complexity_router_config: {
           tiers: {
-            SIMPLE: ANTHROPIC_TIERS.SIMPLE.map(expandedGroupFor),
-            MEDIUM: ANTHROPIC_TIERS.MEDIUM.map(expandedGroupFor),
-            COMPLEX: ANTHROPIC_TIERS.COMPLEX.map(expandedGroupFor),
-            REASONING: ANTHROPIC_TIERS.REASONING.map(expandedGroupFor),
+            SIMPLE: normalizeTierModels(ANTHROPIC_TIERS.SIMPLE).map(expandedGroupFor),
+            MEDIUM: normalizeTierModels(ANTHROPIC_TIERS.MEDIUM).map(expandedGroupFor),
+            COMPLEX: normalizeTierModels(ANTHROPIC_TIERS.COMPLEX).map(expandedGroupFor),
+            REASONING: normalizeTierModels(ANTHROPIC_TIERS.REASONING).map(expandedGroupFor),
           },
         },
       });

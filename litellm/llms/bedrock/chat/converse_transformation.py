@@ -28,8 +28,8 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _parse_content_for_reasoning,
     drop_lookaround_regex_patterns,
+    parse_content_for_reasoning,
     tool_with_sanitized_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -164,7 +164,7 @@ class AmazonConverseConfig(BaseConfig):
         topP: int | None = None,
         topK: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -2387,7 +2387,7 @@ class AmazonConverseConfig(BaseConfig):
                 (
                     extracted_reasoning_content_str,
                     _content_str,
-                ) = _parse_content_for_reasoning(content["text"])
+                ) = parse_content_for_reasoning(content["text"])
                 if _content_str is not None:
                     content_str += _content_str
             if "toolUse" in content:
@@ -2701,13 +2701,13 @@ class AmazonConverseConfig(BaseConfig):
 
         ## HANDLE TOOL CALLS
         _message: Final = Message(**chat_completion_message)
-        initial_finish_reason = map_finish_reason(completion_response["stopReason"])
+        mapped_finish_reason: Final = map_finish_reason(completion_response["stopReason"])
 
-        # When json_mode filtered out all synthetic tool calls the response
-        # is plain content, not a pending tool invocation. Fix finish_reason
-        # so callers (e.g. OpenAI SDK) don't misinterpret it.
-        if resolved_json_mode and not filtered_tools and tools:
-            initial_finish_reason = "stop"
+        initial_finish_reason: Final = (
+            "stop"
+            if resolved_json_mode and not filtered_tools and tools and mapped_finish_reason == "tool_calls"
+            else mapped_finish_reason
+        )
 
         (
             returned_message,
