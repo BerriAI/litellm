@@ -227,6 +227,8 @@ def _ollama_content_part(
             raise _ollama_bad_message(
                 model, message, msg_i, f"has a {type(bad_text).__name__} text part; text must be a string"
             )
+        case {"type": "text"}:
+            raise _ollama_bad_message(model, message, msg_i, "has a text part with no text; text must be a string")
         case {"type": "image_url", "image_url": str() as image_url}:
             return "", image_url
         case {"type": "image_url", "image_url": {"url": str() as image_url}}:
@@ -237,6 +239,13 @@ def _ollama_content_part(
                 message,
                 msg_i,
                 f"has a {type(bad_image_url).__name__} image_url; image_url must be a URL string or an object with a url",
+            )
+        case {"type": "image_url"}:
+            raise _ollama_bad_message(
+                model,
+                message,
+                msg_i,
+                "has an image_url part with no image_url; image_url must be a URL string or an object with a url",
             )
         case _:
             return "", ""
