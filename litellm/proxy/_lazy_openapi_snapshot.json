@@ -13595,7 +13595,6 @@
             "file_guardrail_timeout": {
               "anyOf": [
                 {
-                  "minimum": 1.0,
                   "type": "integer"
                 },
                 {
@@ -13689,7 +13688,6 @@
             "guardrail_timeout": {
               "anyOf": [
                 {
-                  "minimum": 1.0,
                   "type": "integer"
                 },
                 {

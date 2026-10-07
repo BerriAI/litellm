@@ -644,7 +644,7 @@ async def test_hooks_ignore_other_input_types():
 
 
 @pytest.mark.asyncio
-async def test_mid_stream_check_only_checks_and_does_not_record(akto_post_call, sample_inputs, sample_request_data):
+async def test_every_mid_stream_check_is_recorded(akto_post_call, sample_inputs, sample_request_data):
     akto_post_call.async_handler.post = AsyncMock(return_value=_mock_allowed_response())
     mid_stream_request_data = {**sample_request_data, "stream": True, "responses": ["chunk-1", "chunk-2"]}
 
@@ -653,7 +653,7 @@ async def test_mid_stream_check_only_checks_and_does_not_record(akto_post_call, 
     )
 
     [(params, _)] = _calls(akto_post_call)
-    assert params == {"akto_connector": "litellm", "response_guardrails": "true"}, params
+    assert params == {"akto_connector": "litellm", "response_guardrails": "true", "ingest_data": "true"}, params
 
 
 @pytest.mark.asyncio
@@ -666,10 +666,8 @@ async def test_mid_stream_block_records_the_partial_response(akto_post_call, sam
         )
 
     assert (exc_info.value.status_code, exc_info.value.detail) == (403, "PII in response")
-    check, record = _calls(akto_post_call)
-    assert check[0] == {"akto_connector": "litellm", "response_guardrails": "true"}, check[0]
-    assert record[0] == {"akto_connector": "litellm", "response_guardrails": "true", "ingest_data": "true"}, record[0]
-    assert record[1]["responsePayload"] == check[1]["responsePayload"]
+    [(params, _)] = _calls(akto_post_call)
+    assert params == {"akto_connector": "litellm", "response_guardrails": "true", "ingest_data": "true"}, params
 
 
 @pytest.mark.asyncio
@@ -1054,23 +1052,6 @@ async def test_post_call_block_of_a_complete_response_is_one_call(akto_post_call
 
     [(params, _)] = _calls(akto_post_call)
     assert params == {"akto_connector": "litellm", "response_guardrails": "true", "ingest_data": "true"}
-
-
-@pytest.mark.asyncio
-async def test_mid_stream_block_raises_an_http_exception_and_survives_a_failed_record(
-    akto_post_call, sample_inputs, sample_request_data
-):
-    akto_post_call.async_handler.post = AsyncMock(
-        side_effect=[_mock_blocked_response("PII in response"), httpx.ConnectError("Akto down")]
-    )
-
-    with pytest.raises(HTTPException) as exc_info:
-        await akto_post_call.apply_guardrail(
-            inputs=sample_inputs, request_data={**sample_request_data, "stream": True}, input_type="response"
-        )
-
-    assert (exc_info.value.status_code, exc_info.value.detail) == (403, "PII in response")
-    assert akto_post_call.async_handler.post.call_count == 2, "the blocked partial response was sent to be recorded"
 
 
 @pytest.mark.asyncio
@@ -1515,16 +1496,6 @@ def test_streamed_responses_are_checked_at_the_configured_chunk_rate(rate):
     assert UnifiedLLMGuardrails().resolve_streaming_flag(g, "streaming_sampling_rate", 5) == rate
 
 
-@pytest.mark.parametrize("field", ["guardrail_timeout", "file_guardrail_timeout"])
-def test_number_settings_below_one_are_rejected_by_the_config(field):
-    from pydantic import ValidationError
-
-    from litellm.types.guardrails import LitellmParams
-
-    with pytest.raises(ValidationError, match=field):
-        LitellmParams(guardrail="akto", mode="pre_call", **{field: 0})
-
-
 def _akto_params(**settings):
     from litellm.types.guardrails import LitellmParams
 
@@ -1546,11 +1517,15 @@ def test_the_configured_chunk_rate_reaches_the_guardrail(configured):
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, g)
 
 
-def test_a_configured_chunk_rate_below_one_is_rejected():
-    from pydantic import ValidationError
+def test_zero_settings_fall_back_to_the_defaults_instead_of_dropping_the_guardrail():
+    import litellm
 
-    with pytest.raises(ValidationError, match="streaming_sampling_rate"):
-        guardrail_initializer_registry["akto"](_akto_params(streaming_sampling_rate=0), {"guardrail_name": "akto"})
+    zeros = {"guardrail_timeout": 0, "file_guardrail_timeout": 0, "streaming_sampling_rate": 0}
+    g = guardrail_initializer_registry["akto"](_akto_params(**zeros), {"guardrail_name": "akto"})
+    try:
+        assert (g.guardrail_timeout, g.file_guardrail_timeout, g.streaming_sampling_rate) == (5, 10, 5)
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, g)
 
 
 @pytest.mark.asyncio

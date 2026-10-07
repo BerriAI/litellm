@@ -694,11 +694,10 @@ class AktoGuardrail(CustomGuardrail):
         *,
         response: bool = False,
         record: bool = True,
-        record_if_blocked: bool = True,
         can_mask: bool = True,
         streamed: bool = False,
     ) -> GenericGuardrailAPIInputs:
-        """Masking that can't be applied blocks; a blocked check that wasn't recording records anyway."""
+        """Masking that can't be applied blocks."""
         try:
             verdict: Final = self.parse_verdict(
                 await self.send_request(
@@ -729,8 +728,6 @@ class AktoGuardrail(CustomGuardrail):
         )
         if blocked_reason is None:
             return inputs if masked is None else {**inputs, "texts": list(masked)}
-        if not record and record_if_blocked:
-            await self.record_blocked(payload, response=response)
         raise self.blocked(blocked_reason, streamed=streamed)
 
     async def check_attachments(self, inputs: GenericGuardrailAPIInputs, request_data: Mapping[str, object]) -> None:
@@ -783,15 +780,6 @@ class AktoGuardrail(CustomGuardrail):
             raise failure
         return main_task.result()
 
-    async def record_blocked(self, payload: Mapping[str, object], *, response: bool) -> None:
-        """A failed record is logged, never raised."""
-        try:
-            await self.send_request(
-                guardrails=not response, response_guardrails=response, ingest_data=True, payload=payload
-            )
-        except AKTO_ERRORS as e:
-            verbose_proxy_logger.error("Akto: recording blocked traffic failed: %s", str(e))
-
     @override
     @log_guardrail_information
     async def apply_guardrail(
@@ -801,7 +789,7 @@ class AktoGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
-        """Mid-stream checks don't record; the complete response is recorded once. Masking a stream blocks."""
+        """Every stream check records, as the end-of-stream check can be skipped. Masking a stream blocks."""
         if not self.handles(input_type):
             return inputs
 
@@ -831,7 +819,6 @@ class AktoGuardrail(CustomGuardrail):
                 ),
                 response=input_type == "response",
                 record=definition is None,
-                record_if_blocked=definition is None,
             )
 
         if input_type == "request":
@@ -855,7 +842,6 @@ class AktoGuardrail(CustomGuardrail):
                 inputs,
                 self.build_akto_payload(inputs, request_data, include_response=True),
                 response=True,
-                record=complete,
                 can_mask=complete and not streamed,
                 streamed=streamed,
             ),

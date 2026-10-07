@@ -8,7 +8,6 @@ from .base import GuardrailConfigModel
 class AktoGuardrailConfigModelOptionalParams(BaseModel):
     streaming_sampling_rate: int | None = Field(
         default=None,
-        ge=1,
         description=(
             "Check the streamed response every Nth chunk; the stream pauses at that chunk until Akto replies. "
             "1 checks every chunk. Default: 5."
@@ -66,13 +65,11 @@ class AktoConfigModel(GuardrailConfigModel[AktoGuardrailConfigModelOptionalParam
 
     guardrail_timeout: int | None = Field(
         default=None,
-        ge=1,
         description="HTTP timeout in seconds. Default: 5.",
     )
 
     file_guardrail_timeout: int | None = Field(
         default=None,
-        ge=1,
         description="HTTP timeout in seconds for checking attached files. Default: 10.",
     )
 
