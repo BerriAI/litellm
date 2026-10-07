@@ -46,6 +46,7 @@ class DiagnosticsConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool = Field(default=False, strict=True)
+    payload_shapes: bool = Field(default=False, strict=True)
     service_name: str = "litellm"
     policy: DiagnosticPolicy = Field(default_factory=DiagnosticPolicy)
     destinations: tuple[_Destination, ...] = ()
@@ -111,7 +112,7 @@ async def gateway_lifecycle(settings: Mapping[str, object] | None) -> AsyncGener
         if started:
             try:
                 await asyncio.to_thread(shutdown)
-            except Exception:
+            except Exception:  # noqa: BLE001  # shutdown diagnostics must not replace a lifespan failure
                 from litellm._logging import verbose_proxy_logger
 
                 verbose_proxy_logger.exception("Diagnostic exporter shutdown failed")

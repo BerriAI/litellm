@@ -85,6 +85,40 @@ impl NativeDiagnosticLogger {
         Self
     }
 
+    fn payload_shapes_enabled(&self) -> PyResult<bool> {
+        runtime().check_process()?;
+        Ok(logger().scope(litellm_tracing::payload::enabled))
+    }
+
+    #[pyo3(signature = (value, *, nodes=4096, depth=16, paths=256, bytes=16384))]
+    fn extract_payload_shape(
+        &self,
+        value: &Bound<'_, PyAny>,
+        nodes: usize,
+        depth: usize,
+        paths: usize,
+        bytes: usize,
+    ) -> PyResult<(Vec<String>, bool)> {
+        let shape = super::shape::extract(
+            value,
+            litellm_tracing::ShapeLimits {
+                nodes: nodes.min(4096),
+                depth: depth.min(16),
+                paths: paths.min(256),
+                bytes: bytes.min(16384),
+            },
+        )?;
+        Ok((shape.field_paths, shape.truncated))
+    }
+
+    fn emit_payload_shape(&self, py: Python<'_>, event: &str) -> PyResult<()> {
+        runtime().check_process()?;
+        let event: litellm_tracing::payload::PayloadEvent = from_json_argument(event)
+            .map_err(|_| PyValueError::new_err("invalid payload shape event"))?;
+        py.detach(|| logger().scope(|| event.emit()));
+        Ok(())
+    }
+
     fn active(&self) -> PyResult<bool> {
         runtime().check_process()?;
         Ok(runtime().diagnostics.active())
@@ -151,6 +185,9 @@ fn report<T: Default>(py: Python<'_>, result: PyResult<T>) -> T {
 
 impl Sink for PythonSink {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        if metadata.target() == litellm_tracing::payload::TARGET {
+            return false;
+        }
         if !metadata.target().starts_with("litellm_") && !metadata.target().starts_with("_native::")
         {
             return false;
@@ -169,7 +206,9 @@ impl Sink for PythonSink {
     }
 
     fn emit(&self, record: &Record) {
-        if record.metadata.target() == "litellm.diagnostics" {
+        if record.metadata.target() == "litellm.diagnostics"
+            || record.metadata.target() == litellm_tracing::payload::TARGET
+        {
             return;
         }
         let mut fields = record.fields.clone();

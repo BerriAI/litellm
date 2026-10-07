@@ -1684,6 +1684,7 @@ def _is_litellm_router_call(kwargs: Mapping[str, object], *, is_async: bool) -> 
 
 def client(original_function):
     from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
+    from litellm.litellm_core_utils.payload_shapes import capture_result, record_call_shape
 
     Rules: Final = litellm_utils.Rules
     rules_obj: Final = Rules()
@@ -1708,11 +1709,14 @@ def client(original_function):
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
+                    return capture_result(
+                        litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None)),
+                        kwargs.get("litellm_call_id"),
+                    )
                 else:
-                    return result
+                    return capture_result(result, kwargs.get("litellm_call_id"))
 
-            return result
+            return capture_result(result, kwargs.get("litellm_call_id"))
 
         # Prints Exactly what was passed to litellm function - don't execute any logic here - it should just print
         print_args_passed_to_litellm(original_function, args, kwargs)
@@ -1723,6 +1727,8 @@ def client(original_function):
         # only set litellm_call_id if its not in kwargs
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
+
+        record_call_shape(original_function, args, kwargs)
 
         model: Final[str | None] = args[0] if len(args) > 0 else kwargs.get("model", None)
 
@@ -1793,7 +1799,7 @@ def client(original_function):
 
                 if caching_handler_response.cached_result is not None:
                     verbose_logger.debug("Cache hit!")
-                    return caching_handler_response.cached_result
+                    return capture_result(caching_handler_response.cached_result, kwargs.get("litellm_call_id"))
 
             # CHECK MAX TOKENS
             if (
@@ -1838,7 +1844,10 @@ def client(original_function):
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
+                    return capture_result(
+                        litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None)),
+                        kwargs.get("litellm_call_id"),
+                    )
                 else:
                     # RETURN RESULT
                     update_response_metadata: _ResponseMetadataUpdater = litellm_utils.update_response_metadata
@@ -1850,7 +1859,7 @@ def client(original_function):
                         start_time=start_time,
                         end_time=end_time,
                     )
-                    return result
+                    return capture_result(result, kwargs.get("litellm_call_id"))
             elif (
                 "acompletion" in kwargs
                 and kwargs["acompletion"] is True
@@ -1864,7 +1873,7 @@ def client(original_function):
                 and kwargs["aspeech"] is True
                 or asyncio.iscoroutine(result)
             ):
-                return result
+                return capture_result(result, kwargs.get("litellm_call_id"))
 
             ### POST-CALL RULES ###
             post_call_processing(
@@ -1906,7 +1915,7 @@ def client(original_function):
                 end_time,
             )
             # RETURN RESULT
-            return result
+            return capture_result(result, kwargs.get("litellm_call_id"))
         except Exception as e:
             if call_type == CallTypes.completion.value:
                 num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
@@ -1996,6 +2005,8 @@ def client(original_function):
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
 
+        record_call_shape(original_function, args, kwargs)
+
         model: Final[str | None] = args[0] if len(args) > 0 else kwargs.get("model", None)
         is_completion_with_fallbacks: Final = kwargs.get("fallbacks") is not None
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
@@ -2056,10 +2067,12 @@ def client(original_function):
                     if _is_converted_stream_result(_caching_handler_response.cached_result):
                         logging_obj.stream = True
                         logging_obj.model_call_details["stream"] = True
-                    return _caching_handler_response.cached_result
+                    return capture_result(_caching_handler_response.cached_result, kwargs.get("litellm_call_id"))
 
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
-                    return _caching_handler_response.final_embedding_cached_response
+                    return capture_result(
+                        _caching_handler_response.final_embedding_cached_response, kwargs.get("litellm_call_id")
+                    )
 
             if _llm_caching_handler.preset_cache_key is not None:
                 logging_obj.litellm_params["preset_cache_key"] = _llm_caching_handler.preset_cache_key
@@ -2131,7 +2144,10 @@ def client(original_function):
                     chunks: Final = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
+                    return capture_result(
+                        litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None)),
+                        kwargs.get("litellm_call_id"),
+                    )
                 else:
                     _update_response_metadata(
                         result=result,
@@ -2146,7 +2162,7 @@ def client(original_function):
                         call_type=call_type,
                     )
             elif call_type in (CallTypes.arealtime.value, CallTypes.aresponses_websocket.value):
-                return result
+                return capture_result(result, kwargs.get("litellm_call_id"))
             ### POST-CALL RULES ###
             post_call_processing(
                 original_response=result,
@@ -2186,12 +2202,13 @@ def client(original_function):
                     is_completion_with_fallbacks=is_completion_with_fallbacks,
                     is_litellm_internal_call=_is_litellm_internal_call,
                 )
-                return _llm_caching_handler.combine_cached_embedding_response_with_api_result(
+                combined_result: Final = _llm_caching_handler.combine_cached_embedding_response_with_api_result(
                     _caching_handler_response=_caching_handler_response,
                     embedding_response=result,
                     start_time=start_time,
                     end_time=end_time,
                 )
+                return capture_result(combined_result, kwargs.get("litellm_call_id"))
 
             _update_response_metadata(
                 result=result,
@@ -2210,7 +2227,7 @@ def client(original_function):
                 is_litellm_internal_call=_is_litellm_internal_call,
             )
 
-            return result
+            return capture_result(result, kwargs.get("litellm_call_id"))
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
             # Reuse the timestamp taken right when the deployment call itself failed, before
@@ -2251,7 +2268,7 @@ def client(original_function):
                     except Exception:
                         pass
                     else:
-                        return result
+                        return capture_result(result, kwargs.get("litellm_call_id"))
                 elif (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
@@ -2263,7 +2280,7 @@ def client(original_function):
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
                     result = await original_function(*args, **kwargs)
-                    return result
+                    return capture_result(result, kwargs.get("litellm_call_id"))
             elif retry_call_type == CallTypes.aresponses.value:
                 is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
@@ -2282,7 +2299,7 @@ def client(original_function):
                     except Exception:
                         pass
                     else:
-                        return result
+                        return capture_result(result, kwargs.get("litellm_call_id"))
 
             deployment_num_retries: Final = kwargs.get("num_retries")
             if deployment_num_retries is not None:

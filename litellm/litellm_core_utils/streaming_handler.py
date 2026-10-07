@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hid
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
+from litellm.litellm_core_utils.payload_shapes import StreamShapes
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -231,6 +232,7 @@ class CustomStreamWrapper:
         self.count_prompt_tokens = count_prompt_tokens
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj: LiteLLMLoggingObject = logging_obj
+        self._payload_shapes: Final = StreamShapes(getattr(logging_obj, "litellm_call_id", None))
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
@@ -390,9 +392,12 @@ class CustomStreamWrapper:
         guarded=True additionally ensures it never clobbers a different,
         still-active call's context within that same Task if this fires late.
         """
+        if hasattr(self, "_payload_shapes"):
+            self._payload_shapes.finish("cancelled")
         self._restore_consumer_correlation_context(guarded=True)
 
     async def aclose(self):
+        self._payload_shapes.finish("cancelled")
         # Restore the consumer's outer context only after the underlying
         # provider stream's own close (and its diagnostic logging below, if
         # closing fails) completes - not before - so those log lines still
@@ -1415,6 +1420,7 @@ class CustomStreamWrapper:
         return _ProviderChunkParsed(response_obj)
 
     def chunk_creator(self, chunk: Any):
+        self._payload_shapes.add("provider.response.received", chunk)
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
         provider_response_model: Final = _provider_response_model(chunk)
@@ -1868,6 +1874,7 @@ class CustomStreamWrapper:
                         # Add MCP metadata to final chunk if present
                         response = self._add_mcp_metadata_to_final_chunk(response)
                     # RETURN RESULT
+                    self._payload_shapes.add("litellm.response.normalized", response)
                     return response
 
         except StopIteration:
@@ -1949,7 +1956,9 @@ class CustomStreamWrapper:
 
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
+                    self._payload_shapes.add("litellm.response.normalized", response)
                     return response
+                self._payload_shapes.finish("success")
                 self._restore_consumer_correlation_context()
                 raise  # Re-raise StopIteration
             else:
@@ -1981,6 +1990,7 @@ class CustomStreamWrapper:
                 # call (immediate StopIteration, handled above); one that
                 # stops right here relies on aclose() or the best-effort
                 # __del__ guard instead.
+                self._payload_shapes.add("litellm.response.normalized", processed_chunk)
                 return processed_chunk
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
@@ -2088,6 +2098,7 @@ class CustomStreamWrapper:
                         # Add MCP metadata to final chunk if present (after hooks)
                         processed_chunk = self._add_mcp_metadata_to_final_chunk(processed_chunk)
 
+                    self._payload_shapes.add("litellm.response.normalized", processed_chunk)
                     return processed_chunk
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
@@ -2112,9 +2123,13 @@ class CustomStreamWrapper:
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
                         # RETURN RESULT
                         self.chunks.append(processed_chunk)
+                        self._payload_shapes.add("litellm.response.normalized", processed_chunk)
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
             return await self._finalize_completed_stream(cache_hit=cache_hit)
+        except asyncio.CancelledError:
+            self._payload_shapes.finish("cancelled")
+            raise
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
             traceback_exception = traceback.format_exc()
             ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
@@ -2191,6 +2206,7 @@ class CustomStreamWrapper:
 
             if self.sent_stream_usage is False and self.send_stream_usage is True:
                 self.sent_stream_usage = True
+                self._payload_shapes.add("litellm.response.normalized", response)
                 return response
 
             _deferred_cb: Final = getattr(
@@ -2224,6 +2240,7 @@ class CustomStreamWrapper:
                     )
                 )
 
+            self._payload_shapes.finish("success")
             self._restore_consumer_correlation_context()
             raise StopAsyncIteration  # Re-raise StopIteration
         else:
@@ -2245,6 +2262,7 @@ class CustomStreamWrapper:
             # statements processing it. A caller that keeps iterating gets
             # cleaned up on the next __anext__() call; one that stops here
             # relies on aclose() or the best-effort __del__ guard.
+            self._payload_shapes.add("litellm.response.normalized", processed_chunk)
             return processed_chunk
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
@@ -2325,6 +2343,7 @@ class CustomStreamWrapper:
                 )
             except Exception as mapping_error:
                 mapped_exception = mapping_error
+        self._payload_shapes.finish("failure")
         self._restore_consumer_correlation_context()
 
         def _normalize_status_code(exc: Exception) -> int | None:

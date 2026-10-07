@@ -10,14 +10,21 @@ use crate::{
 
 #[derive(Clone, Default)]
 pub struct Diagnostics {
-    sinks: Arc<RwLock<BTreeMap<String, Arc<dyn ExportSink>>>>,
+    state: Arc<RwLock<State>>,
+}
+
+#[derive(Default)]
+struct State {
+    sinks: BTreeMap<String, Arc<dyn ExportSink>>,
+    payload_shapes: bool,
 }
 
 impl Diagnostics {
     fn snapshot(&self) -> Vec<Arc<dyn ExportSink>> {
-        self.sinks
+        self.state
             .read()
             .unwrap_or_else(|error| error.into_inner())
+            .sinks
             .values()
             .cloned()
             .collect()
@@ -25,9 +32,10 @@ impl Diagnostics {
 
     pub fn active(&self) -> bool {
         !self
-            .sinks
+            .state
             .read()
             .unwrap_or_else(|error| error.into_inner())
+            .sinks
             .is_empty()
     }
 
@@ -82,12 +90,15 @@ impl Diagnostics {
         };
         let previous = std::mem::replace(
             &mut *self
-                .sinks
+                .state
                 .write()
                 .unwrap_or_else(|error| error.into_inner()),
-            sinks,
+            State {
+                sinks,
+                payload_shapes: config.payload_shapes,
+            },
         );
-        drain(previous.values().map(|sink| sink.shutdown()))
+        drain(previous.sinks.values().map(|sink| sink.shutdown()))
     }
 
     pub fn force_flush(&self) -> Result<(), Error> {
@@ -97,11 +108,11 @@ impl Diagnostics {
     pub fn shutdown(&self) -> Result<(), Error> {
         let sinks = std::mem::take(
             &mut *self
-                .sinks
+                .state
                 .write()
                 .unwrap_or_else(|error| error.into_inner()),
         );
-        drain(sinks.values().map(|sink| sink.shutdown()))
+        drain(sinks.sinks.values().map(|sink| sink.shutdown()))
     }
 }
 
@@ -117,10 +128,22 @@ fn drain(results: impl Iterator<Item = Result<(), Error>>) -> Result<(), Error> 
 
 impl Sink for Diagnostics {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        if metadata.target() == crate::payload::TARGET
+            && !self
+                .state
+                .read()
+                .unwrap_or_else(|error| error.into_inner())
+                .payload_shapes
+        {
+            return false;
+        }
         self.snapshot().iter().any(|sink| sink.enabled(metadata))
     }
 
     fn emit(&self, record: &Record) {
+        if record.metadata.target() == crate::payload::TARGET && !self.enabled(record.metadata) {
+            return;
+        }
         for sink in self.snapshot() {
             sink.emit(record);
         }
@@ -134,12 +157,15 @@ struct Fanout<S> {
 
 impl<S: Sink> Sink for Fanout<S> {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        self.exports.enabled(metadata) || self.compatibility.enabled(metadata)
+        self.exports.enabled(metadata)
+            || (metadata.target() != crate::payload::TARGET && self.compatibility.enabled(metadata))
     }
 
     fn emit(&self, record: &Record) {
         self.exports.emit(record);
-        if self.compatibility.enabled(record.metadata) {
+        if record.metadata.target() != crate::payload::TARGET
+            && self.compatibility.enabled(record.metadata)
+        {
             self.compatibility.emit(record);
         }
     }

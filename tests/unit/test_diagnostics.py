@@ -23,6 +23,7 @@ def test_environment_replaces_the_gateway_yaml_block_without_merging_credentials
     )
     assert config.model_dump() == {
         "enabled": False,
+        "payload_shapes": False,
         "service_name": "env-service",
         "policy": {"minimum_level": "INFO", "target_prefixes": (), "sample_rate": 1.0},
         "destinations": (),

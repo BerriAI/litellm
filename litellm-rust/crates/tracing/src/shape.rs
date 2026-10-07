@@ -50,13 +50,17 @@ impl PayloadShape {
     }
 
     pub fn extract(value: &Value, limits: ShapeLimits) -> Self {
+        Self::extract_source(value, limits)
+    }
+
+    pub fn extract_source(value: &impl ShapeSource, limits: ShapeLimits) -> Self {
         let mut collector = Collector {
             limits,
             nodes: 0,
             bytes: 0,
             paths: BTreeSet::new(),
         };
-        if collector.walk(value, "$", 0, false).is_err() {
+        if !collector.walk(value, "$", 0, false) {
             return Self {
                 field_paths: vec![],
                 truncated: true,
@@ -76,41 +80,71 @@ struct Collector {
     paths: BTreeSet<String>,
 }
 
+pub trait ShapeSource {
+    fn visit(&self, visitor: &mut ShapeVisitor<'_>) -> bool;
+}
+
+pub struct ShapeVisitor<'a> {
+    collector: &'a mut Collector,
+    path: &'a str,
+    depth: usize,
+    dynamic: bool,
+}
+
+impl ShapeVisitor<'_> {
+    pub fn field(&mut self, key: &str, child: &impl ShapeSource) -> bool {
+        if key.len() > 128 {
+            return false;
+        }
+        let next = if self.dynamic {
+            format!("{}[*]", self.path)
+        } else {
+            format!("{}[{}]", self.path, quoted_key(key))
+        };
+        if self.collector.paths.insert(next.clone()) {
+            self.collector.bytes += next.len();
+            if self.collector.paths.len() > self.collector.limits.paths
+                || self.collector.bytes > self.collector.limits.bytes
+            {
+                return false;
+            }
+        }
+        self.collector
+            .walk(child, &next, self.depth + 1, dynamic_keys(key))
+    }
+
+    pub fn item(&mut self, child: &impl ShapeSource) -> bool {
+        self.collector.walk(
+            child,
+            &format!("{}[*]", self.path),
+            self.depth + 1,
+            self.dynamic,
+        )
+    }
+}
+
+impl ShapeSource for Value {
+    fn visit(&self, visitor: &mut ShapeVisitor<'_>) -> bool {
+        match self {
+            Value::Object(fields) => fields.iter().all(|(key, child)| visitor.field(key, child)),
+            Value::Array(items) => items.iter().all(|child| visitor.item(child)),
+            _ => true,
+        }
+    }
+}
+
 impl Collector {
-    fn walk(&mut self, value: &Value, path: &str, depth: usize, dynamic: bool) -> Result<(), ()> {
+    fn walk(&mut self, value: &impl ShapeSource, path: &str, depth: usize, dynamic: bool) -> bool {
         self.nodes += 1;
         if self.nodes > self.limits.nodes || depth > self.limits.depth {
-            return Err(());
+            return false;
         }
-        match value {
-            Value::Object(fields) => {
-                for (key, child) in fields {
-                    if key.len() > 128 {
-                        return Err(());
-                    }
-                    let next = if dynamic {
-                        format!("{path}[*]")
-                    } else {
-                        format!("{path}[{}]", quoted_key(key))
-                    };
-                    if self.paths.insert(next.clone()) {
-                        self.bytes += next.len();
-                        if self.paths.len() > self.limits.paths || self.bytes > self.limits.bytes {
-                            return Err(());
-                        }
-                    }
-                    self.walk(child, &next, depth + 1, dynamic_keys(key))?;
-                }
-            }
-            Value::Array(items) => {
-                let next = format!("{path}[*]");
-                for child in items {
-                    self.walk(child, &next, depth + 1, dynamic)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
+        value.visit(&mut ShapeVisitor {
+            collector: self,
+            path,
+            depth,
+            dynamic,
+        })
     }
 }
 

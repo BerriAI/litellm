@@ -1,5 +1,6 @@
 mod machine;
 mod python;
+mod shape;
 
 pub(crate) use python::{NativeDiagnosticLogger, capture};
 
