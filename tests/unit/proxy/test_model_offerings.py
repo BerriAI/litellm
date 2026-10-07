@@ -475,3 +475,49 @@ async def test_native_account_change_changes_private_deployment_identity(
         assert await manager.reload(force_inventory=True)
         assert manager.router.get_model_ids() != first
         assert manager.router.latest_snapshot().available_models == {"selected"}
+
+
+async def test_shared_inventory_client_is_reacquired_after_cache_eviction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    path: Final = tmp_path / "offerings.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "providers": {"source": {"provider": "openai", "api_base": "https://supplier.test/v1"}},
+                "offerings": [
+                    {"model_name": "selected", "source": "auto", "provider": "source", "upstream_model": "backend"}
+                ],
+            }
+        )
+    )
+    cache: Final = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", cache)
+    first: Final = get_async_httpx_client(httpxSpecialProvider.ModelInventory)
+    await first.client.aclose()
+    first.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": [{"id": "backend"}]}))
+    )
+    manager: Final = ModelOfferingsManager(path=path, template=Router(model_list=[]), clock=lambda: 0.0)
+    assert await manager.reload(initial=True)
+    assert manager.router.latest_snapshot().available_models == {"selected"}
+    cache.delete_cache(cache.update_cache_key_with_event_loop("async_httpx_clientmodel_inventory"))
+    await first.close()
+    second: Final = get_async_httpx_client(httpxSpecialProvider.ModelInventory)
+    assert second is not first
+    await second.client.aclose()
+    second.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": []}))
+    )
+    try:
+        assert await manager.reload(force_inventory=True)
+        assert manager.router.latest_snapshot().available_models == set()
+        assert not second.client.is_closed
+    finally:
+        await second.close()

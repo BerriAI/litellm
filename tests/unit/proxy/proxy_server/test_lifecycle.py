@@ -1312,7 +1312,7 @@ async def test_external_inventory_lifespan_does_not_close_shared_clients(tmp_pat
                 async with proxy_startup_event(app=None):
                     assert ps.llm_router.model_names == {"manual"}
             else:
-                with pytest.raises(ValueError, match="external offering|External offering"):
+                with pytest.raises(ValueError, match=r"external offering|External offering"):
                     async with proxy_startup_event(app=None):
                         pytest.fail("Invalid external config must reject startup")
             assert get_async_httpx_client(httpxSpecialProvider.ModelInventory) is inventory

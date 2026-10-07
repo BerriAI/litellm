@@ -14,7 +14,7 @@ import yaml
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.model_inventory import (
     get_provider_model_inventory,
     model_inventory_api_base,
@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import model_offering_iden
 from litellm.proxy.offering_router import OfferingRouterView, OfferingServingSnapshot
 from litellm.router import Router
 from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.model_inventory import SupplierInventoryUnavailable, SupplierModelInventory
 from litellm.types.proxy.model_metadata import GatewayModelMetadata
 from litellm.types.proxy.model_offerings import ModelOffering, ModelOfferingsConfig, SupplierConnection
@@ -201,7 +202,7 @@ class ModelOfferingsManager:
         *,
         path: Path,
         template: Router,
-        client: AsyncHTTPHandler,
+        client: AsyncHTTPHandler | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.path = path
@@ -233,7 +234,7 @@ class ModelOfferingsManager:
                 provider=connection.provider,
                 api_base=connection.api_base,
                 headers=connection.headers,
-                client=self.client,
+                client=self.client or get_async_httpx_client(llm_provider=httpxSpecialProvider.ModelInventory),
                 cache=self.cache,
                 force_refresh=True,
             )

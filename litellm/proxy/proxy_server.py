@@ -334,7 +334,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._experimental.mcp_server.byok_credential_cache import byok_credential_cache
@@ -725,7 +725,6 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
     SpendEventProducer,
     build_spend_event_producer,
 )
-from litellm.types.llms.custom_http import httpxSpecialProvider
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (
@@ -1599,19 +1598,15 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         cast(object, general_settings.get("model_offerings_path")),  # cast-ok: validate untyped config
         strict=True,
     )
-    offerings_client: Final = (
-        get_async_httpx_client(llm_provider=httpxSpecialProvider.ModelInventory) if offerings_path is not None else None
-    )
     offerings_manager: Final = (
         ModelOfferingsManager(
             path=pathlib.Path(str(offerings_path)),
             template=llm_router or Router(model_list=[]),
-            client=offerings_client,
         )
-        if offerings_client is not None
+        if offerings_path is not None
         else None
     )
-    if offerings_manager is not None and offerings_client is not None:
+    if offerings_manager is not None:
         if llm_model_list or (llm_router is not None and llm_router.get_model_ids()) or store_model_in_db:
             raise ValueError("External offering mode requires an empty model_list and store_model_in_db disabled")
         if not await offerings_manager.reload(initial=True):
