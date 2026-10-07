@@ -16,6 +16,8 @@ from litellm.rust_bridge.trace.generated.models import (
     LensEvidenceParams,
     LensSampleParams,
     PartRow,
+    TraceAgentRow,
+    TraceAgentsParams,
 )
 from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
 from litellm.rust_bridge.trace.generated.types import ReadQueryName
@@ -25,6 +27,7 @@ from litellm.rust_bridge.trace.queries import (
     LENS_CONTENT,
     LENS_EVIDENCE,
     LENS_SAMPLE,
+    TRACE_AGENTS,
     ClickHouseSQLEnvelope,
     ParamsT,
     ReadQuery,
@@ -67,7 +70,7 @@ class NativeStore(Protocol):
     ) -> Awaitable[int]: ...
 
     def list_traces(
-        self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
+        self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int, agent: str
     ) -> Awaitable[JsonValue]: ...
 
     def get_trace(
@@ -190,8 +193,9 @@ class ClickHouseStorage:
         end_ms: int,
         cursor: str | None = None,
         limit: int = AGENT_TRACING_LIST_PAGE_SIZE,
+        agent: str = "",
     ) -> TracePage:
-        result: Final = await self._native.list_traces(scope, start_ms, end_ms, cursor, limit)
+        result: Final = await self._native.list_traces(scope, start_ms, end_ms, cursor, limit, agent)
         return _validate_query_response(_TRACE_PAGE, result)
 
     async def get_trace(
@@ -228,6 +232,9 @@ class ClickHouseStorage:
     async def query_help(self, scope: QueryScope, secret: str) -> TraceQueryHelp:
         result: Final = await self._native.query_help(scope, secret)
         return _validate_query_response(_HELP_RESPONSE, result)
+
+    async def trace_agents(self, parameters: TraceAgentsParams) -> tuple[TraceAgentRow, ...]:
+        return await self.query(TRACE_AGENTS, parameters)
 
     async def lens_sample(self, parameters: LensSampleParams) -> tuple[ExecutionRow, ...]:
         return await self.query(LENS_SAMPLE, parameters)
