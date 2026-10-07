@@ -24,6 +24,26 @@ HAVING min(StartTs) >= fromUnixTimestamp64Milli({start_ms:Int64})
    AND min(StartTs) < fromUnixTimestamp64Milli({end_ms:Int64})
    AND ({cursor_ms:Int64} = 0 OR (toUnixTimestamp64Milli(min(StartTs)), trace_ref)
         < ({cursor_ms:Int64}, {cursor_trace_id:String}))
+   AND ({agent:String} = '' OR (TeamId, ApiKeyHash, TraceId) IN (
+        SELECT TeamId, ApiKeyHash, TraceId
+        FROM (
+            -- Keep in sync with trace_agents.sql: the run's agents, else its first service.
+            SELECT TeamId, ApiKeyHash, TraceId,
+                   if(countIf(AgentName != '') = 0,
+                      groupUniqArrayIf(SpanName, ObservationType = 'agent'),
+                      arrayConcat(groupUniqArrayIf(AgentName, AgentName != ''),
+                                  groupUniqArrayIf(SpanName, ObservationType = 'agent' AND AgentName = ''
+                                                             AND NOT WrapperCandidate))) AS names,
+                   argMin(ServiceName, Timestamp) AS first_service
+            FROM otel_traces
+            WHERE {agent:String} != ''
+              AND Timestamp >= fromUnixTimestamp64Milli({start_ms:Int64})
+              AND ({all_teams:UInt8} = 1
+                   OR ({user_id:String} != '' AND UserId = {user_id:String})
+                   OR has({team_ids:Array(String)}, TeamId))
+            GROUP BY TeamId, ApiKeyHash, TraceId
+        )
+        WHERE has(if(empty(names), [first_service], names), {agent:String})))
 ORDER BY start_ms DESC, trace_ref DESC
 LIMIT {limit:UInt32}
 )
@@ -33,7 +53,11 @@ SELECT page.* EXCEPT (trace_start, trace_end),
 FROM page
 LEFT JOIN (
     SELECT TeamId, ApiKeyHash, TraceId,
-           arraySort(groupUniqArrayIf(AgentName, AgentName != '')) AS agent_names,
+           arraySort(arrayDistinct(if(countIf(AgentName != '') = 0,
+               groupUniqArrayIf(SpanName, ObservationType = 'agent'),
+               arrayConcat(groupUniqArrayIf(AgentName, AgentName != ''),
+                           groupUniqArrayIf(SpanName, ObservationType = 'agent' AND AgentName = ''
+                                                      AND NOT WrapperCandidate))))) AS agent_names,
            arraySort(groupUniqArrayIf(toString(Framework), Framework != '')) AS frameworks,
            uniqExactIf(if(AgentName = '', SpanName, AgentName), ObservationType = 'agent') AS agent_count
     FROM otel_traces
