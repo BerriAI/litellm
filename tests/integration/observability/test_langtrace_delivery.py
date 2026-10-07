@@ -132,9 +132,8 @@ def _upstream(request: Request) -> Reply:
 def _config(tmp_path: Path, **litellm_settings: object) -> Path:
     config: Final = _PROXY_CONFIG.validate_python(yaml.safe_load(STOCK_CONFIG.read_text()))
     settings: Final = {**_SETTINGS.validate_python(config["litellm_settings"]), **litellm_settings}
-    general: Final = {**_SETTINGS.validate_python(config["general_settings"]), "disable_model_info_refresh": True}
     path: Final = tmp_path / "langtrace.yaml"
-    path.write_text(yaml.safe_dump({**config, "litellm_settings": settings, "general_settings": general}))
+    path.write_text(yaml.safe_dump({**config, "litellm_settings": settings}))
     return path
 
 

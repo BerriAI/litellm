@@ -23,6 +23,19 @@ from litellm.constants import (
     MAX_TIME_TO_CLEAR_QUEUE,
 )
 
+_CALLBACK_DEADLINE: Final[contextvars.ContextVar[float | None]] = contextvars.ContextVar(
+    "logging_callback_deadline", default=None
+)
+
+
+def optional_callback_budget(maximum: float, *, fraction: float = 0.25) -> float:
+    deadline: Final = _CALLBACK_DEADLINE.get()
+    return (
+        maximum
+        if deadline is None
+        else max(0.0, min(maximum, (deadline - asyncio.get_running_loop().time()) * fraction))
+    )
+
 
 def _coroutine_name(coroutine: Coroutine) -> str:
     return getattr(coroutine, "__qualname__", None) or getattr(coroutine, "__name__", None) or type(coroutine).__name__
@@ -100,11 +113,19 @@ class LoggingWorker:
         return len(revived)
 
     def _run_coroutine_silently(self, loop: asyncio.AbstractEventLoop, coroutine: Coroutine) -> bool:
+        token: Final = _CALLBACK_DEADLINE.set(loop.time() + self.timeout)
         try:
             loop.run_until_complete(asyncio.wait_for(coroutine, timeout=self.timeout))
         except (Exception, asyncio.CancelledError):  # noqa: BLE001  # atexit flush must never break the user's program
             return False
+        finally:
+            _CALLBACK_DEADLINE.reset(token)
         return True
+
+    def _create_callback_task(self, task: LoggingTask) -> asyncio.Task[object]:
+        context: Final = task["context"].copy()
+        context.run(_CALLBACK_DEADLINE.set, asyncio.get_running_loop().time() + self.timeout)
+        return context.run(asyncio.create_task, task["coroutine"])
 
     @staticmethod
     def _drain_pending(queue: "asyncio.Queue[LoggingTask]") -> tuple[LoggingTask, ...]:
@@ -172,7 +193,7 @@ class LoggingWorker:
         try:
             if self._queue is not None:
                 # Run the coroutine in its original context
-                callback_task: Final = task["context"].run(asyncio.create_task, task["coroutine"])
+                callback_task: Final = self._create_callback_task(task)
                 try:
                     await asyncio.wait_for(callback_task, timeout=self.timeout)
                 except asyncio.TimeoutError as e:
@@ -424,7 +445,7 @@ class LoggingWorker:
 
         try:
             await asyncio.wait_for(
-                task["context"].run(asyncio.create_task, task["coroutine"]),
+                self._create_callback_task(task),
                 timeout=self.timeout,
             )
         except Exception:
@@ -517,7 +538,7 @@ class LoggingWorker:
                 # Await the coroutine to properly execute and avoid "never awaited" warnings
                 try:
                     await asyncio.wait_for(
-                        task["context"].run(asyncio.create_task, task["coroutine"]),
+                        self._create_callback_task(task),
                         timeout=self.timeout,
                     )
                 except Exception:
