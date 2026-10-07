@@ -425,14 +425,29 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     ),
                     status_code=400,
                 )
-            gate_error: Final = AnthropicConfig._validate_effort_for_model(model, mapped_effort, custom_llm_provider)
+            existing_output_config: Final[object] = optional_params.get("output_config")
+            explicit_effort: Final = AnthropicMessagesConfig._explicit_output_config_effort(existing_output_config)
+            resolved_effort: Final = (
+                explicit_effort
+                if explicit_effort is not None
+                else AnthropicConfig.degrade_alias_effort_for_model(model, mapped_effort, custom_llm_provider)
+            )
+            gate_error: Final = AnthropicConfig._validate_effort_for_model(model, resolved_effort, custom_llm_provider)
             if gate_error is not None:
                 raise AnthropicError(message=gate_error, status_code=400)
-            existing_output_config = optional_params.get("output_config")
-            if not isinstance(existing_output_config, dict):
-                existing_output_config = {}
-            existing_output_config.setdefault("effort", mapped_effort)
-            optional_params["output_config"] = existing_output_config
+            optional_params["output_config"] = (
+                {**existing_output_config, "effort": resolved_effort}
+                if isinstance(existing_output_config, dict)
+                else {"effort": resolved_effort}
+            )
+
+    @staticmethod
+    def _explicit_output_config_effort(output_config: object) -> str | None:
+        match output_config:
+            case {"effort": str() as effort}:
+                return effort
+            case _:
+                return None
 
     @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(

@@ -9,7 +9,7 @@ Covers:
 
 import json
 import os
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 
@@ -23,7 +23,7 @@ from litellm.router_utils.reasoning_effort_capability import (
 from litellm.utils import get_model_info
 
 
-def _load_model_registry() -> Dict[str, Any]:
+def _load_model_registry() -> dict[str, Any]:
     """Load the root model_prices_and_context_window.json."""
     json_path = os.path.join(
         os.path.dirname(__file__),
@@ -141,9 +141,43 @@ class TestNormalizeReasoningEffortValue:
     def test_a_tier_outside_any_chain_passes_through(self, local_model_cost_map, effort):
         assert normalize_reasoning_effort_value(effort, "claude-opus-4-7", "anthropic") == effort
 
-    @pytest.mark.parametrize("effort, expected", [("max", "high"), ("xhigh", "high"), ("minimal", "low")])
-    def test_a_model_the_map_does_not_describe_keeps_the_floor(self, local_model_cost_map, effort, expected):
-        assert normalize_reasoning_effort_value(effort, "totally-made-up-model-xyz", "openai") == expected
+    @pytest.mark.parametrize("effort", ["max", "xhigh", "minimal"])
+    def test_a_model_the_map_does_not_describe_keeps_the_requested_tier(self, local_model_cost_map, effort):
+        assert normalize_reasoning_effort_value(effort, "totally-made-up-model-xyz", "openai") == effort
+
+    @staticmethod
+    def _register_deployment(model_info: dict[str, object]) -> str:
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "compat",
+                    "litellm_params": {"model": "anthropic/compat-reasoner-1", "api_key": "fake-key"},
+                    "model_info": model_info,
+                }
+            ]
+        )
+        return router.model_list[0]["model_info"]["id"]
+
+    @pytest.mark.parametrize("effort", ["max", "xhigh", "minimal"])
+    def test_a_registered_deployment_without_effort_metadata_keeps_the_requested_tier(
+        self, local_model_cost_map, effort
+    ):
+        deployment_id = self._register_deployment({})
+        assert normalize_reasoning_effort_value(effort, deployment_id, "anthropic") == effort
+
+    @pytest.mark.parametrize(
+        "model_info, effort, expected",
+        [
+            ({"supports_reasoning": False}, "max", "high"),
+            ({"supports_reasoning": True, "supports_xhigh_reasoning_effort": False}, "xhigh", "high"),
+            ({"supports_reasoning": True, "supports_minimal_reasoning_effort": False}, "minimal", "low"),
+        ],
+    )
+    def test_a_registered_deployment_declaring_a_tier_unsupported_degrades(
+        self, local_model_cost_map, model_info, effort, expected
+    ):
+        deployment_id = self._register_deployment(model_info)
+        assert normalize_reasoning_effort_value(effort, deployment_id, "anthropic") == expected
 
 
 # ---------------------------------------------------------------------------
@@ -161,9 +195,7 @@ class TestAdapterAdaptiveThinking:
         )
 
         adapter = LiteLLMAnthropicMessagesAdapter()
-        result = adapter.translate_anthropic_thinking_to_reasoning_effort(
-            {"type": "adaptive"}
-        )
+        result = adapter.translate_anthropic_thinking_to_reasoning_effort({"type": "adaptive"})
         assert result == "medium"
 
     def test_messages_adapter_adaptive_overridden_by_output_config(self):

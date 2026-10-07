@@ -75,6 +75,9 @@ def normalize_reasoning_effort_value(
     The accepted set is resolved by the same owner that answers ``/model_group/info``, so a level
     the proxy advertises is a level this path forwards.
 
+    Only a known capability set can refuse a tier: a model the map does not describe, or an entry
+    declaring no effort metadata, keeps the requested tier instead of being silently downgraded.
+
     A deployment that refuses every step of a chain falls back to an accepted level read off that
     same set rather than to an assumed one, since an entry naming its levels outright can exclude
     the tiers the per-level flags treat as unconditional. ``none`` is never that fallback and is
@@ -92,9 +95,11 @@ def normalize_reasoning_effort_value(
     try:
         model_info: Final[ModelInfo] = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
-        return chain[-1]
+        return effort
 
-    supported: Final = resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True)
+    supported: Final = resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=False)
+    if supported is None:
+        return effort
     if not supported:
         return chain[-1]
 
