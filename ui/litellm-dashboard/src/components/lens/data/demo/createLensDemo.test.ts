@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createLensDemo } from "./createLensDemo";
 import { createLensDemoData } from "./fixtures";
 import { evidenceTarget } from "../../model/findings";
+import { traceAgentNames } from "../../traces/utils";
 
 describe("Lens demo data", () => {
   it("links every finding to the quoted original step and assessed run", () => {
@@ -62,6 +63,13 @@ describe("Lens demo data", () => {
     expect(recent.data.length).toBeGreaterThan(0);
     expect(recent.data.length).toBeLessThan(all.data.length);
     expect(recent.data.every((trace) => Date.parse(trace.start_time) >= now - 3600_000)).toBe(true);
+    const agents = await services.traces.agents({ startMs: 0, endMs: now });
+    expect(agents.length).toBeGreaterThan(1);
+    expect(agents).toEqual([...new Set(all.data.flatMap(traceAgentNames))].sort());
+    const filtered = await services.traces.list({ startMs: 0, endMs: now, agent: agents[0] });
+    expect(filtered.data.length).toBeGreaterThan(0);
+    expect(filtered.data.length).toBeLessThan(all.data.length);
+    expect(filtered.data.every((trace) => traceAgentNames(trace).includes(agents[0]))).toBe(true);
     const settings = services.lens.lenses().then((list) => list.lenses[0].settings);
     await expect(services.lens.saveLens(undefined, await settings)).rejects.toMatchObject({ status: 403 });
     await expect(services.lens.run("real-investigation", "job")).rejects.toMatchObject({ status: 404 });
