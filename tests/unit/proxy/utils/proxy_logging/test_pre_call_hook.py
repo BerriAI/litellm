@@ -440,22 +440,22 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
     pre-call CustomLogger now fails here until someone puts it on one side.
     """
     judges_content = {
-        "OPTIONAL_PromptInjectionDetection",
-        "PROXY_AzureContentSafety",
+        "_OPTIONAL_PromptInjectionDetection",
+        "_PROXY_AzureContentSafety",
         "ENTERPRISE_BannedKeywords",
         "ENTERPRISE_BlockedUserList",
     }
     counts_or_shapes_the_request = {
-        "PROXY_MaxParallelRequestsHandler_v3",
-        "PROXY_MaxIterationsHandler",
-        "PROXY_MaxBudgetPerSessionHandler",
-        "PROXY_CacheControlCheck",
-        "PROXY_BatchRedisRequests",
-        "PROXY_SensitiveDataRoutingHandler",
+        "_PROXY_MaxParallelRequestsHandler_v3",
+        "_PROXY_MaxIterationsHandler",
+        "_PROXY_MaxBudgetPerSessionHandler",
+        "_PROXY_CacheControlCheck",
+        "_PROXY_BatchRedisRequests",
+        "_PROXY_SensitiveDataRoutingHandler",
         "ResponsesIDSecurity",
         "SkillsInjectionHook",
-        "PROXY_LiteLLMManagedFiles",
-        "PROXY_LiteLLMManagedVectorStores",
+        "_PROXY_LiteLLMManagedFiles",
+        "_PROXY_LiteLLMManagedVectorStores",
     }
 
     from litellm.proxy.hooks import PROXY_HOOKS

@@ -92,6 +92,16 @@ PROXY_CLASS_NAME_ALIAS_CASES: Final = (
         "_ProxyDBLogger",
         "ProxyDBLogger",
     ),
+    (
+        "enterprise.litellm_enterprise.proxy.hooks.managed_files",
+        "_PROXY_LiteLLMManagedFiles",
+        "PROXY_LiteLLMManagedFiles",
+    ),
+    (
+        "enterprise.litellm_enterprise.proxy.hooks.managed_vector_stores",
+        "_PROXY_LiteLLMManagedVectorStores",
+        "PROXY_LiteLLMManagedVectorStores",
+    ),
 )
 
 ALIAS_CASES: Final = (
