@@ -5,7 +5,8 @@
     await tracing.start()                        # create tables if missing
 
     tracing.ingest(otlp_body, content_type, content_encoding, tenant)   # POST /v1/traces
-    await tracing.list_traces(scope, start_ms, end_ms, cursor)          # GET  /v1/traces
+    await tracing.list_traces(scope, start_ms, end_ms, cursor, agent)   # GET  /v1/traces
+    await tracing.list_agents(scope, start_ms, end_ms)                  # GET  /v1/traces/agents
     await tracing.get_trace(trace_id, scope)                            # GET  /v1/traces/{id}
     await tracing.get_span(trace_id, span_id, scope)                    # GET  /v1/traces/{id}/spans/{span_id}
 
@@ -18,7 +19,14 @@ from io import BytesIO
 from threading import BoundedSemaphore
 from typing import Final
 
-from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE, OTLP_MAX_BODY_BYTES, OTLP_MAX_CONCURRENT_INGESTS
+from litellm.constants import (
+    AGENT_TRACING_AGENT_LIST_LIMIT,
+    AGENT_TRACING_LIST_PAGE_SIZE,
+    OTLP_MAX_BODY_BYTES,
+    OTLP_MAX_CONCURRENT_INGESTS,
+)
+from litellm.rust_bridge.trace.generated.models import TraceAgentsParams
+from litellm.rust_bridge.trace.generated.responses import TraceAgentList
 from litellm.rust_bridge.trace.generated.types import SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
 from litellm.tracing.config import trace_storage_config
@@ -98,8 +106,23 @@ class TraceReceiver:
         except ValueError as error:
             raise InvalidOTLPPayloadError(str(error)) from error
 
-    async def list_traces(self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None = None) -> TracePage:
-        return await self.storage.list_traces(scope, start_ms, end_ms, cursor, AGENT_TRACING_LIST_PAGE_SIZE)
+    async def list_traces(
+        self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None = None, agent: str = ""
+    ) -> TracePage:
+        return await self.storage.list_traces(scope, start_ms, end_ms, cursor, AGENT_TRACING_LIST_PAGE_SIZE, agent)
+
+    async def list_agents(self, scope: TraceScope, start_ms: int, end_ms: int) -> TraceAgentList:
+        rows: Final = await self.storage.trace_agents(
+            TraceAgentsParams(
+                all_teams=scope["all_teams"],
+                user_id=scope["user_id"],
+                team_ids=scope["team_ids"],
+                start_ms=start_ms,
+                end_ms=end_ms,
+                limit=AGENT_TRACING_AGENT_LIST_LIMIT,
+            )
+        )
+        return TraceAgentList(data=tuple(row.agent_name for row in rows))
 
     async def get_trace(
         self,
