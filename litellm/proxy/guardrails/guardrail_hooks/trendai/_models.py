@@ -1,6 +1,5 @@
 # Derived from tm-v1-ai-guard-litellm-plugin revision 6cafc143f62962a98d4eb5abe9f608c61ff194d4.
 # This file has been modified for integration into LiteLLM.
-# Licensed under the Apache License, Version 2.0. See LICENSE.txt in this directory.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
