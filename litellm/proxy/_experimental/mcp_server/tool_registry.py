@@ -1,5 +1,8 @@
+import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Generator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
@@ -22,7 +25,32 @@ class MCPToolRegistry:
 
     def __init__(self):
         # Registry to store all registered tools
-        self.tools: dict[str, MCPTool] = {}
+        self.published_tools: dict[str, MCPTool] = {}  # mutable-ok: register_tool writes entries through .tools
+        self._catalog_tools: ContextVar[tuple[dict[str, MCPTool], asyncio.Event] | None] = ContextVar(
+            "mcp_catalog_tools", default=None
+        )
+
+    @property
+    def tools(self) -> dict[str, MCPTool]:  # mutable-ok: register_tool mutates the returned mapping
+        scoped: Final = self._catalog_tools.get()
+        return scoped[0] if scoped is not None and not scoped[1].is_set() else self.published_tools
+
+    @tools.setter
+    def tools(self, tools: dict[str, MCPTool]) -> None:  # mutable-ok: stored dict is mutated by register_tool
+        self.published_tools = tools
+
+    @contextmanager
+    def catalog_scope(
+        self, tools: Mapping[str, MCPTool]
+    ) -> Generator[dict[str, MCPTool]]:  # mutable-ok: yields the mutable staged copy
+        detached: Final = dict(tools)
+        closed: Final = asyncio.Event()
+        token: Final = self._catalog_tools.set((detached, closed))
+        try:
+            yield detached
+        finally:
+            closed.set()
+            self._catalog_tools.reset(token)
 
     def register_tool(
         self,
@@ -30,6 +58,8 @@ class MCPToolRegistry:
         description: str,
         input_schema: dict[str, Any],
         handler: Callable,
+        *,
+        server_id: str | None = None,
     ) -> None:
         """
         Register a new tool in the registry
@@ -39,6 +69,7 @@ class MCPToolRegistry:
             description=description,
             input_schema=input_schema,
             handler=handler,
+            server_id=server_id,
         )
         verbose_logger.debug("Registered tool: %s", name)
 

@@ -62,6 +62,7 @@ from litellm.proxy._experimental.mcp_server.capabilities import (
     build_discovery,
     configured_versions,
 )
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.contracts import (
     AuthorizedToolCall,
     OperationContext,
@@ -627,6 +628,7 @@ def apply_display_name_overrides(
     return tools
 
 
+@catalog_operation(lambda: global_mcp_server_manager)
 async def _get_allowed_mcp_servers(
     user_api_key_auth: UserAPIKeyAuth | None,
     mcp_servers: Sequence[str] | None,
@@ -943,6 +945,7 @@ def _aggregate_server_key(server: MCPServer) -> str:
     return get_server_prefix(server) or "unknown"
 
 
+@catalog_operation(lambda: global_mcp_server_manager)
 async def _get_tools_from_mcp_servers(
     user_api_key_auth: UserAPIKeyAuth | None,
     mcp_auth_header: str | None,
@@ -1474,6 +1477,7 @@ async def filter_tools_by_key_team_permissions(
     ]
 
 
+@catalog_operation(lambda: global_mcp_server_manager)
 async def _list_mcp_tools(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1529,6 +1533,7 @@ async def _list_mcp_tools(
         return AggregateToolListing(tools=[], outcomes={})
 
 
+@catalog_operation(global_manager)
 async def _list_mcp_prompts(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1570,6 +1575,7 @@ async def _list_mcp_prompts(
     return managed_prompts
 
 
+@catalog_operation(global_manager)
 async def _list_mcp_resources(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1599,6 +1605,7 @@ async def _list_mcp_resources(
     return managed_resources
 
 
+@catalog_operation(global_manager)
 async def _list_mcp_resource_templates(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -2087,6 +2094,9 @@ async def _execute_mcp_tool(
                 ),
             )
 
+        if local_tool.server_id is not None and local_tool.server_id != mcp_server.server_id:
+            raise HTTPException(status_code=403, detail="User not allowed to call this tool.")
+
         # `pre_call_tool_check` calls into `proxy_logging_obj` for the
         # pre-call guardrail hooks, so source it from the canonical
         # `proxy_server` module the same way `_handle_managed_mcp_tool`
@@ -2216,6 +2226,12 @@ async def _execute_mcp_tool(
                         "Retry once the server is registered."
                     ),
                 )
+
+            if (
+                registered_local_tool.server_id is not None
+                and registered_local_tool.server_id != prefix_server.server_id
+            ):
+                raise HTTPException(status_code=403, detail="User not allowed to call this tool.")
 
             from litellm.proxy.proxy_server import proxy_logging_obj
 
@@ -2398,6 +2414,7 @@ async def fire_mcp_tool_call_failure_logging(
 
 
 @client
+@catalog_operation(lambda: global_mcp_server_manager)
 async def call_mcp_tool(
     name: str,
     arguments: dict[str, object] | None = None,
@@ -2694,6 +2711,15 @@ async def _handle_local_mcp_tool(
     tool: Final = global_mcp_tool_registry.get_tool(name)
     if not tool:
         raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")
+    server: Final = (
+        global_mcp_server_manager.get_mcp_server_by_id(tool.server_id)
+        if tool.server_id is not None
+        else global_mcp_server_manager.server_owning_tool_name_prefix(name)
+    )
+    if tool.server_id is not None and server is None:
+        raise HTTPException(status_code=503, detail="MCP server configuration changed; retry the operation")
+    if server is not None:
+        global_mcp_server_manager.catalog.assert_current(server)
 
     try:
         if inspect.iscoroutinefunction(tool.handler):
@@ -3217,6 +3243,7 @@ class GatewayOperations:
     @overload
     async def execute(self, operation: ReadResourceRequest, context: OperationContext) -> ReadResourceResult: ...
 
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
             case DiscoverRequest():
