@@ -12340,7 +12340,9 @@ class Router:
         the group, so inheriting them here would let a key holding a member's
         access group list and call the whole group.
         """
-        model_info: Final = {k: v for k, v in (deployment.get("model_info") or {}).items() if k != "access_groups"}
+        raw_model_info: Final = deployment.get("model_info") or {}
+        model_info_dict: Final = raw_model_info if isinstance(raw_model_info, dict) else raw_model_info.model_dump()
+        model_info: Final = {k: v for k, v in model_info_dict.items() if k != "access_groups"}
         return {**deployment, "model_info": model_info}
 
     TIER_PARAMS_NEVER_DROPPED: Final = frozenset(all_litellm_params) | frozenset(
