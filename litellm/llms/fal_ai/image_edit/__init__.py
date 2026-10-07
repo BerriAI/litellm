@@ -3,9 +3,10 @@ from typing import Final
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 
 from .flux_lora_depth_transformation import FalAIFluxLoraDepthEditConfig
+from .nano_banana_transformation import NANO_BANANA_EDIT_MODELS, FalAINanoBananaImageEditConfig
 from .transformation import FalAIImageEditConfig
 
-__all__ = ("FalAIFluxLoraDepthEditConfig", "FalAIImageEditConfig")
+__all__ = ("FalAIFluxLoraDepthEditConfig", "FalAIImageEditConfig", "FalAINanoBananaImageEditConfig")
 
 
 def get_fal_ai_image_edit_config(model: str) -> BaseImageEditConfig:
@@ -21,4 +22,6 @@ def get_fal_ai_image_edit_config(model: str) -> BaseImageEditConfig:
     model_lower: Final = model.lower()
     if "flux-lora-depth" in model_lower:
         return FalAIFluxLoraDepthEditConfig()
+    if model_lower.removesuffix("/edit") in NANO_BANANA_EDIT_MODELS:
+        return FalAINanoBananaImageEditConfig()
     return FalAIImageEditConfig()
