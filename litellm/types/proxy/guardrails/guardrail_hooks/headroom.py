@@ -30,6 +30,14 @@ class HeadroomGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
         default=True,
         description="Inject the Headroom retrieval tool for hashes declared by the compression service.",
     )
+    affinity_salt: str | None = Field(
+        default=None,
+        description=(
+            "Salt mixed into the x-headroom-affinity digest, which routes related calls to the same "
+            "pod so its cache can be reused. Set this to vary or rotate the digest across deployments. "
+            "Falls back to a fixed default."
+        ),
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -17,7 +18,10 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.compression.compress import get_protected_indices
-from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
+from litellm.constants import (
+    HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
+    SESSION_ID_GENERATED_METADATA_KEY,
+)
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -55,6 +59,20 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 BYPASS_HEADER: Final = "x-headroom-bypass"
+# Routes related Headroom calls to the same pod so its pod-local cache can be
+# reused. The value is derived per tenant (see ``_affinity_key``) and carries no
+# credential, so Headroom needs no end-user authentication of its own.
+AFFINITY_HEADER: Final = "x-headroom-affinity"
+# Fallback salt for the affinity digest when the guardrail config does not set
+# one. Deployments that need the digest to differ across instances (or that want
+# it rotated) set ``affinity_salt`` in the guardrail config instead.
+_DEFAULT_AFFINITY_SALT: Final = "litellm-headroom-affinity-v1"
+# How much of the digest to forward. 32 hex chars is far past collision range for
+# a routing hint while staying short enough to log.
+_AFFINITY_KEY_LENGTH: Final = 32
+# Identities the proxy has already authenticated, most specific first. A client
+# supplied tenant name is deliberately absent: it cannot establish identity.
+_TENANT_ID_KEYS: Final = ("user_api_key_team_id", "user_api_key_org_id", "user_api_key_user_id", "user_api_key_hash")
 _STREAM_CONVERTIBLE_CALL_TYPES: Final = frozenset(
     (CallTypes.completion, CallTypes.acompletion, CallTypes.responses, CallTypes.aresponses)
 )
@@ -76,6 +94,76 @@ def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard
 
 def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
     return isinstance(value, list)
+
+
+def _explicit_session_id(request_data: dict[str, object]) -> str | None:
+    """The caller's own session id, or None when there is none worth pinning.
+
+    A session id the proxy generated for a request that arrived without one is
+    unique per request, so affinity built on it would send every call to a
+    different pod and the cache would never hit. That case is marked in metadata
+    and skipped, matching how session affinity is resolved for other providers.
+    """
+    metadata: Final = request_data.get("metadata")
+    if _is_str_object_dict(metadata) and metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
+        return None
+    for key in ("litellm_session_id", "session_id"):
+        value: Final = request_data.get(key)
+        if isinstance(value, str) and value:
+            return value
+    if _is_str_object_dict(metadata):
+        value: Final = metadata.get("session_id")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _tenant_id(request_data: dict[str, object]) -> str | None:
+    """The authenticated identity this request runs as, or None when anonymous.
+
+    Only keys the proxy itself resolved from a validated key are considered: a
+    client supplied tenant name never establishes identity, so two tenants
+    cannot end up sharing an affinity value by naming themselves the same thing.
+
+    The identity keys live under ``metadata`` / ``litellm_metadata`` on a proxied
+    request rather than at the top level (see
+    ``litellm.proxy.route_llm_request.get_team_id_from_data``), so both nested
+    containers are searched. The top level is checked too for SDK calls, where
+    they do sit flat.
+    """
+    containers: Final[list[Mapping[str, object]]] = [request_data]
+    for container_key in ("metadata", "litellm_metadata"):
+        nested: Final = request_data.get(container_key)
+        if _is_str_object_dict(nested):
+            containers.append(nested)
+
+    for container in containers:
+        for key in _TENANT_ID_KEYS:
+            value: Final = container.get(key)
+            if isinstance(value, str) and value:
+                return f"{key}={value}"
+            if isinstance(value, int) and not isinstance(value, bool):
+                return f"{key}={value}"
+    return None
+
+
+def _affinity_key(request_data: dict[str, object], salt: str = _DEFAULT_AFFINITY_SALT) -> str | None:
+    """Opaque, tenant-scoped routing value for related Headroom calls, or None.
+
+    Returns None unless both halves are present: without a session id there is
+    nothing to keep together, and without a trusted tenant identity the same
+    session id could belong to different tenants, so affinity is omitted rather
+    than risk crossing a tenant boundary. The raw session id never leaves the
+    proxy: Headroom only ever sees a salted digest.
+    """
+    session_id: Final = _explicit_session_id(request_data)
+    if not session_id:
+        return None
+    tenant: Final = _tenant_id(request_data)
+    if not tenant:
+        return None
+    digest: Final = hashlib.sha256(f"{salt or _DEFAULT_AFFINITY_SALT}|{tenant}|{session_id}".encode()).hexdigest()
+    return digest[:_AFFINITY_KEY_LENGTH]
 
 
 def _flatten_messages_for_compression(messages: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -496,6 +584,7 @@ class HeadroomGuardrail(CustomGuardrail):
         unreachable_fallback: str | None = None,
         timeout: float | None = None,
         ccr_retrieval: bool = True,
+        affinity_salt: str | None = None,
     ):
         self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
         if not self.headroom_api_base:
@@ -509,6 +598,11 @@ class HeadroomGuardrail(CustomGuardrail):
             "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
         )
         self.ccr_retrieval = ccr_retrieval
+        # Salted so the digest Headroom receives cannot be replayed to recover
+        # another tenant's session id. Deployments can rotate or vary it per
+        # instance via the guardrail config; the default keeps the value stable
+        # for the common single-deployment case.
+        self.affinity_salt: str = affinity_salt or _DEFAULT_AFFINITY_SALT
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -531,10 +625,12 @@ class HeadroomGuardrail(CustomGuardrail):
         value: Final = headers.get(BYPASS_HEADER)
         return str(value).lower() == "true"
 
-    def _request_headers(self) -> dict[str, str]:
+    def _request_headers(self, affinity: str | None = None) -> dict[str, str]:
         headers: Final[dict[str, str]] = {"Content-Type": "application/json"}
         if self.headroom_api_key:
             headers["Authorization"] = f"Bearer {self.headroom_api_key}"
+        if affinity:
+            headers[AFFINITY_HEADER] = affinity
         return headers
 
     @staticmethod
@@ -587,6 +683,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         messages: list[dict[str, object]],
         model: str | None,
+        affinity: str | None = None,
     ) -> _CompressResult:
         payload: Final[dict[str, object]] = {"messages": messages}
         if model:
@@ -596,7 +693,7 @@ class HeadroomGuardrail(CustomGuardrail):
             raw_response: HttpxResponse = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
                 url=f"{self.headroom_api_base}/v1/compress",
                 json=payload,
-                headers=self._request_headers(),
+                headers=self._request_headers(affinity),
                 timeout=self.timeout,
             )
         except httpx.HTTPStatusError as e:
@@ -725,7 +822,7 @@ class HeadroomGuardrail(CustomGuardrail):
             stats["tokens_saved"] = tokens_before - tokens_after
         return _CompressResult(filtered, True, stats, _read_ccr_hashes(body))
 
-    async def _call_retrieve(self, hash_value: str, query: str | None = None) -> str:
+    async def _call_retrieve(self, hash_value: str, query: str | None = None, affinity: str | None = None) -> str:
         params: Final[dict[str, str]] = {}
         if query:
             params["query"] = query
@@ -734,7 +831,7 @@ class HeadroomGuardrail(CustomGuardrail):
             raw_response: HttpxResponse = await self.async_handler.get(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.get is untyped
                 url=f"{self.headroom_api_base}/v1/retrieve/{hash_value}",
                 params=params,
-                headers=self._request_headers(),
+                headers=self._request_headers(affinity),
                 timeout=self.timeout,
             )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
@@ -814,6 +911,7 @@ class HeadroomGuardrail(CustomGuardrail):
         result: Final = await self._call_compress(
             messages=_flatten_messages_for_compression(compressible),
             model=model if isinstance(model, str) else None,
+            affinity=_affinity_key(_REQUEST_DATA_ADAPTER.validate_python(request_data), self.affinity_salt),
         )
         end_time: Final = time.time()
 
@@ -934,6 +1032,11 @@ class HeadroomGuardrail(CustomGuardrail):
         valid_hashes = self._issued_hashes_by_call_id.get(call_id, (frozenset(), 0.0))[0] if call_id else frozenset()
 
         retrieved: Final[list[tuple[dict[str, object], str]]] = []
+        # The compress call that issued these hashes ran under the originating
+        # request, so its affinity value is what has to be replayed here for the
+        # retrieve to land on the pod holding the entry. kwargs carries the same
+        # request_data shape apply_guardrail sees.
+        affinity: Final = _affinity_key(_REQUEST_DATA_ADAPTER.validate_python(kwargs), self.affinity_salt)
         for tc in tool_calls:
             arguments = tc.get("arguments", {})
             raw_hash = arguments.get("hash", "") if isinstance(arguments, dict) else ""
@@ -954,6 +1057,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 content = await self._call_retrieve(
                     hash_value=hash_value,
                     query=str(query) if query else None,
+                    affinity=affinity,
                 )
             verbose_proxy_logger.debug("Headroom CCR: retrieved hash=%s (%d chars)", hash_value, len(content))
             retrieved.append((tc, content))
