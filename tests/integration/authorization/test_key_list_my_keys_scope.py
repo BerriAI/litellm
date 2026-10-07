@@ -1,16 +1,14 @@
+"""Pin the /key/list flags that the dashboard My Keys toggle relies on."""
+
 from __future__ import annotations
 
 import uuid
-import warnings
 from typing import Final
 
 import httpx
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue
 
-from tests.integration._support.client import Gateway, Scenario, string_value
-
-_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
-_KEY_ROWS: Final = TypeAdapter(list[dict[str, JsonValue]])
+from tests.integration._support.client import JSON_OBJECT, Gateway, object_value, string_value
 
 
 def _key_list_params(user_id: str | None) -> dict[str, str]:
@@ -31,36 +29,14 @@ def _key_list_params(user_id: str | None) -> dict[str, str]:
 
 def _key_rows(response: httpx.Response) -> tuple[dict[str, JsonValue], ...]:
     assert response.status_code == 200, f"GET /key/list: {response.status_code} {response.text}"
-    body: Final = _JSON_OBJECT.validate_json(response.content)
-    return tuple(_KEY_ROWS.validate_python(body["keys"]))
+    body: Final = JSON_OBJECT.validate_json(response.content)
+    keys: Final = body["keys"]
+    assert isinstance(keys, list)
+    return tuple(object_value(row) for row in keys)
 
 
 def _key_aliases(rows: tuple[dict[str, JsonValue], ...]) -> frozenset[str]:
     return frozenset(string_value(row["key_alias"]) for row in rows)
-
-
-def _create_key_for_dave(
-    scenario: Scenario,
-    carol_key: str,
-    dave: str,
-    team: str,
-    key_alias: str,
-) -> str | None:
-    response: Final = scenario.gateway.request(
-        "POST",
-        "/key/generate",
-        {"user_id": dave, "team_id": team, "key_alias": key_alias},
-        key=carol_key,
-    )
-    if response.status_code != 200:
-        warnings.warn(
-            f"Carol's /key/generate request was refused with {response.status_code}: {response.text}",
-            stacklevel=2,
-        )
-        return None
-    created: Final = _JSON_OBJECT.validate_json(response.content)
-    scenario.cleanups.callback(scenario.delete_key, string_value(created["key"]))
-    return key_alias
 
 
 def test_my_keys_hides_teammate_keys_for_internal_user(gateway: Gateway) -> None:
@@ -112,12 +88,24 @@ def test_my_keys_hides_team_keys_for_team_admin(gateway: Gateway) -> None:
         carol_auth_alias: Final = f"carol-auth-{uuid.uuid4().hex}"
         carol_team_alias: Final = f"carol-team-{uuid.uuid4().hex}"
         dave_team_alias: Final = f"dave-team-{uuid.uuid4().hex}"
-        created_for_dave_alias: Final = f"carol-created-for-dave-{uuid.uuid4().hex}"
+        service_account_alias: Final = f"carol-service-account-{uuid.uuid4().hex}"
 
         carol_key: Final = scenario.key(user_id=carol, key_alias=carol_auth_alias)
         scenario.key(user_id=carol, team_id=team, key_alias=carol_team_alias)
         scenario.key(user_id=dave, team_id=team, key_alias=dave_team_alias)
-        created_for_dave: Final = _create_key_for_dave(scenario, carol_key, dave, team, created_for_dave_alias)
+        service_account_body: Final = {"team_id": team, "key_alias": service_account_alias}
+        carol_service_account_response: Final = gateway.request(
+            "POST",
+            "/key/service-account/generate",
+            service_account_body,
+            key=carol_key,
+        )
+        service_account: Final = (
+            JSON_OBJECT.validate_json(carol_service_account_response.content)
+            if carol_service_account_response.status_code == 200
+            else gateway.post("/key/service-account/generate", service_account_body, key=gateway.key)
+        )
+        scenario.cleanups.callback(scenario.delete_key, string_value(service_account["key"]))
 
         defaults: Final = gateway.request(
             "GET",
@@ -126,9 +114,7 @@ def test_my_keys_hides_team_keys_for_team_admin(gateway: Gateway) -> None:
             params=_key_list_params(user_id=None),
         )
         default_aliases: Final = _key_aliases(_key_rows(defaults))
-        assert dave_team_alias in default_aliases
-        if created_for_dave is not None:
-            assert created_for_dave in default_aliases
+        assert {dave_team_alias, service_account_alias} <= default_aliases
 
         my_keys: Final = gateway.request(
             "GET",
