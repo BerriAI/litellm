@@ -189,6 +189,7 @@ def test_alg_none_token_is_rejected():
         _valid_claims(iat="evil"),
         _valid_claims(kind="access"),
         _valid_claims(user_id=""),
+        _valid_claims(family=""),
         _valid_claims(nbf=0),
         {k: v for k, v in _valid_claims().items() if k != "client_id"},
         {k: v for k, v in _valid_claims().items() if k != "exp"},
@@ -273,6 +274,31 @@ def test_proxy_api_audience_and_team_round_trip_through_the_refresh_token():
     opened = open_session_refresh_token(token, KEYS, NOW)
     assert isinstance(opened, OpenedSessionToken)
     assert opened.principal == principal
+
+
+def test_refresh_token_family_is_rooted_at_the_first_jti_and_carried_through_rotation():
+    root = mint_session_refresh_token(PRINCIPAL, KEYS, NOW)
+    assert isinstance(root, MintedSessionToken)
+    root_token = root.token.get_secret_value()
+    assert "family" not in _decoded_claims(root_token, SESSION_REFRESH_PREFIX)
+    opened_root = open_session_refresh_token(root_token, KEYS, NOW)
+    assert isinstance(opened_root, OpenedSessionToken)
+    assert opened_root.family == opened_root.jti
+
+    rotated = mint_session_refresh_token(PRINCIPAL, KEYS, NOW, family=opened_root.family)
+    assert isinstance(rotated, MintedSessionToken)
+    rotated_token = rotated.token.get_secret_value()
+    assert _decoded_claims(rotated_token, SESSION_REFRESH_PREFIX)["family"] == opened_root.jti
+    opened_rotated = open_session_refresh_token(rotated_token, KEYS, NOW)
+    assert isinstance(opened_rotated, OpenedSessionToken)
+    assert opened_rotated.jti != opened_root.jti
+    assert opened_rotated.family == opened_root.jti
+
+    twice_rotated = mint_session_refresh_token(PRINCIPAL, KEYS, NOW, family=opened_rotated.family)
+    assert isinstance(twice_rotated, MintedSessionToken)
+    opened_twice = open_session_refresh_token(twice_rotated.token.get_secret_value(), KEYS, NOW)
+    assert isinstance(opened_twice, OpenedSessionToken)
+    assert opened_twice.family == opened_root.jti
 
 
 def test_signed_claims_with_an_unknown_audience_are_rejected():
