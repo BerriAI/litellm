@@ -73,6 +73,12 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.proxy._experimental.mcp_server.approval_reference import (
+    ApprovalRejected,
+    ApprovalVerified,
+    ApprovalVerifierUnavailable,
+    verify_approval_reference,
+)
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     MCPServerAccess,
@@ -165,6 +171,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     compute_short_server_prefix,
     get_server_prefix,
     interpolate_headers,
+    is_forwardable_caller_header,
     is_short_mcp_tool_prefix_enabled,
     iter_known_server_prefixes,
     iter_known_tool_name_spellings,
@@ -214,9 +221,10 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPInfo,
     MCPOAuthMetadata,
     MCPServer,
+    parse_approval_policy,
     parse_pinned_tools,
 )
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, StandardLoggingMCPApprovalReference
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1275,6 +1283,8 @@ def _openapi_forwarded_extra_headers(
     forwarded: Final[dict[str, str]] = {}
     for header_name in mcp_server.extra_headers:
         if not isinstance(header_name, str):
+            continue
+        if not is_forwardable_caller_header(header_name):
             continue
         if skip_caller_authorization and header_name.lower() == "authorization":
             continue
@@ -2700,6 +2710,7 @@ class MCPServerManager:
                 disallowed_tools=server_config.get("disallowed_tools", None),
                 allowed_params=server_config.get("allowed_params", None),
                 pinned_tools=server_config.get("pinned_tools", None),
+                approval_policy=server_config.get("approval_policy", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
                 env_vars=server_config.get("env_vars", None),
@@ -3284,6 +3295,7 @@ class MCPServerManager:
             tool_name_to_display_name=_deserialize_json_dict(getattr(mcp_server, "tool_name_to_display_name", None)),
             tool_name_to_description=_deserialize_json_dict(getattr(mcp_server, "tool_name_to_description", None)),
             pinned_tools=parse_pinned_tools(getattr(mcp_server, "pinned_tools", None)),
+            approval_policy=parse_approval_policy(getattr(mcp_server, "approval_policy", None)),
             is_byok=bool(getattr(mcp_server, "is_byok", False)),
             byok_description=getattr(mcp_server, "byok_description", None) or [],
             byok_api_key_help_url=getattr(mcp_server, "byok_api_key_help_url", None),
@@ -3989,6 +4001,8 @@ class MCPServerManager:
             match = self._STDIO_ENV_TEMPLATE_PATTERN.match(stripped_value)
             if match:
                 header_name = match.group(1)
+                if not is_forwardable_caller_header(header_name):
+                    continue
                 header_value = normalized_headers.get(header_name.lower())
                 if header_value is None:
                     continue
@@ -4560,7 +4574,11 @@ class MCPServerManager:
             return ()
         forwarded_names: Final = frozenset(name.lower() for name in server.extra_headers)
         return tuple(
-            sorted((name.lower(), value) for name, value in raw_headers.items() if name.lower() in forwarded_names)
+            sorted(
+                (name.lower(), value)
+                for name, value in raw_headers.items()
+                if is_forwardable_caller_header(name) and name.lower() in forwarded_names
+            )
         )
 
     def listed_tools_generation(self, server_id: str) -> int:
@@ -5860,6 +5878,63 @@ class MCPServerManager:
                 is_error=True,
             )
 
+    async def _enforce_approval_reference(
+        self,
+        *,
+        name: str,
+        server: MCPServer,
+        raw_headers: Mapping[str, str] | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+    ) -> None:
+        policy: Final = server.approval_policy
+        if policy is None:
+            return
+        policy_tool: Final = match_known_tool_name(name, server, policy.tools) or match_known_tool_name(
+            strip_known_server_prefix(name, server), server, policy.tools
+        )
+        if policy_tool is None:
+            return
+        result: Final = await verify_approval_reference(
+            policy=policy,
+            policy_tool=policy_tool,
+            server_id=server.server_id,
+            raw_headers=raw_headers,
+        )
+        match result:
+            case ApprovalVerified(record=record):
+                self._stamp_approval_reference(litellm_logging_obj=litellm_logging_obj, record=record)
+            case ApprovalRejected(reason=reason, message=message):
+                if reason == "missing":
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"error": "mcp_approval_reference_required", "message": message},
+                    )
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": "mcp_approval_reference_invalid", "message": message},
+                )
+            case ApprovalVerifierUnavailable(message=message):
+                raise HTTPException(
+                    status_code=503,
+                    detail={"error": "mcp_approval_verifier_unavailable", "message": message},
+                )
+            case _ as unreachable:
+                assert_never(unreachable)
+
+    @staticmethod
+    def _stamp_approval_reference(
+        *,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+        record: StandardLoggingMCPApprovalReference,
+    ) -> None:
+        if litellm_logging_obj is None:
+            return
+        existing: Final = litellm_logging_obj.model_call_details.get("mcp_tool_call_metadata")
+        litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = {
+            **(existing if isinstance(existing, dict) else {}),
+            "approval_reference": dict(record),
+        }
+
     async def pre_call_tool_check(
         self,
         name: str,
@@ -5915,6 +5990,13 @@ class MCPServerManager:
             tool_name=name,
             server=server,
             user_api_key_auth=user_api_key_auth,
+        )
+
+        await self._enforce_approval_reference(
+            name=name,
+            server=server,
+            raw_headers=raw_headers,
+            litellm_logging_obj=litellm_logging_obj,
         )
 
         ## filter parameters based on allowed_params configuration
@@ -6216,6 +6298,8 @@ class MCPServerManager:
             for header in mcp_server.extra_headers:
                 if not isinstance(header, str):
                     continue
+                if not is_forwardable_caller_header(header):
+                    continue
                 if header.lower() == "authorization" and strip_caller_authorization:
                     continue
                 header_value = normalized_raw_headers.get(header.lower())
@@ -6233,10 +6317,13 @@ class MCPServerManager:
                 extra_headers = {}
             extra_headers.update(resolved_static_headers)
 
-        if hook_extra_headers:
+        forwardable_hook_headers: Final = {
+            k: v for k, v in (hook_extra_headers or {}).items() if is_forwardable_caller_header(k)
+        }
+        if forwardable_hook_headers:
             if extra_headers is None:
                 extra_headers = {}
-            hook_has_authorization: Final = any(k.lower() == "authorization" for k in hook_extra_headers)
+            hook_has_authorization: Final = any(k.lower() == "authorization" for k in forwardable_hook_headers)
             existing_has_authorization: Final = any(k.lower() == "authorization" for k in extra_headers)
             server_auth_occupies_authorization: Final = (
                 any(k.lower() == "authorization" for k in server_auth_header)
@@ -6253,9 +6340,11 @@ class MCPServerManager:
                     "Authorization slot; the existing credential is kept.",
                     mcp_server.server_name or mcp_server.name,
                 )
-                extra_headers.update({k: v for k, v in hook_extra_headers.items() if k.lower() != "authorization"})
+                extra_headers.update(
+                    {k: v for k, v in forwardable_hook_headers.items() if k.lower() != "authorization"}
+                )
             else:
-                extra_headers.update(hook_extra_headers)
+                extra_headers.update(forwardable_hook_headers)
 
         # Reset to None if no headers were actually added
         if extra_headers is not None and len(extra_headers) == 0:
@@ -7193,6 +7282,7 @@ class MCPServerManager:
             instructions=server.instructions,
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
+            approval_policy=server.approval_policy,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -7316,6 +7406,7 @@ class MCPServerManager:
             instructions=server.instructions,
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
+            approval_policy=server.approval_policy,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> list[LiteLLM_MCPServerTable]:

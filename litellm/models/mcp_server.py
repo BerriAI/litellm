@@ -15,7 +15,13 @@ from pydantic import Field, ValidationInfo, field_validator
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.mcp import MCPAuthType, MCPCredentials, MCPTransportType
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo, PinnedMCPTool, parse_pinned_tools
+from litellm.types.mcp_server.mcp_server_manager import (
+    MCPApprovalPolicy,
+    MCPInfo,
+    PinnedMCPTool,
+    parse_approval_policy,
+    parse_pinned_tools,
+)
 
 
 class MCPEnvVarScope(str, enum.Enum):
@@ -70,6 +76,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     tool_name_to_display_name: dict[str, str] | None = None
     tool_name_to_description: dict[str, str] | None = None
     pinned_tools: dict[str, PinnedMCPTool] | None = None
+    approval_policy: MCPApprovalPolicy | None = None
     extra_headers: list[str] = Field(default_factory=list)
     mcp_info: MCPInfo | None = None
     static_headers: dict[str, str] | None = None
@@ -124,6 +131,11 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     @classmethod
     def decode_stored_pinned_tools(cls, value: object) -> dict[str, PinnedMCPTool] | None:
         return parse_pinned_tools(value)
+
+    @field_validator("approval_policy", mode="before")
+    @classmethod
+    def decode_stored_approval_policy(cls, value: object) -> MCPApprovalPolicy | None:
+        return parse_approval_policy(value)
 
     @field_validator("static_headers", "env", mode="before")
     @classmethod

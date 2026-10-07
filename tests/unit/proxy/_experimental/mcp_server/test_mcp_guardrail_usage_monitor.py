@@ -113,7 +113,7 @@ async def _run_pre_call(mgr, plo, logging_obj) -> dict:
         server_name="s",
         user_api_key_auth=None,
         proxy_logging_obj=plo,
-        server=mock.MagicMock(pinned_tools=None),
+        server=mock.MagicMock(pinned_tools=None, approval_policy=None),
         raw_headers={},
         litellm_logging_obj=logging_obj,
     )
@@ -189,7 +189,7 @@ async def test_pre_call_without_logging_obj_is_unchanged():
         server_name="s",
         user_api_key_auth=None,
         proxy_logging_obj=plo,
-        server=mock.MagicMock(pinned_tools=None),
+        server=mock.MagicMock(pinned_tools=None, approval_policy=None),
         raw_headers={},
     )
 

@@ -14,6 +14,7 @@ from typing import Any, Final, Protocol
 from urllib.parse import quote
 
 from litellm._logging import verbose_logger
+from litellm.constants import MCP_APPROVAL_REFERENCE_HEADER
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if typing.TYPE_CHECKING:
@@ -21,6 +22,10 @@ if typing.TYPE_CHECKING:
 
 MCP_SERVERS_TARGET: Final = "mcp_servers"
 MCP_OAUTH_TOKENS_TARGET: Final = "mcp_oauth_tokens"
+
+
+def is_forwardable_caller_header(name: str) -> bool:
+    return name.lower() != MCP_APPROVAL_REFERENCE_HEADER
 
 
 class _McpServerLike(Protocol):
@@ -906,7 +911,7 @@ _HOP_BY_HOP_HEADERS: Final = frozenset(
 )
 
 _SYNTHETIC_REQUEST_EXCLUDED_HEADERS: Final = _HOP_BY_HOP_HEADERS | frozenset(
-    {"content-type", "host", "x-forwarded-for"}
+    {"content-type", "host", "x-forwarded-for", MCP_APPROVAL_REFERENCE_HEADER}
 )
 
 _SYNTHETIC_REQUEST_SERVER: Final = ("127.0.0.1", 4000)
@@ -1083,7 +1088,7 @@ def logging_safe_mcp_headers(raw_headers: Mapping[str, str] | None) -> Mapping[s
     excluded: Final = (
         upstream_credential_headers(raw_headers.keys() if raw_headers else ())
         | UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
-        | frozenset({"host"})
+        | frozenset({"host", MCP_APPROVAL_REFERENCE_HEADER})
     )
     cleaned: Final = clean_headers(
         Headers(raw_headers),

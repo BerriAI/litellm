@@ -409,6 +409,13 @@ export interface MCPToolsViewerProps {
 
 export const MCP_REACHABLE_DESCRIPTION = "Server responded. Authentication and tools were not checked";
 
+export interface MCPApprovalPolicy {
+  tools: string[];
+  issuer: string;
+  jwks_url: string;
+  audience?: string | null;
+}
+
 export interface MCPServer {
   server_id: string;
   is_config?: boolean;
@@ -470,6 +477,9 @@ export interface MCPServer {
 
   /** GitHub / source repository URL */
   source_url?: string | null;
+
+  /** Tools that require a signed approval reference before the gateway dispatches a call */
+  approval_policy?: MCPApprovalPolicy | null;
 
   /** BYOM (Bring Your Own MCP) submission fields */
   approval_status?: "active" | "pending_review" | "rejected" | null;

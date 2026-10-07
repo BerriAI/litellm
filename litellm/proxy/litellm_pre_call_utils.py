@@ -23,6 +23,7 @@ from litellm.constants import (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
+    MCP_APPROVAL_REFERENCE_HEADER,
     OTEL_SERVICE_NAME_METADATA_KEYS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
@@ -1197,6 +1198,8 @@ def clean_headers(
     for header, value in headers.items():
         header_lower = header.lower()
 
+        if header_lower == MCP_APPROVAL_REFERENCE_HEADER:
+            continue
         if header_lower == "authorization" and is_anthropic_oauth_key(value):
             if authenticated_with_header is None or authenticated_with_header.lower() != "authorization":
                 clean_headers[header] = value

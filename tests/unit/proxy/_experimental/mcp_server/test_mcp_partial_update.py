@@ -1155,13 +1155,22 @@ async def test_protocol_update_revalidates_current_stored_configuration_before_w
     prisma = _mock_prisma()
     table = prisma.db.litellm_mcpservertable
     table.find_unique.return_value = models.LiteLLM_MCPServerTable.model_construct(
-        server_id="test-server", transport="sse" if protocol_only else "http",
-        mcp_info={} if protocol_only else {"protocol_version": "2026-07-28"}, env={}, env_vars=[],
+        server_id="test-server",
+        transport="sse" if protocol_only else "http",
+        mcp_info={} if protocol_only else {"protocol_version": "2026-07-28"},
+        env={},
+        env_vars=[],
     )
-    payload = UpdateMCPServerRequest.model_validate({
-        "server_id": "test-server",
-        **({"mcp_info": {"protocol_version": "2026-07-28"}} if protocol_only else {"transport": "sse", "url": "https://upstream.example/sse"}),
-    })
+    payload = UpdateMCPServerRequest.model_validate(
+        {
+            "server_id": "test-server",
+            **(
+                {"mcp_info": {"protocol_version": "2026-07-28"}}
+                if protocol_only
+                else {"transport": "sse", "url": "https://upstream.example/sse"}
+            ),
+        }
+    )
     with pytest.raises(HTTPException) as error:
         await update_mcp_server(prisma, payload, "admin")
     assert error.value.status_code == 400
@@ -1175,10 +1184,13 @@ async def test_protocol_update_preserves_missing_server_without_writing(clear_al
     prisma = _mock_prisma()
     table = prisma.db.litellm_mcpservertable
     table.find_unique.return_value = None
-    payload = UpdateMCPServerRequest.model_validate({
-        "server_id": "missing", "mcp_info": {"protocol_version": "2026-07-28"},
-        **({"alias": None} if clear_alias else {}),
-    })
+    payload = UpdateMCPServerRequest.model_validate(
+        {
+            "server_id": "missing",
+            "mcp_info": {"protocol_version": "2026-07-28"},
+            **({"alias": None} if clear_alias else {}),
+        }
+    )
     result = await update_mcp_server(prisma, payload, "admin")
     assert result is None
     table.update.assert_not_awaited()
@@ -1365,3 +1377,148 @@ async def test_issuer_edit_preserves_replacement_with_same_client_id(replacement
     assert credentials["dcr_server_url"] == "https://new.example/mcp"
     assert credentials.get("client_secret") == replacement.get("client_secret")
     assert credentials.get("token_endpoint_auth_method") == replacement.get("token_endpoint_auth_method")
+
+
+# ── approval_policy column ────────────────────────────────────────────────────
+
+
+def _approval_policy():
+    from litellm.types.mcp_server.mcp_server_manager import MCPApprovalPolicy
+
+    return MCPApprovalPolicy(
+        tools=("delete_records", "wipe_records"),
+        issuer="https://approvals.example.com",
+        jwks_url="https://approvals.example.com/.well-known/jwks.json",
+        audience="mcp-gateway",
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_serializes_approval_policy_to_json():
+    mock_prisma = _mock_prisma()
+    data = NewMCPServerRequest(
+        server_id="new-server",
+        url="https://example.com/mcp",
+        transport="http",
+        approval_policy=_approval_policy(),
+    )
+
+    await create_mcp_server(mock_prisma, data, "test-user")
+
+    data_dict = mock_prisma.db.litellm_mcpservertable.create.call_args[1]["data"]
+    stored = json.loads(data_dict["approval_policy"])
+    assert stored == {
+        "tools": ["delete_records", "wipe_records"],
+        "issuer": "https://approvals.example.com",
+        "jwks_url": "https://approvals.example.com/.well-known/jwks.json",
+        "audience": "mcp-gateway",
+    }
+
+
+@pytest.mark.asyncio
+async def test_partial_update_omitted_approval_policy_leaves_column_untouched():
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        allowed_tools=["foo"],
+    )
+
+    data_dict = await _run_update(data)
+
+    assert "approval_policy" not in data_dict
+
+
+@pytest.mark.asyncio
+async def test_partial_update_null_approval_policy_clears_column():
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        approval_policy=None,
+    )
+
+    data_dict = await _run_update(data)
+
+    assert "approval_policy" in data_dict
+    assert _credentials_cleared(data_dict["approval_policy"])
+
+
+@pytest.mark.asyncio
+async def test_partial_update_writes_approval_policy_json():
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        approval_policy=_approval_policy(),
+    )
+
+    data_dict = await _run_update(data)
+
+    stored = json.loads(data_dict["approval_policy"])
+    assert stored["tools"] == ["delete_records", "wipe_records"]
+    assert stored["issuer"] == "https://approvals.example.com"
+    assert stored["jwks_url"] == "https://approvals.example.com/.well-known/jwks.json"
+    assert stored["audience"] == "mcp-gateway"
+
+
+@pytest.mark.asyncio
+async def test_update_mcp_server_writes_prisma_json_null_for_cleared_approval_policy():
+    """PUT with approval_policy=null must reach prisma as Json(None), not a raw
+    None, which prisma-python rejects with MissingRequiredValueError."""
+    from prisma import Json
+
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        approval_policy=None,
+    )
+    data_dict = await _run_update(data)
+
+    assert isinstance(data_dict["approval_policy"], Json)
+    assert data_dict["approval_policy"].data is None
+
+
+@pytest.mark.asyncio
+async def test_partial_update_rejects_plaintext_remote_jwks_url():
+    from pydantic import ValidationError
+
+    from litellm.types.mcp_server.mcp_server_manager import MCPApprovalPolicy
+
+    with pytest.raises(ValidationError):
+        UpdateMCPServerRequest(
+            server_id="my-test-server",
+            approval_policy=MCPApprovalPolicy(
+                tools=("delete_records",),
+                issuer="https://approvals.example.com",
+                jwks_url="http://example.com/jwks.json",
+            ),
+        )
+
+
+def test_server_table_parses_stored_approval_policy_json_and_decodes_secret_map():
+    from litellm.models.mcp_server import LiteLLM_MCPServerTable
+    from litellm.types.mcp_server.mcp_server_manager import MCPApprovalPolicy
+
+    table = LiteLLM_MCPServerTable(
+        server_id="srv-1",
+        server_name="records",
+        transport="http",
+        approval_policy='{"tools": ["delete_record"], "issuer": "http://127.0.0.1:8092", "jwks_url": "http://127.0.0.1:8092/jwks.json"}',
+        static_headers={"Authorization": "Bearer ${LIT9137_STATIC_TOKEN}"},
+    )
+    assert table.approval_policy == MCPApprovalPolicy(
+        tools=("delete_record",),
+        issuer="http://127.0.0.1:8092",
+        jwks_url="http://127.0.0.1:8092/jwks.json",
+    )
+    assert table.static_headers == {"Authorization": "Bearer ${LIT9137_STATIC_TOKEN}"}
+
+
+def test_server_table_rejects_stored_falsy_approval_policy_json():
+    import pytest
+    from pydantic import ValidationError
+
+    from litellm.models.mcp_server import LiteLLM_MCPServerTable
+
+    with pytest.raises(ValidationError) as exc_info:
+        LiteLLM_MCPServerTable(
+            server_id="srv-1",
+            server_name="records",
+            transport="http",
+            approval_policy="{}",
+        )
+    assert any(e["loc"][0] == "approval_policy" for e in exc_info.value.errors())

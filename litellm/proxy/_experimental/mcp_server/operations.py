@@ -114,6 +114,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     build_synthetic_mcp_request,
     extract_mcp_tool_result_error_message,
     get_server_prefix,
+    is_forwardable_caller_header,
     is_tool_name_prefixed,
     iter_known_server_prefixes,
     logging_safe_mcp_headers,
@@ -866,7 +867,7 @@ def _prepare_mcp_server_headers(
         )
 
         for header in server.extra_headers:
-            if not isinstance(header, str):
+            if not isinstance(header, str) or not is_forwardable_caller_header(header):
                 continue
             if header.lower() == "authorization" and (strip_caller_authorization or withhold_forwarded_authorization):
                 continue

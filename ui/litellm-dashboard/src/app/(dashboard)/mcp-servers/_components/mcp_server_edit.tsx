@@ -40,6 +40,7 @@ import { getToken, isTokenValid, removeToken, setToken } from "@/utils/mcpTokenS
 import { buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
+import ApprovalPolicySection from "./ApprovalPolicySection";
 import TruePassthroughWarning from "./TruePassthroughWarning";
 import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -158,6 +159,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       extra_headers: mcpServer.extra_headers || [],
       oauth_flow_type: oauth2FlowToFormValue(mcpServer.oauth2_flow),
       dcr_bridge: Boolean(mcpServer.dcr_bridge),
+      approval_policy_tools: mcpServer.approval_policy?.tools ?? [],
+      approval_policy_issuer: mcpServer.approval_policy?.issuer,
+      approval_policy_jwks_url: mcpServer.approval_policy?.jwks_url,
+      approval_policy_audience: mcpServer.approval_policy?.audience,
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
@@ -1284,6 +1289,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     mcpServer={mcpServer}
                     mountedAuthType={authType}
                   />
+                </div>
+
+                <div className="mt-6">
+                  <ApprovalPolicySection />
                 </div>
 
                 {/* Tool Configuration Section */}
