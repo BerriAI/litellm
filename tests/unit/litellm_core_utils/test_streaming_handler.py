@@ -3884,6 +3884,108 @@ async def test_transport_read_error_before_finish_reason_raises(logging_obj: Log
     assert fabricated_finish_reasons == []
 
 
+def _raised_from(error: Exception, cause: Exception) -> Exception:
+    try:
+        raise error from cause
+    except Exception as raised:
+        return raised
+
+
+def _sdk_connection_error() -> Exception:
+    import httpx
+    import openai
+
+    return openai.APIConnectionError(request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"))
+
+
+@pytest.mark.asyncio
+async def test_sdk_wrapped_httpx2_read_error_after_finish_reason_ends_stream_gracefully(
+    logging_obj: Logging,
+):
+    httpx2: Final = pytest.importorskip("httpx2")
+
+    completion_stream: Final = TransportErrorAfterChunksIterator(
+        model_responses=[
+            _reset_test_chunk(content="Hello"),
+            _reset_test_chunk(finish_reason="stop"),
+        ],
+        exception=_raised_from(_sdk_connection_error(), httpx2.ReadError("peer closed connection")),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="openai/stub-model",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+
+    chunks: Final = [chunk async for chunk in response]
+
+    finish_reasons: Final = [
+        chunk.choices[0].finish_reason
+        for chunk in chunks
+        if chunk.choices and chunk.choices[0].finish_reason
+    ]
+    contents: Final = [
+        chunk.choices[0].delta.content
+        for chunk in chunks
+        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content
+    ]
+    assert finish_reasons == ["stop"]
+    assert contents == ["Hello"]
+
+
+@pytest.mark.asyncio
+async def test_httpx2_protocol_error_after_finish_reason_ends_stream_gracefully(
+    logging_obj: Logging,
+):
+    httpx2: Final = pytest.importorskip("httpx2")
+
+    completion_stream: Final = TransportErrorAfterChunksIterator(
+        model_responses=[
+            _reset_test_chunk(content="Hello"),
+            _reset_test_chunk(finish_reason="stop"),
+        ],
+        exception=httpx2.RemoteProtocolError("peer closed connection without sending complete message body"),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="openai/stub-model",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+
+    chunks: Final = [chunk async for chunk in response]
+
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"]
+
+
+@pytest.mark.asyncio
+async def test_sdk_wrapped_httpx2_read_error_before_finish_reason_raises(logging_obj: Logging):
+    httpx2: Final = pytest.importorskip("httpx2")
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    completion_stream: Final = TransportErrorAfterChunksIterator(
+        model_responses=[_reset_test_chunk(content="Hel")],
+        exception=_raised_from(_sdk_connection_error(), httpx2.ReadError("peer closed connection")),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="openai/stub-model",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+
+    async def _drain() -> None:
+        async for _ in response:
+            pass
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await _drain()
+
+    assert excinfo.value.is_pre_first_chunk is False
+
+
 def test_openai_custom_tool_call_stream_deltas_survive_conversion(logging_obj: Logging):
     """
     Regression test: OpenAI chat completions custom tool calls stream as

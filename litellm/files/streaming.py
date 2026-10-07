@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional, cast
 import anyio
 
 from litellm.files.types import FileContentProvider
+from litellm.llms.custom_httpx.transport_errors import as_public_exception
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -59,8 +60,11 @@ class FileContentStreamingResponse:
             self._log_success_sync()
             raise
         except Exception as e:
-            self._log_failure_sync(e)
-            raise
+            public_error: Final = self._public_error(e)
+            self._log_failure_sync(public_error or e)
+            if public_error is None:
+                raise
+            raise public_error from e
 
     def __aiter__(self) -> "FileContentStreamingResponse":
         if not hasattr(self.stream_iterator, "__anext__"):
@@ -77,8 +81,14 @@ class FileContentStreamingResponse:
             await self._log_success_async()
             raise
         except Exception as e:
-            await self._log_failure_async(e)
-            raise
+            public_error: Final = self._public_error(e)
+            await self._log_failure_async(public_error or e)
+            if public_error is None:
+                raise
+            raise public_error from e
+
+    def _public_error(self, error: Exception) -> Exception | None:
+        return as_public_exception(error, model=self.model, llm_provider=self.custom_llm_provider)
 
     async def aclose(self) -> None:
         if self._close_completed:

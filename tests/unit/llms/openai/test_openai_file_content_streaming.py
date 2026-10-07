@@ -1,6 +1,7 @@
 import pytest
-from typing import AsyncIterator, Iterator, cast
+from typing import AsyncIterator, Final, Iterator, cast
 
+import litellm
 from litellm.files import main as files_main
 from litellm.files.streaming import FileContentStreamingResponse
 from litellm.files.types import FileContentStreamingResult
@@ -323,3 +324,79 @@ def test_file_content_streaming_passes_exception_to_context_manager_exit():
     assert response_cm.exc_info[0] is RuntimeError
     assert response_cm.exc_info[1] is exc_info.value
     assert response_cm.exc_info[2] is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport_module", ["httpx", "httpx2"])
+async def test_afile_content_streaming_maps_a_read_timeout_to_litellm_timeout(transport_module: str):
+    transport: Final = pytest.importorskip(transport_module)
+    raw_timeout: Final = transport.ReadTimeout("timed out")
+
+    async def _stalled_stream() -> AsyncIterator[bytes]:
+        yield b"hello"
+        raise raw_timeout
+
+    stream: Final = FileContentStreamingResponse(
+        stream_iterator=_stalled_stream(),
+        file_id="file-abc123",
+        model=None,
+        custom_llm_provider="openai",
+        logging_obj=None,
+    )
+
+    assert await stream.__anext__() == b"hello"
+
+    with pytest.raises(litellm.Timeout) as excinfo:
+        await stream.__anext__()
+
+    assert excinfo.value.__cause__ is raw_timeout
+    assert excinfo.value.llm_provider == "openai"
+
+
+@pytest.mark.parametrize("transport_module", ["httpx", "httpx2"])
+def test_file_content_streaming_maps_a_dropped_connection_to_litellm_api_connection_error(transport_module: str):
+    transport: Final = pytest.importorskip(transport_module)
+    raw_error: Final = transport.ReadError("peer closed connection")
+
+    def _dropped_stream() -> Iterator[bytes]:
+        yield b"hello"
+        raise raw_error
+
+    stream: Final = FileContentStreamingResponse(
+        stream_iterator=_dropped_stream(),
+        file_id="file-abc123",
+        model=None,
+        custom_llm_provider="openai",
+        logging_obj=None,
+    )
+
+    assert next(stream) == b"hello"
+
+    with pytest.raises(litellm.APIConnectionError) as excinfo:
+        next(stream)
+
+    assert excinfo.value.__cause__ is raw_error
+    assert excinfo.value.llm_provider == "openai"
+
+
+def test_file_content_streaming_leaves_a_non_transport_failure_as_is():
+    raw_error: Final = ValueError("decoder failure")
+
+    def _broken_stream() -> Iterator[bytes]:
+        yield b"hello"
+        raise raw_error
+
+    stream: Final = FileContentStreamingResponse(
+        stream_iterator=_broken_stream(),
+        file_id="file-abc123",
+        model=None,
+        custom_llm_provider="openai",
+        logging_obj=None,
+    )
+
+    assert next(stream) == b"hello"
+
+    with pytest.raises(ValueError, match="decoder failure") as excinfo:
+        next(stream)
+
+    assert excinfo.value is raw_error
