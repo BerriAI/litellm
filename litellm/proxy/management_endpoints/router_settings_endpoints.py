@@ -123,7 +123,7 @@ async def get_router_settings(
             # generic `hasattr` loop below would miss them.
             current_values["routing_groups"] = [
                 group.model_dump(exclude=frozenset(("model_priorities",)) if group.model_priorities is None else None)
-                for group in llm_router._routing_groups.values()
+                for group in llm_router.routing_groups.values()
             ]
             for field in router_fields:
                 if field.field_name == "routing_groups":

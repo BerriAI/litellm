@@ -121,7 +121,7 @@ async def test_async_create_file():
     2. Create Batch Request
     3. Retrieve the specific batch
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     print("Testing async create batch")
 
     file_name = "bedrock_batch_completions.jsonl"
@@ -162,7 +162,7 @@ async def test_async_file_and_batch():
     """
     Test file retrieval
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     file_name = "bedrock_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)

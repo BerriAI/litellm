@@ -32,7 +32,7 @@ from litellm.exceptions import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus_helpers import (
     PrometheusLabelFactoryContext,
-    _get_cached_end_user_id_for_cost_tracking,
+    get_cached_end_user_id_for_cost_tracking,
 )
 from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker import (
     BoundedPrometheusSeriesTracker,
@@ -65,8 +65,8 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
-    _sanitize_prometheus_label_name,
-    _sanitize_prometheus_label_value,
+    sanitize_prometheus_label_name,
+    sanitize_prometheus_label_value,
     validate_prometheus_deployment_and_latency_caller_identity,
 )
 from litellm.types.proxy.carried_budget_state import (
@@ -1069,10 +1069,10 @@ class PrometheusLogger(CustomLogger):
 
         builtin_labels: Final = frozenset(label.value for label in UserAPIKeyLabelNames)
         custom_metadata_labels: Final = frozenset(
-            _sanitize_prometheus_label_name(label) for label in litellm.custom_prometheus_metadata_labels
+            sanitize_prometheus_label_name(label) for label in litellm.custom_prometheus_metadata_labels
         )
         custom_tag_labels: Final = frozenset(
-            _sanitize_prometheus_label_name(f"tag_{tag}") for tag in litellm.custom_prometheus_tags
+            sanitize_prometheus_label_name(f"tag_{tag}") for tag in litellm.custom_prometheus_tags
         )
         return builtin_labels | _NON_ENUM_METRIC_LABELS | custom_metadata_labels | custom_tag_labels
 
@@ -1508,7 +1508,7 @@ class PrometheusLogger(CustomLogger):
         model: Final = kwargs.get("model", "")
         litellm_params: Final = kwargs.get("litellm_params", {}) or {}
         _metadata: Final = litellm_params.get("metadata") or {}
-        get_end_user_id_for_cost_tracking: Final = _get_cached_end_user_id_for_cost_tracking()
+        get_end_user_id_for_cost_tracking: Final = get_cached_end_user_id_for_cost_tracking()
 
         end_user_id: Final = get_end_user_id_for_cost_tracking(litellm_params, service_type="prometheus")
         user_id: Final = standard_logging_payload["metadata"]["user_api_key_user_id"]
@@ -2523,7 +2523,7 @@ class PrometheusLogger(CustomLogger):
         model: Final = kwargs.get("model", "")
 
         litellm_params: Final = kwargs.get("litellm_params", {}) or {}
-        get_end_user_id_for_cost_tracking: Final = _get_cached_end_user_id_for_cost_tracking()
+        get_end_user_id_for_cost_tracking: Final = get_cached_end_user_id_for_cost_tracking()
 
         end_user_id: Final = get_end_user_id_for_cost_tracking(litellm_params, service_type="prometheus")
         user_id: Final = standard_logging_payload["metadata"]["user_api_key_user_id"]
@@ -2775,7 +2775,7 @@ class PrometheusLogger(CustomLogger):
         status_code: Final = self._extract_status_code(exception=original_exception)
 
         try:
-            _tags: Final = StandardLoggingPayloadSetup._get_request_tags(
+            _tags: Final = StandardLoggingPayloadSetup.get_request_tags(
                 litellm_params=request_data,
                 proxy_server_request=request_data.get("proxy_server_request", {}),
             )
@@ -3725,11 +3725,11 @@ class PrometheusLogger(CustomLogger):
         increment metric when litellm.Router / load balancing logic places a deployment in cool down
         """
         self.litellm_deployment_cooled_down.labels(
-            _sanitize_prometheus_label_value(litellm_model_name),
-            _sanitize_prometheus_label_value(model_id),
-            _sanitize_prometheus_label_value(api_base),
-            _sanitize_prometheus_label_value(api_provider),
-            _sanitize_prometheus_label_value(exception_status),
+            sanitize_prometheus_label_value(litellm_model_name),
+            sanitize_prometheus_label_value(model_id),
+            sanitize_prometheus_label_value(api_base),
+            sanitize_prometheus_label_value(api_provider),
+            sanitize_prometheus_label_value(exception_status),
         ).inc()
 
     def increment_callback_logging_failure(
@@ -4750,17 +4750,17 @@ def _prometheus_labels_from_context(
     ctx: PrometheusLabelFactoryContext,
 ) -> dict[str, str | None]:
     filtered_labels: Final[dict[str, str | None]] = {
-        label: ctx._sanitized_enum[label] for label in supported_enum_labels if label in ctx._sanitized_enum
+        label: ctx.sanitized_enum[label] for label in supported_enum_labels if label in ctx.sanitized_enum
     }
 
     if UserAPIKeyLabelNames.END_USER.value in filtered_labels:
         filtered_labels[UserAPIKeyLabelNames.END_USER.value] = ctx.get_resolved_end_user()
 
-    for sk, val in ctx._custom_by_sanitized_key.items():
+    for sk, val in ctx.custom_by_sanitized_key.items():
         if sk in supported_enum_labels:
             filtered_labels[sk] = val
 
-    for k, v in ctx._tag_labels.items():
+    for k, v in ctx.tag_labels.items():
         if k in supported_enum_labels:
             filtered_labels[k] = v
 
@@ -4797,13 +4797,13 @@ def prometheus_label_factory(
     # Filter supported labels and sanitize values to prevent breaking
     # the Prometheus text format (e.g. U+2028 Line Separator in label values)
     filtered_labels: Final = {
-        label: _sanitize_prometheus_label_value(value)
+        label: sanitize_prometheus_label_value(value)
         for label, value in enum_dict.items()
         if label in supported_enum_labels
     }
 
     if UserAPIKeyLabelNames.END_USER.value in filtered_labels:
-        get_end_user_id_for_cost_tracking: Final = _get_cached_end_user_id_for_cost_tracking()
+        get_end_user_id_for_cost_tracking: Final = get_cached_end_user_id_for_cost_tracking()
 
         filtered_labels["end_user"] = get_end_user_id_for_cost_tracking(
             litellm_params={"user_api_key_end_user_id": enum_values.end_user},
@@ -4813,16 +4813,16 @@ def prometheus_label_factory(
     if enum_values.custom_metadata_labels is not None:
         for key, value in enum_values.custom_metadata_labels.items():
             # check sanitized key
-            sanitized_key = _sanitize_prometheus_label_name(key)
+            sanitized_key = sanitize_prometheus_label_name(key)
             if sanitized_key in supported_enum_labels:
-                filtered_labels[sanitized_key] = _sanitize_prometheus_label_value(value)
+                filtered_labels[sanitized_key] = sanitize_prometheus_label_value(value)
 
     # Add custom tags if configured
     if enum_values.tags is not None:
         custom_tag_labels: Final = get_custom_labels_from_tags(enum_values.tags)
         for key, value in custom_tag_labels.items():
             if key in supported_enum_labels:
-                filtered_labels[key] = _sanitize_prometheus_label_value(value)
+                filtered_labels[key] = sanitize_prometheus_label_value(value)
 
     for label in supported_enum_labels:
         if label not in filtered_labels:
@@ -4919,7 +4919,7 @@ def _tag_matches_wildcard_configured_pattern(tags: Sequence[str], configured_tag
     from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 
     pattern_router: Final = PatternMatchRouter()
-    regex_pattern: Final = pattern_router._pattern_to_regex(configured_tag)
+    regex_pattern: Final = pattern_router.pattern_to_regex(configured_tag)
     return any(re.match(pattern=regex_pattern, string=tag) for tag in tags)
 
 
@@ -4945,7 +4945,7 @@ def get_custom_labels_from_tags(tags: Sequence[str]) -> dict[str, str]:
     }
     """
 
-    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
+    from litellm.types.integrations.prometheus import sanitize_prometheus_label_name
 
     configured_tags: Final = litellm.custom_prometheus_tags
     if configured_tags is None or len(configured_tags) == 0:
@@ -4954,7 +4954,7 @@ def get_custom_labels_from_tags(tags: Sequence[str]) -> dict[str, str]:
     result: Final[dict[str, str]] = {}
 
     for configured_tag in configured_tags:
-        label_name = _sanitize_prometheus_label_name(f"tag_{configured_tag}")
+        label_name = sanitize_prometheus_label_name(f"tag_{configured_tag}")
 
         # Check for exact match first (backwards compatibility)
         if configured_tag in tags:

@@ -12,7 +12,7 @@ async def test_manus_files_api_e2e_all_methods():
     """
     E2E test for Manus Files API: create, retrieve, list, delete.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     api_key = os.getenv("MANUS_API_KEY")
     if api_key is None:

@@ -20,7 +20,7 @@ async def test_anthropic_messages_litellm_router_bedrock():
     Test the anthropic_messages with non-streaming request
     """
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     router = Router(
         model_list=[
             {

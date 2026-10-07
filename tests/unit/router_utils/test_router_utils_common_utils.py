@@ -402,7 +402,7 @@ def test_filter_deployments_by_model_access_groups_access_group_only_key():
 
     filtered = router._filter_deployments_by_model_access_groups(
         model="gpt-5",
-        healthy_deployments=router._get_all_deployments(model_name="gpt-5"),
+        healthy_deployments=router.get_all_deployments(model_name="gpt-5"),
         request_kwargs={
             "metadata": {
                 "user_api_key_team_id": "team-2",
@@ -561,9 +561,9 @@ class TestResolveModelGroupAlias:
             model_group_alias={"group-a": "group-b", "group-item": {"model": "group-b", "hidden": True}},
         )
 
-        assert router._get_model_from_alias("group-a") == "group-b"
-        assert router._get_model_from_alias("group-item") == "group-b"
-        assert router._get_model_from_alias("group-b") is None
+        assert router.get_model_from_alias("group-a") == "group-b"
+        assert router.get_model_from_alias("group-item") == "group-b"
+        assert router.get_model_from_alias("group-b") is None
 
 
 class TestTruncateFallbackErrorDetail:

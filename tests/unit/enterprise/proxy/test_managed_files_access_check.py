@@ -39,9 +39,9 @@ def _make_managed_files_instance(
     unified_file_id: str,
     file_team_id=None,
 ):
-    """Create a _PROXY_LiteLLMManagedFiles with a mocked DB that returns a file owned by file_created_by."""
+    """Create a PROXY_LiteLLMManagedFiles with a mocked DB that returns a file owned by file_created_by."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     mock_db_record = MagicMock()
@@ -53,7 +53,7 @@ def _make_managed_files_instance(
         return_value=mock_db_record
     )
 
-    instance = _PROXY_LiteLLMManagedFiles(
+    instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=mock_prisma,
     )
@@ -176,7 +176,7 @@ def _make_managed_files_instance_with_object_store():
     """Managed-files hook backed by an in-memory stand-in for the managed
     object table, so create and retrieve exercise the same stored row."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     store = {}
@@ -194,7 +194,7 @@ def _make_managed_files_instance_with_object_store():
     )
 
     return (
-        _PROXY_LiteLLMManagedFiles(
+        PROXY_LiteLLMManagedFiles(
             internal_usage_cache=DualCache(),
             prisma_client=mock_prisma,
         ),

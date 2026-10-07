@@ -111,9 +111,9 @@ class TestBareModelNameFallback:
         """azure/gpt-5-mini carries no effort flag while gpt-5-mini carries three, and the request
         path resolves capability flags through that same twin (#20885). Reading only the prefixed
         entry would answer unknown for a model the map fully describes."""
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        model_info = dict(_get_model_info_helper(model="gpt-5-mini", custom_llm_provider="azure"))
+        model_info = dict(get_model_info_helper(model="gpt-5-mini", custom_llm_provider="azure"))
 
         assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
             "minimal",
@@ -194,9 +194,9 @@ class TestNoneLevelPolarity:
         """AzureOpenAIGPT5Config raises UnsupportedParamsError on reasoning_effort='none' for models
         it does not flag, so advertising the level there would offer routing a 400."""
         from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        model_info = dict(_get_model_info_helper(model=model_key.split("/", 1)[1], custom_llm_provider="azure"))
+        model_info = dict(get_model_info_helper(model=model_key.split("/", 1)[1], custom_llm_provider="azure"))
         resolved = resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True)
 
         assert resolved is not None
@@ -353,9 +353,9 @@ class TestKimiK3AdvertisesItsDocumentedLevels:
     def test_the_declaration_survives_model_info_hydration(self, local_model_cost_map, model, provider):
         """The hydration line is the load-bearing seam: without it the key the map carries never
         reaches the resolver and reads as absent everywhere downstream."""
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider=provider))
+        model_info = dict(get_model_info_helper(model=model, custom_llm_provider=provider))
 
         assert model_info["reasoning_effort_levels"] == ["low", "high", "max"]
         assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == ("low", "high", "max")
@@ -378,9 +378,9 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
     def test_the_entry_advertises_low_through_max_without_none(self, local_model_cost_map):
         """OpenAI documents low, medium, high, xhigh and max for gpt-6-astra. Unlike gpt-5.6-sol it
         does not take none, so a group must not offer none and must offer max."""
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        model_info = dict(_get_model_info_helper(model="gpt-6-astra", custom_llm_provider="openai"))
+        model_info = dict(get_model_info_helper(model="gpt-6-astra", custom_llm_provider="openai"))
 
         assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
             "low",
@@ -405,9 +405,9 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
         on both Azure routes: none returns 200 with zero reasoning tokens and unlocks temperature,
         which OpenAI's API rejects, while max returns 400 unsupported_value naming none through
         xhigh as the levels it does take."""
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
+        model_info = dict(get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
 
         assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
             "none",
@@ -423,9 +423,9 @@ class TestGpt6SolAndLunaAdvertiseNoneThroughMax:
     def test_the_entry_advertises_none_through_max(self, local_model_cost_map, model):
         """OpenAI documents none, low, medium (default), high, xhigh and max for both. Unlike
         gpt-6-astra they take none."""
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider="openai"))
+        model_info = dict(get_model_info_helper(model=model, custom_llm_provider="openai"))
 
         assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
             "none",
@@ -477,10 +477,10 @@ class TestAzureGpt6SolAndLunaAdvertiseTheOpenAiLevels:
     ):
         """The Foundry deployments of sol and luna take the same effort set OpenAI documents for
         the direct API, so the resolved levels must match the OpenAI-direct entry."""
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        azure_info = dict(_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
-        openai_info = dict(_get_model_info_helper(model=model.rsplit("/", 1)[1], custom_llm_provider="openai"))
+        azure_info = dict(get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
+        openai_info = dict(get_model_info_helper(model=model.rsplit("/", 1)[1], custom_llm_provider="openai"))
 
         assert resolve_supported_reasoning_efforts(
             azure_info, deployment_is_mapped=True

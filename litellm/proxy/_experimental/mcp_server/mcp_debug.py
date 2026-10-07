@@ -244,7 +244,7 @@ class MCPDebug:
     def mask_secret(value: str | None) -> str:
         if not value:
             return "(none)"
-        return MCPDebug._masker._mask_value(value)
+        return MCPDebug._masker.mask_value(value)
 
     @staticmethod
     def is_debug_enabled(headers: dict[str, str]) -> bool:

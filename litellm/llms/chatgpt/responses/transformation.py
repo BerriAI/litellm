@@ -6,7 +6,7 @@ import httpx
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _safe_convert_created_field,
+    safe_convert_created_field,
 )
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -216,7 +216,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if not response_payload.get("output") and streamed_output_items:
             response_payload["output"] = [item for _, item in sorted(streamed_output_items.items())]
         if "created_at" in response_payload:
-            response_payload["created_at"] = _safe_convert_created_field(response_payload["created_at"])
+            response_payload["created_at"] = safe_convert_created_field(response_payload["created_at"])
         try:
             return ResponsesAPIResponse(**response_payload)
         except Exception:

@@ -28,8 +28,8 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _parse_content_for_reasoning,
     drop_lookaround_regex_patterns,
+    parse_content_for_reasoning,
     tool_with_sanitized_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -2387,7 +2387,7 @@ class AmazonConverseConfig(BaseConfig):
                 (
                     extracted_reasoning_content_str,
                     _content_str,
-                ) = _parse_content_for_reasoning(content["text"])
+                ) = parse_content_for_reasoning(content["text"])
                 if _content_str is not None:
                     content_str += _content_str
             if "toolUse" in content:

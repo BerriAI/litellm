@@ -19,7 +19,7 @@ async def test_bedrock_sonnet_4_5_with_advanced_tool_use_beta_header():
     This should work without throwing "invalid beta flag" error because LiteLLM
     filters out the advanced-tool-use beta header for Bedrock Invoke API.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = await litellm.anthropic.messages.acreate(
         model="bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         messages=[{"role": "user", "content": "What is 2+2?"}],

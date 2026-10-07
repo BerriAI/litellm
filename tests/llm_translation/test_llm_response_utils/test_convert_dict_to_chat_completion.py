@@ -1794,41 +1794,41 @@ class TestSafeConvertCreatedField:
         import time
 
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _safe_convert_created_field,
+            safe_convert_created_field,
         )
 
-        result = _safe_convert_created_field(None)
+        result = safe_convert_created_field(None)
         assert abs(result - int(time.time())) <= 1
 
     def test_int_passthrough(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _safe_convert_created_field,
+            safe_convert_created_field,
         )
 
-        assert _safe_convert_created_field(1700000000) == 1700000000
+        assert safe_convert_created_field(1700000000) == 1700000000
 
     def test_float_truncated(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _safe_convert_created_field,
+            safe_convert_created_field,
         )
 
-        assert _safe_convert_created_field(1700000000.999) == 1700000000
+        assert safe_convert_created_field(1700000000.999) == 1700000000
 
     def test_string_converted(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _safe_convert_created_field,
+            safe_convert_created_field,
         )
 
-        assert _safe_convert_created_field("1700000000.5") == 1700000000
+        assert safe_convert_created_field("1700000000.5") == 1700000000
 
     def test_invalid_string_returns_current_time(self):
         import time
 
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _safe_convert_created_field,
+            safe_convert_created_field,
         )
 
-        result = _safe_convert_created_field("not-a-number")
+        result = safe_convert_created_field("not-a-number")
         assert abs(result - int(time.time())) <= 1
 
 
@@ -2003,14 +2003,14 @@ class TestConvertToStreamingResponseAsync:
 class TestHandleInvalidParallelToolCalls:
     def test_none_input(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _handle_invalid_parallel_tool_calls,
+            handle_invalid_parallel_tool_calls,
         )
 
-        assert _handle_invalid_parallel_tool_calls(None) is None
+        assert handle_invalid_parallel_tool_calls(None) is None
 
     def test_normal_tool_calls_unchanged(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _handle_invalid_parallel_tool_calls,
+            handle_invalid_parallel_tool_calls,
         )
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
@@ -2021,13 +2021,13 @@ class TestHandleInvalidParallelToolCalls:
                 function=Function(name="get_weather", arguments='{"city": "NYC"}'),
             )
         ]
-        result = _handle_invalid_parallel_tool_calls(tool_calls)
+        result = handle_invalid_parallel_tool_calls(tool_calls)
         assert len(result) == 1
         assert result[0].function.name == "get_weather"
 
     def test_multi_tool_use_parallel_expanded(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _handle_invalid_parallel_tool_calls,
+            handle_invalid_parallel_tool_calls,
         )
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
@@ -2054,7 +2054,7 @@ class TestHandleInvalidParallelToolCalls:
                 ),
             )
         ]
-        result = _handle_invalid_parallel_tool_calls(tool_calls)
+        result = handle_invalid_parallel_tool_calls(tool_calls)
         assert len(result) == 2
         assert result[0].function.name == "get_weather"
         assert result[0].id == "call_1_0"
@@ -2064,7 +2064,7 @@ class TestHandleInvalidParallelToolCalls:
 
     def test_invalid_json_returns_original(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _handle_invalid_parallel_tool_calls,
+            handle_invalid_parallel_tool_calls,
         )
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
@@ -2075,7 +2075,7 @@ class TestHandleInvalidParallelToolCalls:
                 function=Function(name="some_func", arguments="not valid json{{{"),
             )
         ]
-        result = _handle_invalid_parallel_tool_calls(tool_calls)
+        result = handle_invalid_parallel_tool_calls(tool_calls)
         assert len(result) == 1
         assert result[0].id == "call_1"
 
@@ -2083,13 +2083,13 @@ class TestHandleInvalidParallelToolCalls:
 class TestShouldConvertToolCallToJsonMode:
     def test_returns_true_when_conditions_met(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _should_convert_tool_call_to_json_mode,
+            should_convert_tool_call_to_json_mode,
         )
         from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 
         tool_calls = [{"function": {"name": RESPONSE_FORMAT_TOOL_NAME}}]
         assert (
-            _should_convert_tool_call_to_json_mode(
+            should_convert_tool_call_to_json_mode(
                 tool_calls=tool_calls, convert_tool_call_to_json_mode=True
             )
             is True
@@ -2097,13 +2097,13 @@ class TestShouldConvertToolCallToJsonMode:
 
     def test_returns_false_when_flag_off(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _should_convert_tool_call_to_json_mode,
+            should_convert_tool_call_to_json_mode,
         )
         from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 
         tool_calls = [{"function": {"name": RESPONSE_FORMAT_TOOL_NAME}}]
         assert (
-            _should_convert_tool_call_to_json_mode(
+            should_convert_tool_call_to_json_mode(
                 tool_calls=tool_calls, convert_tool_call_to_json_mode=False
             )
             is False
@@ -2111,12 +2111,12 @@ class TestShouldConvertToolCallToJsonMode:
 
     def test_returns_false_when_wrong_tool_name(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _should_convert_tool_call_to_json_mode,
+            should_convert_tool_call_to_json_mode,
         )
 
         tool_calls = [{"function": {"name": "some_other_tool"}}]
         assert (
-            _should_convert_tool_call_to_json_mode(
+            should_convert_tool_call_to_json_mode(
                 tool_calls=tool_calls, convert_tool_call_to_json_mode=True
             )
             is False
@@ -2124,7 +2124,7 @@ class TestShouldConvertToolCallToJsonMode:
 
     def test_returns_false_when_multiple_tool_calls(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _should_convert_tool_call_to_json_mode,
+            should_convert_tool_call_to_json_mode,
         )
         from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 
@@ -2133,7 +2133,7 @@ class TestShouldConvertToolCallToJsonMode:
             {"function": {"name": "other"}},
         ]
         assert (
-            _should_convert_tool_call_to_json_mode(
+            should_convert_tool_call_to_json_mode(
                 tool_calls=tool_calls, convert_tool_call_to_json_mode=True
             )
             is False
@@ -2141,11 +2141,11 @@ class TestShouldConvertToolCallToJsonMode:
 
     def test_returns_false_when_none(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _should_convert_tool_call_to_json_mode,
+            should_convert_tool_call_to_json_mode,
         )
 
         assert (
-            _should_convert_tool_call_to_json_mode(
+            should_convert_tool_call_to_json_mode(
                 tool_calls=None, convert_tool_call_to_json_mode=True
             )
             is False

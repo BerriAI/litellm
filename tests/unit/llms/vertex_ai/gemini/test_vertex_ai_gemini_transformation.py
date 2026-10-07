@@ -822,12 +822,12 @@ def _parallel_tool_calls_signed_via_id(*signatures):
     OpenAI-format client echoes back on the next turn.
     """
     from litellm.litellm_core_utils.prompt_templates.factory import (
-        _encode_tool_call_id_with_signature,
+        encode_tool_call_id_with_signature,
     )
 
     return [
         {
-            "id": _encode_tool_call_id_with_signature(f"call_{idx}", signature),
+            "id": encode_tool_call_id_with_signature(f"call_{idx}", signature),
             "type": "function",
             "function": {"name": f"tool_{idx}", "arguments": '{"location": "Paris"}'},
             "index": idx,

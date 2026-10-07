@@ -36,7 +36,7 @@ async def test_azure_responses_api_preview_api_version():
     """
     Ensure new azure preview api version is working
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = await litellm.aresponses(
         model="azure/gpt-5-mini",
         truncation="auto",

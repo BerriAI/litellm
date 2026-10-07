@@ -228,7 +228,7 @@ class RouteChecks:
         # Use SensitiveDataMasker with custom configuration for user_id
         masker: Final = SensitiveDataMasker(visible_prefix=6, visible_suffix=2, mask_char="*")
 
-        return masker._mask_value(user_id)
+        return masker.mask_value(user_id)
 
     @staticmethod
     def _raise_admin_only_route_exception(

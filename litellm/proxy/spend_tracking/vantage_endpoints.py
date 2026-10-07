@@ -410,14 +410,14 @@ async def vantage_dry_run_export(
 
         # Use the same pre-transform column names as
         # FocusExportEngine.dry_run_export_usage_data for consistency.
-        total_spend: Final = FocusExportEngine._sum_column(data, "spend")
-        total_tokens: Final = FocusExportEngine._sum_column(data, "total_tokens")
+        total_spend: Final = FocusExportEngine.sum_column(data, "spend")
+        total_tokens: Final = FocusExportEngine.sum_column(data, "total_tokens")
         summary: Final = {
             "total_records": len(normalized),
             "total_spend": float(total_spend) if total_spend is not None else 0,
             "total_tokens": float(total_tokens) if total_tokens is not None else 0,
-            "unique_teams": FocusExportEngine._count_unique(data, "team_id"),
-            "unique_models": FocusExportEngine._count_unique(data, "model"),
+            "unique_teams": FocusExportEngine.count_unique(data, "team_id"),
+            "unique_models": FocusExportEngine.count_unique(data, "model"),
         }
 
         dry_run_result: Final = {

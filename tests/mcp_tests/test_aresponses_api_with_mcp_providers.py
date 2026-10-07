@@ -84,7 +84,7 @@ async def test_streaming_responses_api_with_mcp_tools(
             ) as mock_get_tools,
             patch.object(
                 LiteLLM_Proxy_MCP_Handler,
-                "_execute_tool_calls",
+                "execute_tool_calls",
                 new_callable=AsyncMock,
             ) as mock_execute_tools,
         ):
@@ -211,7 +211,7 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
             ) as mock_get_tools,
             patch.object(
                 LiteLLM_Proxy_MCP_Handler,
-                "_execute_tool_calls",
+                "execute_tool_calls",
                 new_callable=AsyncMock,
             ) as mock_execute_tools,
         ):

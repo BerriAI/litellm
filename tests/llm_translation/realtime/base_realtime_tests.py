@@ -178,7 +178,7 @@ class BaseRealtimeTest(ABC):
         2. Initial event is received
         3. Messages are properly forwarded
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         if self.should_skip():
             pytest.skip(self.get_skip_reason())
 
@@ -241,7 +241,7 @@ class BaseRealtimeTest(ABC):
         Test realtime connection with explicit query parameters.
         Verifies that query params are properly passed to the backend.
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         if self.should_skip():
             pytest.skip(self.get_skip_reason())
 
@@ -303,7 +303,7 @@ class BaseRealtimeTest(ABC):
         if self.should_skip():
             pytest.skip(self.get_skip_reason())
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         # Create a custom websocket client that sends a message
         class InteractiveWebSocketClient(RealTimeWebSocketClient):

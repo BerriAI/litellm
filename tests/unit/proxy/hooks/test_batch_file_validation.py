@@ -31,9 +31,9 @@ def _models(file_content_as_dict):
 
 
 def test_token_counter_counts_chat_messages():
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {
             "body": {
                 "model": "gpt-4o-mini",
@@ -47,27 +47,27 @@ def test_token_counter_counts_chat_messages():
 def test_token_counter_counts_text_completion_prompt():
     """Pre-fix this returned 0 tokens (the counter only inspected
     `messages`), letting `prompt`-style batches slip past TPM limits."""
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {"body": {"model": "gpt-3.5-turbo-instruct", "prompt": "hello world"}}
     )
     assert tokens > 0
 
 
 def test_token_counter_counts_embedding_input_string():
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {"body": {"model": "text-embedding-3-small", "input": "hello world"}}
     )
     assert tokens > 0
 
 
 def test_token_counter_counts_embedding_input_list():
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {
             "body": {
                 "model": "text-embedding-3-small",
@@ -79,9 +79,9 @@ def test_token_counter_counts_embedding_input_list():
 
 
 def test_token_counter_counts_text_completion_prompt_list():
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {
             "body": {
                 "model": "gpt-3.5-turbo-instruct",
@@ -96,9 +96,9 @@ def test_token_counter_counts_pre_tokenized_prompt_int_list():
     """OpenAI's text-completion API accepts a single pre-tokenized prompt as
     a list of ints. Each int is one token; pre-fix this shape was silently
     counted as zero, leaving a TPM bypass."""
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {
             "body": {
                 "model": "gpt-3.5-turbo-instruct",
@@ -113,9 +113,9 @@ def test_token_counter_counts_pre_tokenized_prompt_list_of_int_lists():
     """Multiple pre-tokenized prompts (`list[list[int]]`) — the most
     important bypass shape. A 1000-token batch must report 1000 tokens,
     not zero."""
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {
             "body": {
                 "model": "gpt-3.5-turbo-instruct",
@@ -128,9 +128,9 @@ def test_token_counter_counts_pre_tokenized_prompt_list_of_int_lists():
 
 def test_token_counter_counts_pre_tokenized_input_for_embeddings():
     """Same shape applies to embeddings (`input`)."""
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {
             "body": {
                 "model": "text-embedding-3-small",
@@ -1741,13 +1741,13 @@ def _make_batch_input_bytes(n_rows: int, padding: int = 200) -> bytes:
 
 def test_iter_batch_output_entries_matches_dict_list():
     from litellm.batches.batch_utils import (
-        _get_file_content_as_dictionary,
+        get_file_content_as_dictionary,
         _iter_batch_output_entries,
     )
 
     raw = _make_batch_input_bytes(50)
     streamed = list(_iter_batch_output_entries(raw))
-    assert streamed == _get_file_content_as_dictionary(raw)
+    assert streamed == get_file_content_as_dictionary(raw)
     assert streamed[0]["custom_id"] == "request-0"
     # tolerant of blank lines and a missing trailing newline
     assert list(_iter_batch_output_entries(raw + b"\n\n")) == streamed
@@ -1758,7 +1758,7 @@ def test_streaming_count_peak_below_dict_list():
     import tracemalloc
 
     from litellm.batches.batch_utils import (
-        _get_file_content_as_dictionary,
+        get_file_content_as_dictionary,
         _iter_batch_output_entries,
     )
 
@@ -1785,7 +1785,7 @@ def test_streaming_count_peak_below_dict_list():
         return count
 
     def _build_list():
-        return len(_get_file_content_as_dictionary(raw))
+        return len(get_file_content_as_dictionary(raw))
 
     stream_peak = _measure(_stream)
     list_peak = _measure(_build_list)
@@ -1813,7 +1813,7 @@ async def test_count_input_file_usage_streams_without_building_list():
     with (
         patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
         patch(
-            "litellm.batches.batch_utils._get_file_content_as_dictionary"
+            "litellm.batches.batch_utils.get_file_content_as_dictionary"
         ) as mock_dict_list,
     ):
         usage = await rate_limiter.count_input_file_usage(
@@ -1874,7 +1874,7 @@ async def test_count_input_file_usage_enforces_models_when_token_counting_fails(
 
     with (
         patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
-        patch("litellm.proxy.hooks.batch_rate_limiter._count_entry_tokens", new=_boom),
+        patch("litellm.proxy.hooks.batch_rate_limiter.count_entry_tokens", new=_boom),
         patch("litellm.proxy.auth.auth_checks.can_key_call_model", new=deny),
         patch("litellm.proxy.proxy_server.llm_router", MagicMock(model_list=[])),
     ):
@@ -1919,7 +1919,7 @@ async def test_count_input_file_usage_estimates_tokens_when_counting_fails_for_a
 
     with (
         patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
-        patch("litellm.proxy.hooks.batch_rate_limiter._count_entry_tokens", new=_boom),
+        patch("litellm.proxy.hooks.batch_rate_limiter.count_entry_tokens", new=_boom),
         patch("litellm.proxy.auth.auth_checks.can_key_call_model", new=allow),
         patch("litellm.proxy.proxy_server.llm_router", MagicMock(model_list=[])),
     ):

@@ -13,7 +13,7 @@ async def test_javelin_guardrail_reject_prompt():
     """
     Test that the Javelin guardrail raises HTTPException when violations are detected, preventing the request from going to the LLM.
     """
-    # litellm._turn_on_debug()
+    # litellm.turn_on_debug()
     guardrail = JavelinGuardrail(
         guardrail_name="promptinjectiondetection",
         api_base="https://api-dev.javelin.live",

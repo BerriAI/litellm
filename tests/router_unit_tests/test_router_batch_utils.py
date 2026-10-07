@@ -6,7 +6,7 @@ from io import BytesIO
 from typing import Dict, List
 from litellm.router_utils.batch_utils import (
     replace_model_in_jsonl,
-    _get_router_metadata_variable_name,
+    get_router_metadata_variable_name,
     InMemoryFile,
     parse_jsonl_with_embedded_newlines,
 )
@@ -100,16 +100,16 @@ def test_file_like_object(sample_file_like):
 
 def test_router_metadata_variable_name():
     """Test that the variable name is correct"""
-    assert _get_router_metadata_variable_name(function_name="completion") == "metadata"
+    assert get_router_metadata_variable_name(function_name="completion") == "metadata"
     assert (
-        _get_router_metadata_variable_name(function_name="batch") == "litellm_metadata"
+        get_router_metadata_variable_name(function_name="batch") == "litellm_metadata"
     )
     assert (
-        _get_router_metadata_variable_name(function_name="acreate_file")
+        get_router_metadata_variable_name(function_name="acreate_file")
         == "litellm_metadata"
     )
     assert (
-        _get_router_metadata_variable_name(function_name="aget_file")
+        get_router_metadata_variable_name(function_name="aget_file")
         == "litellm_metadata"
     )
 

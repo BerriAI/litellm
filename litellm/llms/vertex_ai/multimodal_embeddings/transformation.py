@@ -19,7 +19,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.utils import _count_characters, is_base64_encoded
+from litellm.utils import count_characters, is_base64_encoded
 
 from ...base_llm.embedding.transformation import BaseEmbeddingConfig
 from ..common_utils import VertexAIError
@@ -245,7 +245,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
                     prompt += text
 
         if prompt is not None:
-            character_count = _count_characters(prompt)
+            character_count = count_characters(prompt)
 
         ## Calculate image embeddings usage
         image_count = 0

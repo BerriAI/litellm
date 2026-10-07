@@ -978,7 +978,7 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
 )
 @pytest.mark.skip(reason="databricks is having an active outage")
 def test_completion_cost_databricks(model):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     messages = [{"role": "user", "content": "What is 2+2?"}]
@@ -2357,7 +2357,7 @@ def test_completion_cost_azure_tts():
 
 
 def test_select_model_name_for_cost_calc():
-    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.cost_calculator import select_model_name_for_cost_calc
     from litellm.types.utils import ModelResponse, Choices, Usage, Message
 
     args = {
@@ -2393,7 +2393,7 @@ def test_select_model_name_for_cost_calc():
         "custom_pricing": None,
     }
 
-    return_model = _select_model_name_for_cost_calc(**args)
+    return_model = select_model_name_for_cost_calc(**args)
     assert return_model == "azure_ai/mistral-large"
 
 
@@ -2578,7 +2578,7 @@ def test_cost_calculator_with_base_model_with_router(base_model_arg):
 def test_cost_calculator_with_base_model_with_router_embedding(base_model_arg):
     from litellm import Router
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     model_item = {
         "model_name": "random-model",

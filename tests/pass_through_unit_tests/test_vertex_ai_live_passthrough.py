@@ -48,7 +48,7 @@ class TestVertexAILivePassthroughLoggingHandler:
         """Create a mock logging object"""
         mock = MagicMock(spec=LiteLLMLoggingObj)
         mock.model_call_details = {}
-        mock._response_cost_calculator.return_value = None
+        mock.response_cost_calculator.return_value = None
         return mock
 
     @pytest.fixture
@@ -788,7 +788,7 @@ class TestVertexAILivePassthroughIntegration:
         """Create a mock logging object"""
         mock = MagicMock(spec=LiteLLMLoggingObj)
         mock.model_call_details = {}
-        mock._response_cost_calculator.return_value = None
+        mock.response_cost_calculator.return_value = None
         return mock
 
     @patch(
@@ -922,7 +922,7 @@ class TestVertexAILivePassthroughErrorHandling:
         """Create a mock logging object"""
         mock = MagicMock(spec=LiteLLMLoggingObj)
         mock.model_call_details = {}
-        mock._response_cost_calculator.return_value = None
+        mock.response_cost_calculator.return_value = None
         return mock
 
     def test_invalid_websocket_messages_format(self):

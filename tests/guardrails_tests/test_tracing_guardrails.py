@@ -209,7 +209,7 @@ async def test_langfuse_trace_includes_guardrail_information():
     mock_post.return_value = mock_response
 
     with patch("httpx.Client.post", mock_post):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.callbacks = [callback]
         presidio_guard = _OPTIONAL_PresidioPIIMasking(
             guardrail_name="presidio_guard",
@@ -311,7 +311,7 @@ async def test_bedrock_guardrail_status_blocked():
     from litellm.proxy._types import UserAPIKeyAuth
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Setup custom logger to capture standard logging payload
     test_custom_logger = CustomLoggerForTesting()

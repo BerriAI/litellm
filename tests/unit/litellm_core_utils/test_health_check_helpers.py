@@ -147,7 +147,7 @@ async def test_ahealth_check_supports_image_edit_mode():
 
 
 def test_update_model_params_with_health_check_tracking_information():
-    """Test _update_model_params_with_health_check_tracking_information adds required tracking info."""
+    """Test update_model_params_with_health_check_tracking_information adds required tracking info."""
     initial_model_params = {"model": "gpt-3.5-turbo", "api_key": "test_key"}
 
     with patch(
@@ -167,7 +167,7 @@ def test_update_model_params_with_health_check_tracking_information():
                 },
             }
 
-            result = HealthCheckHelpers._update_model_params_with_health_check_tracking_information(
+            result = HealthCheckHelpers.update_model_params_with_health_check_tracking_information(
                 initial_model_params
             )
 
@@ -445,7 +445,7 @@ async def test_realtime_health_check_uses_model_level_vertex_params():
         ),
         patch.object(
             HealthCheckHelpers,
-            "_update_model_params_with_health_check_tracking_information",
+            "update_model_params_with_health_check_tracking_information",
             staticmethod(lambda model_params: model_params),
         ),
     ):

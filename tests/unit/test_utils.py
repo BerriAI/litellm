@@ -68,7 +68,7 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
-    _get_potential_model_names,
+    get_potential_model_names,
     _is_litellm_router_call,
     _is_streaming_request,
     _run_success_deployment_hook_on_converted_chat_stream,
@@ -83,6 +83,13 @@ from litellm.utils import (
     is_cached_message,
     is_prompt_caching_valid_prompt,
 )
+
+
+def test_get_base_model_from_metadata_returns_unvalidated_root_value():
+    from litellm.utils import get_base_model_from_metadata
+
+    assert get_base_model_from_metadata({"litellm_params": {"base_model": 42}}) == 42
+
 
 # Adds the parent directory to the system path
 
@@ -182,13 +189,13 @@ def test_potential_model_names_keeps_provider_prefixed_candidate():
     Agent API serves `perplexity/glm-5.2`, mapped as `perplexity/perplexity/glm-5.2`)
     needs the un-stripped `<provider>/<model>` candidate. Every other candidate reads
     the leading `perplexity/` as the litellm prefix and strips it away."""
-    already_prefixed = _get_potential_model_names(model="perplexity/glm-5.2", custom_llm_provider="perplexity")
+    already_prefixed = get_potential_model_names(model="perplexity/glm-5.2", custom_llm_provider="perplexity")
     assert already_prefixed["provider_prefixed_model_name"] == "perplexity/perplexity/glm-5.2"
     assert already_prefixed["split_model"] == "glm-5.2"
     assert already_prefixed["combined_model_name"] == "perplexity/glm-5.2"
     assert already_prefixed["combined_stripped_model_name"] == "perplexity/glm-5.2"
 
-    bare = _get_potential_model_names(model="glm-5.2", custom_llm_provider="perplexity")
+    bare = get_potential_model_names(model="glm-5.2", custom_llm_provider="perplexity")
     assert bare["provider_prefixed_model_name"] == bare["combined_model_name"] == "perplexity/glm-5.2"
 
 
@@ -242,9 +249,9 @@ def test_get_model_info_prefers_exact_dated_key_over_stripped(
 
 
 def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:
-    with patch("litellm.utils._get_potential_model_names", side_effect=RuntimeError("malformed metadata")):
+    with patch("litellm.utils.get_potential_model_names", side_effect=RuntimeError("malformed metadata")):
         with pytest.raises(Exception, match="This model isn't mapped yet") as exc_info:
-            litellm.utils._get_model_info_helper(model="gpt-4o", custom_llm_provider="openai")
+            litellm.utils.get_model_info_helper(model="gpt-4o", custom_llm_provider="openai")
     assert not isinstance(exc_info.value, litellm.ModelNotMappedError)
 
 
@@ -4236,7 +4243,7 @@ async def test_s3_v2_success_callback_registers_alongside_user_subclass(
     and success_callback ["s3_v2"], the built-in s3_v2 logger was never added and S3 logs were
     silently dropped while requests kept returning 200."""
     from litellm.integrations.s3_v2 import S3Logger
-    from litellm.utils import _add_custom_logger_callback_to_specific_event
+    from litellm.utils import add_custom_logger_callback_to_specific_event
 
     class UserS3Logger(S3Logger):
         async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -4248,7 +4255,7 @@ async def test_s3_v2_success_callback_registers_alongside_user_subclass(
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
 
-    _add_custom_logger_callback_to_specific_event("s3_v2", "success")
+    add_custom_logger_callback_to_specific_event("s3_v2", "success")
 
     assert any(type(cb) is S3Logger for cb in litellm.success_callback)
     assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
@@ -6012,16 +6019,16 @@ class TestDefaultReasoningEffortHydration:
         [("gpt-5.1", "openai"), ("gpt-5.4", "openai"), ("azure/gpt-5.1", "azure")],
     )
     def test_the_declared_default_survives_model_info_hydration(self, local_model_cost_map, model, provider):
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider=provider))
+        model_info = dict(get_model_info_helper(model=model, custom_llm_provider=provider))
         assert model_info["default_reasoning_effort"] == "none"
 
     def test_a_model_that_declares_nothing_hydrates_to_none(self, local_model_cost_map):
         """Absent means "the map does not say", which the gate reads as reasoning being active."""
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        model_info = dict(_get_model_info_helper(model="gpt-5.6-terra", custom_llm_provider="openai"))
+        model_info = dict(get_model_info_helper(model="gpt-5.6-terra", custom_llm_provider="openai"))
         assert model_info.get("default_reasoning_effort") is None
 
 

@@ -158,13 +158,13 @@ def test_allowed_openai_params_does_not_forward_unset_params():
     added ``optional_params["enable_thinking"] = None`` which then
     crashed the openai client.
     """
-    from litellm.utils import _apply_openai_param_overrides
+    from litellm.utils import apply_openai_param_overrides
 
     chat_template_kwargs = {"enable_thinking": False}
     optional_params: dict = {}
     non_default_params = {"chat_template_kwargs": chat_template_kwargs}
 
-    result = _apply_openai_param_overrides(
+    result = apply_openai_param_overrides(
         optional_params=optional_params,
         non_default_params=non_default_params,
         allowed_openai_params=["chat_template_kwargs", "enable_thinking"],

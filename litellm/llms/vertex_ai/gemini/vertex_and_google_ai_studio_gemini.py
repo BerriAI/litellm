@@ -10,6 +10,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 import httpx
+from pydantic import JsonValue
 
 import litellm
 from litellm import verbose_logger
@@ -27,7 +28,7 @@ from litellm.constants import (
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    _encode_tool_call_id_with_signature,
+    encode_tool_call_id_with_signature,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -85,7 +86,7 @@ from litellm.utils import (
     supports_reasoning,
 )
 
-from ....utils import _remove_additional_properties, _remove_strict_from_schema
+from ....utils import remove_additional_properties, remove_strict_from_schema
 from ..common_utils import (
     VertexAIError,
     _build_json_schema,
@@ -611,9 +612,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         google_maps_retrieval_config: dict | None = None
         computerUse: dict | None = None
         # remove 'additionalProperties' from tools
-        value = _remove_additional_properties(value)
+        schema_value: Final[JsonValue] = cast(JsonValue, value)  # cast-ok: tool schemas come from JSON request data
+        remove_additional_properties(schema_value)
         # remove 'strict' from tools
-        value = _remove_strict_from_schema(value)
+        remove_strict_from_schema(schema_value)
 
         for tool in value:
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
@@ -778,7 +780,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def apply_response_schema_transformation(self, value: dict, optional_params: dict, model: str):
         new_value = deepcopy(value)
         # remove 'strict' from json schema (not supported by Gemini)
-        new_value = _remove_strict_from_schema(new_value)
+        new_value = remove_strict_from_schema(new_value)
 
         # Automatically use responseJsonSchema for Gemini 2.0+ models
         # responseJsonSchema uses standard JSON Schema format and supports additionalProperties
@@ -787,7 +789,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         if not use_json_schema:
             # For responseSchema, remove 'additionalProperties' (not supported)
-            new_value = _remove_additional_properties(new_value)
+            new_value = remove_additional_properties(new_value)
 
         # Handle response type
         if new_value.get("type") == "json_object":
@@ -1591,7 +1593,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     # Embed thought signature in ID for OpenAI client compatibility
                     if thought_signature:
                         _tool_response_chunk["provider_specific_fields"] = {"thought_signature": thought_signature}
-                        _tool_response_chunk["id"] = _encode_tool_call_id_with_signature(
+                        _tool_response_chunk["id"] = encode_tool_call_id_with_signature(
                             _tool_response_chunk["id"] or "", thought_signature
                         )
                     _tools.append(_tool_response_chunk)
@@ -3307,7 +3309,7 @@ class ModelResponseIterator:
         return self.chunk_parser(chunk=json_chunk)
 
     def handle_accumulated_json_chunk(self, chunk: str, is_final: bool = False) -> Optional["ModelResponseStream"]:
-        message: Final = (litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or "").replace("\n\n", "")
+        message: Final = (litellm.CustomStreamWrapper.strip_sse_data_from_chunk(chunk) or "").replace("\n\n", "")
         self._json_buffer.append(message)
 
         # Mid-stream, defer parsing until the buffer's last byte can close a value:
@@ -3336,7 +3338,7 @@ class ModelResponseIterator:
 
     def _common_chunk_parsing_logic(self, chunk: str) -> Optional["ModelResponseStream"]:
         try:
-            chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+            chunk = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(chunk) or ""
             if len(chunk) > 0:
                 """
                 Check if initial chunk valid json

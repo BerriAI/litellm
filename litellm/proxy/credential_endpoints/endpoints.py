@@ -15,7 +15,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+from litellm.litellm_core_utils.litellm_logging import get_masked_values
 from litellm.llms.anthropic.wif import (
     ExportedJwks,
     NotAnInternalIssuerCredential,
@@ -269,7 +269,7 @@ async def get_credentials(
         masked_credentials: Final = [
             {
                 "credential_name": credential.credential_name,
-                "credential_values": _get_masked_values(credential.credential_values),
+                "credential_values": get_masked_values(credential.credential_values),
                 "credential_info": credential.credential_info,
             }
             for credential in litellm.credential_list
@@ -299,7 +299,7 @@ async def get_credential_by_name(
             if credential.credential_name == credential_name:
                 masked_credential = CredentialItem(
                     credential_name=credential.credential_name,
-                    credential_values=_get_masked_values(
+                    credential_values=get_masked_values(
                         credential.credential_values,
                         unmasked_length=4,
                         number_of_asterisks=4,
@@ -401,7 +401,7 @@ async def get_credential_by_model(
         credential_values: Final = llm_router.get_deployment_credentials(model_id)
         if credential_values is None:
             raise HTTPException(status_code=404, detail="Model not found")
-        masked_credential_values: Final = _get_masked_values(
+        masked_credential_values: Final = get_masked_values(
             credential_values,
             unmasked_length=4,
             number_of_asterisks=4,

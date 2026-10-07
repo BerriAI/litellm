@@ -38,7 +38,7 @@ def strftime_now(fmt: str) -> str:
     return datetime.now().strftime(fmt)
 
 
-def _get_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
+def get_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
     """
     Fetch tokenizer_config.json from HuggingFace (sync)
 
@@ -61,7 +61,10 @@ def _get_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
         return {"status": "failure"}
 
 
-async def _aget_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
+_get_tokenizer_config = get_tokenizer_config
+
+
+async def aget_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
     """
     Fetch tokenizer_config.json from HuggingFace (async)
 
@@ -86,7 +89,10 @@ async def _aget_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
         return {"status": "failure"}
 
 
-def _get_chat_template_file(hf_model_name: str) -> _ChatTemplateFileResult:
+_aget_tokenizer_config = aget_tokenizer_config
+
+
+def get_chat_template_file(hf_model_name: str) -> _ChatTemplateFileResult:
     """
     Fetch chat template from separate .jinja file (sync)
 
@@ -114,7 +120,10 @@ def _get_chat_template_file(hf_model_name: str) -> _ChatTemplateFileResult:
     return {"status": "failure"}
 
 
-async def _aget_chat_template_file(hf_model_name: str) -> _ChatTemplateFileResult:
+_get_chat_template_file = get_chat_template_file
+
+
+async def aget_chat_template_file(hf_model_name: str) -> _ChatTemplateFileResult:
     """
     Fetch chat template from separate .jinja file (async)
 
@@ -144,7 +153,10 @@ async def _aget_chat_template_file(hf_model_name: str) -> _ChatTemplateFileResul
     return {"status": "failure"}
 
 
-def _extract_token_value(token_value: None | str | dict[str, Any]) -> str:
+_aget_chat_template_file = aget_chat_template_file
+
+
+def extract_token_value(token_value: None | str | dict[str, Any]) -> str:
     """
     Extract token string from various formats (string, dict, etc.)
 
@@ -159,3 +171,6 @@ def _extract_token_value(token_value: None | str | dict[str, Any]) -> str:
     if isinstance(token_value, dict):
         return token_value.get("content", "")
     return ""
+
+
+_extract_token_value = extract_token_value

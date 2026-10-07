@@ -203,7 +203,7 @@ def anthropic_messages():
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_anthropic_vertex_ai_prompt_caching(anthropic_messages, sync_mode):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     load_vertex_ai_credentials()
 

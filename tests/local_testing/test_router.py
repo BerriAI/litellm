@@ -24,8 +24,8 @@ from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
 from litellm.types.router import ModelInfo
 from litellm.router_utils.cooldown_handlers import (
-    _async_get_cooldown_deployments,
-    _get_cooldown_deployments,
+    async_get_cooldown_deployments,
+    get_cooldown_deployments,
 )
 from litellm.types.router import DeploymentTypedDict
 
@@ -496,7 +496,7 @@ async def test_async_router_context_window_fallback(sync_mode):
     from large_text import text
 
     litellm.set_verbose = False
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     print(f"len(text): {len(text)}")
     try:
@@ -1881,11 +1881,11 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
         )
 
     if sync_mode:
-        cooldown_deployments = _get_cooldown_deployments(
+        cooldown_deployments = get_cooldown_deployments(
             litellm_router_instance=router, parent_otel_span=None
         )
     else:
-        cooldown_deployments = await _async_get_cooldown_deployments(
+        cooldown_deployments = await async_get_cooldown_deployments(
             litellm_router_instance=router, parent_otel_span=None
         )
 

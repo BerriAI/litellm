@@ -185,7 +185,7 @@ def _mask_sensitive_fields(data: Mapping[str, object], sensitive_fields: set[str
     masked: Final[dict[str, object]] = {}
     for key, value in data.items():
         if value is not None and key in sensitive_fields and isinstance(value, str):
-            masked[key] = _sensitive_masker._mask_value(value)
+            masked[key] = _sensitive_masker.mask_value(value)
         else:
             masked[key] = value
     return masked

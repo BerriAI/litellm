@@ -106,7 +106,7 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         base_completion_call_args = self.get_base_completion_call_args()
 
@@ -335,7 +335,7 @@ def test_gemini_context_caching_separate_messages():
 
 
 def test_gemini_image_generation():
-    # litellm._turn_on_debug()
+    # litellm.turn_on_debug()
     response = completion(
         model="gemini/gemini-2.5-flash-image",
         messages=[{"role": "user", "content": "Generate an image of a cat"}],
@@ -620,7 +620,7 @@ def test_gemini_imagen_models_use_predict_endpoint():
 
 
 def test_gemini_thinking():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.types.utils import Message, CallTypes
     from litellm.utils import return_raw_request
     import json
@@ -660,7 +660,7 @@ def test_gemini_thinking():
 
 
 def test_gemini_thinking_budget_0():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.types.utils import Message, CallTypes
     from litellm.utils import return_raw_request
     import json
@@ -686,7 +686,7 @@ def test_gemini_finish_reason():
     import os
     from litellm import completion
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = completion(
         model="gemini/gemini-2.5-flash-lite",
         messages=[{"role": "user", "content": "give me 3 random words"}],
@@ -701,7 +701,7 @@ def test_gemini_finish_reason():
 def test_gemini_url_context():
     from litellm import completion
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     URL1 = "https://www.foodnetwork.com/recipes/ina-garten/perfect-roast-chicken-recipe-1940592"
 
     prompt = f"""
@@ -727,7 +727,7 @@ def test_gemini_url_context():
 def test_gemini_with_grounding():
     from litellm import completion, Usage, stream_chunk_builder
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.set_verbose = True
     tools = [{"googleSearch": {}}]
 
@@ -763,7 +763,7 @@ def test_gemini_with_grounding():
 def test_gemini_with_empty_function_call_arguments():
     from litellm import completion
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     tools = [
         {
             "type": "function",
@@ -1026,7 +1026,7 @@ def test_gemini_tool_use():
 
 @pytest.mark.asyncio
 async def test_gemini_image_generation_async():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = await litellm.acompletion(
         messages=[
             {
@@ -1059,7 +1059,7 @@ async def test_gemini_image_generation_async():
 
 @pytest.mark.asyncio
 async def test_gemini_image_generation_async_stream():
-    # litellm._turn_on_debug()
+    # litellm.turn_on_debug()
     response = await litellm.acompletion(
         messages=[
             {
@@ -1129,7 +1129,7 @@ def get_current_weather(location, unit="fahrenheit"):
 def test_gemini_with_thinking():
     from litellm import completion
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.modify_params = True
     model = "gemini/gemini-2.5-flash"
     messages = [
@@ -1429,7 +1429,7 @@ def l(status_code, expected_exception):
 
 
 def test_gemini_embedding():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = litellm.embedding(
         model="gemini/gemini-embedding-001",
         input="Hello, world!",

@@ -1646,7 +1646,7 @@ async def test_get_guardrail_info_endpoint_config_guardrail(mocker):
 
     # Mock _get_masked_values to return values as-is
     mocker.patch(
-        "litellm.litellm_core_utils.litellm_logging._get_masked_values",
+        "litellm.litellm_core_utils.litellm_logging.get_masked_values",
         side_effect=lambda x, **kwargs: x,
     )
 

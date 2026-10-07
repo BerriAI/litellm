@@ -72,7 +72,7 @@ def test_image_edit_prices_a_vertex_deployment_at_its_configured_location(
             vertex_location=location,
             litellm_logging_obj=logging_obj,
         )
-        return logging_obj._response_cost_calculator(result=response)
+        return logging_obj.response_cost_calculator(result=response)
 
     assert cost_at("global") == pytest.approx(0.04)
     assert cost_at("us-central1") == pytest.approx(0.044)

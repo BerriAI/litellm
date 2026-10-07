@@ -449,7 +449,7 @@ async def test_should_validate_owner_and_forward_decoded_id_for_multipart_upload
         "convert_upload_files_to_file_data",
         AsyncMock(return_value={"file": ["file-data"]}),
     )
-    encoded_id = ResponsesAPIRequestUtils._build_container_id(
+    encoded_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="azure",
         model_id="router-gpt",
         container_id="cntr_provider",
@@ -508,7 +508,7 @@ async def test_should_forward_decoded_container_id_for_proxy_retrieve(monkeypatc
         "assert_user_can_access_container",
         AsyncMock(return_value=("cntr_provider", "azure")),
     )
-    encoded_id = ResponsesAPIRequestUtils._build_container_id(
+    encoded_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="azure",
         model_id="router-gpt",
         container_id="cntr_provider",
@@ -781,7 +781,7 @@ async def test_should_forward_decoded_container_id_for_proxy_delete(monkeypatch)
         "assert_user_can_access_container",
         AsyncMock(return_value=("cntr_provider", "azure")),
     )
-    encoded_id = ResponsesAPIRequestUtils._build_container_id(
+    encoded_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="azure",
         model_id="router-gpt",
         container_id="cntr_provider",

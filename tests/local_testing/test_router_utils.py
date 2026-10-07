@@ -317,7 +317,7 @@ def test_router_get_model_access_groups(potential_access_group, expected_result)
             },
         ]
     )
-    access_groups = router._is_model_access_group_for_wildcard_route(
+    access_groups = router.is_model_access_group_for_wildcard_route(
         model_access_group=potential_access_group
     )
     assert access_groups == expected_result
@@ -330,7 +330,7 @@ def test_router_redis_cache():
 
     redis_cache = MagicMock()
 
-    router._update_redis_cache(cache=redis_cache)
+    router.update_redis_cache(cache=redis_cache)
 
     assert router.cache.redis_cache == redis_cache
 

@@ -38,7 +38,7 @@ from litellm.constants import (
     REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION,
     REDIS_TIMEOUT_LOG_INTERVAL,
 )
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.types.caching import (
     RedisPipelineIncrementOperation,
@@ -1157,7 +1157,7 @@ class RedisCache(BaseCache):
                     error=e,
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                     call_type="async_set_cache",
                     caller=_get_call_stack_info(),
                 )
@@ -1192,7 +1192,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             return result
@@ -1208,7 +1208,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             log_redis_failure(
@@ -1276,7 +1276,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             return
@@ -1293,7 +1293,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
 
@@ -1384,7 +1384,7 @@ class RedisCache(BaseCache):
                     error=e,
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                     call_type="async_set_cache_sadd",
                     caller=_get_call_stack_info(),
                 )
@@ -1410,7 +1410,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
         except Exception as e:
@@ -1425,7 +1425,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             # NON blocking - notify users Redis is throwing an exception
@@ -2036,7 +2036,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             return results
@@ -2053,7 +2053,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             log_redis_failure(

@@ -2220,7 +2220,7 @@ def test_replay_model_cost_registrations_survives_a_malformed_deployment():
 
         litellm.model_cost = {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
         _invalidate_model_cost_lowercase_map()
-        router._replay_model_cost_registrations()
+        router.replay_model_cost_registrations()
 
         assert litellm.model_cost["healthy-id"]["max_input_tokens"] == 777
     finally:

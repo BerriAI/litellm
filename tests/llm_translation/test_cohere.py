@@ -267,7 +267,7 @@ async def test_cohere_request_body_with_allowed_params():
 
 
 def test_cohere_embedding_outout_dimensions():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = embedding(
         model="cohere/embed-v4.0", input="Hello, world!", dimensions=512
     )

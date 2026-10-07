@@ -48,7 +48,9 @@ UTILS_NAMES: Final = (
     "register_model",
     "encode",
     "decode",
+    "calculate_retry_after",
     "_calculate_retry_after",
+    "should_retry",
     "_should_retry",
     "get_supported_openai_params",
     "get_api_base",
@@ -384,15 +386,18 @@ UTILS_MODULE_NAMES: Final = (
     "_get_response_headers",
     "get_llm_provider",
     "_is_non_openai_azure_model",
+    "is_non_openai_azure_model",
     "get_supported_openai_params",
     "LiteLLMResponseObjectHandler",
     "_handle_invalid_parallel_tool_calls",
+    "handle_invalid_parallel_tool_calls",
     "convert_to_model_response_object",
     "convert_to_streaming_response",
     "convert_to_streaming_response_async",
     "get_api_base",
     "ResponseMetadata",
     "_parse_content_for_reasoning",
+    "parse_content_for_reasoning",
     "LiteLLMLoggingObject",
     "redact_message_input_output_from_logging",
     "CustomStreamWrapper",
@@ -415,8 +420,10 @@ UTILS_MODULE_NAMES: Final = (
     "delete_nested_value",
     "is_nested_path",
     "_get_base_model_from_litellm_call_metadata",
+    "get_base_model_from_litellm_call_metadata",
     "get_litellm_params",
     "_ensure_extra_body_is_safe",
+    "ensure_extra_body_is_safe",
     "get_formatted_prompt",
     "get_response_headers",
     "update_response_metadata",
@@ -475,8 +482,10 @@ _UTILS_IMPORT_MAP: Final = {
     "register_model": (".utils", "register_model"),
     "encode": (".utils", "encode"),
     "decode": (".utils", "decode"),
-    "_calculate_retry_after": (".utils", "_calculate_retry_after"),
-    "_should_retry": (".utils", "_should_retry"),
+    "calculate_retry_after": (".utils", "calculate_retry_after"),
+    "_calculate_retry_after": (".utils", "calculate_retry_after"),
+    "should_retry": (".utils", "should_retry"),
+    "_should_retry": (".utils", "should_retry"),
     "get_supported_openai_params": (".utils", "get_supported_openai_params"),
     "get_api_base": (".utils", "get_api_base"),
     "get_first_chars_messages": (".utils", "get_first_chars_messages"),
@@ -1320,7 +1329,11 @@ _UTILS_MODULE_IMPORT_MAP: Final = {
     ),
     "_is_non_openai_azure_model": (
         "litellm.litellm_core_utils.get_llm_provider_logic",
-        "_is_non_openai_azure_model",
+        "is_non_openai_azure_model",
+    ),
+    "is_non_openai_azure_model": (
+        "litellm.litellm_core_utils.get_llm_provider_logic",
+        "is_non_openai_azure_model",
     ),
     "get_supported_openai_params": (
         "litellm.litellm_core_utils.get_supported_openai_params",
@@ -1332,7 +1345,11 @@ _UTILS_MODULE_IMPORT_MAP: Final = {
     ),
     "_handle_invalid_parallel_tool_calls": (
         "litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response",
-        "_handle_invalid_parallel_tool_calls",
+        "handle_invalid_parallel_tool_calls",
+    ),
+    "handle_invalid_parallel_tool_calls": (
+        "litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response",
+        "handle_invalid_parallel_tool_calls",
     ),
     "convert_to_model_response_object": (
         "litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response",
@@ -1356,7 +1373,11 @@ _UTILS_MODULE_IMPORT_MAP: Final = {
     ),
     "_parse_content_for_reasoning": (
         "litellm.litellm_core_utils.prompt_templates.common_utils",
-        "_parse_content_for_reasoning",
+        "parse_content_for_reasoning",
+    ),
+    "parse_content_for_reasoning": (
+        "litellm.litellm_core_utils.prompt_templates.common_utils",
+        "parse_content_for_reasoning",
     ),
     "LiteLLMLoggingObject": (
         "litellm.litellm_core_utils.redact_messages",
@@ -1429,7 +1450,11 @@ _UTILS_MODULE_IMPORT_MAP: Final = {
     ),
     "_get_base_model_from_litellm_call_metadata": (
         "litellm.litellm_core_utils.get_litellm_params",
-        "_get_base_model_from_litellm_call_metadata",
+        "get_base_model_from_litellm_call_metadata",
+    ),
+    "get_base_model_from_litellm_call_metadata": (
+        "litellm.litellm_core_utils.get_litellm_params",
+        "get_base_model_from_litellm_call_metadata",
     ),
     "get_litellm_params": (
         "litellm.litellm_core_utils.get_litellm_params",
@@ -1437,7 +1462,11 @@ _UTILS_MODULE_IMPORT_MAP: Final = {
     ),
     "_ensure_extra_body_is_safe": (
         "litellm.litellm_core_utils.llm_request_utils",
-        "_ensure_extra_body_is_safe",
+        "ensure_extra_body_is_safe",
+    ),
+    "ensure_extra_body_is_safe": (
+        "litellm.litellm_core_utils.llm_request_utils",
+        "ensure_extra_body_is_safe",
     ),
     "get_formatted_prompt": (
         "litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt",

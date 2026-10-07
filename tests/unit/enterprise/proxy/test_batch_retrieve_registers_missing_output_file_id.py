@@ -182,14 +182,14 @@ async def test_ensure_batch_response_uses_batch_owner_when_db_batch_object_prese
 @pytest.mark.asyncio
 async def test_registered_output_file_row_denies_cross_user_access():
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     raw_output_file_id = "file-raw-output"
     prisma = MagicMock()
     prisma.db.litellm_managedfiletable.upsert = AsyncMock()
     prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
-    managed_files = _PROXY_LiteLLMManagedFiles(
+    managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=prisma,
     )

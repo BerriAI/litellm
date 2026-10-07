@@ -34,7 +34,7 @@ from litellm._logging import (
     _parse_json_logs_env,
     _plain_log_format,
     _stdout_truncation_marker,
-    _turn_on_json,
+    turn_on_json,
     format_base64_size,
     session_id_var,
     set_session_id,
@@ -63,7 +63,7 @@ class CacheHitCustomLogger(CustomLogger):
 
 def test_json_mode_emits_one_record_per_logger(capfd):
     # Turn on JSON logging
-    _turn_on_json()
+    turn_on_json()
     # Make sure our loggers will emit INFO-level records
     for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
         lg.setLevel(logging.INFO)
@@ -896,7 +896,7 @@ def test_disabled_diagnostic_call_does_not_render_arguments(caplog):
 
 def test_truncation_filter_survives_json_reconfiguration():
     """The cap lives on the loggers, so swapping handlers (JSON mode) can't drop it."""
-    _turn_on_json()
+    turn_on_json()
 
     for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
         assert any(isinstance(f, StdoutLogTruncationFilter) for f in lg.filters), f"{lg.name} lost stdout truncation"

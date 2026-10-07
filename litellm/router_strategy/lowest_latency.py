@@ -13,7 +13,7 @@ from litellm import ModelResponse, token_counter, verbose_logger
 from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs, safe_divide_seconds
+from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs, safe_divide_seconds
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
@@ -134,7 +134,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # ------------
                 # Update usage
                 # ------------
-                parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+                parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
                 request_count_dict: Final = (
                     self.router_cache.get_cache(key=latency_key, parent_otel_span=parent_otel_span) or {}
                 )
@@ -317,7 +317,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # ------------
                 # Update usage
                 # ------------
-                parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+                parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
                 request_count_dict: Final = (
                     await self.router_cache.async_get_cache(
                         key=latency_key,
@@ -513,7 +513,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         # get list of potential deployments
         latency_key: Final = f"{model_group}_map"
 
-        parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(request_kwargs)
+        parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(request_kwargs)
         request_count_dict: Final = (
             await self.router_cache.async_get_cache(key=latency_key, parent_otel_span=parent_otel_span) or {}
         )
@@ -542,7 +542,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         # get list of potential deployments
         latency_key: Final = f"{model_group}_map"
 
-        parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(request_kwargs)
+        parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(request_kwargs)
         request_count_dict = self.router_cache.get_cache(key=latency_key, parent_otel_span=parent_otel_span) or {}
 
         return self._get_available_deployments(

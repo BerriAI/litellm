@@ -16,7 +16,7 @@ import pytest
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Skipping bedrock agents test - arn not working")
 async def test_bedrock_agents():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = litellm.completion(
         model="bedrock/agent/L1RT58GYRW/MFPSBCXYTW",
         messages=[{"role": "user", "content": "Hi just respond with a ping message"}],
@@ -41,7 +41,7 @@ async def test_bedrock_agents():
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Skipping bedrock agents test - arn not working")
 async def test_bedrock_agents_with_streaming():
-    # litellm._turn_on_debug()
+    # litellm.turn_on_debug()
     response = litellm.completion(
         model="bedrock/agent/L1RT58GYRW/MFPSBCXYTW",
         messages=[
@@ -60,7 +60,7 @@ async def test_bedrock_agents_with_streaming():
 
 
 def test_bedrock_agents_with_custom_params():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from unittest.mock import MagicMock
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 

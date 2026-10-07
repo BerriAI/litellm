@@ -106,7 +106,7 @@ def _set_weave_specific_attributes(span: Span, kwargs: Mapping[str, Any], respon
             safe_set_attribute(span, OpenInferenceSpanAttributes.OUTPUT_VALUE, safe_dumps(output_dict))
 
 
-def _get_weave_authorization_header(api_key: str) -> str:
+def get_weave_authorization_header(api_key: str) -> str:
     """
     Get the authorization header for Weave OpenTelemetry.
 
@@ -115,6 +115,9 @@ def _get_weave_authorization_header(api_key: str) -> str:
     auth_string: Final = f"api:{api_key}"
     auth_header: Final = base64.b64encode(auth_string.encode()).decode()
     return f"Basic {auth_header}"
+
+
+_get_weave_authorization_header = get_weave_authorization_header
 
 
 def weave_otel_endpoint(host: str | None) -> str:
@@ -155,7 +158,7 @@ def get_weave_otel_config() -> WeaveOtelConfig:
     verbose_logger.debug("Using Weave OTEL endpoint: %s", endpoint)
 
     # Weave uses Basic auth with format: api:<WANDB_API_KEY>
-    auth_header: Final = _get_weave_authorization_header(api_key=api_key)
+    auth_header: Final = get_weave_authorization_header(api_key=api_key)
     otlp_auth_headers: Final = f"Authorization={auth_header},project_id={project_id}"
 
     # Set standard OTEL environment variables
@@ -320,7 +323,7 @@ class WeaveOtelLogger(OpenTelemetry):
         dynamic_weave_project_id: Final = standard_callback_dynamic_params.get("weave_project_id")
 
         if dynamic_wandb_api_key:
-            auth_header: Final = _get_weave_authorization_header(
+            auth_header: Final = get_weave_authorization_header(
                 api_key=dynamic_wandb_api_key,
             )
             dynamic_headers["Authorization"] = auth_header

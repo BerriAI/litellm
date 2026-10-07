@@ -316,7 +316,7 @@ class TestRAGFlowVectorStore(BaseVectorStoreTest):
     @pytest.mark.asyncio
     async def test_basic_create_vector_store(self, sync_mode):
         """Override to handle RAGFlow-specific connection errors."""
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
         base_request_args = self.get_base_create_vector_store_args()
 

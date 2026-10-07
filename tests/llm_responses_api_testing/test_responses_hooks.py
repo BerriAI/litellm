@@ -57,7 +57,7 @@ class _FakeLoggingObj:
     async def async_failure_handler(self, *args, **kwargs):
         self.async_failure_calls += 1
 
-    def _update_completion_start_time(self, completion_start_time):
+    def update_completion_start_time(self, completion_start_time):
         self.completion_start_time = completion_start_time
         self.model_call_details["completion_start_time"] = completion_start_time
 
@@ -377,7 +377,7 @@ def test_process_chunk_completed_response_updates_id_and_usage_cost(monkeypatch)
             )
 
     logging_obj = _FakeLoggingObj()
-    logging_obj._response_cost_calculator = MagicMock(return_value=1.23)
+    logging_obj.response_cost_calculator = MagicMock(return_value=1.23)
     iterator = ResponsesAPIStreamingIterator(
         response=httpx.Response(200),
         model="test-model",
@@ -521,7 +521,7 @@ def test_process_chunk_cost_annotation_failure_is_nonfatal(monkeypatch):
             )
 
     logging_obj = _FakeLoggingObj()
-    logging_obj._response_cost_calculator = MagicMock(side_effect=RuntimeError("boom"))
+    logging_obj.response_cost_calculator = MagicMock(side_effect=RuntimeError("boom"))
     iterator = ResponsesAPIStreamingIterator(
         response=httpx.Response(200),
         model="test-model",
@@ -584,7 +584,7 @@ async def test_responses_streaming_completed_event_persists_async_cache():
         async_set_cache=AsyncMock(),
         _should_store_result_in_cache=lambda original_function, kwargs: True,
     )
-    logging_obj._llm_caching_handler = caching_handler
+    logging_obj.llm_caching_handler = caching_handler
 
     iterator = ResponsesAPIStreamingIterator(
         response=httpx.Response(200),
@@ -636,7 +636,7 @@ def test_responses_streaming_completed_event_persists_sync_cache():
         sync_set_cache=MagicMock(),
         _should_store_result_in_cache=lambda original_function, kwargs: True,
     )
-    logging_obj._llm_caching_handler = caching_handler
+    logging_obj.llm_caching_handler = caching_handler
 
     iterator = SyncResponsesAPIStreamingIterator(
         response=httpx.Response(200),
@@ -768,9 +768,9 @@ def test_persist_completed_response_to_cache_guard_branches(monkeypatch, scenari
             response=completed_event.response,
         )
     elif scenario == "missing_caching_handler":
-        logging_obj._llm_caching_handler = None
+        logging_obj.llm_caching_handler = None
     else:
-        logging_obj._llm_caching_handler = SimpleNamespace(
+        logging_obj.llm_caching_handler = SimpleNamespace(
             request_kwargs={
                 "model": "test-model",
                 "input": "hello",
@@ -805,7 +805,7 @@ def test_build_synthetic_response_events_covers_annotations_function_calls_and_r
     original_include_cost = litellm.include_cost_in_streaming_usage
     litellm.include_cost_in_streaming_usage = True
     logging_obj = _FakeLoggingObj()
-    logging_obj._response_cost_calculator = MagicMock(side_effect=RuntimeError("boom"))
+    logging_obj.response_cost_calculator = MagicMock(side_effect=RuntimeError("boom"))
     transformed = ResponsesAPIResponse(
         id="resp_events",
         created_at=int(datetime.now().timestamp()),
@@ -985,7 +985,7 @@ async def test_cached_responses_stream_async_hit_triggers_success_callbacks(
         async_add_cache=AsyncMock(),
         add_cache=MagicMock(),
     )
-    logging_obj._llm_caching_handler = SimpleNamespace(
+    logging_obj.llm_caching_handler = SimpleNamespace(
         request_kwargs={"model": "test-model", "input": "hello", "stream": True},
         preset_cache_key="responses-stream-cache-key",
         original_function=litellm.aresponses,
@@ -1040,7 +1040,7 @@ def test_cached_responses_stream_sync_hit_triggers_success_callbacks(monkeypatch
         async_add_cache=AsyncMock(),
         add_cache=MagicMock(),
     )
-    logging_obj._llm_caching_handler = SimpleNamespace(
+    logging_obj.llm_caching_handler = SimpleNamespace(
         request_kwargs={"model": "test-model", "input": "hello", "stream": True},
         preset_cache_key="responses-stream-cache-key",
         original_function=litellm.responses,

@@ -24,7 +24,7 @@ def test_bedrock_agentcore_basic(model):
     """
     Test AgentCore invocation parameterized by model
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = litellm.completion(
         model=model,
         messages=[
@@ -49,7 +49,7 @@ async def test_bedrock_agentcore_with_streaming(model):
     Test AgentCore with streaming
     """
     print("running streming test for model=", model)
-    # litellm._turn_on_debug()
+    # litellm.turn_on_debug()
     response = await litellm.acompletion(
         model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
         messages=[
@@ -71,7 +71,7 @@ def test_bedrock_agentcore_with_custom_params():
     """
     import json
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -139,7 +139,7 @@ def test_bedrock_agentcore_with_runtime_user_id():
     """
     import json
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -178,7 +178,7 @@ def test_bedrock_agentcore_with_session_and_user():
     """
     import json
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -222,7 +222,7 @@ def test_bedrock_agentcore_with_api_key_bearer_token():
     """
     import json
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -270,7 +270,7 @@ def test_bedrock_agentcore_with_all_parameters():
     """
     import json
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -339,7 +339,7 @@ def test_bedrock_agentcore_without_api_key_uses_sigv4():
     """
     import json
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -602,7 +602,7 @@ def test_agentcore_synchronous_non_streaming_response():
     """
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = HTTPHandler()
 
     # Mock a JSON response (typical for synchronous AgentCore calls)

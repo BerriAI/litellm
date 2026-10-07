@@ -22,13 +22,79 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
+    encode_tool_call_id_with_signature,
+    function_call_prompt,
+    get_thought_signature_from_tool,
     get_tool_calls_from_response,
     make_valid_bedrock_tool_name,
     ollama_pt,
+    parse_mime_type,
     sanitize_messages_for_tool_calling,
 )
 from litellm.types.llms.openai import ChatCompletionToolMessage
 from litellm.utils import validate_and_fix_openai_messages
+
+
+def test_function_call_prompt_preserves_append_failure_for_non_string_content() -> None:
+    messages = [{"role": "system", "content": None}]
+
+    with pytest.raises(AttributeError):
+        function_call_prompt(messages, [])
+
+
+@pytest.mark.parametrize(
+    ("thought_signature", "expected"),
+    [
+        ("encoded-signature", "call_123__thought__encoded-signature"),
+        (None, "call_123"),
+        ("", "call_123"),
+    ],
+)
+def test_encode_tool_call_id_with_signature(thought_signature, expected):
+    assert encode_tool_call_id_with_signature("call_123", thought_signature) == expected
+
+
+@pytest.mark.parametrize(
+    ("tool", "expected"),
+    [
+        ({"provider_specific_fields": {"thought_signature": "tool-signature"}}, "tool-signature"),
+        (
+            {"function": {"provider_specific_fields": {"thought_signature": "function-signature"}}},
+            "function-signature",
+        ),
+        (
+            {"id": encode_tool_call_id_with_signature("call_123", "embedded-signature")},
+            "embedded-signature",
+        ),
+        ({}, None),
+    ],
+)
+def test_get_thought_signature_from_tool(tool, expected):
+    assert get_thought_signature_from_tool(tool) == expected
+
+
+@pytest.mark.parametrize(
+    ("base64_data", "expected"),
+    [
+        ("data:image/png;base64,encoded-image", "image/png"),
+        ("data:application/pdf;base64,encoded-document", "application/pdf"),
+        ("not-a-data-url", None),
+    ],
+)
+def test_parse_mime_type(base64_data, expected):
+    assert parse_mime_type(base64_data) == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_error"),
+    [
+        ({"type": "file"}, "missing the required 'file' field"),
+        ({"type": "file", "file": {}}, "file_data and file_id cannot both be None"),
+    ],
+)
+def test_process_file_message_rejects_missing_file_data(message, expected_error):
+    with pytest.raises(litellm.BadRequestError, match=expected_error):
+        BedrockConverseMessagesProcessor.process_file_message(message)
 
 
 def _get_gemini_function_response_inline_data_parts(result):
@@ -324,7 +390,7 @@ def test_bedrock_validate_format_image_or_video():
     # Test valid image formats
     valid_image_formats = ["png", "jpeg", "gif", "webp"]
     for format in valid_image_formats:
-        result = BedrockImageProcessor._validate_format(f"image/{format}", format)
+        result = BedrockImageProcessor.validate_format(f"image/{format}", format)
         assert result == format, f"Expected {format}, got {result}"
 
     # Test valid video formats
@@ -340,7 +406,7 @@ def test_bedrock_validate_format_image_or_video():
         "3gp",
     ]
     for format in valid_video_formats:
-        result = BedrockImageProcessor._validate_format(f"video/{format}", format)
+        result = BedrockImageProcessor.validate_format(f"video/{format}", format)
         assert result == format, f"Expected {format}, got {result}"
 
     # Test valid document formats
@@ -352,7 +418,7 @@ def test_bedrock_validate_format_image_or_video():
     }
     for mime, expected in valid_document_formats.items():
         print("testing mime", mime, "expected", expected)
-        result = BedrockImageProcessor._validate_format(mime, mime.split("/")[1])
+        result = BedrockImageProcessor.validate_format(mime, mime.split("/")[1])
         assert result == expected, f"Expected {expected}, got {result}"
 
 

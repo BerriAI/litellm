@@ -49,6 +49,27 @@ def test_web_search_cost_high():
     )
 
 
+def test_get_web_search_options_preserves_explicit_none_error():
+    with pytest.raises(TypeError):
+        StandardBuiltInToolCostTracking.get_web_search_options(
+            {"web_search_options": None, "tools": [{"type": "web_search_preview"}]}
+        )
+
+
+def test_get_web_search_options_accepts_non_list_tool_iterables():
+    options = StandardBuiltInToolCostTracking.get_web_search_options(
+        {"tools": ({"type": "web_search_preview"},)}
+    )
+
+    assert options == {"type": "web_search_preview"}
+
+
+def test_get_file_search_tool_call_does_not_validate_tool_payload():
+    tool = {"type": "file_search", "vector_store_ids": "not-a-list"}
+
+    assert StandardBuiltInToolCostTracking.get_file_search_tool_call({"tools": [tool]}) == tool
+
+
 # Test file search cost calculation
 def test_file_search_cost():
     file_search = FileSearchTool(type="file_search")
@@ -570,5 +591,4 @@ _BEDROCK_MANTLE_WEB_SEARCH_MODELS = (
 )
 
 _BEDROCK_MANTLE_WEB_SEARCH_RATE = 0.012
-
 

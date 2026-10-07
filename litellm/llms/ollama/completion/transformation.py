@@ -66,14 +66,14 @@ class _OllamaGenerateReasoning(LiteLLMBaseModel):
         """Reasoning reaches `/api/generate` either in the top-level `thinking` field or
         inline in `<think>` tags, never both. The field wins, matching `ollama_chat`."""
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            _parse_content_for_reasoning,
+            parse_content_for_reasoning,
         )
 
         if self.thinking:
             return self.thinking, self.response
         if self.response is None:
             return None, None
-        return _parse_content_for_reasoning(self.response)
+        return parse_content_for_reasoning(self.response)
 
 
 class OllamaConfig(BaseConfig):

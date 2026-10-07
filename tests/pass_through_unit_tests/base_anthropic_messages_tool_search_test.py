@@ -124,7 +124,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
         This validates that the tool search beta header is being passed via
         extra_headers and forwarded correctly to the downstream provider.
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         tools = self.get_tools_with_tool_search()
         messages = [{"role": "user", "content": "What's the weather in San Francisco?"}]
@@ -155,7 +155,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
         This validates that when the user asks about weather, the model
         discovers the get_weather tool via tool search and attempts to use it.
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         tools = self.get_tools_with_tool_search()
         messages = [
@@ -195,7 +195,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
         """
         E2E test: Tool search should work with streaming responses.
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         tools = self.get_tools_with_tool_search()
         messages = [{"role": "user", "content": "What's the weather like in Tokyo?"}]
@@ -243,7 +243,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
         This validates that the model can discover the appropriate tool
         from a larger catalog of deferred tools.
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         tools = self.get_tools_with_tool_search()
         messages = [

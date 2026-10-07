@@ -322,7 +322,7 @@ def test_avertex_ai_stream():
 async def test_async_vertexai_streaming_response():
     import random
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     load_vertex_ai_credentials()
     test_models = (
@@ -3301,7 +3301,7 @@ def test_vertex_ai_llama_tool_calling():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     load_vertex_ai_credentials()
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     args = {
         "model": "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas",
         "messages": [
@@ -3347,7 +3347,7 @@ def test_gemini_nullable_object_tool_schema_httpx():
     Ensure nullable object tool params preserve nested properties in Vertex schema conversion.
     """
     load_vertex_ai_credentials()
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     tools = [
         {
@@ -3503,7 +3503,7 @@ def test_vertex_ai_streaming_response_id():
 def test_vertex_ai_gemini_2_5_pro_streaming():
     try:
         load_vertex_ai_credentials()
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         response = completion(
             model="vertex_ai/gemini-2.5-pro",
             messages=[{"role": "user", "content": "Hi!"}],
@@ -3613,7 +3613,7 @@ def test_vertex_ai_gemini_audio_ogg():
 async def test_vertex_ai_deepseek():
     """Test that deepseek models use the correct v1 API endpoint instead of v1beta1."""
     load_vertex_ai_credentials()
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     client = AsyncHTTPHandler()
@@ -3655,7 +3655,7 @@ def test_gemini_grounding_on_streaming():
     from litellm import completion
 
     load_vertex_ai_credentials()
-    # litellm._turn_on_debug()
+    # litellm.turn_on_debug()
     args = {
         "model": "vertex_ai/gemini-3-flash-preview",
         "messages": [
@@ -3689,7 +3689,7 @@ def test_gemini_google_maps_tool_simple():
     Test googleMaps tool with just enableWidget parameter.
     """
     load_vertex_ai_credentials()
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     tools = [{"googleMaps": {"enableWidget": True}}]
     tools_with_location = [

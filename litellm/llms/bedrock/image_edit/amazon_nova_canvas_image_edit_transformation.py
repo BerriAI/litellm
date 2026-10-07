@@ -25,9 +25,9 @@ from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageObject, ImageResponse
 from litellm.utils import (
-    _get_model_cost_key,
-    _get_potential_model_names,
+    get_model_cost_key,
     get_model_info,
+    get_potential_model_names,
 )
 
 if TYPE_CHECKING:
@@ -192,7 +192,7 @@ def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
         pass
 
     try:
-        potential: Final = _get_potential_model_names(model=model, custom_llm_provider=None)
+        potential: Final = get_potential_model_names(model=model, custom_llm_provider=None)
         for field in (
             "combined_model_name",
             "combined_stripped_model_name",
@@ -206,7 +206,7 @@ def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
         pass
 
     for name in candidates:
-        key = _get_model_cost_key(name)
+        key = get_model_cost_key(name)
         if key is None:
             continue
         entry = _litellm.model_cost.get(key) or {}

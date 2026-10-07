@@ -144,7 +144,7 @@ class BaseLLMChatTest(ABC):
         assert response.choices[0].message.content is not None
 
     def test_tool_call_with_property_type_array(self):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         from litellm.utils import supports_function_calling
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -190,7 +190,7 @@ class BaseLLMChatTest(ABC):
 
     @pytest.mark.flaky(retries=3, delay=1)
     def test_tool_call_with_empty_enum_property(self):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         from litellm.utils import supports_function_calling
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -301,7 +301,7 @@ class BaseLLMChatTest(ABC):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         base_completion_call_args = self.get_base_completion_call_args()
 
@@ -327,7 +327,7 @@ class BaseLLMChatTest(ABC):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         base_completion_call_args = self.get_base_completion_call_args()
 
@@ -356,7 +356,7 @@ class BaseLLMChatTest(ABC):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         image_content = [
             {"type": "text", "text": "What's this file about?"},
@@ -395,7 +395,7 @@ class BaseLLMChatTest(ABC):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         image_content = [
             {"type": "text", "text": "What's this file about?"},
@@ -602,7 +602,7 @@ class BaseLLMChatTest(ABC):
 
     @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_pydantic_obj(self):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         from pydantic import BaseModel
         from litellm.utils import supports_response_schema
 
@@ -698,7 +698,7 @@ class BaseLLMChatTest(ABC):
         """
         PROD Test: ensure nested json schema sent to proxy works as expected.
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         from pydantic import BaseModel
         from litellm.utils import supports_response_schema
         from litellm.llms.base_llm.base_utils import type_to_response_format_param
@@ -751,7 +751,7 @@ class BaseLLMChatTest(ABC):
         """
         from litellm.utils import supports_audio_input
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_audio_input(base_completion_call_args["model"], None):
             pytest.skip(
@@ -1090,7 +1090,7 @@ class BaseLLMChatTest(ABC):
             from litellm import completion, ModelResponse
 
             litellm.set_verbose = True
-            litellm._turn_on_debug()
+            litellm.turn_on_debug()
             from litellm.utils import supports_function_calling
 
             os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1123,7 +1123,7 @@ class BaseLLMChatTest(ABC):
             from litellm import completion, ModelResponse
 
             litellm.set_verbose = True
-            litellm._turn_on_debug()
+            litellm.turn_on_debug()
             from litellm.utils import supports_function_calling
 
             os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1245,7 +1245,7 @@ class BaseLLMChatTest(ABC):
     async def test_completion_cost(self):
         from litellm import completion_cost
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1332,7 +1332,7 @@ class BaseLLMChatTest(ABC):
         from litellm.utils import supports_function_calling
         from litellm import completion
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         try:
 
             os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1462,7 +1462,7 @@ class BaseLLMChatTest(ABC):
         ) in json.dumps(optional_params)
 
         try:
-            litellm._turn_on_debug()
+            litellm.turn_on_debug()
             response = completion(
                 **base_completion_call_args,
                 reasoning_effort="low",
@@ -1665,7 +1665,7 @@ class BaseAnthropicChatTest(ABC):
     def test_completion_thinking_with_response_format(self):
         from pydantic import BaseModel
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         class RFormat(BaseModel):
             question: str
@@ -1685,7 +1685,7 @@ class BaseAnthropicChatTest(ABC):
     def test_completion_thinking_with_max_tokens(self):
         from pydantic import BaseModel
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         base_completion_call_args = self.get_base_completion_call_args_with_thinking()
 
@@ -1701,7 +1701,7 @@ class BaseAnthropicChatTest(ABC):
     def test_completion_thinking_without_max_tokens(self):
         from pydantic import BaseModel
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         base_completion_call_args = self.get_base_completion_call_args_with_thinking()
 
@@ -1714,7 +1714,7 @@ class BaseAnthropicChatTest(ABC):
         print(response)
 
     def test_completion_with_thinking_basic(self):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args_with_thinking()
 
         messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
@@ -1815,7 +1815,7 @@ class BaseReasoningLLMTests(ABC):
         - Assert that `reasoning_content` is not None from response message
         - Assert that `reasoning_tokens` is greater than 0 from usage
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
         response: ModelResponse = self.completion_function(
             **base_completion_call_args, reasoning_effort="low"
@@ -1835,7 +1835,7 @@ class BaseReasoningLLMTests(ABC):
         - Assert that `reasoning_content` is not None from streaming response
         - Assert that `reasoning_tokens` is greater than 0 from usage
         """
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
         response: CustomStreamWrapper = self.completion_function(
             **base_completion_call_args,

@@ -1635,6 +1635,14 @@ def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_t
     }
 
 
+def test_empty_custom_tokenizer_uses_model_tokenizer() -> None:
+    text_value: Final = "A tokenizer fallback should preserve the model encoding."
+    custom_count: Final = _get_exact_count_function("gpt-3.5-turbo", {})(text_value)
+    model_count: Final = _get_exact_count_function("gpt-3.5-turbo", None)(text_value)
+
+    assert custom_count == model_count
+
+
 def _threshold_test_messages(turns: int) -> list[dict]:
     messages: list[dict] = [{"role": "system", "content": "You are a terse assistant. " * 20}]
     for index in range(turns):

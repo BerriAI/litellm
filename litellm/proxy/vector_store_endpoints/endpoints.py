@@ -638,5 +638,5 @@ async def index_list(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
 
-    indexes: Final = await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(prisma_client)
+    indexes: Final = await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(prisma_client)
     return IndexListResponse(data=indexes)

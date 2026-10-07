@@ -641,7 +641,7 @@ def test_repeated_db_sync_does_not_accumulate_runner_instances():
 
     def distinct_runner_instances() -> int:
         seen = set()
-        for callback in litellm.logging_callback_manager._get_all_callbacks():
+        for callback in litellm.logging_callback_manager.get_all_callbacks():
             if isinstance(callback, CustomGuardrail) and getattr(callback, "guardrail_name", None) == name:
                 seen.add(id(callback))
         return len(seen)

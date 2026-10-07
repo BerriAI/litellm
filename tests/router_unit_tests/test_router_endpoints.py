@@ -1237,7 +1237,7 @@ async def test_init_containers_api_endpoints_managed_id_routes_via_generic_fallb
     )
     router._ageneric_api_call_with_fallbacks = AsyncMock()
 
-    managed_id = ResponsesAPIRequestUtils._build_container_id(
+    managed_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="azure",
         model_id="azure-router-model",
         container_id="cfile_upstream_abc",
@@ -1271,7 +1271,7 @@ async def test_init_containers_api_endpoints_managed_id_without_model_id_unwraps
     router = Router(model_list=[])
     mock_original_function = AsyncMock(return_value={"ok": True})
 
-    managed_id = ResponsesAPIRequestUtils._build_container_id(
+    managed_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="openai",
         model_id=None,
         container_id="cfile_upstream_abc",
@@ -1304,7 +1304,7 @@ async def test_init_containers_api_endpoints_managed_id_without_model_id_applies
     router = Router(model_list=[])
     mock_original_function = AsyncMock(return_value={"ok": True})
 
-    managed_id = ResponsesAPIRequestUtils._build_container_id(
+    managed_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="azure",
         model_id=None,
         container_id="cfile_upstream_abc",

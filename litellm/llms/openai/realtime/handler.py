@@ -7,7 +7,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 import ssl
 from typing import Any, Final, cast
 
-from litellm._logging import _redact_string, verbose_logger
+from litellm._logging import redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.types.realtime import RealtimeQueryParams
 
@@ -190,7 +190,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
         except Exception as e:
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e}"))
+                await websocket.close(code=1011, reason=redact_string(f"Internal server error: {e}"))
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(close_error):
                     # The WebSocket is already closed or the response is completed, so we can ignore this error

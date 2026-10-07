@@ -1577,7 +1577,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
         for effort in effort_levels:
-            result = handler._map_reasoning_effort(effort)
+            result = handler.map_reasoning_effort(effort)
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
@@ -1593,7 +1593,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         litellm.reasoning_auto_summary = True
 
         for effort in effort_levels:
-            result = handler._map_reasoning_effort(effort)
+            result = handler.map_reasoning_effort(effort)
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
@@ -1609,7 +1609,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         litellm.reasoning_auto_summary = False
         monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
 
-        result = handler._map_reasoning_effort("high")
+        result = handler.map_reasoning_effort("high")
         assert (
             result["summary"] == "detailed"
         ), "Summary should be 'detailed' when env var is enabled"
@@ -1621,7 +1621,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
         dict_input = {"effort": "high", "summary": "custom_summary"}
-        result_dict = handler._map_reasoning_effort(dict_input)
+        result_dict = handler.map_reasoning_effort(dict_input)
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")

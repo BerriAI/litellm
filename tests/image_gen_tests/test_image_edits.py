@@ -64,7 +64,7 @@ class BaseLLMImageEditTest(ABC):
         """
         Test image edit functionality with both sync and async modes.
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         try:
             prompt = """
             Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
@@ -158,7 +158,7 @@ class TestAzureAIFlux2ImageEdit(BaseLLMImageEditTest):
 @pytest.mark.flaky(retries=3, delay=2)
 @pytest.mark.asyncio
 async def test_openai_image_edit_litellm_router():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     try:
         prompt = """
         Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
@@ -201,7 +201,7 @@ async def test_openai_image_edit_with_bytesio():
     """Test image editing using BytesIO objects instead of file readers"""
     from litellm import image_edit, aimage_edit
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     try:
         prompt = """
         Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
@@ -264,7 +264,7 @@ async def test_azure_image_edit_litellm_sdk():
         # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         prompt = """
         Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
@@ -385,7 +385,7 @@ async def test_openai_image_edit_cost_tracking():
         # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         prompt = """
         Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
@@ -476,7 +476,7 @@ async def test_azure_image_edit_cost_tracking():
         # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         prompt = """
         Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
@@ -535,7 +535,7 @@ async def test_recraft_image_edit_api():
     from litellm import aimage_edit
     import requests
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     try:
         prompt = """
         Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
@@ -630,7 +630,7 @@ async def test_multiple_image_edit_with_different_formats():
     """Test multiple images editing with different file formats and types"""
     from litellm import aimage_edit
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     try:
         prompt = "Create a cohesive artistic style across all images"

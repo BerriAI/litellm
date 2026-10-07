@@ -28,7 +28,7 @@ async def test_mock_stream_generate_content_with_tools():
     """Test streaming function call response parsing and validation"""
     from litellm.types.google_genai.main import ToolConfigDict
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     contents = [
         {
             "role": "user",

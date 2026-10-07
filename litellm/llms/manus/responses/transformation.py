@@ -7,7 +7,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _safe_convert_created_field,
+    safe_convert_created_field,
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.openai.common_utils import OpenAIError
@@ -181,11 +181,11 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
             # Manus uses camelCase "createdAt" instead of snake_case "created_at"
             if "createdAt" in raw_response_json and "created_at" not in raw_response_json:
-                raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["createdAt"])
+                raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["createdAt"])
 
             # Ensure created_at is set
             if "created_at" in raw_response_json:
-                raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
+                raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -273,11 +273,11 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
             # Manus uses camelCase "createdAt" instead of snake_case "created_at"
             if "createdAt" in raw_response_json and "created_at" not in raw_response_json:
-                raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["createdAt"])
+                raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["createdAt"])
 
             # Ensure created_at is set
             if "created_at" in raw_response_json:
-                raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
+                raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 

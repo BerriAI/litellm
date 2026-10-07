@@ -55,7 +55,7 @@ class BaseLLMAudioTranscriptionTest(ABC):
         """
 
         litellm.set_verbose = True
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         AUDIO_FILE = open(file_path, "rb")
         transcription_call_args = self.get_base_audio_transcription_call_args()
         transcript = await litellm.atranscription(

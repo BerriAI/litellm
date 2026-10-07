@@ -15,7 +15,7 @@ from litellm import create_batch, create_file
 from litellm._logging import verbose_logger
 from litellm.batches.batch_utils import (
     _aggregate_batch_cost_usage_models,
-    _get_file_content_as_dictionary,
+    get_file_content_as_dictionary,
     _get_batch_job_usage_from_response_body,
     _get_response_from_batch_job_output_file,
     _batch_response_was_successful,
@@ -123,7 +123,7 @@ def sample_file_content_dict():
 
 
 def test_get_file_content_as_dictionary(sample_file_content):
-    result = _get_file_content_as_dictionary(sample_file_content)
+    result = get_file_content_as_dictionary(sample_file_content)
     assert len(result) == 2
     assert result[0]["id"] == "batch_req_6769ca596b38819093d7ae9f522de924"
     assert result[0]["custom_id"] == "request-1"
@@ -234,7 +234,7 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
     expected_models = ["gpt-5-mini"]
 
     with patch(
-        "litellm.litellm_core_utils.litellm_logging._handle_completed_batch",
+        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch",
         new=AsyncMock(
             return_value=BatchCostUsageResult(
                 cost=expected_cost,
@@ -272,7 +272,7 @@ async def test_handle_completed_batch_computes_real_cost_from_output_file(
     the function the retrieve handler invokes on completion; a dropped output line, a
     wrong token sum, or mispriced model fails this test.
     """
-    from litellm.batches.batch_utils import _handle_completed_batch
+    from litellm.batches.batch_utils import handle_completed_batch
     from litellm.types.utils import LiteLLMBatch
 
     batch = LiteLLMBatch(
@@ -293,7 +293,7 @@ async def test_handle_completed_batch_computes_real_cost_from_output_file(
         "litellm.batches.batch_utils._fetch_batch_output_file_content",
         new=AsyncMock(return_value=sample_file_content_bytes),
     ):
-        result = await _handle_completed_batch(
+        result = await handle_completed_batch(
             batch=batch, custom_llm_provider="openai"
         )
 
@@ -382,7 +382,7 @@ async def test_batch_retrieve_cost_tracking_with_explicit_cost_data():
     explicit_models = ["gpt-5-mini", "gpt-5.5"]
 
     with patch(
-        "litellm.litellm_core_utils.litellm_logging._handle_completed_batch",
+        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch",
         new=AsyncMock(),
     ) as mock_handle_batch:
         # Call async_success_handler with explicit cost data
@@ -517,7 +517,7 @@ async def test_batch_retrieve_cost_tracking_with_unified_file_id_incomplete_batc
     logging_obj.custom_llm_provider = "openai"
 
     with patch(
-        "litellm.litellm_core_utils.litellm_logging._handle_completed_batch",
+        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch",
         new=AsyncMock(),
     ) as mock_handle_batch:
         # Call async_success_handler with in_progress batch (unified file ID)
@@ -606,7 +606,7 @@ async def test_batch_retrieve_cost_tracking_with_partial_explicit_data():
     from litellm.batches.batch_utils import BatchCostUsageResult
 
     with patch(
-        "litellm.litellm_core_utils.litellm_logging._handle_completed_batch",
+        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch",
         new=AsyncMock(
             return_value=BatchCostUsageResult(
                 cost=expected_cost,

@@ -15,7 +15,7 @@ from typing_extensions import ParamSpec, TypeVar
 
 import litellm
 from litellm import verbose_logger
-from litellm._lazy_imports import _get_default_encoding
+from litellm._lazy_imports import get_default_encoding
 from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
@@ -650,35 +650,34 @@ def _get_exact_count_function(
 ) -> TokenCounterFunction:
     """
     Get the function to count tokens based on the model and custom tokenizer."""
-    from litellm.utils import _select_tokenizer
+    from litellm.utils import select_tokenizer
 
     if model is not None or custom_tokenizer is not None:
-        tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
-        if tokenizer_json["type"] == "huggingface_tokenizer":
-            tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
-
-            def count_tokens(text: str) -> int:
-                if isinstance(tokenizer, HuggingFaceTokenizer):
-                    return tokenizer.count(text)
-                return len(tokenizer.encode_batch_fast([text])[0])
-
-            return count_tokens
-        elif tokenizer_json["type"] == "openai_tokenizer":
-            encoding: Final = openai_tokenizer_encoding(model)
-
-            def encode_length(text: str) -> int:
-                return _encoding_count(encoding, text)
-
-            return _get_tiktoken_count_function(encode_length)
-        else:
-            raise ValueError("Unsupported tokenizer type")
+        tokenizer_json: Final = custom_tokenizer or select_tokenizer(model)
     else:
-        default_encoding: Final = _get_default_encoding()
+        default_encoding: Final = get_default_encoding()
 
         def encode_length(text: str) -> int:
             return _encoding_count(default_encoding, text)
 
         return _get_tiktoken_count_function(encode_length)
+    if tokenizer_json["type"] == "huggingface_tokenizer":
+        tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
+
+        def count_tokens(text: str) -> int:
+            if isinstance(tokenizer, HuggingFaceTokenizer):
+                return tokenizer.count(text)
+            return len(tokenizer.encode_batch_fast([text])[0])
+
+        return count_tokens
+    if tokenizer_json["type"] == "openai_tokenizer":
+        encoding: Final = openai_tokenizer_encoding(model)
+
+        def encode_length(text: str) -> int:
+            return _encoding_count(encoding, text)
+
+        return _get_tiktoken_count_function(encode_length)
+    raise ValueError("Unsupported tokenizer type")
 
 
 def _encoding_count(encoding: Encoding, text: str) -> int:

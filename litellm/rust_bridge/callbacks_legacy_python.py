@@ -227,7 +227,7 @@ def post_call(
 
 
 def defers_async_logging(logger: LoggingSurface) -> bool:
-    return bool(getattr(logger, "_defer_async_logging", False))
+    return bool(getattr(logger, "defer_async_logging", False))
 
 
 def defer_success(logger: LoggingSurface, pending: object) -> None:

@@ -201,13 +201,13 @@ def test_cost_per_token_anthropic():
 @pytest.mark.benchmark
 def test_get_model_cost_key_exact_match():
     """Benchmark model cost key lookup with an exact match."""
-    litellm.utils._get_model_cost_key("gpt-4o")
+    litellm.utils.get_model_cost_key("gpt-4o")
 
 
 @pytest.mark.benchmark
 def test_get_model_cost_key_case_insensitive():
     """Benchmark model cost key lookup with case-insensitive fallback."""
-    litellm.utils._get_model_cost_key("GPT-4o")
+    litellm.utils.get_model_cost_key("GPT-4o")
 
 
 # ---------------------------------------------------------------------------

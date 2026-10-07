@@ -4,8 +4,9 @@ import pytest
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _handle_invalid_parallel_tool_calls,
-    _should_convert_tool_call_to_json_mode,
+    handle_invalid_parallel_tool_calls,
+    should_convert_tool_call_to_json_mode,
+    safe_convert_created_field,
     convert_to_model_response_object,
 )
 from litellm.types.utils import (
@@ -46,6 +47,20 @@ OPENAI_CUSTOM_TOOL_CALL_RESPONSE = {
 }
 
 
+def test_safe_convert_created_field_preserves_large_integer_precision():
+    created_value = 2**53 + 1
+
+    assert safe_convert_created_field(created_value) == created_value
+
+
+def test_safe_convert_created_field_accepts_float_convertible_non_strings():
+    class FloatConvertible:
+        def __float__(self) -> float:
+            return 1.5
+
+    assert safe_convert_created_field(FloatConvertible()) == 1
+
+
 def test_convert_openai_custom_tool_call_response():
     result = convert_to_model_response_object(
         response_object=OPENAI_CUSTOM_TOOL_CALL_RESPONSE,
@@ -66,7 +81,7 @@ def test_should_convert_tool_call_to_json_mode_ignores_custom_tool_call():
         custom={"name": "ApplyPatch", "input": "patch"},
     )
     assert (
-        _should_convert_tool_call_to_json_mode(
+        should_convert_tool_call_to_json_mode(
             tool_calls=[custom_tool_call],
             convert_tool_call_to_json_mode=True,
         )
@@ -81,7 +96,7 @@ def test_should_convert_tool_call_to_json_mode_still_matches_response_format_too
         function=Function(name=RESPONSE_FORMAT_TOOL_NAME, arguments='{"answer": 4}'),
     )
     assert (
-        _should_convert_tool_call_to_json_mode(
+        should_convert_tool_call_to_json_mode(
             tool_calls=[response_format_call],
             convert_tool_call_to_json_mode=True,
         )
@@ -99,7 +114,7 @@ def test_handle_invalid_parallel_tool_calls_skips_custom_tool_calls():
         type="function",
         function=Function(name="get_weather", arguments='{"city": "SF"}'),
     )
-    result = _handle_invalid_parallel_tool_calls([custom_tool_call, function_tool_call])
+    result = handle_invalid_parallel_tool_calls([custom_tool_call, function_tool_call])
     assert result == [custom_tool_call, function_tool_call]
 
 

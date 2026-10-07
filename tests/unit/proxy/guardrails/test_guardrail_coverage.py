@@ -443,10 +443,10 @@ def test_banned_keywords_blocks_multimodal_content(monkeypatch):
     misaligned with the runtime, so the test wouldn't catch regressions.
     """
     monkeypatch.setattr("litellm.banned_keywords_list", ["forbidden"], raising=False)
-    from enterprise.enterprise_hooks.banned_keywords import _ENTERPRISE_BannedKeywords
+    from enterprise.enterprise_hooks.banned_keywords import ENTERPRISE_BannedKeywords
     from fastapi import HTTPException
 
-    guard = _ENTERPRISE_BannedKeywords()
+    guard = ENTERPRISE_BannedKeywords()
 
     async def _run():
         await guard.async_pre_call_hook(
@@ -475,10 +475,10 @@ def test_banned_keywords_blocks_multimodal_content(monkeypatch):
 
 def test_banned_keywords_blocks_responses_api_input(monkeypatch):
     monkeypatch.setattr("litellm.banned_keywords_list", ["forbidden"], raising=False)
-    from enterprise.enterprise_hooks.banned_keywords import _ENTERPRISE_BannedKeywords
+    from enterprise.enterprise_hooks.banned_keywords import ENTERPRISE_BannedKeywords
     from fastapi import HTTPException
 
-    guard = _ENTERPRISE_BannedKeywords()
+    guard = ENTERPRISE_BannedKeywords()
 
     async def _run():
         await guard.async_pre_call_hook(
@@ -502,10 +502,10 @@ def test_banned_keywords_fires_on_text_content_call_types(monkeypatch, call_type
     ``acompletion`` (chat completions) and ``aresponses`` (Responses API).
     """
     monkeypatch.setattr("litellm.banned_keywords_list", ["forbidden"], raising=False)
-    from enterprise.enterprise_hooks.banned_keywords import _ENTERPRISE_BannedKeywords
+    from enterprise.enterprise_hooks.banned_keywords import ENTERPRISE_BannedKeywords
     from fastapi import HTTPException
 
-    guard = _ENTERPRISE_BannedKeywords()
+    guard = ENTERPRISE_BannedKeywords()
 
     import asyncio
 
@@ -529,9 +529,9 @@ def test_banned_keywords_skips_non_text_call_types(monkeypatch):
     even when the request body otherwise looks like a chat payload.
     """
     monkeypatch.setattr("litellm.banned_keywords_list", ["forbidden"], raising=False)
-    from enterprise.enterprise_hooks.banned_keywords import _ENTERPRISE_BannedKeywords
+    from enterprise.enterprise_hooks.banned_keywords import ENTERPRISE_BannedKeywords
 
-    guard = _ENTERPRISE_BannedKeywords()
+    guard = ENTERPRISE_BannedKeywords()
 
     import asyncio
 
@@ -552,10 +552,10 @@ async def test_banned_keywords_post_call_checks_all_choices(monkeypatch, user_ap
     """Krrish blocker: ``n>1`` responses must not bypass post-call checks by
     placing the banned text in ``choices[1+]``."""
     monkeypatch.setattr("litellm.banned_keywords_list", ["forbidden"], raising=False)
-    from enterprise.enterprise_hooks.banned_keywords import _ENTERPRISE_BannedKeywords
+    from enterprise.enterprise_hooks.banned_keywords import ENTERPRISE_BannedKeywords
     from fastapi import HTTPException
 
-    guard = _ENTERPRISE_BannedKeywords()
+    guard = ENTERPRISE_BannedKeywords()
     response = ModelResponse(
         choices=[
             Choices(index=0, message=Message(role="assistant", content="clean")),
@@ -725,10 +725,10 @@ async def test_openai_moderation_inspects_multimodal_content(monkeypatch, user_a
     list-format text parts and Responses-API input — without this, multimodal
     content silently passed moderation."""
     from enterprise.enterprise_hooks.openai_moderation import (
-        _ENTERPRISE_OpenAI_Moderation,
+        ENTERPRISE_OpenAI_Moderation,
     )
 
-    guard = _ENTERPRISE_OpenAI_Moderation()
+    guard = ENTERPRISE_OpenAI_Moderation()
 
     seen_inputs = []
 
@@ -777,11 +777,11 @@ async def test_openai_moderation_reads_model_name_at_call_time(
     """``litellm_settings`` applies ``callbacks`` and ``openai_moderations_model_name`` in YAML
     order, so the hook must resolve the model when it runs, not when it is constructed."""
     from enterprise.enterprise_hooks.openai_moderation import (
-        _ENTERPRISE_OpenAI_Moderation,
+        ENTERPRISE_OpenAI_Moderation,
     )
 
     monkeypatch.setattr(litellm, "openai_moderations_model_name", None)
-    guard = _ENTERPRISE_OpenAI_Moderation()
+    guard = ENTERPRISE_OpenAI_Moderation()
     monkeypatch.setattr(litellm, "openai_moderations_model_name", configured_after_init)
 
     class FakeModeration:
@@ -808,10 +808,10 @@ async def test_google_text_moderation_inspects_multimodal_content(user_api_key):
     """The text passed to Google's moderation client must include list-format
     text parts."""
     from enterprise.enterprise_hooks.google_text_moderation import (
-        _ENTERPRISE_GoogleTextModeration,
+        ENTERPRISE_GoogleTextModeration,
     )
 
-    guard = _ENTERPRISE_GoogleTextModeration.__new__(_ENTERPRISE_GoogleTextModeration)
+    guard = ENTERPRISE_GoogleTextModeration.__new__(ENTERPRISE_GoogleTextModeration)
     seen_documents = []
 
     def fake_language_document(content, type_):

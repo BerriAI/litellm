@@ -34,7 +34,7 @@ class TestRouterSearch:
         from litellm import Router
         import litellm
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         # Create router with search_tools config
         router = Router(

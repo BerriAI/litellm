@@ -45,7 +45,7 @@ class TestCustomLogger(CustomLogger):
 
 async def _setup_web_search_test():
     """Helper function to setup common test requirements"""
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
     return test_custom_logger

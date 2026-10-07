@@ -906,7 +906,7 @@ def test_cache_get_cache_filters_non_lookup_kwargs_from_backend_cache():
     cache.cache = MagicMock()
     cache.should_use_cache = MagicMock(return_value=True)
     cache.get_cache_key = MagicMock(return_value="test_key")
-    cache._get_cache_logic = MagicMock(return_value={"content": "Paris"})
+    cache.get_cache_logic = MagicMock(return_value={"content": "Paris"})
 
     def _cache_hit(_cache_key, **cache_kwargs):
         cache_kwargs["metadata"]["semantic-similarity"] = 0.7
@@ -940,7 +940,7 @@ def test_cache_get_cache_filters_non_lookup_kwargs_from_backend_cache():
         },
     }
     assert forwarded_kwargs["metadata"] is not metadata
-    cache._get_cache_logic.assert_called_once_with(
+    cache.get_cache_logic.assert_called_once_with(
         cached_result={"content": "Paris"},
         max_age=10,
     )
@@ -954,7 +954,7 @@ def test_cache_get_cache_filters_sensitive_kwargs_without_metadata():
     cache.cache.get_cache = MagicMock(return_value={"content": "Paris"})
     cache.should_use_cache = MagicMock(return_value=True)
     cache.get_cache_key = MagicMock(return_value="test_key")
-    cache._get_cache_logic = MagicMock(return_value={"content": "Paris"})
+    cache.get_cache_logic = MagicMock(return_value={"content": "Paris"})
 
     result = cache.get_cache(
         input="What is the capital of France?",
@@ -976,7 +976,7 @@ def test_cache_get_cache_passes_responses_input_to_dynamic_cache():
     cache = Cache.__new__(Cache)
     cache.should_use_cache = MagicMock(return_value=True)
     cache.get_cache_key = MagicMock(return_value="test_key")
-    cache._get_cache_logic = MagicMock(return_value={"content": "Paris"})
+    cache.get_cache_logic = MagicMock(return_value={"content": "Paris"})
     dynamic_cache_object = MagicMock()
     dynamic_cache_object.get_cache = MagicMock(return_value={"content": "Paris"})
 
@@ -994,7 +994,7 @@ def test_cache_get_cache_passes_responses_input_to_dynamic_cache():
         input="What is the capital of France?",
         metadata=metadata,
     )
-    cache._get_cache_logic.assert_called_once_with(
+    cache.get_cache_logic.assert_called_once_with(
         cached_result={"content": "Paris"},
         max_age=float("inf"),
     )

@@ -847,7 +847,7 @@ def test_api_base_and_api_key_passthrough(function_name, is_async, is_stream):
     import asyncio
     import unittest.mock
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Import the specific function being tested
     if function_name == "generate_content":

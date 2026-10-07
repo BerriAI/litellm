@@ -427,7 +427,7 @@ class TestMilvusVectorStore:
 # @pytest.mark.asyncio
 # async def test_basic_search_vector_store(sync_mode):
 #     """Integration test with real Milvus API (requires credentials)"""
-#     litellm._turn_on_debug()
+#     litellm.turn_on_debug()
 #     litellm.set_verbose = True
 #     base_request_args = {
 #         "vector_store_id": "book_2",

@@ -18,7 +18,7 @@ from litellm.types.utils import CallTypes as LitellmCallTypes, ModelResponse
 async def test_lakera_pre_call_hook_for_pii_masking():
     """Test for Lakera guardrail pre-call hook for PII masking"""
     # Setup the guardrail with specific entities config
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     lakera_guardrail = LakeraAIGuardrail(
         api_key="test_key",
     )

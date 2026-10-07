@@ -19,7 +19,7 @@ _AWSMP_LOGO_IMAGE_URL = (
 @pytest.mark.flaky(retries=3, delay=5)
 class TestBedrockInvokeClaudeJson(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         return {
             "model": "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         }

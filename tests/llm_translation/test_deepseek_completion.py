@@ -24,7 +24,7 @@ def test_deepseek_mock_completion(stream):
     import litellm
     from litellm import completion
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     response = completion(
         model="deepseek/deepseek-reasoner",
@@ -52,7 +52,7 @@ async def test_deepseek_provider_async_completion(stream):
     from unittest.mock import patch, AsyncMock, MagicMock
     from litellm import acompletion
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Set up the test parameters
     api_key = "fake_api_key"

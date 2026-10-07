@@ -613,7 +613,7 @@ def test_azure_safety_result():
     """Bubble up safety result from Azure OpenAI"""
     from litellm import completion
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     response = completion(
         model="azure/gpt-4.1-mini",
@@ -631,7 +631,7 @@ def test_azure_openai_responses_bridge():
     from litellm import completion
     import litellm
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     with patch.object(litellm, "responses") as mock_responses:
         try:

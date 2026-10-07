@@ -99,9 +99,9 @@ def test_pattern_to_regex():
     Tests that the pattern is converted to a regex
     """
     router = PatternMatchRouter()
-    assert router._pattern_to_regex("openai/*") == "openai/(.*)"
+    assert router.pattern_to_regex("openai/*") == "openai/(.*)"
     assert (
-        router._pattern_to_regex("openai/fo::*::static::*")
+        router.pattern_to_regex("openai/fo::*::static::*")
         == "openai/fo::(.*)::static::(.*)"
     )
 

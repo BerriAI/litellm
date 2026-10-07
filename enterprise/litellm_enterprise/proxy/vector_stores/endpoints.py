@@ -171,7 +171,7 @@ async def list_vector_stores(
     try:
         # Get vector stores from database (source of truth)
         # Only return what's in the database to ensure consistency across instances
-        vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
+        vector_stores_from_db = await VectorStoreRegistry.get_vector_stores_from_db(
             prisma_client=prisma_client
         )
         

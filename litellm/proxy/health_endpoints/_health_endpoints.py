@@ -998,7 +998,7 @@ def _caller_may_probe_deployment(
     caller_is_admin: bool,
 ) -> bool:
     """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
-    if not caller_is_admin and not Router._deployment_usable_by_team(deployment, team_id):
+    if not caller_is_admin and not Router.deployment_usable_by_team(deployment, team_id):
         return False
     if allowed_models is None:
         return True

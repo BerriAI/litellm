@@ -9,7 +9,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _safe_convert_created_field,
+    safe_convert_created_field,
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -245,7 +245,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
             raw_response_json: Final = self._parsed_response_body(raw_response)
             if "created_at" in raw_response_json:
-                raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
+                raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise VolcEngineError(message=raw_response.text, status_code=raw_response.status_code)
 

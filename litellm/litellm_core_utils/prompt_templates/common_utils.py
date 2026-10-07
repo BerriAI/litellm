@@ -271,7 +271,7 @@ def request_contains_image_content(messages: Sequence[Mapping[str, object]]) -> 
     )
 
 
-def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
+def audio_or_image_in_message_content(message: AllMessageValues) -> bool:
     """
     Checks if message content contains an image or audio
     """
@@ -282,6 +282,9 @@ def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
                 if c.get("type") == "image_url" or c.get("type") == "input_audio":
                     return True
     return False
+
+
+_audio_or_image_in_message_content = audio_or_image_in_message_content
 
 
 def convert_openai_message_to_only_content_messages(
@@ -1503,7 +1506,7 @@ def tool_with_sanitized_parameters(
     return tool if sanitized_schema is input_schema else {**tool, "input_schema": sanitized_schema}
 
 
-def _get_image_mime_type_from_url(url: str) -> str | None:
+def get_image_mime_type_from_url(url: str) -> str | None:
     """
     Get mime type for common image URLs
     See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
@@ -1566,6 +1569,9 @@ def _get_image_mime_type_from_url(url: str) -> str | None:
             return mime_type
 
     return None
+
+
+_get_image_mime_type_from_url = get_image_mime_type_from_url
 
 
 def infer_content_type_from_url_and_content(
@@ -1968,7 +1974,11 @@ def convert_prefix_message_to_non_prefix_messages(
     return new_messages
 
 
-def _extract_reasoning_content(message: dict) -> tuple[str | None, str | None]:
+def _provider_text_or_none(value: object) -> str | None:
+    return cast(str | None, value)  # cast-ok: reasoning fields arrive in untyped provider messages
+
+
+def extract_reasoning_content(message: Mapping[str, object]) -> tuple[str | None, str | None]:
     """
     Extract reasoning content and main content from a message.
 
@@ -1980,12 +1990,15 @@ def _extract_reasoning_content(message: dict) -> tuple[str | None, str | None]:
     """
     message_content: Final = message.get("content")
     if "reasoning_content" in message:
-        return message["reasoning_content"], message_content
+        return _provider_text_or_none(message["reasoning_content"]), _provider_text_or_none(message_content)
     elif "reasoning" in message:
-        return message["reasoning"], message_content
+        return _provider_text_or_none(message["reasoning"]), _provider_text_or_none(message_content)
     elif isinstance(message_content, str):
-        return _parse_content_for_reasoning(message_content)
-    return None, message_content
+        return parse_content_for_reasoning(message_content)
+    return None, _provider_text_or_none(message_content)
+
+
+_extract_reasoning_content = extract_reasoning_content
 
 
 def _readable_thinking_text(block: Mapping[str, object]) -> str:
@@ -2163,7 +2176,7 @@ def responses_reasoning_items_from_thinking_blocks(
     )
 
 
-def _parse_content_for_reasoning(
+def parse_content_for_reasoning(
     message_text: str | None,
 ) -> tuple[str | None, str | None]:
     """
@@ -2186,6 +2199,9 @@ def _parse_content_for_reasoning(
         return reasoning_match.group(1), reasoning_match.group(2)
 
     return None, message_text
+
+
+_parse_content_for_reasoning = parse_content_for_reasoning
 
 
 def _extract_base64_data(image_url: str) -> str:

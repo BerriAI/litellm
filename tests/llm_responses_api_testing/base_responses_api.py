@@ -112,7 +112,7 @@ class BaseResponsesAPITest(ABC):
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
     async def test_basic_openai_responses_api(self, sync_mode):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
         try:
@@ -139,7 +139,7 @@ class BaseResponsesAPITest(ABC):
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=2)
     async def test_basic_openai_responses_api_streaming(self, sync_mode):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         # Enable cost calculation for streaming usage
         litellm.include_cost_in_streaming_usage = True
         base_completion_call_args = self.get_base_completion_call_args()
@@ -232,7 +232,7 @@ class BaseResponsesAPITest(ABC):
     @pytest.mark.parametrize("sync_mode", [False, True])
     @pytest.mark.asyncio
     async def test_basic_openai_responses_delete_endpoint(self, sync_mode):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
         if sync_mode:
@@ -264,7 +264,7 @@ class BaseResponsesAPITest(ABC):
     @pytest.mark.flaky(retries=3, delay=2)
     @pytest.mark.asyncio
     async def test_basic_openai_responses_streaming_delete_endpoint(self, sync_mode):
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         # litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
         response_id = None
@@ -314,7 +314,7 @@ class BaseResponsesAPITest(ABC):
     @pytest.mark.flaky(retries=3, delay=2)
     @pytest.mark.asyncio
     async def test_basic_openai_responses_get_endpoint(self, sync_mode):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
         if sync_mode:
@@ -349,7 +349,7 @@ class BaseResponsesAPITest(ABC):
 
     @pytest.mark.asyncio
     async def test_multiturn_responses_api(self):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
         try:
             base_completion_call_args = self.get_base_completion_call_args()
@@ -375,7 +375,7 @@ class BaseResponsesAPITest(ABC):
     @pytest.mark.asyncio
     async def test_responses_api_with_tool_calls(self):
         """Test that calls the Responses API with tool calls including function call and output"""
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
 
@@ -518,7 +518,7 @@ class BaseResponsesAPITest(ABC):
     @pytest.mark.asyncio
     async def test_basic_openai_responses_cancel_endpoint(self, sync_mode):
         try:
-            litellm._turn_on_debug()
+            litellm.turn_on_debug()
             litellm.set_verbose = True
             base_completion_call_args = self.get_base_completion_call_args()
             if sync_mode:

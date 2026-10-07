@@ -138,7 +138,7 @@ async def test_anthropic_messages_litellm_router_non_streaming():
     """
     Test the anthropic_messages with non-streaming request
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     router = Router(
         model_list=[
             {
@@ -176,7 +176,7 @@ async def test_anthropic_messages_litellm_router_routing_strategy():
     """
     Test the anthropic_messages with routing strategy + non-streaming request
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     router = Router(
         model_list=[
             {
@@ -218,7 +218,7 @@ async def test_anthropic_messages_fallbacks():
     """
     E2E test the anthropic_messages fallbacks from Anthropic API to Bedrock
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     router = Router(
         model_list=[
             {
@@ -391,7 +391,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     """
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     MODEL_GROUP = "claude-special-alias"
     router = Router(
         model_list=[
@@ -807,7 +807,7 @@ def test_sync_openai_messages():
     """
     Test the anthropic_messages with sync request
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = litellm.anthropic.messages.create(
         messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
         model="openai/gpt-4.1-mini",

@@ -2984,7 +2984,7 @@ async def test_add_litellm_metadata_from_request_headers():
     Relevant issue: https://github.com/BerriAI/litellm/issues/14008
     """
     # Set up test logger
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     test_logger = TestCustomLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [test_logger]
@@ -3095,7 +3095,7 @@ async def test_anthropic_messages_standard_logging_object_matches_fixture():
     Regression: /v1/messages calls routed to non-Anthropic providers should keep
     call_type=anthropic_messages in standard logging payloads.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     test_logger = TestCustomLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [test_logger]

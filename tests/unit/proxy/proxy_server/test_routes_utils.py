@@ -33,7 +33,7 @@ def patched_token_counter(monkeypatch):
     monkeypatch.setattr(litellm, "disable_token_counter", False, raising=False)
     monkeypatch.setattr(
         litellm.utils,
-        "_select_tokenizer",
+        "select_tokenizer",
         lambda model, custom_tokenizer=None: {
             "type": "openai_tokenizer",
             "tokenizer": None,
@@ -255,10 +255,10 @@ def lookup_fixture_model(monkeypatch):
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setitem(litellm.model_cost, "lookup-fixture-model", entry)
     litellm.get_model_info.cache_clear()
-    litellm.utils._cached_get_model_info_helper.cache_clear()
+    litellm.utils.cached_get_model_info_helper.cache_clear()
     yield entry
     litellm.get_model_info.cache_clear()
-    litellm.utils._cached_get_model_info_helper.cache_clear()
+    litellm.utils.cached_get_model_info_helper.cache_clear()
 
 
 def test_model_info_lookup_returns_full_cost_map_entry_for_unregistered_model(client, auth_as, lookup_fixture_model):

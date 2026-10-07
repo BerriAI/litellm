@@ -40,12 +40,12 @@ async def test_acompletion_mcp_auto_exec(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         fake_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_execute_tool_calls",
+        "execute_tool_calls",
         fake_execute,
     )
     monkeypatch.setattr(
@@ -103,12 +103,12 @@ async def test_acompletion_mcp_respects_manual_approval(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         fake_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_execute_tool_calls",
+        "execute_tool_calls",
         fake_execute,
     )
     monkeypatch.setattr(
@@ -191,12 +191,12 @@ async def test_completion_mcp_with_streaming_no_timeout_error(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         fake_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_execute_tool_calls",
+        "execute_tool_calls",
         fake_execute,
     )
     monkeypatch.setattr(
@@ -508,12 +508,12 @@ async def test_mcp_metadata_in_streaming_final_chunk(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         fake_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_execute_tool_calls",
+        "execute_tool_calls",
         fake_execute,
     )
     monkeypatch.setattr(
@@ -863,12 +863,12 @@ async def test_mcp_streaming_metadata_ordering(monkeypatch):
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_process_mcp_tools_without_openai_transform",
+        "process_mcp_tools_without_openai_transform",
         fake_process,
     )
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
-        "_execute_tool_calls",
+        "execute_tool_calls",
         fake_execute,
     )
     monkeypatch.setattr(

@@ -538,7 +538,7 @@ def anthropic_messages_handler(
             LiteLLM_Proxy_MCP_Handler,
         )
 
-        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
+        if LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools):
             return anthropic_messages_with_mcp(
                 max_tokens=max_tokens,
                 messages=messages,
