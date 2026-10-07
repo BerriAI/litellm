@@ -8,6 +8,7 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 DecisionsJSON: TypeAlias = str | Mapping[str, object] | Sequence[object]
 NoulCriteria: TypeAlias = Mapping[Literal["true", "false"], DecisionsJSON | None]
+MAX_DECISION_QUESTIONS: Final = 128
 
 
 class NoulQuestion(LiteLLMPydanticObjectBase):
@@ -47,7 +48,7 @@ DecisionQuestion: TypeAlias = Annotated[
 
 DecisionQuestionMap: TypeAlias = Annotated[
     Mapping[Annotated[str, Field(min_length=1)], DecisionQuestion],
-    Field(min_length=1, max_length=128),
+    Field(min_length=1, max_length=MAX_DECISION_QUESTIONS),
 ]
 
 
@@ -199,7 +200,7 @@ OpenAIDecisionQuestion: TypeAlias = Annotated[
 
 class OpenAIDecisionRequestBody(LiteLLMPydanticObjectBase):
     input: str | Sequence[OpenAIDecisionInputMessage]
-    questions: Annotated[Sequence[OpenAIDecisionQuestion], Field(min_length=1, max_length=200)]
+    questions: Annotated[Sequence[OpenAIDecisionQuestion], Field(min_length=1, max_length=MAX_DECISION_QUESTIONS)]
     safety_identifier: str | None = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
