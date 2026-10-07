@@ -1193,6 +1193,24 @@ class TestBedrockRealtimeUserEventsAndUsage:
         assert [e["type"] for e in events][:1] == ["response.created"]
         assert [e["text"] for e in events if e["type"] == "response.text.done"] == ["Next turn."]
 
+    def test_barge_in_marker_in_final_block_is_dropped_and_the_next_answer_still_flows(self):
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("SPECULATIVE", "I can't check live weather.", "PARTIAL_TURN")
+            + self._assistant_audio_block("INTERRUPTED")
+            + self._assistant_text_block("FINAL", '{ "interrupted" : true }', "INTERRUPTED")
+            + self._assistant_text_block("FINAL", "I can't check live weather.", "INTERRUPTED")
+            + self._assistant_text_block("SPECULATIVE", "Still no live weather.", "PARTIAL_TURN")
+            + self._assistant_audio_block("END_TURN"),
+        )
+        types: Final = [e["type"] for e in events]
+        assert [e["text"] for e in events if e["type"] == "response.text.done"] == [
+            "I can't check live weather.",
+            "Still no live weather.",
+        ]
+        assert types.count("response.created") == 1
+        assert types.count("response.done") == 1
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
