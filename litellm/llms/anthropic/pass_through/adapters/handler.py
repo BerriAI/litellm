@@ -24,6 +24,7 @@ from litellm.llms.anthropic.pass_through.utils import (
     litellm_logging_obj_from_kwargs,
     local_model_name,
 )
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -32,6 +33,7 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
 
@@ -58,6 +60,20 @@ def _messages_have_compaction_block(messages: _AnthropicMessages) -> bool:
             if isinstance(block, dict) and block.get("type") == "compaction":
                 return True
     return False
+
+
+def _record_bridged_response_cost(
+    completion_response: ModelResponse, logging_obj: "LiteLLMLoggingObject | None"
+) -> None:
+    """
+    The Anthropic-shaped response can no longer be priced correctly (its usage drops the image token breakdown),
+    and the success handlers that store this cost run on another thread, so the proxy's x-litellm-response-cost
+    header could read the logging object before they did
+    """
+    response_cost: Final = get_hidden_params_dict(completion_response).get("response_cost")
+    if logging_obj is None or not isinstance(response_cost, (int, float)):
+        return
+    logging_obj.model_call_details["response_cost"] = response_cost
 
 
 def _proxy_router_fallback() -> "Router | None":
@@ -665,6 +681,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         )
 
         completion_response: Final = await litellm.acompletion(**completion_kwargs)
+        bridged_logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
@@ -673,14 +690,16 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=True,
-                litellm_logging_obj=litellm_logging_obj_from_kwargs(kwargs),
+                litellm_logging_obj=bridged_logging_obj,
             )
             if transformed_stream is not None:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            bridged_response: Final = cast(ModelResponse, completion_response)
+            _record_bridged_response_cost(bridged_response, bridged_logging_obj)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
-                cast(ModelResponse, completion_response),
+                bridged_response,
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
             )
@@ -800,6 +819,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         )
 
         completion_response: Final = litellm.completion(**completion_kwargs)
+        bridged_logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
@@ -808,14 +828,16 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=False,
-                litellm_logging_obj=litellm_logging_obj_from_kwargs(kwargs),
+                litellm_logging_obj=bridged_logging_obj,
             )
             if transformed_stream is not None:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            bridged_response: Final = cast(ModelResponse, completion_response)
+            _record_bridged_response_cost(bridged_response, bridged_logging_obj)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
-                cast(ModelResponse, completion_response),
+                bridged_response,
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
             )
