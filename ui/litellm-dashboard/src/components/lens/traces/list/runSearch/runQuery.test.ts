@@ -56,6 +56,12 @@ describe("RUN_INDEX values", () => {
   });
 });
 
+it("matches a run the server sent with no agent names by its service", () => {
+  const legacy = run({ trace_id: "ddd444", service: "claude-agent-sdk-demo", agent_names: [] });
+  expect(filterRuns([legacy], "", { agent: "claude-agent-sdk-demo", status: "all" })).toEqual([legacy]);
+  expect(filterRuns([legacy], "agent:claude-agent-sdk-demo")).toEqual([legacy]);
+});
+
 it("combines quick filters with search and treats agent names literally", () => {
   const selected = filterRuns(runs, "vector", { agent: "researcher", status: "error" });
   expect(selected.map((run) => run.trace_id)).toEqual(["bbb222"]);
