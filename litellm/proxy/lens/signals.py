@@ -3,6 +3,7 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
+from itertools import accumulate
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
@@ -235,21 +236,43 @@ def candidate(
 
 
 def _take_head(steps: tuple[SignalStep, ...], remaining: int) -> tuple[SignalStep, ...]:
-    if not steps or remaining <= 0:
+    if remaining <= 0:
         return ()
-    first: Final = steps[0]
-    if len(first.content) <= remaining:
-        return (first, *_take_head(steps[1:], remaining - len(first.content)))
-    return (first.model_copy(update=MappingProxyType({"content": first.content[:remaining]})),)
+    cumulative_lengths: Final = tuple(accumulate(len(step.content) for step in steps))
+    boundary: Final = next((index for index, total in enumerate(cumulative_lengths) if total >= remaining), None)
+    if boundary is None:
+        return steps
+    preceding: Final = steps[:boundary]
+    last: Final = steps[boundary]
+    used: Final = cumulative_lengths[boundary - 1] if boundary > 0 else 0
+    last_length: Final = remaining - used
+    return (
+        *preceding,
+        last
+        if last_length == len(last.content)
+        else last.model_copy(update=MappingProxyType({"content": last.content[:last_length]})),
+    )
 
 
 def _take_tail(steps: tuple[SignalStep, ...], remaining: int) -> tuple[SignalStep, ...]:
-    if not steps or remaining <= 0:
+    if remaining <= 0:
         return ()
-    last: Final = steps[-1]
-    if len(last.content) <= remaining:
-        return (*_take_tail(steps[:-1], remaining - len(last.content)), last)
-    return (last.model_copy(update=MappingProxyType({"content": last.content[-remaining:]})),)
+    reversed_steps: Final = tuple(reversed(steps))
+    cumulative_lengths: Final = tuple(accumulate(len(step.content) for step in reversed_steps))
+    boundary: Final = next((index for index, total in enumerate(cumulative_lengths) if total >= remaining), None)
+    if boundary is None:
+        return steps
+    preceding: Final = reversed_steps[:boundary]
+    last: Final = reversed_steps[boundary]
+    used: Final = cumulative_lengths[boundary - 1] if boundary > 0 else 0
+    last_length: Final = remaining - used
+    selected: Final = (
+        *preceding,
+        last
+        if last_length == len(last.content)
+        else last.model_copy(update=MappingProxyType({"content": last.content[-last_length:]})),
+    )
+    return tuple(reversed(selected))
 
 
 def _bounded_steps(steps: tuple[SignalStep, ...]) -> tuple[SignalStep, ...]:
