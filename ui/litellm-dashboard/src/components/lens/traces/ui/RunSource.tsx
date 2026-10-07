@@ -16,18 +16,17 @@ type SourceType = Source["type"];
 
 interface SourceApp {
   readonly label: string;
-  readonly link: string;
   readonly logo: string | null;
 }
 
 const APPS: Readonly<Record<SourceType, SourceApp>> = {
-  slack: { label: "Slack", link: "Slack thread", logo: slackLogo.src },
-  teams: { label: "Microsoft Teams", link: "Teams thread", logo: null },
-  discord: { label: "Discord", link: "Discord thread", logo: null },
-  linear: { label: "Linear", link: "Linear issue", logo: linearLogo.src },
-  github: { label: "GitHub", link: "GitHub thread", logo: githubLogo.src },
-  jira: { label: "Jira", link: "Jira issue", logo: jiraLogo.src },
-  custom: { label: "Conversation", link: "Agent conversation", logo: null },
+  slack: { label: "Slack", logo: slackLogo.src },
+  teams: { label: "Teams", logo: null },
+  discord: { label: "Discord", logo: null },
+  linear: { label: "Linear", logo: linearLogo.src },
+  github: { label: "GitHub", logo: githubLogo.src },
+  jira: { label: "Jira", logo: jiraLogo.src },
+  custom: { label: "Conversation", logo: null },
 };
 
 export function sourceApp(source: Pick<Source, "type" | "url">): SourceApp | null {
@@ -50,15 +49,19 @@ export function RunSourceLink({ source }: { source: Source }) {
   if (!app) return null;
   return (
     <HoverCard>
-      <HoverCardTrigger
-        href={source.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-muted/60 px-2 py-0.5 font-medium text-foreground transition-colors hover:bg-muted active:scale-[0.97]"
-      >
-        <AppMark app={app} className="size-3 shrink-0" />
-        {app.link}
-      </HoverCardTrigger>
+      <span className="inline-flex items-center gap-1">
+        Source
+        <HoverCardTrigger
+          href={source.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`Source: ${app.label}`}
+          className="inline-flex items-center gap-1 font-medium text-foreground underline-offset-2 hover:underline"
+        >
+          <AppMark app={app} className="size-3 shrink-0" />
+          {app.label}
+        </HoverCardTrigger>
+      </span>
       <HoverCardContent align="start" className="w-72 p-3">
         <a href={source.url} target="_blank" rel="noopener noreferrer" className="flex flex-col gap-1.5">
           <span className="line-clamp-2 text-sm font-medium text-foreground">
