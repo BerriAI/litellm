@@ -5,6 +5,10 @@ Regression tests for https://github.com/BerriAI/litellm/issues/36493
 (e.g. seed) and the extra_body escape hatch, unlike /v1/images/generations.
 """
 
+import base64
+import json
+from typing import Final
+
 import httpx
 import pytest
 
@@ -165,3 +169,64 @@ async def test_aimage_edit_forwards_extra_body():
     assert fields["quality_level"] == "high"
     assert "extra_body" not in fields
     assert response.data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("use_extra_body", [False, True])
+async def test_vertex_image_edit_preserves_image_config_and_system_instruction(
+    use_async: bool, use_extra_body: bool
+) -> None:
+    image_config: Final = {"aspect_ratio": "3:2", "image_size": "4K"}
+    instruction: Final = "Preserve the subject and use the second image as a color reference"
+    prompt: Final = "Change the color"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content) == {
+            "contents": {
+                "role": "USER",
+                "parts": [
+                    {"inlineData": {"mimeType": "image/png", "data": base64.b64encode(PNG_BYTES).decode()}},
+                    {"inlineData": {"mimeType": "image/png", "data": base64.b64encode(PNG_BYTES).decode()}},
+                    {"text": prompt},
+                ],
+            },
+            "generationConfig": {
+                "response_modalities": ["IMAGE"],
+                "imageConfig": {"aspectRatio": "3:2", "imageSize": "4K"},
+            },
+            "systemInstruction": {"parts": [{"text": instruction}]},
+        }
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"inlineData": {"data": "aW1n"}}]}}]},
+        )
+
+    params: Final = {"image_config": image_config, "system_instruction": instruction}
+    request_params: Final = (
+        {"image_config": {"aspect_ratio": "1:1"}, "extra_body": params} if use_extra_body else params
+    )
+    if use_async:
+        async_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+        async with async_handler.client:
+            response = await litellm.aimage_edit(
+                model="vertex_ai/gemini-3.1-flash-image",
+                image=[PNG_BYTES, PNG_BYTES],
+                prompt=prompt,
+                size="1024x1024",
+                api_base="https://edit.example/generateContent",
+                client=async_handler,
+                **request_params,
+            )
+    else:
+        with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
+            response = litellm.image_edit(
+                model="vertex_ai/gemini-3.1-flash-image",
+                image=[PNG_BYTES, PNG_BYTES],
+                prompt=prompt,
+                size="1024x1024",
+                api_base="https://edit.example/generateContent",
+                client=HTTPHandler(client=http_client),
+                **request_params,
+            )
+    assert response.data[0].b64_json == "aW1n"

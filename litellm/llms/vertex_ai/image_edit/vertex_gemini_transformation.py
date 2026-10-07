@@ -1,19 +1,24 @@
 import base64
 import json
 import os
+from collections.abc import Mapping
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.gemini.common_utils import (
+    get_gemini_image_generation_config,
+    map_openai_size_to_gemini_image_config,
+)
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.vertex_ai import (
     GenerateContentResponseBody,
     HttpxContentType,
@@ -40,14 +45,21 @@ def _generate_content_payload(response: _GenerateContentSource) -> GenerateConte
     return response.json()
 
 
+_CONTENT_OBJECT: Final = TypeAdapter(dict[str, object])
+
+
 class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     """
     Vertex AI Gemini Image Edit Configuration
 
-    Uses generateContent API for Gemini models on Vertex AI
+    Uses generateContent API for Gemini models on Vertex AI.
+
+    image_config/imageConfig overrides size-derived settings. system_instruction
+    accepts text or a Content object; systemInstruction accepts a Content object
+    or its JSON representation for multipart requests.
     """
 
-    SUPPORTED_PARAMS: list[str] = ["size"]
+    SUPPORTED_PARAMS: list[str] = ["size", "image_config", "imageConfig", "system_instruction", "systemInstruction"]
 
     def __init__(self) -> None:
         BaseImageEditConfig.__init__(self)
@@ -58,16 +70,41 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
     def map_openai_params(
         self,
-        image_edit_optional_params: ImageEditOptionalRequestParams,
+        image_edit_optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict[str, str]:
-        supported_params: Final = self.get_supported_openai_params(model)
-        if "size" not in supported_params or "size" not in image_edit_optional_params:
-            return {}
-
+    ) -> dict[str, object]:
         size: Final = image_edit_optional_params.get("size")
-        return {"aspectRatio": self._map_size_to_aspect_ratio(size or "")}
+        size_config: Final = map_openai_size_to_gemini_image_config(size, model) if isinstance(size, str) else None
+        raw_image_config: Final = image_edit_optional_params.get(
+            "imageConfig", image_edit_optional_params.get("image_config")
+        )
+        explicit_config: Final = (
+            _CONTENT_OBJECT.validate_json(raw_image_config)
+            if isinstance(raw_image_config, str)
+            else _CONTENT_OBJECT.validate_python(raw_image_config or {})
+        )
+        config_aliases: Final = {"aspect_ratio": "aspectRatio", "image_size": "imageSize"}
+        image_config: Final = {
+            **(size_config or {}),
+            **{config_aliases.get(key, key): value for key, value in explicit_config.items()},
+        }
+        raw_system_instruction: Final = image_edit_optional_params.get(
+            "systemInstruction", image_edit_optional_params.get("system_instruction")
+        )
+        system_instruction: Final = (
+            {"parts": [{"text": raw_system_instruction}]}
+            if isinstance(raw_system_instruction, str) and "systemInstruction" not in image_edit_optional_params
+            else (
+                _CONTENT_OBJECT.validate_json(raw_system_instruction)
+                if isinstance(raw_system_instruction, str)
+                else raw_system_instruction
+            )
+        )
+        return {
+            **({"imageConfig": image_config} if image_config else {}),
+            **({"systemInstruction": system_instruction} if system_instruction is not None else {}),
+        }
 
     def _resolve_vertex_project(self) -> str | None:
         return (
@@ -175,18 +212,16 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         # Correct format for Vertex AI Gemini image editing
         contents: Final[dict[str, object]] = {"role": "USER", "parts": parts}
 
-        # Add image-specific configuration
-        image_config: Final = (
-            {"aspect_ratio": image_edit_optional_request_params["aspectRatio"]}
-            if "aspectRatio" in image_edit_optional_request_params
-            else None
-        )
-
         generation_config: Final[dict[str, object]] = {
-            key: value for key, value in (("response_modalities", ["IMAGE"]), ("image_config", image_config)) if value
+            **get_gemini_image_generation_config(model, image_edit_optional_request_params),
+            "response_modalities": ["IMAGE"],
         }
-
-        request_body: Final[dict[str, object]] = {"contents": contents, "generationConfig": generation_config}
+        system_instruction: Final = image_edit_optional_request_params.get("systemInstruction")
+        request_body: Final[dict[str, object]] = {
+            "contents": contents,
+            "generationConfig": generation_config,
+            **({"systemInstruction": system_instruction} if system_instruction is not None else {}),
+        }
 
         payload: Final = json.dumps(request_body)
         empty_files: Final = cast(RequestFiles, [])
@@ -221,17 +256,6 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         model_response.data = cast(list[OpenAIImage], data_list)
         return model_response
-
-    def _map_size_to_aspect_ratio(self, size: str) -> str:
-        """Map OpenAI size format to Gemini aspect ratio format"""
-        aspect_ratio_map: Final = {
-            "1024x1024": "1:1",
-            "1792x1024": "16:9",
-            "1024x1792": "9:16",
-            "1280x896": "4:3",
-            "896x1280": "3:4",
-        }
-        return aspect_ratio_map.get(size, "1:1")
 
     def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[HttpxPartType]:
         images: Final[list[FileTypes]] = image if isinstance(image, list) else [image]
