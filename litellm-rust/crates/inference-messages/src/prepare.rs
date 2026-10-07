@@ -109,13 +109,7 @@ fn prepare_provider_request(
         auth: validated.auth,
     };
 
-    let url = if transformed
-        .params
-        .stream
-        .as_ref()
-        .and_then(Nullable::value)
-        == Some(&true)
-    {
+    let url = if transformed.params.stream.as_ref().and_then(Nullable::value) == Some(&true) {
         config.complete_stream_url(api_base.as_deref(), &transformed.model, &env_lookup)?
     } else {
         config.get_complete_url(api_base.as_deref(), &transformed.model, &env_lookup)?

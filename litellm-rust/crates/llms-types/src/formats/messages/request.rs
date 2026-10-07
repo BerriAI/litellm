@@ -392,51 +392,143 @@ pub struct MessagesRequest {
 #[macro_rules_attribute::apply(wire_type)]
 #[derive(Default)]
 pub struct MessagesOptionalParams {
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub max_tokens: Option<Nullable<u64>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub system: Option<Nullable<SystemPrompt>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub metadata: Option<Recognized<MessagesMetadata>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub stop_sequences: Option<Nullable<Vec<String>>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub stream: Option<Nullable<bool>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub temperature: Option<Nullable<f64>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub top_p: Option<Nullable<f64>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub top_k: Option<Nullable<i64>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub tools: Option<Nullable<Vec<Recognized<MessagesTool>>>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub tool_choice: Option<Recognized<ToolChoice>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub thinking: Option<Recognized<ThinkingConfig>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub service_tier: Option<Nullable<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub container: Option<Recognized<ContainerReference>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub mcp_servers: Option<Nullable<Vec<Recognized<McpServer>>>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub context_management: Option<Recognized<ContextManagement>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub output_format: Option<Recognized<OutputFormat>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub output_config: Option<Recognized<OutputConfig>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub speed: Option<Recognized<Speed>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub inference_geo: Option<Nullable<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub reasoning_effort: Option<Recognized<ReasoningEffort>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub compaction: Option<Recognized<MessagesCompaction>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub cache_control: Option<Recognized<CacheControl>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub safeguards: Option<Recognized<Vec<Recognized<Safeguard>>>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,

@@ -70,9 +70,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
                 params: MessagesOptionalParams {
                     system: request.params.system.map(|system| match system {
                         Nullable::Null => Nullable::Null,
-                        Nullable::Value(system) => {
-                            Nullable::Value(strip_scope_from_system(system))
-                        }
+                        Nullable::Value(system) => Nullable::Value(strip_scope_from_system(system)),
                     }),
                     ..request.params
                 },

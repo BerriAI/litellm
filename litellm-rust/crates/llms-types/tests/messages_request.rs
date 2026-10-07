@@ -244,7 +244,13 @@ fn mcp_container_compaction_and_output_format_are_typed() {
         "output_format":{"type":"json_schema","schema":{"type":"object"},"strict":true}
     });
     let parsed: MessagesOptionalParams = serde_json::from_value(wire.clone()).unwrap();
-    let server = parsed.mcp_servers.as_ref().unwrap()[0].known().unwrap();
+    let server = parsed
+        .mcp_servers
+        .as_ref()
+        .and_then(Nullable::value)
+        .unwrap()[0]
+        .known()
+        .unwrap();
     assert_eq!(server.server_type, McpServerType::Url);
     assert_eq!(
         server.url,

@@ -135,13 +135,7 @@ fn response_exposes_content_usage_and_metadata(response_wire: Value) {
         Some(Recognized::Known(2))
     );
     assert_eq!(
-        response
-            .container
-            .as_ref()
-            .unwrap()
-            .known()
-            .unwrap()
-            .id,
+        response.container.as_ref().unwrap().known().unwrap().id,
         Some(Recognized::Known("container_1".into()))
     );
     let iterations = usage.iterations.as_ref().unwrap().known().unwrap();

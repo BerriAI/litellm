@@ -1,4 +1,5 @@
 use litellm_auth::CredentialPlacement;
+use litellm_llms_types::serde_compat::Nullable;
 use litellm_llms_types::{
     formats::messages::{
         ContentBlock, ContentBlockType, ContextEdit, ContextManagement, ContextTrigger, Message,
@@ -7,7 +8,6 @@ use litellm_llms_types::{
     providers::anthropic::{AnthropicBeta, BetaSet},
     recognized::Recognized,
 };
-use litellm_llms_types::serde_compat::Nullable;
 use serde_json::{Map, Value, json};
 
 use super::{
@@ -115,6 +115,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum ThinkingSemantics {
     /// Claude's rules: disabled thinking is dropped, legacy and adaptive thinking and effort
     /// are rewritten for the model, and a temperature that conflicts with thinking is removed.
@@ -124,6 +125,7 @@ pub(crate) enum ThinkingSemantics {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum BillingMetadata {
     Forward,
     Strip,
@@ -142,6 +144,7 @@ pub(crate) const FIRST_PARTY_REQUEST_POLICY: RequestPolicy = RequestPolicy {
 };
 
 /// A third-party host that speaks the Anthropic wire format but is not Claude.
+#[allow(dead_code)]
 pub(crate) const COMPATIBLE_HOST_REQUEST_POLICY: RequestPolicy = RequestPolicy {
     thinking: ThinkingSemantics::Passthrough,
     billing_metadata: BillingMetadata::Strip,
@@ -271,6 +274,7 @@ pub(crate) fn transform_messages_request_with(
             safeguards: params
                 .safeguards
                 .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+            extra: params.extra,
         },
         ..request
     };
@@ -291,13 +295,7 @@ pub(crate) fn transform_messages_request_with(
         .context_management
         .clone()
         .map(map_openai_context_management_to_anthropic);
-    let messages = if has_advisor_tool(
-        request
-            .params
-            .tools
-            .as_ref()
-            .and_then(Nullable::as_deref),
-    ) {
+    let messages = if has_advisor_tool(request.params.tools.as_ref().and_then(Nullable::as_deref)) {
         request.messages
     } else {
         strip_advisor_blocks(request.messages)
@@ -676,8 +674,7 @@ mod tests {
             "messages": [{"role": "user", "content": "Hello"}]
         }))
         .unwrap();
-        let missing_error =
-            transform_messages_request_with(missing, &context, policy).unwrap_err();
+        let missing_error = transform_messages_request_with(missing, &context, policy).unwrap_err();
         let explicit_null_error =
             transform_messages_request_with(explicit_null, &context, policy).unwrap_err();
         assert_eq!(explicit_null_error, missing_error);

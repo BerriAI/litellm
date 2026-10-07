@@ -12,7 +12,6 @@ use litellm_llms::base_llm::{
     },
 };
 use litellm_llms_types::formats::messages::MessagesResponse;
-use litellm_llms_types::serde_compat::Nullable;
 use litellm_tracing::ByteChunk;
 use serde_json::Value;
 

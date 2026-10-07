@@ -114,9 +114,7 @@ mod tests {
             MessagesStreamEvent::MessageStop {
                 usage: Some(litellm_llms_types::serde_compat::Nullable::Value(Box::new(
                     MessagesUsage {
-                        output_tokens: Some(
-                            litellm_llms_types::serde_compat::Nullable::Value(7),
-                        ),
+                        output_tokens: Some(litellm_llms_types::serde_compat::Nullable::Value(7)),
                         ..MessagesUsage::default()
                     },
                 ))),
