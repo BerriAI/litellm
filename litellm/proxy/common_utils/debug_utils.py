@@ -8,7 +8,7 @@ import sys
 import tracemalloc
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, NamedTuple, Protocol, TypedDict
+from typing import Annotated, Any, Final, NamedTuple, Protocol, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing_extensions import ReadOnly
@@ -16,8 +16,11 @@ from typing_extensions import ReadOnly
 from litellm import get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PYTHON_GC_THRESHOLD
+from litellm.litellm_core_utils.bug_report import EnvironmentReport
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.bug_report_config import build_proxy_environment_report
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 
 router: Final = APIRouter()
 
@@ -328,7 +331,7 @@ async def get_memory_summary(
     - garbage_collector: GC status and pending object counts
 
     Example usage:
-    curl http://localhost:4000/debug/memory/summary -H "Authorization: Bearer sk-1234"
+    curl http://localhost:4000/debug/memory/summary -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     For detailed analysis, call GET /debug/memory/details
     For cache management, use the cache management endpoints
@@ -689,7 +692,7 @@ async def get_memory_details(
     - include_process_info: Include process-level memory info using psutil (default: true)
 
     Example usage:
-    curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer sk-1234"
+    curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     All memory sizes are reported in both bytes and MB.
     """
@@ -751,10 +754,10 @@ async def configure_gc_thresholds_endpoint(
     - generation_2: Number of gen-1 collections before gen-2 collection (default: 10)
 
     Example for more aggressive collection:
-    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500" -H "Authorization: Bearer sk-1234"
+    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     Example for less aggressive collection:
-    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000" -H "Authorization: Bearer sk-1234"
+    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     Monitor memory usage with GET /debug/memory/summary after changes.
     """
@@ -781,6 +784,23 @@ async def configure_gc_thresholds_endpoint(
         "objects_awaiting_collection": current_count,
         "tip": f"Next collection will run after {generation_0 - current_count} more allocations",
     }
+
+
+@router.get("/debug/report", include_in_schema=False)
+async def get_debug_report(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> EnvironmentReport:
+    """
+    The same LiteLLM-owned environment facts the bug report link puts in a GitHub issue:
+    versions, deployment kind, and config flags whose keys and values LiteLLM defines.
+    Nothing from the operator's config values, request data, or errors
+
+    Example usage:
+    curl http://localhost:4000/debug/report -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+    """
+    if not is_proxy_admin(user_api_key_dict):
+        raise HTTPException(status_code=403, detail="Only proxy admins can read /debug/report")
+    return build_proxy_environment_report()
 
 
 @router.get(

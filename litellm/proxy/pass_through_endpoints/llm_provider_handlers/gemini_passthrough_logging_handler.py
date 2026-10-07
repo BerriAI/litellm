@@ -1,4 +1,5 @@
 import re
+from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
@@ -17,6 +18,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrou
 )
 from litellm.types.utils import (
     ModelResponse,
+    ModelResponseStream,
     TextCompletionResponse,
 )
 
@@ -79,8 +81,8 @@ class GeminiPassthroughLoggingHandler:
 
             # Set response_cost in _hidden_params to prevent recalculation
             if not hasattr(litellm_video_response, "_hidden_params"):
-                litellm_video_response._hidden_params = {}
-            litellm_video_response._hidden_params["response_cost"] = response_cost
+                litellm_video_response.hidden_params = {}
+            litellm_video_response.hidden_params["response_cost"] = response_cost
 
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
@@ -147,7 +149,7 @@ class GeminiPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
-        kwargs: dict[str, Any] = {}
+        kwargs: dict[str, object] = {}
         model = model or GeminiPassthroughLoggingHandler.extract_model_from_url(url_route)
         complete_streaming_response: Final = GeminiPassthroughLoggingHandler._build_complete_streaming_response(
             all_chunks=all_chunks,
@@ -194,7 +196,9 @@ class GeminiPassthroughLoggingHandler:
                 sync_stream=False,
                 logging_obj=litellm_logging_obj,
             )
-            chunk_parsing_logic: Final[Any] = gemini_iterator._common_chunk_parsing_logic
+            chunk_parsing_logic: Final[Callable[[str], ModelResponseStream | None]] = (
+                gemini_iterator._common_chunk_parsing_logic
+            )
             parsed_chunks = [chunk_parsing_logic(chunk) for chunk in all_chunks]
         else:
             return None

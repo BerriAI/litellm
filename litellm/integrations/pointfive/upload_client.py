@@ -24,6 +24,7 @@ from litellm.types.integrations.pointfive import (
     PointFiveUploadFailure,
     PointFiveUploadTarget,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 UPLOAD_KIND: Final = "LITELLM"
 UPLOAD_URL_PATH: Final = "/upload-url"
@@ -31,21 +32,21 @@ PING_PATH: Final = "/ping"
 PUT_HEADERS: Final = MappingProxyType({"Content-Type": "application/x-ndjson", "Content-Encoding": "gzip"})
 
 
-class _PresignRequest(BaseModel):
+class _PresignRequest(LiteLLMBaseModel):
     kind: str = UPLOAD_KIND
     byte_count: int = Field(serialization_alias="byteCount")
 
 
-class _PingRequest(BaseModel):
+class _PingRequest(LiteLLMBaseModel):
     kind: str = UPLOAD_KIND
 
 
-class _TargetPayload(BaseModel):
+class _TargetPayload(LiteLLMBaseModel):
     upload_url: str = Field(alias="uploadUrl")
     object_key: str = Field(alias="objectKey")
 
 
-class _ErrorPayload(BaseModel):
+class _ErrorPayload(LiteLLMBaseModel):
     error: str = ""
 
 
@@ -147,7 +148,7 @@ class PointFiveUploadClient:
             response: Final = await self.http_client.post(
                 self.api_url + path,
                 json=request.model_dump(by_alias=True),
-                headers={  # mutable-ok: AsyncHTTPHandler.post types headers as dict
+                headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 },
@@ -172,7 +173,7 @@ class PointFiveUploadClient:
         if isinstance(destination, PointFiveUploadFailure):
             return destination
         url, host = destination
-        headers: Final = dict(PUT_HEADERS, Host=host) if host else dict(PUT_HEADERS)  # mutable-ok: put wants dict
+        headers: Final = dict(PUT_HEADERS, Host=host) if host else dict(PUT_HEADERS)
         try:
             await self.http_client.put(url, data=body, headers=headers, follow_redirects=False)
         except httpx.HTTPStatusError as e:

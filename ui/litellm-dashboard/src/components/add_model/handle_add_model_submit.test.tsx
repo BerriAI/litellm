@@ -101,4 +101,23 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.litellmParamsObj.litellm_credential_name).toBe("from-json");
     expect(deployment.litellmParamsObj.timeout).toBe(5);
   });
+
+  it.each([
+    ["OpenAI", "openai/*"],
+    ["Azure_AI_Studio", "azure_ai/*"],
+    ["Petals", "petals/*"],
+  ])("composes wildcard names for the all-model selection", async (custom_llm_provider, wildcardModel) => {
+    const formValues = {
+      model_mappings: [],
+      model: "all-wildcard",
+      custom_llm_provider,
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments).toHaveLength(1);
+    const [deployment] = deployments!;
+    expect(deployment.modelName).toBe(wildcardModel);
+    expect(deployment.litellmParamsObj.model).toBe(wildcardModel);
+  });
 });

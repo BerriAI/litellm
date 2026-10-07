@@ -1,6 +1,7 @@
+import itertools
 import re
-from collections.abc import Collection
-from typing import Final
+from collections.abc import Collection, Iterable, Mapping
+from typing import Final, cast
 
 from fastapi import HTTPException, Request, status
 
@@ -194,6 +195,16 @@ class RouteChecks:
         if denied_auth_enforced_pass_through_route:
             raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
+        if valid_token.metadata.get("password_reset_required") is True:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "This account's password must be changed before the session can be used: "
+                    "it was either found in a known data breach or set by an admin. "
+                    "Change it via POST /user/password/change (UI: /ui/change-password), then log in again."
+                ),
+            )
+
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}",
@@ -218,7 +229,7 @@ class RouteChecks:
         # Use SensitiveDataMasker with custom configuration for user_id
         masker: Final = SensitiveDataMasker(visible_prefix=6, visible_suffix=2, mask_char="*")
 
-        return masker._mask_value(user_id)
+        return masker.mask_value(user_id)
 
     @staticmethod
     def _raise_admin_only_route_exception(
@@ -268,7 +279,11 @@ class RouteChecks:
             route=route,
             method=RouteChecks._get_request_method(request=request),
         ):
-            RouteChecks._require_auth_pass_through_access(route=route, valid_token=valid_token)
+            RouteChecks._require_auth_pass_through_access(
+                route=route,
+                valid_token=valid_token,
+                jwt_team_allowed_routes=RouteChecks._jwt_team_allowed_routes(valid_token=valid_token),
+            )
         elif RouteChecks.is_llm_api_route(route=route):
             pass
         elif RouteChecks.is_info_route(route=route):
@@ -326,7 +341,12 @@ class RouteChecks:
             pass
         elif route.startswith("/v1/mcp/") or route.startswith("/mcp-rest/"):
             pass  # authN/authZ handled by api itself
-        elif RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
+        elif RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token) or (
+            valid_token.is_team_service_account
+            and RouteChecks.check_route_access(
+                route=route, allowed_routes=LiteLLMRoutes.team_service_account_key_routes.value
+            )
+        ):
             pass
         elif valid_token.allowed_routes is not None:
             # check if route is in allowed_routes (exact match or prefix match)
@@ -391,7 +411,7 @@ class RouteChecks:
         if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.agent_inference_routes.value):
             return True
 
-        if route in LiteLLMRoutes.litellm_native_routes.value:
+        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.litellm_native_routes.value):
             return True
 
         # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
@@ -675,14 +695,107 @@ class RouteChecks:
         )
 
     @staticmethod
+    def _route_matches_denied_route(route: str, denied_route: str) -> bool:
+        """A `/` entry denies every route, since every route sits under the root."""
+        normalized_denied_route: Final = denied_route.rstrip("/") or "/"
+        return (
+            normalized_denied_route == "/"
+            or RouteChecks._route_matches_allowed_route(route=route, allowed_route=normalized_denied_route)
+            or RouteChecks.route_matches_wildcard_pattern(route=route, pattern=denied_route)
+        )
+
+    @staticmethod
+    def matching_denied_passthrough_route(
+        route: str, metadata_sources: Iterable[Mapping[str, object] | None]
+    ) -> str | None:
+        """
+        First ``denied_passthrough_routes`` entry across ``metadata_sources`` that matches ``route``.
+        Unlike the allowlist (key list, else team list), every source's deny list applies.
+        """
+        denied_routes: Final = tuple(
+            itertools.chain.from_iterable(
+                cast(  # cast-ok: management endpoints validate this metadata key as a list of route strings on write
+                    "list[str]", (metadata or {}).get("denied_passthrough_routes") or []
+                )
+                for metadata in metadata_sources
+            )
+        )
+        if not denied_routes:
+            return None
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+        )
+
+        forwarded_routes: Final = InitPassThroughEndpointHelpers.forwarded_routes(route)
+        return next(
+            (
+                denied_route
+                for denied_route in denied_routes
+                if any(
+                    RouteChecks._route_matches_denied_route(route=candidate, denied_route=denied_route)
+                    for candidate in forwarded_routes
+                )
+            ),
+            None,
+        )
+
+    @staticmethod
+    def passthrough_route_denied_exception(route: str, denied_route: str) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Key/team denied access to passthrough route {route}. "
+                f"Matched `{denied_route}` in `denied_passthrough_routes`."
+            ),
+        )
+
+    @staticmethod
+    def _raise_if_passthrough_route_denied(route: str, valid_token: UserAPIKeyAuth) -> None:
+        denied_route: Final = RouteChecks.matching_denied_passthrough_route(
+            route=route,
+            metadata_sources=(valid_token.metadata, valid_token.team_metadata),
+        )
+        if denied_route is not None:
+            raise RouteChecks.passthrough_route_denied_exception(route=route, denied_route=denied_route)
+
+    @staticmethod
+    def jwt_team_routes_grant_pass_through(route: str, team_allowed_routes: Collection[str]) -> bool:
+        """
+        Explicit paths and trailing-wildcard prefixes grant auth=true pass-through. Blanket grants never do:
+        a named route group like ``openai_routes`` is only ever compared as a path, and an entry that names
+        no path segment (``*``, ``/*``) is skipped.
+        """
+        return any(
+            RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route)
+            for allowed_route in team_allowed_routes
+            if allowed_route.rstrip("*").strip("/")
+        )
+
+    @staticmethod
+    def _jwt_team_allowed_routes(valid_token: UserAPIKeyAuth) -> Collection[str]:
+        """``team_allowed_routes`` for team tokens built by JWT auth; JWT-mapped virtual keys stay key-scoped."""
+        if valid_token.jwt_claims is None or valid_token.token is not None or valid_token.team_id is None:
+            return ()
+
+        from litellm.proxy.proxy_server import jwt_handler
+
+        return jwt_handler.litellm_jwtauth.team_allowed_routes
+
+    @staticmethod
     def _require_auth_pass_through_access(
         route: str,
         valid_token: UserAPIKeyAuth,
+        jwt_team_allowed_routes: Collection[str] = (),
     ) -> None:
         """
-        Require an explicit ``allowed_passthrough_routes`` match for auth=true pass-through.
+        Require an explicit grant for auth=true pass-through: ``allowed_passthrough_routes`` on the
+        key or team, or an explicit JWT ``team_allowed_routes`` entry. A key or team
+        ``denied_passthrough_routes`` match blocks the route even when one of those grants it.
         """
+        RouteChecks._raise_if_passthrough_route_denied(route=route, valid_token=valid_token)
         if RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
+            return
+        if RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=jwt_team_allowed_routes):
             return
         raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
@@ -807,7 +920,8 @@ class RouteChecks:
              in the codebase is automatically readable by Admin Viewer
              without needing to remember to add it to an allowlist.
           3. Unsafe HTTP method (POST/PUT/PATCH/DELETE):
-             - Allow `/user/update` only when restricted to user_email/password.
+             - Allow `/user/update` only when restricted to user_email.
+             - Allow `/user/password/change` (endpoint only writes the caller's own row).
              - Block all explicit writes in `_ADMIN_VIEWER_BLOCKED_WRITE_ROUTES`.
              - Otherwise allow only if the route is in admin_viewer_routes /
                global_spend_tracking_routes (legacy explicit-allow set).
@@ -827,10 +941,10 @@ class RouteChecks:
                 if request_data is not None and isinstance(request_data, dict):
                     _params_updated: Final = request_data.keys()
                     for param in _params_updated:
-                        if param not in ["user_email", "password"]:
+                        if param != "user_email":
                             raise HTTPException(
                                 status_code=status.HTTP_403_FORBIDDEN,
-                                detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
+                                detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email can be updated",
                             )
             elif RouteChecks.check_route_access(route=route, allowed_routes=_PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES) or (
                 route.startswith("/key/") and route.endswith(_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES)
@@ -849,19 +963,27 @@ class RouteChecks:
             return
 
         # ── Unsafe HTTP method: explicit checks ──────────────────────────
-        # Allow `/user/update` for self-service email / password change.
+        # Allow `/user/update` for self-service email change.
         if route == "/user/update":
             if request_data is not None and isinstance(request_data, dict):
                 for param in request_data:
-                    if param not in ["user_email", "password"]:
+                    if param != "user_email":
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail=(
                                 f"user not allowed to access this route, role= {_user_role}. "
                                 f"Trying to access: {route} and updating invalid param: {param}. "
-                                "only user_email and password can be updated"
+                                "only user_email can be updated"
                             ),
                         )
+            return
+
+        # Self-service password change; the endpoint only writes the caller's own row.
+        if route == "/user/password/change":
+            return
+
+        # Self-service logout; the endpoint only revokes the caller's own session key.
+        if route == "/session/logout":
             return
 
         # Hard-block known write routes regardless of HTTP method (defensive

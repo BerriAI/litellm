@@ -94,24 +94,19 @@ export async function makeInteractionsRequest(
 
         const eventType = event.event_type as string | undefined;
 
-        if (eventType === "interaction.start" || eventType === "interaction.complete") {
-          // Capture model from either the native Gemini shape (nested under
-          // `interaction`) or the bridge shape (top-level `model` field).
+        if (eventType === "interaction.created" || eventType === "interaction.completed") {
           const interaction = event.interaction as Record<string, unknown> | undefined;
           if (typeof interaction?.model === "string" && interaction.model) {
             responseModel = interaction.model;
           } else if (typeof event.model === "string" && event.model) {
             responseModel = event.model;
           }
-        } else if (eventType === "content.delta" || eventType === "content.start") {
+        } else if (eventType === "step.delta") {
           const delta = event.delta as Record<string, unknown> | undefined;
-          // Accept both native Gemini format {"type":"text","text":"..."} and bridge
-          // format {"text":"..."} (no type discriminator)
           if (typeof delta?.text === "string" && delta.text) {
             updateUI(delta.text, responseModel ?? selectedModel);
           }
         }
-        // content.start, content.stop, interaction.status_update — no UI action needed
       }
     }
   } catch (error: unknown) {

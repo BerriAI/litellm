@@ -15,8 +15,8 @@ from litellm.integrations.prompt_management_base import (
     PromptManagementClient,
 )
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.openai import AllMessageValues
@@ -58,7 +58,7 @@ class GenericPromptManager(CustomPromptManagement):
         api_key: str | None = None,
         timeout: int = 30,
         prompt_id: str | None = None,
-        additional_provider_specific_query_params: dict[str, Any] | None = None,
+        additional_provider_specific_query_params: Mapping[str, object] | None = None,
         **kwargs,
     ):
         """
@@ -93,7 +93,7 @@ class GenericPromptManager(CustomPromptManagement):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def _fetch_prompt_from_api(self, prompt_id: str | None, prompt_spec: PromptSpec | None) -> dict[str, Any]:
+    def _fetch_prompt_from_api(self, prompt_id: str | None, prompt_spec: PromptSpec | None) -> dict[str, object]:
         """
         Fetch a prompt from the API.
 
@@ -114,7 +114,7 @@ class GenericPromptManager(CustomPromptManagement):
             "prompt_id": prompt_id,
             **(self.additional_provider_specific_query_params or {}),
         }
-        http_client: Final = _get_httpx_client()
+        http_client: Final = get_httpx_client()
 
         try:
             response: Final = http_client.get(

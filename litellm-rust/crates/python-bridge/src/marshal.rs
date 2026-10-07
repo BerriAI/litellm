@@ -1,14 +1,15 @@
-use std::collections::{BTreeMap, HashMap};
-use std::time::Duration;
-
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
-use serde_json::{Map, Value};
+use std::{
+    collections::{BTreeMap, HashMap},
+    time::Duration,
+};
 
 use litellm_auth::InputSource;
-use litellm_python_interop::from_py_preserving_errors as from_py;
+use litellm_host_python::{from_py, from_py_argument};
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value};
 
+/// The keyword arguments every value route shares, validated at the Python boundary.
 pub(crate) struct RouteOptions {
     pub(crate) model: String,
     pub(crate) api_key: Option<String>,
@@ -18,57 +19,28 @@ pub(crate) struct RouteOptions {
     pub(crate) timeout: Option<Duration>,
 }
 
-pub(crate) struct RouteOptionsInputs {
-    pub(crate) model: String,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_base: Option<String>,
-    pub(crate) custom_llm_provider: Option<String>,
-    pub(crate) extra_headers: Option<Value>,
-    pub(crate) timeout_seconds: Option<f64>,
-}
-
-impl RouteOptions {
-    pub(crate) fn from_python(inputs: RouteOptionsInputs) -> PyResult<Self> {
-        Ok(Self {
-            model: inputs.model,
-            api_key: inputs.api_key,
-            api_base: inputs.api_base,
-            custom_llm_provider: inputs.custom_llm_provider,
-            extra_headers: optional_object("extra_headers", inputs.extra_headers)?,
-            timeout: optional_timeout(inputs.timeout_seconds),
-        })
-    }
-}
-
-pub(crate) fn required_array(name: &'static str, value: Value) -> PyResult<Vec<Value>> {
-    match value {
+pub(crate) fn messages_argument(value: &Bound<'_, PyAny>) -> PyResult<Vec<Value>> {
+    match from_py_argument(value)? {
         Value::Array(values) => Ok(values),
-        _ => Err(PyValueError::new_err(format!("{name} must be a list"))),
+        _ => Err(PyValueError::new_err("messages must be a list")),
     }
 }
 
-pub(crate) fn required_object(name: &'static str, value: Value) -> PyResult<Map<String, Value>> {
+fn required_object(name: &'static str, value: Value) -> PyResult<Map<String, Value>> {
     match value {
         Value::Object(values) => Ok(values),
         _ => Err(PyValueError::new_err(format!("{name} must be a dict"))),
     }
 }
 
-pub(crate) fn object_or_empty(
-    name: &'static str,
-    value: Option<Value>,
-) -> PyResult<Map<String, Value>> {
-    match value {
-        Some(value) => required_object(name, value),
-        None => Ok(Map::new()),
-    }
-}
-
 fn optional_object(
     name: &'static str,
-    value: Option<Value>,
+    value: &Bound<'_, PyAny>,
 ) -> PyResult<Option<Map<String, Value>>> {
-    value.map(|value| required_object(name, value)).transpose()
+    if value.is_none() {
+        return Ok(None);
+    }
+    required_object(name, from_py_argument(value)?).map(Some)
 }
 
 pub(crate) fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration> {
@@ -86,6 +58,48 @@ pub(crate) fn python_timeout_seconds(py: Python<'_>, timeout: Py<PyAny>) -> PyRe
         .getattr("timeout_to_seconds")?
         .call1((timeout,))?
         .extract()
+}
+
+pub(crate) fn required_field<'py>(
+    fields: &Bound<'py, PyDict>,
+    name: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    fields
+        .get_item(name)?
+        .ok_or_else(|| PyValueError::new_err(format!("{name} is required")))
+}
+
+pub(crate) fn optional_field<T: DeserializeOwned>(
+    fields: &Bound<'_, PyDict>,
+    name: &str,
+) -> PyResult<Option<T>> {
+    fields
+        .get_item(name)?
+        .map(|value| from_py_argument(&value))
+        .transpose()
+        .map(Option::flatten)
+}
+
+pub(crate) fn optional_object_field(
+    fields: &Bound<'_, PyDict>,
+    name: &'static str,
+) -> PyResult<Option<Map<String, Value>>> {
+    fields
+        .get_item(name)?
+        .map(|value| optional_object(name, &value))
+        .transpose()
+        .map(Option::flatten)
+}
+
+pub(crate) fn value_route_options(fields: &Bound<'_, PyDict>) -> PyResult<RouteOptions> {
+    Ok(RouteOptions {
+        model: from_py_argument(&required_field(fields, "model")?)?,
+        api_key: optional_field(fields, "api_key")?,
+        api_base: optional_field(fields, "api_base")?,
+        custom_llm_provider: optional_field(fields, "custom_llm_provider")?,
+        extra_headers: optional_object_field(fields, "extra_headers")?,
+        timeout: optional_timeout(optional_field(fields, "timeout_seconds")?),
+    })
 }
 
 pub(crate) fn project_optional_fields(
@@ -168,9 +182,10 @@ pub(crate) fn marshal_headers(headers: Option<Value>) -> PyResult<HashMap<String
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pyo3::exceptions::PyTypeError;
     use serde_json::json;
+
+    use super::*;
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);
@@ -188,43 +203,90 @@ mod tests {
         request_input_sources(&kwargs, names.iter().copied())
     }
 
-    #[test]
-    fn required_shapes_preserve_nested_values_and_existing_errors() {
-        Python::initialize();
-        let nested = json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}]);
-        assert_eq!(
-            Value::Array(required_array("messages", nested.clone()).unwrap()),
-            nested
-        );
-
-        let body = json!({"model": "claude", "metadata": {"user": "1"}});
-        assert_eq!(
-            Value::Object(required_object("body", body.clone()).unwrap()),
-            body
-        );
-
-        assert_eq!(
-            required_array("messages", json!({"role": "user"}))
-                .unwrap_err()
-                .to_string(),
-            "ValueError: messages must be a list"
-        );
-        assert_eq!(
-            required_object("body", json!([])).unwrap_err().to_string(),
-            "ValueError: body must be a dict"
-        );
+    #[serde_with::serde_as]
+    #[derive(Debug, serde::Deserialize, serde::Serialize, PartialEq)]
+    struct Numbers {
+        #[serde_as(deserialize_as = "Option<Vec<litellm_llms_types::serde_compat::LaxI64>>")]
+        integers: Option<Vec<i64>>,
+        #[serde_as(deserialize_as = "Option<litellm_llms_types::serde_compat::FiniteF64>")]
+        float: Option<f64>,
     }
 
     #[test]
-    fn optional_parameters_treat_missing_as_empty() {
-        assert_eq!(
-            object_or_empty("optional_params", None).unwrap(),
-            Map::new()
-        );
-        assert_eq!(
-            object_or_empty("optional_params", Some(json!({"temperature": 0.2}))).unwrap(),
-            required_object("optional_params", json!({"temperature": 0.2})).unwrap()
-        );
+    fn numeric_adapters_agree_across_json_and_python_boundaries() {
+        Python::initialize();
+        Python::attach(|py| {
+            for input in [
+                json!({}),
+                json!({"integers": null, "float": null}),
+                json!({"integers": [i64::MIN, i64::MAX, "9007199254740993.0", " +1_000.00 ", true, 3.0], "float": " 1.25 "}),
+                json!({"integers": [u64::MAX]}),
+                json!({"integers": ["1.0000000000000001"]}),
+                json!({"integers": [2.5]}),
+                json!({"float": "NaN"}),
+                json!({"float": "inf"}),
+                json!({"float": "1e999"}),
+                json!({"float": true}),
+                json!({"float": u64::MAX}),
+            ] {
+                let expected = serde_json::from_value::<Numbers>(input.clone());
+                let python = litellm_host_python::to_py(py, &input).unwrap();
+                let actual = from_py::<Numbers>(python.bind(py));
+                match (expected, actual) {
+                    (Ok(expected), Ok(actual)) => {
+                        assert_eq!(actual, expected);
+                        let serialized = litellm_host_python::to_py(py, &actual).unwrap();
+                        assert_eq!(
+                            from_py::<Value>(serialized.bind(py)).unwrap(),
+                            serde_json::to_value(expected).unwrap()
+                        );
+                    }
+                    (Err(_), Err(_)) => {}
+                    mismatch => panic!("boundary mismatch for {input}: {mismatch:?}"),
+                }
+            }
+            for source in [
+                c"{'float': float('nan')}",
+                c"{'float': float('inf')}",
+                c"{'integers': [float('inf')]}",
+                c"{'integers': [2 ** 100]}",
+            ] {
+                let value = py.eval(source, None, None).unwrap();
+                assert!(from_py::<Numbers>(&value).is_err());
+            }
+        });
+    }
+
+    #[test]
+    fn argument_converters_keep_nested_values_and_accept_explicit_none() {
+        Python::initialize();
+        Python::attach(|py| {
+            let messages = py
+                .eval(
+                    c"[{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}]",
+                    None,
+                    None,
+                )
+                .unwrap();
+            assert_eq!(
+                Value::Array(messages_argument(&messages).unwrap()),
+                json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
+            );
+
+            let params = py.eval(c"{'temperature': 0.2}", None, None).unwrap();
+            assert_eq!(
+                optional_object("optional_params", &params).unwrap(),
+                Some(required_object("optional_params", json!({"temperature": 0.2})).unwrap())
+            );
+            assert_eq!(
+                optional_object("optional_params", &py.None().into_bound(py)).unwrap(),
+                None
+            );
+            assert_eq!(
+                optional_object("extra_headers", &py.None().into_bound(py)).unwrap(),
+                None
+            );
+        });
     }
 
     #[test]

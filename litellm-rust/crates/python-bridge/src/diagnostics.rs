@@ -1,23 +1,29 @@
-use litellm_python_interop::release_count;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use litellm_host_python::{release_count, runtime_started};
+use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyDict};
 
 #[pyfunction]
-fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
+pub(crate) fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let stats = PyDict::new(py);
     stats.set_item("releases", release_count())?;
     Ok(stats.into_any().unbind())
 }
 
-#[cfg(feature = "panic-test")]
+/// True once this process has started the native runtime, which does not survive `fork()`.
 #[pyfunction]
-fn _panic_for_test() {
-    panic!("intentional PyO3 panic smoke test");
+pub(crate) fn process_state_started() -> bool {
+    runtime_started()
 }
 
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
-    #[cfg(feature = "panic-test")]
-    module.add_function(wrap_pyfunction!(_panic_for_test, module)?)?;
-    Ok(())
+/// Declares that this process only forks workers: from now on every native route raises here,
+/// so the runtime can never start. Raises if it already has. Forked workers are unaffected.
+#[pyfunction]
+pub(crate) fn reserve_process_for_forking() -> PyResult<()> {
+    litellm_host_python::reserve_process_for_forking()
+        .map_err(|_| PyRuntimeError::new_err("the native runtime already started in this process"))
+}
+
+#[cfg(feature = "panic-test")]
+#[pyfunction]
+pub(crate) fn _panic_for_test() {
+    panic!("intentional PyO3 panic smoke test");
 }
