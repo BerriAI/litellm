@@ -33,6 +33,8 @@ RUST_GAPS: Final[Mapping[str, str]] = MappingProxyType(
         "test_request_num_retries_still_wins_on_image_generation": "aimage_generation is not served yet",
         "test_flag_off_hides_fallback_credentials": "dict fallback targets decline at construction",
         "test_flag_on_masks_fallback_credentials": "dict fallback targets decline at construction",
+        "test_include_fallback_errors_propagates_through_router": "include_fallback_errors is not served yet",
+        "test_set_response_headers_adds_model_group_to_streaming_wrapper": "calls a PythonRouter internal the Rust backend replaces",
     }
 )
 

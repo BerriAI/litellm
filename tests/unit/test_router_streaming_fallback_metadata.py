@@ -7,6 +7,9 @@ import litellm
 from litellm.proxy.proxy_server import _should_include_fallback_errors
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from tests.unit.router_backends.backends import router_backend  # noqa: F401  # fixture import
+
+pytestmark = pytest.mark.usefixtures("router_backend")
 
 
 def test_apply_fallback_hidden_params_copies_from_fallback_response():
