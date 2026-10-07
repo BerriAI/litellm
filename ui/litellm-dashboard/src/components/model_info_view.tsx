@@ -23,7 +23,7 @@ import {
   isComplexityRouter as isComplexityRouterParams,
 } from "./add_model/auto_router_strategies";
 import { canEditAutoRouter, canModifyModel } from "@/utils/modelPermissions";
-import { teamsUserCanAssign } from "@/utils/roles";
+import { isProxyAdminTierRole, teamsUserCanAssign } from "@/utils/roles";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
@@ -48,6 +48,7 @@ import ModelInfoEditForm, { type ModelEditFormValues, type TouchedPricingField }
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import KubernetesPodsCard from "./model_info/KubernetesPodsCard";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -704,6 +705,12 @@ export default function ModelInfoView({
                 Created By {modelData.model_info.created_by || "Not Set"}
               </div>
             </div>
+
+            {modelData?.litellm_params?.kubernetes_pod_discovery === true && isProxyAdminTierRole(userRole ?? "") && (
+              <div className="mb-6">
+                <KubernetesPodsCard modelId={modelId} />
+              </div>
+            )}
 
             {/* Settings Card */}
             <Card className="block p-6">

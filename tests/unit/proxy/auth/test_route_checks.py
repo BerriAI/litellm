@@ -2476,6 +2476,7 @@ def test_proxy_admin_viewer_can_access_settings_read_endpoints(route):
 ADMIN_VIEWER_REPORTED_GET_ROUTES = [
     "/health/latest",
     "/credentials",
+    "/model/model-pods-1/kubernetes_pods",
     "/v1/mcp/network/client-ip",
     "/claude-code/plugins",
     "/policy/templates",
@@ -3620,6 +3621,59 @@ def test_internal_user_still_blocked_from_another_users_info():
 
     assert exc_info.value.status_code == 403
     assert "key not allowed to access this user's info" in str(exc_info.value.detail)
+
+
+def test_internal_user_cannot_access_kubernetes_pod_discovery_route() -> None:
+    route: Final = "/model/model-pods-1/kubernetes_pods"
+    user_obj: Final = LiteLLM_UserTable(
+        user_id="internal_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request: Final = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+
+    assert RouteChecks.is_management_route(route=route)
+    with pytest.raises(Exception, match="Only proxy admin can be used"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
+def test_proxy_admin_viewer_can_access_kubernetes_pod_discovery_route() -> None:
+    route: Final = "/model/model-pods-1/kubernetes_pods"
+    user_obj: Final = LiteLLM_UserTable(
+        user_id="admin_viewer",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="admin_viewer",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request: Final = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+
+    assert RouteChecks.is_management_route(route=route)
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
 
 
 @pytest.mark.parametrize(

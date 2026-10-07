@@ -2,6 +2,7 @@ import inspect
 import asyncio
 import contextlib
 import json
+import socket
 from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
 from typing import Dict, Final, Optional
@@ -27,11 +28,13 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.management_endpoints.model_management_endpoints import (
+    KubernetesPodsResponse,
     ModelManagementAuthChecks,
     _get_team_deployments,
     _raise_if_rate_limits_required_but_missing,
     clear_cache,
     delete_team_models,
+    get_kubernetes_pods,
     patch_model,
     update_model,
 )
@@ -42,6 +45,210 @@ from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDe
 
 async def _passthrough_row(update_data):
     return update_data
+
+
+def _kubernetes_pod_router(
+    discovery_enabled: bool | None = True,
+    api_base: str = "http://vllm-headless.ns.svc.cluster.local:8000/v1",
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpu-llama",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_base": api_base,
+                    "api_key": "not-in-response",
+                    **({"kubernetes_pod_discovery": discovery_enabled} if discovery_enabled is not None else {}),
+                },
+                "model_info": {"id": "model-pods-1"},
+            }
+        ],
+        ignore_invalid_deployments=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_role",
+    [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
+)
+async def test_get_kubernetes_pods_returns_sorted_read_only_response(
+    monkeypatch: pytest.MonkeyPatch,
+    user_role: LitellmUserRoles,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    router: Final = _kubernetes_pod_router()
+    loop: Final = asyncio.get_running_loop()
+
+    async def getaddrinfo(
+        host: str | None,
+        port: str | int | None,
+        family: int = 0,
+        type: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.0.0.3", 8000)),
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.0.0.1", 8000)),
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.0.0.1", 8000)),
+        ]
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
+
+    response: Final = await get_kubernetes_pods(
+        model_id="model-pods-1",
+        user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=user_role),
+    )
+
+    assert isinstance(response, KubernetesPodsResponse)
+    assert response.model_dump() == {
+        "model_id": "model-pods-1",
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "port": 8000,
+        "pod_ips": ["10.0.0.1", "10.0.0.3"],
+        "pod_count": 2,
+        "error": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_kubernetes_pods_returns_dns_error_without_exposing_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    router: Final = _kubernetes_pod_router()
+    loop: Final = asyncio.get_running_loop()
+
+    async def getaddrinfo(
+        host: str | None,
+        port: str | int | None,
+        family: int = 0,
+        type: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
+        raise OSError("temporary DNS failure")
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
+
+    response: Final = await get_kubernetes_pods(
+        model_id="model-pods-1",
+        user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response.model_dump() == {
+        "model_id": "model-pods-1",
+        "service_host": "vllm-headless.ns.svc.cluster.local",
+        "port": 8000,
+        "pod_ips": [],
+        "pod_count": 0,
+        "error": "temporary DNS failure",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_kubernetes_pods_returns_404_for_unknown_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _kubernetes_pod_router())
+
+    with pytest.raises(ProxyException) as error:
+        await get_kubernetes_pods(
+            model_id="unknown",
+            user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert error.value.code == "404"
+    assert error.value.type == "not_found_error"
+    assert error.value.param == "model_id"
+
+
+@pytest.mark.asyncio
+async def test_get_kubernetes_pods_returns_500_without_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+
+    with pytest.raises(ProxyException) as error:
+        await get_kubernetes_pods(
+            model_id="model-pods-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert error.value.code == "500"
+    assert error.value.type == "internal_server_error"
+
+
+@pytest.mark.asyncio
+async def test_get_kubernetes_pods_returns_400_when_discovery_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _kubernetes_pod_router(discovery_enabled=None))
+
+    with pytest.raises(ProxyException) as error:
+        await get_kubernetes_pods(
+            model_id="model-pods-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message == "Kubernetes pod discovery is not enabled for this model"
+    assert error.value.param == "model_id"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://vllm-headless.ns.svc.cluster.local:8000/v1",
+        "http://192.0.2.10:8000/v1",
+    ],
+)
+async def test_get_kubernetes_pods_returns_400_for_ineligible_api_base(
+    monkeypatch: pytest.MonkeyPatch,
+    api_base: str,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _kubernetes_pod_router(api_base=api_base))
+    expected_message: Final = (
+        "Kubernetes pod discovery is enabled for this model, but its api_base is not an http:// "
+        "service hostname, so no pods are resolved"
+    )
+
+    with pytest.raises(ProxyException) as error:
+        await get_kubernetes_pods(
+            model_id="model-pods-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message == expected_message
+    assert error.value.param == "model_id"
+
+
+@pytest.mark.asyncio
+async def test_get_kubernetes_pods_rejects_internal_users(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _kubernetes_pod_router())
+
+    with pytest.raises(ProxyException) as error:
+        await get_kubernetes_pods(
+            model_id="model-pods-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="internal-user", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert error.value.code == "403"
+    assert error.value.type == "auth_error"
 
 
 @pytest.mark.asyncio

@@ -164,6 +164,17 @@ if TYPE_CHECKING:
     from prisma import types as prisma_types
 
 router: Final = APIRouter()
+
+
+class KubernetesPodsResponse(BaseModel):
+    model_id: str
+    service_host: str
+    port: int | None
+    pod_ips: list[str]
+    pod_count: int
+    error: str | None
+
+
 CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points", "litellm_credential_name"})
 NULL_CLEARABLE_LITELLM_PARAMS: Final = frozenset((*SPECIAL_MODEL_INFO_PARAMS, *CLEARABLE_LITELLM_PARAMS))
 
@@ -1138,6 +1149,74 @@ def update_db_model(
         prisma_compatible_model_dict["blocked"] = updated_patch.blocked
 
     return prisma_compatible_model_dict
+
+
+@router.get(
+    "/model/{model_id}/kubernetes_pods",
+    response_model=KubernetesPodsResponse,
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_kubernetes_pods(
+    model_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> KubernetesPodsResponse:
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        raise ProxyException(
+            message="Only proxy admins can view Kubernetes pods",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param=None,
+        )
+
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        raise ProxyException(
+            message=CommonProxyErrors.no_llm_router.value,
+            type=ProxyErrorTypes.internal_server_error.value,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            param=None,
+        )
+
+    deployment: Final = llm_router.get_model_info(id=model_id)
+    if deployment is None:
+        raise ProxyException(
+            message=f"Model with id {model_id} not found",
+            type=ProxyErrorTypes.not_found_error.value,
+            code=status.HTTP_404_NOT_FOUND,
+            param="model_id",
+        )
+
+    lookup: Final = await llm_router.kubernetes_pod_discovery.async_lookup_pods(deployment)
+    if lookup is None:
+        litellm_params: Final = deployment.get("litellm_params")
+        discovery_enabled: Final = (
+            isinstance(litellm_params, Mapping) and litellm_params.get("kubernetes_pod_discovery") is True
+        )
+        raise ProxyException(
+            message=(
+                "Kubernetes pod discovery is enabled for this model, but its api_base is not an http:// "
+                "service hostname, so no pods are resolved"
+                if discovery_enabled
+                else "Kubernetes pod discovery is not enabled for this model"
+            ),
+            type=ProxyErrorTypes.bad_request_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="model_id",
+        )
+
+    return KubernetesPodsResponse(
+        model_id=model_id,
+        service_host=lookup.service_host,
+        port=lookup.port,
+        pod_ips=list(lookup.pod_ips),
+        pod_count=len(lookup.pod_ips),
+        error=lookup.error,
+    )
 
 
 @router.patch(

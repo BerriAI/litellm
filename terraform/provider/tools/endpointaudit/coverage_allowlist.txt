@@ -73,6 +73,8 @@ GET /guardrails/ui/major_airlines
 GET /guardrails/ui/provider_specific_params
 GET /key/aliases
 GET /model/deprecations
+# Dashboard-only pod status view; discovered pods are transient runtime state, not Terraform-managed desired state
+GET /model/{model_id}/kubernetes_pods
 GET /search_tools/ui/available_providers
 GET /team/available
 GET /team/metadata_schema
