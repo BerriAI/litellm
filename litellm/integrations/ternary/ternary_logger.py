@@ -256,9 +256,9 @@ class TernaryLogger(FocusLogger):
         )
 
     def _compute_time_window(self, now: datetime) -> FocusTimeWindow:
-        """Snap the window start to the previous UTC midnight so each push carries whole days."""
+        """Start at UTC midnight two days back so each push re-sends whole days, including spend flushed late."""
         now_utc: Final = now.astimezone(timezone.utc)
-        start_time: Final = (now_utc - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_time: Final = (now_utc - timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
         return FocusTimeWindow(start_time=start_time, end_time=now_utc, frequency=self.frequency)
 
     def _ensure_engine(self) -> FocusExportEngine:

@@ -94,9 +94,46 @@ def test_compute_time_window_is_day_aligned_and_carries_whole_days():
     logger = TernaryLogger(api_key="k", connection_id="c", base_url="http://localhost:8080")
     now = datetime(2026, 9, 4, 13, 47, 5, tzinfo=timezone.utc)
     window = logger._compute_time_window(now)
-    assert window.start_time == datetime(2026, 9, 3, 0, 0, 0, tzinfo=timezone.utc)
+    assert window.start_time == datetime(2026, 9, 2, 0, 0, 0, tzinfo=timezone.utc)
     assert window.end_time == now
-    assert window.start_time.hour == 0 and window.start_time.minute == 0
+
+
+@pytest.mark.asyncio
+async def test_daily_export_resends_yesterday_whole_including_spend_flushed_after_midnight():
+    """LiteLLM flushes spend in batches, so a 2026-10-07 row can be written at 2026-10-08 00:10, after that
+    day's 00:05 export. The next daily run (2026-10-09 00:05) must still upload 2026-10-07 complete."""
+    from datetime import datetime, timezone
+
+    rows = pl.DataFrame(
+        {
+            "date": ["2026-10-07", "2026-10-07", "2026-10-08"],
+            "updated_at": [
+                datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc),
+                datetime(2026, 10, 8, 0, 10, tzinfo=timezone.utc),
+                datetime(2026, 10, 8, 9, 0, tzinfo=timezone.utc),
+            ],
+            "spend": [1.0, 2.0, 3.0],
+        }
+    )
+    logger = TernaryLogger(api_key="k", connection_id="c", base_url="http://localhost:8080")
+    window = logger._compute_time_window(datetime(2026, 10, 9, 0, 5, tzinfo=timezone.utc))
+
+    engine = MagicMock()
+
+    async def fake_get_usage_data(*, limit, start_time_utc, end_time_utc):
+        return rows.filter((pl.col("updated_at") >= start_time_utc) & (pl.col("updated_at") <= end_time_utc))
+
+    engine._database.get_usage_data = fake_get_usage_data
+    captured = {}
+
+    async def fake_deliver(data, _window):
+        captured["data"] = data
+
+    engine._deliver_enriched = fake_deliver
+    await _TernaryExportEngine.export_window(engine, window=window, limit=None)
+
+    sent = captured["data"]
+    assert sent.filter(pl.col("date") == "2026-10-07")["spend"].sum() == 3.0
 
 
 def test_drop_days_before_removes_older_days():
