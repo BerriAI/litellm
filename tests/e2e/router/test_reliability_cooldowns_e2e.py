@@ -71,10 +71,12 @@ import pytest
 from complexity_router_client import ComplexityRouterClient
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import StreamingResponse
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, RouterSettingsOverride
 from reliability_support import (
     COOLDOWN_SECONDS,
+    REAL_MODEL,
     REPLICA_PROPAGATION_SECONDS,
     chat_override,
     create_always_5xx_deployment,
@@ -212,6 +214,14 @@ def _assert_trips_then_recovers(
 
 class TestReliabilityCooldowns:
     @pytest.mark.covers("reliability.cooldown.5xx.trips_then_recovers")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_5xx_trips_cooldown_then_recovers(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -230,6 +240,14 @@ class TestReliabilityCooldowns:
         _assert_trips_then_recovers(client, scoped_key, group, failing, backup, failure_status=500)
 
     @pytest.mark.covers("reliability.cooldown.sibling_replica.serves_backup_within_read_interval")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_sibling_replica_serves_backup_within_redis_read_interval(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -272,6 +290,14 @@ class TestReliabilityCooldowns:
             )
 
     @pytest.mark.covers("reliability.cooldown.429.trips_then_recovers")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL, REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_429_trips_cooldown_then_recovers(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -292,6 +318,14 @@ class TestReliabilityCooldowns:
         _assert_trips_then_recovers(client, scoped_key, group, failing, backup, failure_status=429)
 
     @pytest.mark.covers("reliability.cooldown.auth.trips_then_recovers")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_auth_failure_trips_cooldown_then_recovers(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -304,6 +338,14 @@ class TestReliabilityCooldowns:
         _assert_trips_then_recovers(client, scoped_key, group, failing, backup, failure_status=401)
 
     @pytest.mark.covers("reliability.cooldown.timeout.trips_then_recovers")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_timeout_trips_cooldown_then_recovers(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
