@@ -4,7 +4,7 @@ use litellm_host_python::{
 };
 use litellm_router::{
     engine::Routed,
-    host::{Attempt, Invoked, RouterHost},
+    host::{Attempt, FallbackCheck, Invoked, RouterHost},
 };
 use pyo3::{
     exceptions::PyRuntimeError,
@@ -34,11 +34,18 @@ impl RouterHost for BridgeHost {
             .call(|reply| RouterHostCall::Sleep { seconds, reply })
             .await
     }
+
+    async fn allow_fallback(&self, check: FallbackCheck<PyObj>) -> Result<bool, BridgeError> {
+        self.0
+            .call(|reply| RouterHostCall::AllowFallback { check, reply })
+            .await
+    }
 }
 
 enum Pending {
     Invoke(Reply<Invoked<PyObj, PyObj>>),
     Sleep(Reply<()>),
+    AllowFallback(Reply<bool>),
 }
 
 pub(super) struct RouterBinding {
@@ -67,6 +74,7 @@ impl RouterBinding {
         match self.pending.take() {
             Some(Pending::Invoke(reply)) => reply.send(python::invoked(py, result)?),
             Some(Pending::Sleep(reply)) => reply.send(()),
+            Some(Pending::AllowFallback(reply)) => reply.send(result.extract()?),
             None => {
                 return Err(PyRuntimeError::new_err(
                     "router host reply without a pending op",
@@ -167,6 +175,15 @@ impl PythonHostCalls<RouterProtocol> for RouterBinding {
                 },
                 pyo3::types::PyFloat::new(py, seconds).into_any().unbind(),
                 Pending::Sleep(reply),
+            ),
+            RouterHostCall::AllowFallback { check, reply } => (
+                if self.asynchronous {
+                    "allow_fallback"
+                } else {
+                    "allow_fallback_sync"
+                },
+                python::fallback_check(py, &check)?,
+                Pending::AllowFallback(reply),
             ),
         };
         self.pending = Some(pending);

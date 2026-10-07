@@ -7,7 +7,7 @@ use litellm_host_python::from_py;
 use litellm_router::{
     engine::{Outcome, Override, Resume, RouterCall},
     failure::{Classified, Raised, Rejection},
-    host::{Attempt, Invoked, MockFailure, Op, Target, TypedFallback},
+    host::{Attempt, FallbackCheck, Invoked, MockFailure, Op, Target, TypedFallback},
     operation::Operation,
     pyrepr::PyNumber,
     settings::Fallbacks,
@@ -145,6 +145,16 @@ pub(super) fn attempt<'py>(py: Python<'py>, attempt: &Attempt<PyObj>) -> PyResul
     dict.set_item("max_retries", attempt.retry.max_retries)?;
     dict.set_item("stream_retry", attempt.retry.stream_retry)?;
     dict.set_item("ops", ops(py, &attempt.ops)?)?;
+    Ok(dict.into_any().unbind())
+}
+
+pub(super) fn fallback_check(py: Python<'_>, check: &FallbackCheck<PyObj>) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("target", &check.target)?;
+    dict.set_item("model_group", &check.model_group)?;
+    dict.set_item("bucket", check.bucket)?;
+    dict.set_item("model", &check.model)?;
+    dict.set_item("ops", ops(py, &check.ops)?)?;
     Ok(dict.into_any().unbind())
 }
 

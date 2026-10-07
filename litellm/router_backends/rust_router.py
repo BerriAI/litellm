@@ -107,6 +107,8 @@ class NormalizerView(AttemptRouter, Protocol):
     cooldown_time: float
     disable_cooldowns: bool | None
     enable_pre_call_checks: bool
+    fallback_access_check: object
+    fallback_budget_check: object
 
     def get_model_names(self) -> list[str]: ...  # mutable-ok: PythonRouter's read surface
 
@@ -189,6 +191,7 @@ def _settings(router: NormalizerView) -> Mapping[str, object]:
         "cooldown_time": router.cooldown_time,
         "disable_cooldowns": bool(router.disable_cooldowns),
         "enable_pre_call_checks": router.enable_pre_call_checks,
+        "fallback_checks": router.fallback_access_check is not None or router.fallback_budget_check is not None,
         "tunables": {
             "initial_retry_delay": constants.INITIAL_RETRY_DELAY,
             "max_retry_delay": constants.MAX_RETRY_DELAY,

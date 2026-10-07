@@ -13,7 +13,8 @@ use crate::{
     failure::{Classified, ExceptionClass, Failure, Raised, StreamFailure},
     fallback::{chain_for_groups, generic_targets},
     host::{
-        Attempt, HopStamp, Invoked, MockFailure, Op, RetryStamp, RouterHost, Target, TypedFallback,
+        Attempt, FallbackCheck, HopStamp, Invoked, MockFailure, Op, RetryStamp, RouterHost, Target,
+        TypedFallback,
     },
     operation::Operation,
     random::PythonRandom,
@@ -877,7 +878,22 @@ impl<'a, H: RouterHost> Run<'a, H> {
         let mut model = hop.group.clone();
         let mut last = original.clone();
         for target in targets {
-            if *target == hop.group || !self.attempted_targets.insert(target.clone()) {
+            if *target == hop.group {
+                continue;
+            }
+            if self.snapshot.settings.fallback_checks {
+                let check = FallbackCheck {
+                    target: target.clone(),
+                    model_group: hop.group.clone(),
+                    bucket,
+                    model: model.clone(),
+                    ops: std::mem::take(&mut self.ops),
+                };
+                if !self.host.allow_fallback(check).await.map_err(Stop::Host)? {
+                    continue;
+                }
+            }
+            if !self.attempted_targets.insert(target.clone()) {
                 continue;
             }
             self.ops.push(Op::LogRetry {

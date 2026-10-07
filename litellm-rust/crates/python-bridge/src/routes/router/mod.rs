@@ -15,7 +15,7 @@ use litellm_host::{
 use litellm_host_python::{HookChain, enter_native, from_py_argument};
 use litellm_router::{
     engine::{Engine, Failed, Resume, RouteError, Routed, RouterCall},
-    host::{Attempt, Invoked},
+    host::{Attempt, FallbackCheck, Invoked},
     random::PythonRandom,
     settings::Settings,
     snapshot::{RoutedDeployment, Snapshot},
@@ -59,6 +59,10 @@ pub(crate) enum RouterHostCall {
     Sleep {
         seconds: f64,
         reply: Reply<()>,
+    },
+    AllowFallback {
+        check: FallbackCheck<PyObj>,
+        reply: Reply<bool>,
     },
 }
 

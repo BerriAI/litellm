@@ -53,6 +53,13 @@ SUPPORTED_ARGUMENTS: Final = frozenset(
         "cooldown_time",
         "disable_cooldowns",
         "max_retries",
+        "router_general_settings",
+        "search_tools",
+        "assistants_config",
+        "ignore_invalid_deployments",
+        "fallback_access_check",
+        "fallback_budget_check",
+        "auto_router_capability_limit",
     }
 )
 _UNSET: Final = object()
@@ -79,7 +86,7 @@ class _RawDeployment(BaseModel):
     model_info: Mapping[str, object] | None = None
 
 
-_MODEL_LIST: Final = TypeAdapter(tuple[_RawDeployment, ...])
+_MODEL_LIST: Final = TypeAdapter(tuple[object, ...])
 
 
 def bind_arguments(args: tuple[object, ...], kwargs: Mapping[str, object]) -> Mapping[str, object]:
@@ -97,7 +104,7 @@ def unsupported_reason(arguments: Mapping[str, object]) -> str | None:
             for reason in (
                 _argument_reason(arguments),
                 _fallbacks_reason(arguments),
-                _model_list_reason(arguments.get("model_list")),
+                _model_list_reason(arguments.get("model_list"), arguments.get("ignore_invalid_deployments") is True),
                 _global_reason(),
             )
             if reason is not None
@@ -132,10 +139,23 @@ def _fallbacks_reason(arguments: Mapping[str, object]) -> str | None:
 
 
 def _group_names(model_list: object) -> frozenset[str]:
+    return frozenset(
+        deployment.model_name for deployment in map(_readable, _entries(model_list)) if deployment is not None
+    )
+
+
+def _entries(model_list: object) -> tuple[object, ...]:
     try:
-        return frozenset(deployment.model_name for deployment in _MODEL_LIST.validate_python(model_list or ()))
+        return _MODEL_LIST.validate_python(model_list or ())
     except ValidationError:
-        return frozenset()
+        return ()
+
+
+def _readable(entry: object) -> _RawDeployment | None:
+    try:
+        return _RawDeployment.model_validate(entry)
+    except ValidationError:
+        return None
 
 
 def _plain_chain(value: object, groups: frozenset[str]) -> bool:
@@ -158,15 +178,22 @@ def _plain_chain_of(key: str, targets: object, groups: frozenset[str]) -> bool:
     )
 
 
-def _model_list_reason(model_list: object) -> str | None:
+def _model_list_reason(model_list: object, ignore_invalid: bool) -> str | None:
+    """With `ignore_invalid_deployments`, Python drops an entry it cannot read instead of failing,
+    so the Rust router only serves the ones it can."""
     if model_list is None:
         return None
-    try:
-        deployments: Final = _MODEL_LIST.validate_python(model_list)
-    except ValidationError:
+    if not isinstance(model_list, (list, tuple)):
+        return "a model_list the Rust router cannot read"
+    deployments: Final = tuple(map(_readable, _entries(model_list)))
+    if None in deployments and not ignore_invalid:
         return "model_list entries the Rust router cannot read"
     return next(
-        (reason for reason in map(_deployment_reason, deployments) if reason is not None),
+        (
+            reason
+            for reason in (_deployment_reason(deployment) for deployment in deployments if deployment is not None)
+            if reason is not None
+        ),
         None,
     )
 

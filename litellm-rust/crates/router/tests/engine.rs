@@ -6,7 +6,7 @@ use std::{
 use litellm_router::{
     engine::{Engine, Override, Resume, RouteError, RouterCall},
     failure::{Classified, ExceptionClass, Raised, StreamFailure},
-    host::{Attempt, Invoked, Op, RouterHost, Target},
+    host::{Attempt, FallbackCheck, Invoked, Op, RouterHost, Target},
     operation::Operation,
     pyrepr::PyNumber,
     random::PythonRandom,
@@ -30,6 +30,8 @@ struct ScriptedHost {
     attempts: Mutex<Vec<String>>,
     sleeps: Mutex<Vec<f64>>,
     ops: Mutex<Vec<String>>,
+    denied: Vec<String>,
+    checks: Mutex<Vec<String>>,
 }
 
 impl ScriptedHost {
@@ -43,6 +45,15 @@ impl ScriptedHost {
 
     fn attempts(&self) -> Vec<String> {
         self.attempts.lock().unwrap().clone()
+    }
+
+    fn deny(mut self, target: &str) -> Self {
+        self.denied.push(target.into());
+        self
+    }
+
+    fn checks(&self) -> Vec<String> {
+        self.checks.lock().unwrap().clone()
     }
 }
 
@@ -127,6 +138,18 @@ impl RouterHost for ScriptedHost {
     async fn sleep(&self, seconds: f64) -> Result<(), ()> {
         self.sleeps.lock().unwrap().push(seconds);
         Ok(())
+    }
+
+    async fn allow_fallback(&self, check: FallbackCheck<String>) -> Result<bool, ()> {
+        self.ops
+            .lock()
+            .unwrap()
+            .extend(check.ops.iter().map(op_name));
+        self.checks.lock().unwrap().push(format!(
+            "{}->{} (bucket {}, model {})",
+            check.model_group, check.target, check.bucket, check.model
+        ));
+        Ok(!self.denied.contains(&check.target))
     }
 }
 
@@ -635,6 +658,10 @@ impl RouterHost for ReplacingHost {
     async fn sleep(&self, seconds: f64) -> Result<(), ()> {
         self.inner.sleep(seconds).await
     }
+
+    async fn allow_fallback(&self, check: FallbackCheck<String>) -> Result<bool, ()> {
+        self.inner.allow_fallback(check).await
+    }
 }
 
 #[rstest]
@@ -659,4 +686,81 @@ async fn a_running_call_keeps_its_snapshot_while_the_next_call_sees_the_new_one(
         (running.outcome.deployment_id, next.outcome.deployment_id),
         ("a".to_owned(), "b".to_owned())
     );
+}
+
+#[rstest]
+#[case::checks_off(false, &["a", "b"], &[])]
+#[case::checks_on(true, &["a", "c"], &["g->h (bucket 0, model g)", "g->i (bucket 0, model g)"])]
+#[tokio::test]
+async fn a_fallback_target_the_checks_reject_is_skipped(
+    #[case] fallback_checks: bool,
+    #[case] expected_attempts: &[&str],
+    #[case] expected_checks: &[&str],
+) {
+    let mut settings = settings();
+    settings.fallbacks = Some(vec![chain("g", &["h", "i"])]);
+    settings.num_retries = 0;
+    settings.fallback_checks = fallback_checks;
+    let engine = engine(
+        vec![
+            deployment("a", "g"),
+            deployment("b", "h"),
+            deployment("c", "i"),
+        ],
+        settings,
+    );
+    let host = ScriptedHost::default().script("a", &[SERVER]).deny("h");
+
+    let routed = engine.route(&host, call("g")).await.ok().unwrap();
+
+    assert_eq!(host.attempts(), expected_attempts);
+    assert_eq!(host.checks(), expected_checks);
+    assert_eq!(routed.outcome.attempted_fallbacks, 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_failed_fallback_hop_checks_the_rest_of_the_chain_as_its_own_group() {
+    let mut settings = settings();
+    settings.fallbacks = Some(vec![chain("g", &["h", "i"])]);
+    settings.num_retries = 0;
+    settings.fallback_checks = true;
+    let engine = engine(
+        vec![
+            deployment("a", "g"),
+            deployment("b", "h"),
+            deployment("c", "i"),
+        ],
+        settings,
+    );
+    let host = ScriptedHost::default()
+        .script("a", &[SERVER])
+        .script("b", &[SERVER]);
+
+    engine.route(&host, call("g")).await.ok().unwrap();
+
+    assert_eq!(host.attempts(), ["a", "b", "c"]);
+    assert_eq!(
+        host.checks(),
+        ["g->h (bucket 0, model g)", "h->i (bucket 1, model h)"]
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_rejected_target_is_not_recorded_as_attempted() {
+    let mut settings = settings();
+    settings.fallbacks = Some(vec![chain("g", &["h", "h"])]);
+    settings.num_retries = 0;
+    settings.fallback_checks = true;
+    let engine = engine(vec![deployment("a", "g"), deployment("b", "h")], settings);
+    let host = ScriptedHost::default().script("a", &[SERVER]).deny("h");
+
+    let Err(RouteError::Failed(failed)) = engine.route(&host, call("g")).await else {
+        panic!("every target was rejected");
+    };
+
+    assert_eq!(host.attempts(), ["a"]);
+    assert_eq!(host.checks().len(), 2);
+    assert_eq!(raised(&failed.error), "a#1");
 }

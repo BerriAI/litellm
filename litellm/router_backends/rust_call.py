@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,  # pyright: ignore[reportPrivateUsage]  # the header reader the cooldown callback uses
 )
@@ -59,6 +60,10 @@ from litellm.router_utils.cooldown_handlers import (
     is_advisor_orchestration_failure,
     is_background_response_cost_poll_not_found,
     is_caller_timeout_408,
+)
+from litellm.router_utils.fallback_event_handlers import (
+    _is_fallback_target_authorized,  # pyright: ignore[reportPrivateUsage]  # run_async_fallback's access check
+    _is_fallback_target_within_budget,  # pyright: ignore[reportPrivateUsage]  # run_async_fallback's budget check
 )
 from litellm.types.llms.openai import ResponseAPIUsage
 from litellm.types.router import RouterErrors, RouterRateLimitError
@@ -201,6 +206,16 @@ class Attempt(BaseModel):
     attempted_retries: int
     max_retries: int
     stream_retry: bool = False
+    ops: tuple[Mapping[str, object], ...]
+
+
+class FallbackCheck(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    target: str
+    model_group: str
+    bucket: int
+    model: str
     ops: tuple[Mapping[str, object], ...]
 
 
@@ -355,6 +370,27 @@ class RoutedCall:
 
     def sleep_sync(self, seconds: float) -> None:
         time.sleep(seconds)
+
+    async def allow_fallback(self, check: Mapping[str, object]) -> bool:
+        """`run_async_fallback`'s access and budget checks, asked of the request as the hop the
+        chain falls back from left it."""
+        parsed: Final = FallbackCheck.model_validate(check)
+        self._apply(parsed.ops)
+        kwargs: Final = {
+            **self._kwargs,
+            **self._hop_kwargs[parsed.bucket],
+            "model": parsed.model,
+            self._metadata_key: self._buckets[parsed.bucket],
+        }
+        router: Final = self._normalizer
+        return await _is_fallback_target_authorized(
+            router, parsed.target, parsed.model_group, kwargs
+        ) and await _is_fallback_target_within_budget(router, parsed.target, parsed.model_group, kwargs)
+
+    def allow_fallback_sync(self, check: Mapping[str, object]) -> bool:
+        """Python's sync calls run the async fallback loop, checks included, through `run_async_function`."""
+        allowed: Final[object] = run_async_function(self.allow_fallback, check)
+        return allowed is True
 
     def success(self, response: object, outcome: Mapping[str, object], ops: Sequence[Mapping[str, object]]) -> object:
         self._apply(ops)

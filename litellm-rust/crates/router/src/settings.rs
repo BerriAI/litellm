@@ -127,6 +127,10 @@ pub struct Settings {
     pub cooldown_time: PyNumber,
     pub disable_cooldowns: bool,
     pub enable_pre_call_checks: bool,
+    /// A `fallback_access_check` or `fallback_budget_check` is set, so each cross-group
+    /// fallback target is put to the host before it is tried.
+    #[serde(default)]
+    pub fallback_checks: bool,
     #[serde(default)]
     pub tunables: Tunables,
 }

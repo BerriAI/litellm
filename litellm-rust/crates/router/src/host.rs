@@ -108,6 +108,19 @@ pub struct Attempt<E> {
     pub ops: Vec<Op<E>>,
 }
 
+/// `run_async_fallback`'s access and budget checks for one fallback target, asked against
+/// `bucket` with `kwargs["model"] == model`, the hop the chain falls back from. `ops` are
+/// applied first, so the request the checks read is the one Python's would be.
+#[derive(Clone, Debug)]
+pub struct FallbackCheck<E> {
+    pub target: String,
+    /// The group whose chain this is, which the checks never reject.
+    pub model_group: String,
+    pub bucket: u32,
+    pub model: String,
+    pub ops: Vec<Op<E>>,
+}
+
 pub enum Invoked<R, E> {
     Success(R),
     Failure { error: E, classified: Classified },
@@ -125,4 +138,11 @@ pub trait RouterHost: Send + Sync {
     ) -> impl Future<Output = Result<Invoked<Self::Response, Self::Error>, Self::Fault>> + Send;
 
     fn sleep(&self, seconds: f64) -> impl Future<Output = Result<(), Self::Fault>> + Send;
+
+    /// Whether the fallback chain may try `check.target`. Asked only when the settings say a
+    /// check is configured.
+    fn allow_fallback(
+        &self,
+        check: FallbackCheck<Self::Error>,
+    ) -> impl Future<Output = Result<bool, Self::Fault>> + Send;
 }
