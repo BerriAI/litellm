@@ -24,6 +24,9 @@ from litellm.proxy.lens.endpoints import (
     watching,
     worker_supports_model,
 )
+from litellm.proxy.lens.endpoints import (
+    sample as worker_sample,
+)
 from litellm.proxy.lens.models import (
     ActivitySelection,
     Coverage,
@@ -41,6 +44,7 @@ from litellm.proxy.lens.models import (
 )
 from litellm.proxy.lens.repository import DueLens, Row
 from litellm.proxy.lens.state import claim_job, queue_job, replace_job
+from litellm.rust_bridge.trace.generated.models import ExecutionRow, LensSampleParams
 from tests.unit.proxy.lens.test_agent_workspace import execution
 from tests.unit.proxy.lens.test_state import NOW, lens, worker
 
@@ -65,6 +69,74 @@ class ResultDatabase:
         assert isinstance(payload, str)
         self.completed = TypeAdapter(tuple[ReviewVersion, ...]).validate_json(payload)
         return len(self.completed)
+
+
+@pytest.mark.asyncio
+async def test_worker_sample_retries_oversized_pages_and_keeps_all_executions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = claimed.jobs[0].model_copy(update={"lease_until": datetime.max.replace(tzinfo=timezone.utc)})
+    db: Final = ResultDatabase(replace_job(claimed, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    rows: Final = tuple(
+        ExecutionRow(
+            source="traces",
+            trace_id=trace_id,
+            team_id="team",
+            name=trace_id,
+            start_time="",
+            span_count=1,
+            root_seen=1,
+            eligible=3,
+            selected=3,
+            selection_key=trace_id,
+        )
+        for trace_id in ("trace-1", "trace-2", "trace-3")
+    )
+
+    class SampleStorage:
+        def __init__(self) -> None:
+            self.limits: tuple[int, ...] = ()
+
+        async def lens_sample(self, parameters: LensSampleParams) -> tuple[ExecutionRow, ...]:
+            self.limits = (*self.limits, parameters.limit)
+            if parameters.limit > 2_500:
+                raise RuntimeError("ClickHouse query exceeded the response size limit")
+            return rows
+
+    storage: Final = SampleStorage()
+    selected: Final = await worker_sample("lens", "job", worker(), storage)
+    assert storage.limits == (10_000, 5_000, 2_500)
+    assert tuple(execution.trace_id for execution in selected.executions) == ("trace-1", "trace-2", "trace-3")
+    assert selected.selected == 3
+
+
+@pytest.mark.asyncio
+async def test_worker_sample_propagates_response_too_large_at_minimum_page_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = claimed.jobs[0].model_copy(update={"lease_until": datetime.max.replace(tzinfo=timezone.utc)})
+    db: Final = ResultDatabase(replace_job(claimed, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+
+    class SampleStorage:
+        def __init__(self) -> None:
+            self.limits: tuple[int, ...] = ()
+
+        async def lens_sample(self, parameters: LensSampleParams) -> tuple[ExecutionRow, ...]:
+            self.limits = (*self.limits, parameters.limit)
+            raise RuntimeError("ClickHouse query exceeded the response size limit")
+
+    storage: Final = SampleStorage()
+    with pytest.raises(RuntimeError, match="response size limit"):
+        await worker_sample("lens", "job", worker(), storage)
+    assert storage.limits == (10_000, 5_000, 2_500, 1_250, 625, 312, 156, 100)
 
 
 @pytest.mark.asyncio
