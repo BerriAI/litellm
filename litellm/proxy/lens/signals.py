@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import accumulate
 from types import MappingProxyType
@@ -15,7 +16,7 @@ from litellm.litellm_core_utils.secret_redaction import redact_internal_details
 from litellm.proxy.lens.models import ActivitySelection, Execution, Record, Scope, TraceIdentity
 from litellm.proxy.lens.sources import SourceReader, Storage
 
-SIGNAL_INTERVAL_SECONDS: Final = 60
+SIGNAL_SETTLE: Final = timedelta(seconds=15)
 SIGNAL_PAGE_SIZE: Final = 100
 SIGNAL_MAX_PER_TICK: Final = 50
 SIGNAL_CONCURRENCY: Final = 8
@@ -30,6 +31,19 @@ SIGNAL_TRANSCRIPT_MAX_CHARS: Final = 40000
 SIGNAL_TRANSCRIPT_HEAD_CHARS: Final = 15000
 SIGNAL_TRANSCRIPT_TAIL_CHARS: Final = 25000
 SIGNAL_MAX_SCAN_PAGES: Final = 10
+
+
+@dataclass(frozen=True, slots=True)
+class SignalSweep:
+    lookback: timedelta
+    interval_seconds: float
+    max_pages: int
+
+
+SIGNAL_LIVE_SWEEP: Final = SignalSweep(lookback=timedelta(minutes=15), interval_seconds=2, max_pages=1)
+SIGNAL_BACKLOG_SWEEP: Final = SignalSweep(
+    lookback=timedelta(hours=24), interval_seconds=60, max_pages=SIGNAL_MAX_SCAN_PAGES
+)
 SIGNAL_TASK: Final = (
     "An AI agent run recorded as a trace. Judge only what the user and the agent said and did in these steps."
 )
@@ -441,6 +455,7 @@ class _SignalScan:
         now: datetime,
         cursor: str,
         limit: int,
+        sweep: SignalSweep,
     ) -> None:
         self.reader: Final = reader
         self.repository: Final = repository
@@ -449,6 +464,7 @@ class _SignalScan:
         self.now: Final = now
         self.cursor: str = cursor
         self.limit: Final = limit
+        self.sweep: Final = sweep
         self.executions: tuple[Execution, ...] = ()
         self.finished: bool = False
 
@@ -478,9 +494,9 @@ class _SignalScan:
         return eligible, next_cursor
 
     async def run(self) -> tuple[tuple[Execution, ...], str]:
-        start: Final = int((self.now - timedelta(hours=24)).timestamp() * 1000)
-        end: Final = int((self.now - timedelta(minutes=2)).timestamp() * 1000)
-        for _ in range(SIGNAL_MAX_SCAN_PAGES):
+        start: Final = int((self.now - self.sweep.lookback).timestamp() * 1000)
+        end: Final = int((self.now - SIGNAL_SETTLE).timestamp() * 1000)
+        for _ in range(self.sweep.max_pages):
             if self.finished or len(self.executions) >= self.limit:
                 break
             eligible, next_cursor = await self._read_page(start, end)
@@ -501,11 +517,18 @@ async def _scan_pages(
     now: datetime,
     cursor: str,
     remaining: int,
+    sweep: SignalSweep,
 ) -> tuple[tuple[Execution, ...], str]:
     if remaining <= 0:
         return (), cursor
-    scan: Final = _SignalScan(reader, repository, scope, config, now, cursor, remaining)
+    scan: Final = _SignalScan(reader, repository, scope, config, now, cursor, remaining, sweep)
     return await scan.run()
+
+
+@dataclass(frozen=True, slots=True)
+class SignalTick:
+    cursor: str
+    claimed: int = 0
 
 
 async def run_signal_tick(
@@ -515,13 +538,14 @@ async def run_signal_tick(
     clock: Clock,
     router_ready: RouterReady = lambda: True,
     cursor: str = "",
-) -> str:
+    sweep: SignalSweep = SIGNAL_BACKLOG_SWEEP,
+) -> SignalTick:
     if repository is None or completion is None or not router_ready():
-        return cursor
+        return SignalTick(cursor)
     now: Final = clock()
     config: Final = await repository.get_config()
     if not config.enabled:
-        return cursor
+        return SignalTick(cursor)
     reader: Final = SourceReader(storage)
     scope: Final = Scope(all_teams=True)
     candidates: Final = await _scan_pages(
@@ -532,12 +556,13 @@ async def run_signal_tick(
         now,
         cursor,
         SIGNAL_MAX_PER_TICK,
+        sweep,
     )
     executions, next_cursor = candidates
     classifier: Final = SignalClassifier(reader, completion, clock)
     semaphore: Final = asyncio.Semaphore(SIGNAL_CONCURRENCY)
 
-    async def process(execution: Execution) -> None:
+    async def process(execution: Execution) -> bool:
         from litellm._logging import verbose_proxy_logger
 
         async with semaphore:
@@ -547,18 +572,37 @@ async def run_signal_tick(
                 claimed: Final = await repository.claim(execution, config, claimed_until, claimed_at)
             except Exception as error:
                 verbose_proxy_logger.error("Lens signal claim failed: %s", redact_internal_details(str(error)))
-                return
+                return False
             if not claimed:
-                return
+                return False
             await _process_claimed(classifier, repository, scope, execution, config, claimed_until)
+            return True
 
-    await asyncio.gather(*(process(execution) for execution in executions))
-    return next_cursor
+    outcomes: Final = await asyncio.gather(*(process(execution) for execution in executions))
+    return SignalTick(next_cursor, sum(outcomes))
+
+
+async def _logged_tick(
+    storage: Storage,
+    repository: SignalRepositoryProtocol | None,
+    completion: DecisionsCall | None,
+    clock: Clock,
+    router_ready: RouterReady,
+    cursor: str,
+    sweep: SignalSweep,
+) -> SignalTick:
+    from litellm._logging import verbose_proxy_logger
+
+    try:
+        return await run_signal_tick(storage, repository, completion, clock, router_ready, cursor, sweep)
+    except Exception as error:
+        verbose_proxy_logger.error("Lens signal tick failed: %s", redact_internal_details(str(error)))
+        return SignalTick(cursor)
 
 
 class _SignalLoopState:
     def __init__(self) -> None:
-        self.cursor: str = ""
+        self.tick: SignalTick = SignalTick("")
 
 
 async def run_signal_loop(
@@ -567,20 +611,9 @@ async def run_signal_loop(
     completion: DecisionsCall | None,
     clock: Clock = lambda: datetime.now(timezone.utc),
     router_ready: RouterReady = lambda: True,
+    sweep: SignalSweep = SIGNAL_BACKLOG_SWEEP,
 ) -> None:
-    from litellm._logging import verbose_proxy_logger
-
     state: Final = _SignalLoopState()
     while True:
-        try:
-            state.cursor = await run_signal_tick(
-                storage,
-                repository,
-                completion,
-                clock,
-                router_ready,
-                cursor=state.cursor,
-            )
-        except Exception as error:
-            verbose_proxy_logger.error("Lens signal tick failed: %s", redact_internal_details(str(error)))
-        await asyncio.sleep(SIGNAL_INTERVAL_SECONDS)
+        state.tick = await _logged_tick(storage, repository, completion, clock, router_ready, state.tick.cursor, sweep)
+        await asyncio.sleep(0 if state.tick.claimed >= SIGNAL_MAX_PER_TICK else sweep.interval_seconds)

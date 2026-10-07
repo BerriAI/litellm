@@ -15,7 +15,10 @@ from litellm.proxy.lens.repository import Database, Row
 from litellm.proxy.lens.signal_repository import SignalRepository
 from litellm.proxy.lens.signals import (
     DEFAULT_SIGNALS,
+    SIGNAL_BACKLOG_SWEEP,
     SIGNAL_CLAIM_LEASE,
+    SIGNAL_LIVE_SWEEP,
+    SIGNAL_MAX_PER_TICK,
     SIGNAL_MAX_SCAN_PAGES,
     SIGNAL_TASK,
     DecisionQuestions,
@@ -26,6 +29,7 @@ from litellm.proxy.lens.signals import (
     SignalConfig,
     SignalData,
     SignalStep,
+    SignalSweep,
     StoredTraceSignal,
     candidate,
     run_signal_loop,
@@ -711,15 +715,17 @@ async def test_signal_tick_resumes_after_ten_pages_and_resets_after_a_short_page
     ) -> object:
         return {"answers": {}}
 
-    first_cursor: Final = await run_signal_tick(storage, repository, decide, lambda: NOW)
+    first_cursor: Final = (await run_signal_tick(storage, repository, decide, lambda: NOW)).cursor
     first_calls: Final = tuple(storage.cursors.get_nowait() for _ in range(storage.cursors.qsize()))
-    second_cursor: Final = await run_signal_tick(
-        storage,
-        repository,
-        decide,
-        lambda: NOW,
-        cursor=first_cursor,
-    )
+    second_cursor: Final = (
+        await run_signal_tick(
+            storage,
+            repository,
+            decide,
+            lambda: NOW,
+            cursor=first_cursor,
+        )
+    ).cursor
     second_calls: Final = tuple(storage.cursors.get_nowait() for _ in range(storage.cursors.qsize()))
 
     assert len(first_calls) == SIGNAL_MAX_SCAN_PAGES
@@ -730,12 +736,14 @@ async def test_signal_tick_resumes_after_ten_pages_and_resets_after_a_short_page
 
     short_storage: Final = PagedSampleStorage((pages[0][:50],))
     short_database: Final = SignalDatabase(config, stored_rows=stored_rows[:50])
-    short_cursor: Final = await run_signal_tick(
-        short_storage,
-        SignalRepository(short_database),
-        decide,
-        lambda: NOW,
-    )
+    short_cursor: Final = (
+        await run_signal_tick(
+            short_storage,
+            SignalRepository(short_database),
+            decide,
+            lambda: NOW,
+        )
+    ).cursor
     assert short_cursor == ""
 
 
@@ -778,26 +786,30 @@ async def test_signal_tick_resumes_a_partially_consumed_page() -> None:
         }
 
     first_database: Final = SignalDatabase(config, stored_rows=initial_rows)
-    first_cursor: Final = await run_signal_tick(
-        storage,
-        SignalRepository(first_database),
-        decide,
-        lambda: NOW,
-        cursor=resume_cursor,
-    )
+    first_cursor: Final = (
+        await run_signal_tick(
+            storage,
+            SignalRepository(first_database),
+            decide,
+            lambda: NOW,
+            cursor=resume_cursor,
+        )
+    ).cursor
     first_claims: Final = tuple(first_database.claims.get_nowait() for _ in range(first_database.claims.qsize()))
 
     classified_first_rows: Final = tuple(
         stored_trace(CURRENT_CONFIG_KEY, trace_id=trace_id) for trace_id in first_claims
     )
     second_database: Final = SignalDatabase(config, stored_rows=(*initial_rows, *classified_first_rows))
-    second_cursor: Final = await run_signal_tick(
-        storage,
-        SignalRepository(second_database),
-        decide,
-        lambda: NOW,
-        cursor=first_cursor,
-    )
+    second_cursor: Final = (
+        await run_signal_tick(
+            storage,
+            SignalRepository(second_database),
+            decide,
+            lambda: NOW,
+            cursor=first_cursor,
+        )
+    ).cursor
     second_claims: Final = tuple(second_database.claims.get_nowait() for _ in range(second_database.claims.qsize()))
     sample_cursors: Final = tuple(storage.cursors.get_nowait() for _ in range(storage.cursors.qsize()))
     expected_eligible: Final = frozenset(f"trace-{index}" for index in range(20, 100))
@@ -1000,3 +1012,87 @@ async def test_proxy_signal_call_resolves_the_current_router(monkeypatch: pytest
     monkeypatch.setattr(proxy_server, "llm_router", None)
     with pytest.raises(RuntimeError, match="router is not initialized"):
         await call_current_router()
+
+
+class RecordingSampleStorage(PagedSampleStorage):
+    def __init__(self, pages: tuple[tuple[ExecutionRow, ...], ...]) -> None:
+        super().__init__(pages)
+        self.windows: Final[asyncio.Queue[tuple[int, int]]] = asyncio.Queue()
+
+    async def lens_sample(self, parameters: LensSampleParams) -> Sequence[ExecutionRow]:
+        await self.windows.put((parameters.start, parameters.end))
+        return await super().lens_sample(parameters)
+
+
+def sample_rows(prefix: str, count: int) -> tuple[ExecutionRow, ...]:
+    return tuple(
+        ExecutionRow(
+            source="traces",
+            trace_id=f"{prefix}-{index}",
+            team_id="",
+            name=f"{prefix}-{index}",
+            start_time="",
+            span_count=1,
+            root_seen=1,
+            eligible=count,
+            selected=count,
+            selection_key=f"{prefix}-{index}",
+        )
+        for index in range(count)
+    )
+
+
+async def no_answers(
+    *,
+    model: str,
+    state: DecisionState,
+    questions: DecisionQuestions,
+    timeout: float,
+    metadata: Mapping[str, object],
+) -> object:
+    return {"answers": {}}
+
+
+def drained(queue: "asyncio.Queue[tuple[int, int]]") -> tuple[tuple[int, int], ...]:
+    return tuple(queue.get_nowait() for _ in range(queue.qsize()))
+
+
+@pytest.mark.asyncio
+async def test_live_sweep_reads_one_page_of_recently_finished_traces() -> None:
+    pages: Final = (sample_rows("a", 100), sample_rows("b", 100), ())
+    stored_rows: Final = tuple(
+        stored_trace(CURRENT_CONFIG_KEY, trace_id=row.trace_id) for row in chain.from_iterable(pages)
+    )
+    live_storage: Final = RecordingSampleStorage(pages)
+    backlog_storage: Final = RecordingSampleStorage(pages)
+    repository: Final = SignalRepository(SignalDatabase(SignalConfig(model="decision"), stored_rows=stored_rows))
+
+    live_tick: Final = await run_signal_tick(live_storage, repository, no_answers, lambda: NOW, sweep=SIGNAL_LIVE_SWEEP)
+    await run_signal_tick(backlog_storage, repository, no_answers, lambda: NOW, sweep=SIGNAL_BACKLOG_SWEEP)
+    live_windows: Final = drained(live_storage.windows)
+    backlog_windows: Final = drained(backlog_storage.windows)
+    now_ms: Final = int(NOW.timestamp() * 1000)
+
+    assert len(live_windows) == 1
+    assert live_tick.cursor == pages[0][-1].selection_key
+    assert live_tick.claimed == 0
+    assert backlog_windows[0][0] < live_windows[0][0] < live_windows[0][1] < now_ms
+    assert live_windows[0][1] == backlog_windows[0][1]
+    assert now_ms - live_windows[0][1] <= 30_000, "a finished trace should be visible to the sweep within seconds"
+
+
+@pytest.mark.asyncio
+async def test_signal_loop_drains_a_backlog_without_waiting_for_the_interval() -> None:
+    storage: Final = SignalStorage(executions=sample_rows("trace", SIGNAL_MAX_PER_TICK + 10))
+    database: Final = SignalDatabase(SignalConfig(model="decision"))
+    hour_long_sweep: Final = SignalSweep(lookback=timedelta(minutes=15), interval_seconds=3600, max_pages=1)
+
+    task: Final = asyncio.create_task(
+        run_signal_loop(storage, SignalRepository(database), no_answers, lambda: NOW, sweep=hour_long_sweep)
+    )
+    claims: Final = tuple([await asyncio.wait_for(database.claims.get(), 1) for _ in range(SIGNAL_MAX_PER_TICK + 1)])
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert len(claims) == SIGNAL_MAX_PER_TICK + 1

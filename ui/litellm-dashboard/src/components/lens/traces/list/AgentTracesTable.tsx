@@ -170,11 +170,11 @@ function SignalsCell({ run }: { run: TraceSummary }) {
   if (!state || state.status === "pending") return <Skeleton aria-label="Loading signals" className="h-3 w-16" />;
   if (state.status === "error") return muted("Unavailable", "Could not load signals");
   const { status } = state.signals;
-  if (status === "unclassified") return muted("Queued", "Waiting for the System 1 model to check this run");
-  if (status === "pending") return muted("Checking", "The System 1 model is checking this run");
+  if (status === "unclassified" || status === "pending")
+    return muted("Checking", "The System 1 model is checking this run");
   if (status === "failed") return muted("Not checked", "The System 1 model could not check this run");
   const flags = flaggedSignals(state.signals);
-  if (!flags.length) return muted("-", "No signals detected");
+  if (!flags.length) return <span title="No signals detected" />;
   return <SignalPills flags={flags} className="overflow-hidden" />;
 }
 

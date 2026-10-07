@@ -317,7 +317,7 @@ describe("AgentTracesTable signals", () => {
     ).toEqual(["User frustration", "Repeated request"]);
     expect(flagged).toHaveAttribute("title", "Signals: User frustration (92%), Repeated request (71%)");
     expect(within(rows[1]).getByTitle("No signals detected")).toBeInTheDocument();
-    expect(within(rows[2]).getByText("Queued")).toBeInTheDocument();
+    expect(within(rows[2]).getByText("Checking")).toBeInTheDocument();
   });
 
   it("keeps the signals column with a setup link until signals are configured", async () => {
