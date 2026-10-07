@@ -166,9 +166,7 @@ async def test_due_pages_lenses_with_equal_due_at_without_skipping_or_repeating(
     now: Final = datetime.now(timezone.utc).replace(microsecond=0)
     scope: Final = Scope(team_id=uuid4().hex)
     repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
-    lenses: Final = tuple(
-        _scheduled_lens(uuid4().hex, scope, now, now - timedelta(minutes=1)) for _ in range(45)
-    )
+    lenses: Final = tuple(_scheduled_lens(uuid4().hex, scope, now, now - timedelta(minutes=1)) for _ in range(45))
     await asyncio.gather(*(repo.create(lens) for lens in lenses))
     try:
         await lens_db.execute_raw(

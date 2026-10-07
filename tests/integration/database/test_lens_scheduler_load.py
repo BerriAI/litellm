@@ -134,9 +134,7 @@ async def test_claim_due_reaches_a_supported_lens_behind_a_full_page_of_unsuppor
     worker: Final = Worker(id=uuid4().hex, name="paging-test-worker", scope=scope, last_seen=now)
     unsupported_at: Final = now - timedelta(minutes=5)
     supported_at: Final = now - timedelta(minutes=1)
-    unsupported: Final = tuple(
-        _due_lens(uuid4().hex, scope, now, "unsupported", unsupported_at) for _ in range(25)
-    )
+    unsupported: Final = tuple(_due_lens(uuid4().hex, scope, now, "unsupported", unsupported_at) for _ in range(25))
     supported: Final = _due_lens(uuid4().hex, scope, now, "supported", supported_at)
     candidates: Final = (*unsupported, supported)
     repository: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))

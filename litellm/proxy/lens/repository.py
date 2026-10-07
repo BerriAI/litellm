@@ -179,9 +179,7 @@ class LensRepository:
         rows: Final = _ROWS.validate_python(await self.db.query_raw('SELECT data FROM "LiteLLM_Lens" ORDER BY id'))
         return tuple(Lens.model_validate(row.data) for row in rows)
 
-    async def due(
-        self, scope: Scope, now: datetime, limit: int, after: DueLens | None = None
-    ) -> tuple[DueLens, ...]:
+    async def due(self, scope: Scope, now: datetime, limit: int, after: DueLens | None = None) -> tuple[DueLens, ...]:
         query: Final[LiteralString] = _DUE_QUERY if after is None else _DUE_AFTER_QUERY
         parameters: Final[tuple[object, ...]] = (
             (
