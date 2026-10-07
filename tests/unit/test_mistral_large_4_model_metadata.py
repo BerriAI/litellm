@@ -34,7 +34,7 @@ def test_metadata_and_backup(model):
     assert info["max_input_tokens"] == 524288
     assert info["input_cost_per_token"] == 6.8e-07
     assert info["output_cost_per_token"] == 2.09e-06
-    assert info["cache_read_input_token_cost"] == 7e-08
+    assert info["cache_read_input_token_cost"] == 6.8e-08
     assert info["reasoning_effort_levels"] == ["none", "high"]
     for capability in (
         "supports_vision",
@@ -76,7 +76,7 @@ def test_completion_cost(model):
         },
     )
     assert litellm.completion_cost(completion_response=response, model=model) == pytest.approx(
-        400 * 6.8e-07 + 600 * 7e-08 + 100 * 2.09e-06
+        400 * 6.8e-07 + 600 * 6.8e-08 + 100 * 2.09e-06
     )
 
 

@@ -39213,7 +39213,7 @@
         "mode": "embedding"
     },
     "mistral/mistral-large-4": {
-        "cache_read_input_token_cost": 7e-08,
+        "cache_read_input_token_cost": 6.8e-08,
         "input_cost_per_token": 6.8e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 524288,
@@ -39234,7 +39234,7 @@
         "supports_vision": true
     },
     "mistral/mistral-large-4-0": {
-        "cache_read_input_token_cost": 7e-08,
+        "cache_read_input_token_cost": 6.8e-08,
         "input_cost_per_token": 6.8e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 524288,
