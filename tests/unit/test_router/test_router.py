@@ -3197,6 +3197,7 @@ def test_adopt_fallback_response_headers_replaces_rather_than_merges():
     fallback._response_headers = {"x-request-id": "req-FALLBACK"}
     fallback._hidden_params = {
         "model_id": "fallback-deployment",
+        "response_cost": 0.0,
         "additional_headers": {"llm_provider-x-request-id": "req-FALLBACK"},
     }
 
@@ -3207,6 +3208,8 @@ def test_adopt_fallback_response_headers_replaces_rather_than_merges():
     assert wrapper._response_headers == {"x-request-id": "req-FALLBACK"}
     assert wrapper._hidden_params["model_id"] == "fallback-deployment"
     assert "only_on_failed_attempt" not in wrapper._hidden_params
+    assert wrapper._hidden_params["response_cost"] is None
+    assert wrapper._base_hidden_params["response_cost"] is None
     assert wrapper._hidden_params is not fallback._hidden_params
     # the snapshot CustomStreamWrapper caches at init has to follow, or a chunk built
     # from it would still be stamped with the deployment that failed
