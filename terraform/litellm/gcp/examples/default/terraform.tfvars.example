@@ -107,3 +107,9 @@ env    = "stage"
 # main.tf (otel_endpoint, otel_exporter, otel_environment_name,
 # otel_capture_message_content, otel_headers_secret). Full docs in
 # ../../variables.tf.
+
+# ---------- Prometheus metrics sidecar ----------
+# Serve /metrics from a sidecar in the gateway service instead of the inference
+# workers. Scraped inside the instance by the Managed Service for Prometheus
+# sidecar and written to Cloud Monitoring; see ../../README.md.
+# gateway_metrics_port = 4001

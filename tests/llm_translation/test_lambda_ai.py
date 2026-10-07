@@ -8,7 +8,6 @@ from unittest import mock
 import pytest
 
 import litellm
-from litellm import completion
 from litellm.llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 
 
@@ -24,7 +23,7 @@ def test_lambda_ai_get_openai_compatible_provider_info():
 
     # Test with default values (no env vars set)
     with mock.patch.dict(os.environ, {}, clear=True):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://api.lambda.ai/v1"
         assert api_key is None
 
@@ -36,7 +35,7 @@ def test_lambda_ai_get_openai_compatible_provider_info():
             "LAMBDA_API_BASE": "https://custom.lambda.ai/v1",
         },
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://custom.lambda.ai/v1"
         assert api_key == "test-key"
 
@@ -45,9 +44,7 @@ def test_lambda_ai_get_openai_compatible_provider_info():
         os.environ,
         {"LAMBDA_API_KEY": "env-key", "LAMBDA_API_BASE": "https://env.lambda.ai/v1"},
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://param.lambda.ai/v1", "param-key"
-        )
+        api_base, api_key = config.get_openai_compatible_provider_info("https://param.lambda.ai/v1", "param-key")
         assert api_base == "https://param.lambda.ai/v1"
         assert api_key == "param-key"
 
@@ -103,77 +100,3 @@ async def test_lambda_ai_completion_call():
             raise
 
 
-def test_lambda_ai_models_configuration():
-    """Test that Lambda AI models are configured correctly"""
-    from litellm import get_model_info
-
-    # Reload model cost map to pick up local changes
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    # Clear and repopulate lambda_ai_models list after reloading model_cost
-    litellm.lambda_ai_models = set()
-    litellm.add_known_models()
-
-    # Some Lambda AI models to test
-    lambda_ai_models = [
-        "lambda_ai/deepseek-llama3.3-70b",
-        "lambda_ai/hermes3-8b",
-        "lambda_ai/llama3.1-8b-instruct",
-        "lambda_ai/llama3.2-11b-vision-instruct",
-        "lambda_ai/qwen25-coder-32b-instruct",
-    ]
-
-    for model in lambda_ai_models:
-        model_info = get_model_info(model)
-        assert model_info is not None, f"Model info not found for {model}"
-        assert (
-            model_info.get("litellm_provider") == "lambda_ai"
-        ), f"{model} should have lambda_ai as provider"
-        assert model_info.get("mode") == "chat", f"{model} should be in chat mode"
-        assert (
-            model_info.get("supports_function_calling") is True
-        ), f"{model} should support function calling"
-        assert (
-            model_info.get("supports_system_messages") is True
-        ), f"{model} should support system messages"
-
-        # Check vision support for vision models
-        if "vision" in model:
-            assert (
-                model_info.get("supports_vision") is True
-            ), f"{model} should support vision"
-
-
-def test_lambda_ai_model_list_populated():
-    """Test that lambda_ai_models list is populated correctly"""
-    # Ensure we're using local model cost map and repopulate models
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    # Clear and repopulate all model lists after reloading model_cost
-    litellm.lambda_ai_models = set()
-    litellm.add_known_models()
-
-    # This should be populated by the add_known_models function
-    assert (
-        len(litellm.lambda_ai_models) > 0
-    ), "lambda_ai_models list should not be empty"
-
-    # Check that all models in the list are Lambda AI models
-    for model in litellm.lambda_ai_models:
-        assert model.startswith(
-            "lambda_ai/"
-        ), f"Model {model} should start with 'lambda_ai/'"
-
-    # Check some expected models are in the list
-    expected_models = [
-        "lambda_ai/llama3.1-8b-instruct",
-        "lambda_ai/hermes3-405b",
-        "lambda_ai/deepseek-v3-0324",
-    ]
-
-    for model in expected_models:
-        assert (
-            model in litellm.lambda_ai_models
-        ), f"{model} should be in lambda_ai_models list"

@@ -2,7 +2,6 @@ import copy
 import enum
 import re
 from typing import TYPE_CHECKING, Final, cast
-from urllib.parse import urlparse
 
 import httpx
 from httpx import Response
@@ -10,13 +9,17 @@ from httpx import Response
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _audio_or_image_in_message_content,
+    audio_or_image_in_message_content,
     convert_content_list_to_str,
     filter_value_from_dict,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
-from litellm.llms.azure_ai.common_utils import is_foundry_model_inference_base
+from litellm.llms.azure_ai.common_utils import (
+    api_key_header_for_base,
+    is_foundry_model_inference_base,
+)
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.xai.chat.transformation import XAIChatConfig
@@ -24,10 +27,10 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
-from litellm.utils import _add_path_to_api_base, supports_tool_choice
+from litellm.utils import add_path_to_api_base, supports_tool_choice
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AzureFoundryErrorStrings(str, enum.Enum):
@@ -42,12 +45,37 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
 )
 
 
+class AzureAIGPT5Config(OpenAIGPT5Config):
+    @classmethod
+    def _model_map_lookup_name(cls, model: str) -> str:
+        """Normalise a Foundry routing name to its cost-map key, when the map has one.
+
+        A Foundry deployment and its OpenAI-hosted namesake are different products with
+        different capabilities, so ``azure_ai/<model>`` is the entry to read whenever the map
+        carries it. Most gpt-5-family names have no ``azure_ai/`` row, though, and prefixing
+        those anyway costs them every flag: ``get_llm_provider`` re-resolves an ``azure_ai/``
+        name to the azure provider when a global AZURE_AI_API_BASE points at an
+        openai.azure.com host, ``azure/<model>`` is not a key either, so the lookup lands
+        nowhere and every effort answer degrades to False. A missing key defers to the base
+        resolver instead.
+        """
+        prefixed: Final = model if model.startswith("azure_ai/") else f"azure_ai/{model}"
+        return prefixed if prefixed in litellm.model_cost else super()._model_map_lookup_name(model)
+
+
+azureAIGPT5Config: Final = AzureAIGPT5Config()
+
+
 class AzureAIStudioConfig(OpenAIConfig):
     def get_supported_openai_params(self, model: str) -> list:
         model_supports_tool_choice = True  # azure ai supports this by default
         if not supports_tool_choice(model=f"azure_ai/{model}"):
             model_supports_tool_choice = False
-        supported_params = super().get_supported_openai_params(model)
+        supported_params = (
+            azureAIGPT5Config.get_supported_openai_params(model)
+            if azureAIGPT5Config.is_model_gpt_5_model(model)
+            else super().get_supported_openai_params(model)
+        )
         if not model_supports_tool_choice:
             filtered_supported_params: Final = []
             for param in supported_params:
@@ -61,6 +89,27 @@ class AzureAIStudioConfig(OpenAIConfig):
 
         return supported_params
 
+    def map_openai_params(
+        self,
+        non_default_params: dict[str, object],  # mutable-ok: OpenAIConfig.map_openai_params signature
+        optional_params: dict[str, object],  # mutable-ok: OpenAIConfig.map_openai_params signature
+        model: str,
+        drop_params: bool,
+    ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
+        if not azureAIGPT5Config.is_model_gpt_5_model(model):
+            return super().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+            )
+        return azureAIGPT5Config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
+
     def _supports_stop_reason(self, model: str) -> bool:
         """
         Check if the model supports stop tokens.
@@ -68,7 +117,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         if "grok" in model:
             # Reuse Xai method for Grok model
             xai_config: Final = XAIChatConfig()
-            return xai_config._supports_stop_reason(model)
+            return xai_config.supports_stop_reason(model)
         return True
 
     def validate_environment(
@@ -89,7 +138,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         else:
             # No api_key provided — fall back to Azure AD token-based auth
             litellm_params_obj = GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {}))
-            headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+            headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         headers["Content-Type"] = "application/json"
 
@@ -99,11 +148,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         Returns True if the request should use `api-key` header for authentication.
         """
-        parsed_url: Final = urlparse(api_base)
-        host: Final = parsed_url.hostname
-        if host and (host.endswith(".services.ai.azure.com") or host.endswith(".openai.azure.com")):
-            return True
-        return False
+        return api_key_header_for_base(api_base) == "api-key"
 
     def get_complete_url(
         self,
@@ -148,9 +193,9 @@ class AzureAIStudioConfig(OpenAIConfig):
 
         # Add the path to the base URL
         if "services.ai.azure.com" in api_base:
-            new_url = _add_path_to_api_base(api_base=api_base, ending_path="/models/chat/completions")
+            new_url = add_path_to_api_base(api_base=api_base, ending_path="/models/chat/completions")
         else:
-            new_url = _add_path_to_api_base(api_base=api_base, ending_path="/chat/completions")
+            new_url = add_path_to_api_base(api_base=api_base, ending_path="/chat/completions")
 
         # Use the new query_params dictionary
         final_url: Final = httpx.URL(new_url).copy_with(params=query_params)
@@ -200,7 +245,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                 filter_value_from_dict(message_dict, field)
 
             # Do nothing if the message contains an image or audio
-            if _audio_or_image_in_message_content(message):
+            if audio_or_image_in_message_content(message):
                 continue
 
             texts = convert_content_list_to_str(message=message)
@@ -236,6 +281,15 @@ class AzureAIStudioConfig(OpenAIConfig):
             custom_llm_provider = "azure"
         return api_base, dynamic_api_key, custom_llm_provider
 
+    def get_openai_compatible_provider_info(
+        self,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str,
+    ) -> tuple[str | None, str | None, str]:
+        return self._get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider)
+
     def transform_request(
         self,
         model: str,
@@ -260,7 +314,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

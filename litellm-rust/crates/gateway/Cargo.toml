@@ -1,0 +1,38 @@
+[package]
+name = "litellm-gateway"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum.workspace = true
+envy = "0.4.2"
+http-body-util = "0.1"
+litellm-inference.workspace = true
+litellm-gateway-inference.workspace = true
+litellm-gateway-mcp.workspace = true
+tokio-util = "0.7"
+thiserror.workspace = true
+futures-util.workspace = true
+litellm-gateway-auth.workspace = true
+litellm-gateway-ui.workspace = true
+litellm-auth-types.workspace = true
+litellm-config.workspace = true
+litellm-http = { workspace = true, features = ["mcp"] }
+litellm-llms.workspace = true
+litellm-secrets.workspace = true
+litellm-tracing.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+uuid.workspace = true
+tower-sessions-moka-store = "0.15.0"
+
+[dev-dependencies]
+base64.workspace = true
+rstest.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tower = { version = "0.5", features = ["util"] }

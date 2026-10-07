@@ -25,6 +25,12 @@ describe("EntityLink", () => {
     expect(push).toHaveBeenCalledWith("/ui/users?user=u1");
   });
 
+  it("renders the label as plain text when there is no href to point at", () => {
+    render(<EntityLink>default_user_id</EntityLink>);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByText("default_user_id")).toBeInTheDocument();
+  });
+
   it("leaves modified clicks to the browser so new-tab shortcuts keep working", async () => {
     const user = userEvent.setup();
     render(<EntityLink href="/ui/users?user=u1">alice</EntityLink>);
