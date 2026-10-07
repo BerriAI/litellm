@@ -26614,6 +26614,11 @@ export interface components {
                 [key: string]: number;
             };
             /**
+             * Total Tokens
+             * @description Input and output tokens of routed generation requests on the selected UTC days, excluding classifier tokens; null when any selected requests predate daily token recording
+             */
+            total_tokens?: number | null;
+            /**
              * Turns
              * @description Auto-routed requests on the selected UTC days
              */
@@ -26691,6 +26696,11 @@ export interface components {
              * @description What the selected days' routed traffic actually cost
              */
             spend: number;
+            /**
+             * Total Tokens
+             * @description Input and output tokens of routed generation requests on the selected UTC days, excluding classifier tokens; null when any selected requests predate daily token recording
+             */
+            total_tokens?: number | null;
             /**
              * Turns
              * @description Auto-routed requests on the selected UTC days
@@ -27143,6 +27153,11 @@ export interface components {
              * @description Google Cloud location/region (e.g., us-central1)
              */
             location?: string | null;
+            /**
+             * Logging Only Scope
+             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             */
+            logging_only_scope?: ("input" | "output" | "both") | null;
             /**
              * Mask Request Content
              * @description Will mask request content if guardrail makes any changes
@@ -33404,6 +33419,27 @@ export interface components {
             /** Output Text */
             output_text: string;
         };
+        /** GuardrailUIAddGuardrailSettings */
+        GuardrailUIAddGuardrailSettings: {
+            /** Content Filter Settings */
+            content_filter_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Pii Entity Categories */
+            pii_entity_categories: components["schemas"]["PiiEntityCategoryMap"][];
+            /** Providers Without Directional Logging Only Scope */
+            providers_without_directional_logging_only_scope: string[];
+            /** Supported Actions */
+            supported_actions: string[];
+            /** Supported Entities */
+            supported_entities: string[];
+            /** Supported Modes */
+            supported_modes: string[];
+            /** Supported Modes By Provider */
+            supported_modes_by_provider: {
+                [key: string]: string[];
+            };
+        };
         /**
          * HTTPAuthSecurityScheme
          * @description Defines a security scheme using HTTP authentication.
@@ -35676,8 +35712,14 @@ export interface components {
             cache_creation_input_audio_token_cost?: number | null;
             /** Cache Creation Input Token Cost */
             cache_creation_input_token_cost?: number | null;
+            /** Cache Creation Input Token Cost Above 100K Tokens */
+            cache_creation_input_token_cost_above_100k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 100K Tokens Batches */
+            cache_creation_input_token_cost_above_100k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr */
             cache_creation_input_token_cost_above_1hr?: number | null;
+            /** Cache Creation Input Token Cost Above 1Hr Above 100K Tokens */
+            cache_creation_input_token_cost_above_1hr_above_100k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens */
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens Batches */
@@ -35706,6 +35748,10 @@ export interface components {
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
+            /** Cache Read Input Token Cost Above 100K Tokens */
+            cache_read_input_token_cost_above_100k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 100K Tokens Batches */
+            cache_read_input_token_cost_above_100k_tokens_batches?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
             cache_read_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Batches */
@@ -35790,6 +35836,10 @@ export interface components {
             input_cost_per_second?: number | null;
             /** Input Cost Per Token */
             input_cost_per_token?: number | null;
+            /** Input Cost Per Token Above 100K Tokens */
+            input_cost_per_token_above_100k_tokens?: number | null;
+            /** Input Cost Per Token Above 100K Tokens Batches */
+            input_cost_per_token_above_100k_tokens_batches?: number | null;
             /** Input Cost Per Token Above 128K Tokens */
             input_cost_per_token_above_128k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens */
@@ -35927,6 +35977,10 @@ export interface components {
             output_cost_per_second_768p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
+            /** Output Cost Per Token Above 100K Tokens */
+            output_cost_per_token_above_100k_tokens?: number | null;
+            /** Output Cost Per Token Above 100K Tokens Batches */
+            output_cost_per_token_above_100k_tokens_batches?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
             output_cost_per_token_above_128k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens */
@@ -37186,6 +37240,11 @@ export interface components {
              * @description Google Cloud location/region (e.g., us-central1)
              */
             location?: string | null;
+            /**
+             * Logging Only Scope
+             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             */
+            logging_only_scope?: ("input" | "output" | "both") | null;
             /**
              * Mask
              * @description Enable content masking using Lasso classifix API
@@ -40820,6 +40879,13 @@ export interface components {
          * @enum {string}
          */
         PiiAction: "BLOCK" | "MASK";
+        /** PiiEntityCategoryMap */
+        PiiEntityCategoryMap: {
+            /** Category */
+            category: string;
+            /** Entities */
+            entities: string[];
+        };
         /**
          * PiiEntityType
          * @enum {string}
@@ -44780,6 +44846,18 @@ export interface components {
             /** Start */
             start?: string | null;
         };
+        /** RunSource */
+        RunSource: {
+            /** Title */
+            title: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "slack" | "teams" | "discord" | "linear" | "github" | "jira" | "custom";
+            /** Url */
+            url: string;
+        };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
             /** Costcenter */
@@ -48058,6 +48136,7 @@ export interface components {
             resolution_limited?: boolean;
             /** Service */
             service: string;
+            source?: components["schemas"]["RunSource"] | null;
             /** Span Count */
             span_count: number;
             /** Spend */
@@ -50693,8 +50772,14 @@ export interface components {
             cache_creation_input_audio_token_cost?: number | null;
             /** Cache Creation Input Token Cost */
             cache_creation_input_token_cost?: number | null;
+            /** Cache Creation Input Token Cost Above 100K Tokens */
+            cache_creation_input_token_cost_above_100k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 100K Tokens Batches */
+            cache_creation_input_token_cost_above_100k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr */
             cache_creation_input_token_cost_above_1hr?: number | null;
+            /** Cache Creation Input Token Cost Above 1Hr Above 100K Tokens */
+            cache_creation_input_token_cost_above_1hr_above_100k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens */
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens Batches */
@@ -50723,6 +50808,10 @@ export interface components {
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
+            /** Cache Read Input Token Cost Above 100K Tokens */
+            cache_read_input_token_cost_above_100k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 100K Tokens Batches */
+            cache_read_input_token_cost_above_100k_tokens_batches?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
             cache_read_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Batches */
@@ -50807,6 +50896,10 @@ export interface components {
             input_cost_per_second?: number | null;
             /** Input Cost Per Token */
             input_cost_per_token?: number | null;
+            /** Input Cost Per Token Above 100K Tokens */
+            input_cost_per_token_above_100k_tokens?: number | null;
+            /** Input Cost Per Token Above 100K Tokens Batches */
+            input_cost_per_token_above_100k_tokens_batches?: number | null;
             /** Input Cost Per Token Above 128K Tokens */
             input_cost_per_token_above_128k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens */
@@ -50944,6 +51037,10 @@ export interface components {
             output_cost_per_second_768p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
+            /** Output Cost Per Token Above 100K Tokens */
+            output_cost_per_token_above_100k_tokens?: number | null;
+            /** Output Cost Per Token Above 100K Tokens Batches */
+            output_cost_per_token_above_100k_tokens_batches?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
             output_cost_per_token_above_128k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens */
@@ -60997,7 +61094,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GuardrailUIAddGuardrailSettings"];
                 };
             };
         };

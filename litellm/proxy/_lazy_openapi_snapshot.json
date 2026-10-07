@@ -11572,6 +11572,23 @@
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
             },
+            "logging_only_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "input",
+                    "output",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "title": "Logging Only Scope"
+            },
             "mask_request_content": {
               "anyOf": [
                 {
@@ -12727,6 +12744,77 @@
           "title": "GuardrailSubmissionSummary",
           "type": "object"
         },
+        "GuardrailUIAddGuardrailSettings": {
+          "properties": {
+            "content_filter_settings": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Content Filter Settings"
+            },
+            "pii_entity_categories": {
+              "items": {
+                "$ref": "#/components/schemas/PiiEntityCategoryMap"
+              },
+              "title": "Pii Entity Categories",
+              "type": "array"
+            },
+            "providers_without_directional_logging_only_scope": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Providers Without Directional Logging Only Scope",
+              "type": "array"
+            },
+            "supported_actions": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Actions",
+              "type": "array"
+            },
+            "supported_entities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Entities",
+              "type": "array"
+            },
+            "supported_modes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Modes",
+              "type": "array"
+            },
+            "supported_modes_by_provider": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "title": "Supported Modes By Provider",
+              "type": "object"
+            }
+          },
+          "required": [
+            "supported_entities",
+            "supported_actions",
+            "supported_modes",
+            "supported_modes_by_provider",
+            "providers_without_directional_logging_only_scope",
+            "pii_entity_categories"
+          ],
+          "title": "GuardrailUIAddGuardrailSettings",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -13822,6 +13910,23 @@
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
             },
+            "logging_only_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "input",
+                    "output",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "title": "Logging Only Scope"
+            },
             "mask": {
               "anyOf": [
                 {
@@ -14881,6 +14986,27 @@
           ],
           "title": "PiiAction",
           "type": "string"
+        },
+        "PiiEntityCategoryMap": {
+          "properties": {
+            "category": {
+              "title": "Category",
+              "type": "string"
+            },
+            "entities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Entities",
+              "type": "array"
+            }
+          },
+          "required": [
+            "category",
+            "entities"
+          ],
+          "title": "PiiEntityCategoryMap",
+          "type": "object"
         },
         "PiiEntityType": {
           "enum": [
@@ -16323,7 +16449,9 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/GuardrailUIAddGuardrailSettings"
+                  }
                 }
               },
               "description": "Successful Response"

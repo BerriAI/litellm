@@ -10,8 +10,10 @@ rollups and, for ``source``, the status page's per-test links to GitHub.
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
+import junit_properties
 import pytest
 from junit_properties import (
     SUITE_ROOT,
@@ -97,13 +99,16 @@ class TestResultProperties:
     def test_every_test_carries_package_covers_and_source(self, request: pytest.FixtureRequest) -> None:
         """Read off this test's own collected Item, so the nodeid and location are
         whatever pytest reports for the launch shape in use, and the marker is added
-        at run time so the coverage registry's collect-only pass never sees it."""
+        at run time so the coverage registry's collect-only pass never sees it. The
+        source re-roots the location under the suite root as it would for a suite
+        file: the constant is hardcoded, not looked up, so a file outside the suite
+        gets the same treatment."""
         test = type(self).test_every_test_carries_package_covers_and_source
         request.applymarker(pytest.mark.covers("LOG-1", "LOG-2"))
         assert result_properties(collected_item(request, test.__name__)) == (
             ("package", "root"),
             ("covers", "LOG-1,LOG-2"),
-            ("source", f"tests/e2e/test_junit_properties.py:{test.__code__.co_firstlineno}"),
+            ("source", f"{SUITE_ROOT}/{Path(__file__).name}:{test.__code__.co_firstlineno}"),
         )
 
     def test_attach_is_idempotent(self, request: pytest.FixtureRequest) -> None:
@@ -116,14 +121,15 @@ class TestResultProperties:
 
 
 class TestSuiteRoot:
-    def test_suite_root_names_this_file_s_real_home(self) -> None:
+    def test_suite_root_names_the_harness_s_real_home(self) -> None:
         """SUITE_ROOT is hardcoded because the runner image has no repo to read it
-        from. Where there IS a checkout, prove the constant still points at us --
-        otherwise a moved tests/e2e/ ships links that 404."""
+        from. Where there IS a checkout, prove the constant still points at the
+        harness -- otherwise a moved tests/e2e/ ships links that 404."""
         root = repo_root()
         if root is None:
-            pytest.skip("no checkout above this file (the runner image copies tests/e2e/ to /app/e2e)")
-        assert (root / SUITE_ROOT / Path(__file__).name).resolve() == Path(__file__).resolve()
+            pytest.skip("no checkout above this file")
+        harness_home = Path(inspect.getfile(junit_properties)).resolve()
+        assert (root / SUITE_ROOT / "junit_properties.py").resolve() == harness_home
 
 
 class TestDedupeCovers:
