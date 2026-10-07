@@ -115,10 +115,6 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "compatible-host policy is consumed by the DeepSeek Messages adapter"
-)]
 pub(crate) enum ThinkingSemantics {
     /// Claude's rules: disabled thinking is dropped, legacy and adaptive thinking and effort
     /// are rewritten for the model, and a temperature that conflicts with thinking is removed.
@@ -128,10 +124,6 @@ pub(crate) enum ThinkingSemantics {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "compatible-host policy is consumed by the DeepSeek Messages adapter"
-)]
 pub(crate) enum BillingMetadata {
     Forward,
     Strip,
@@ -150,10 +142,6 @@ pub(crate) const FIRST_PARTY_REQUEST_POLICY: RequestPolicy = RequestPolicy {
 };
 
 /// A third-party host that speaks the Anthropic wire format but is not Claude.
-#[allow(
-    dead_code,
-    reason = "compatible-host policy is consumed by the DeepSeek Messages adapter"
-)]
 pub(crate) const COMPATIBLE_HOST_REQUEST_POLICY: RequestPolicy = RequestPolicy {
     thinking: ThinkingSemantics::Passthrough,
     billing_metadata: BillingMetadata::Strip,
