@@ -4,7 +4,8 @@ import os
 import subprocess
 import sys
 import textwrap
-from typing import Final, List, Optional, Tuple
+from collections.abc import Mapping
+from typing import Final, List, Optional, Tuple, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,8 +16,13 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _convert_to_bedrock_tool_call_invoke,
+    convert_to_anthropic_tool_invoke,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
+from litellm.types.utils import ChatCompletionMessageToolCall, Message
 
 
 @pytest.fixture(autouse=True)
@@ -1045,6 +1051,36 @@ def _count_cache_control(messages: List[AllMessageValues]) -> int:
     return count
 
 
+def _count_tool_call_cache_controls(message: AllMessageValues) -> int:
+    message_mapping: Final = cast(Mapping[str, object], message)
+    tool_calls: Final = message_mapping.get("tool_calls")
+    tool_call_values: Final = cast(list[object], tool_calls) if isinstance(tool_calls, list) else None
+    return (
+        sum(
+            1
+            for tool_call in tool_call_values
+            if isinstance(tool_call, dict) and isinstance(tool_call.get("cache_control"), dict)
+        )
+        if tool_call_values is not None
+        else 0
+    )
+
+
+def _marked_function_tool_calls() -> list[ChatCompletionAssistantToolCall]:
+    return cast(
+        list[ChatCompletionAssistantToolCall],
+        [
+            {
+                "id": f"call_{index}",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+                "cache_control": {"type": "ephemeral"},
+            }
+            for index in range(3)
+        ],
+    )
+
+
 def _build_injection_points():
     return [
         {
@@ -1058,6 +1094,184 @@ def _build_injection_points():
             "control": {"type": "ephemeral", "ttl": "5m"},
         },
     ]
+
+
+def test_cache_control_hook_counts_tool_call_cache_controls():
+    message: Final[AllMessageValues] = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": _marked_function_tool_calls(),
+    }
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 3
+
+
+def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_calls():
+    message: Final[AllMessageValues] = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": cast(
+            list[ChatCompletionAssistantToolCall],
+            [
+                {
+                    "id": "nested",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": "{}",
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                },
+                {
+                    "id": "non_function",
+                    "type": "custom",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "id": "prompt_breakpoint",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "prompt_cache_breakpoint": {"type": "ephemeral"},
+                },
+                {
+                    "id": "srvtoolu_web_search",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "id": "srvtoolu_tool_result",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "id": "srvtoolu_unmatched",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        ),
+        "provider_specific_fields": {
+            "web_search_results": [{"tool_use_id": "srvtoolu_web_search"}],
+            "tool_results": [{"tool_use_id": "srvtoolu_tool_result"}],
+        },
+    }
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 2
+
+
+@pytest.mark.parametrize("tool_call_type", ["function", "custom", None])
+@pytest.mark.parametrize(
+    "mark",
+    [{"type": "ephemeral"}, {}, "ephemeral", "", 7, ["ephemeral"], "x" * 5000, None],
+    ids=["dict", "empty_dict", "string", "empty_string", "int", "list", "5kb_string", "none"],
+)
+def test_tool_call_census_matches_the_breakpoints_providers_send(mark: object, tool_call_type: str | None):
+    tool_call: Final[dict[str, object]] = {
+        "id": "call_0",
+        "function": {"name": "lookup", "arguments": "{}"},
+        "cache_control": mark,
+        **({"type": tool_call_type} if tool_call_type is not None else {}),
+    }
+    message: Final = cast(AllMessageValues, {"role": "assistant", "content": None, "tool_calls": [tool_call]})
+    bedrock_cache_points: Final = sum(
+        1
+        for block in _convert_to_bedrock_tool_call_invoke([tool_call], model="anthropic.claude-sonnet-4-5-20250929-v1:0")
+        if "cachePoint" in block
+    )
+    anthropic_marks: Final = sum(
+        1 for block in convert_to_anthropic_tool_invoke([tool_call]) if block.get("cache_control") is not None
+    )
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints([message])
+
+    assert census == bedrock_cache_points
+    assert census >= anthropic_marks
+    assert census == (0 if mark is None else 1)
+
+
+def test_cache_control_hook_caps_customer_tool_call_marks_before_injection():
+    hook = AnthropicCacheControlHook()
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "system", "content": "Follow the tool instructions."},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "Look up three values.", "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "assistant", "content": None, "tool_calls": _marked_function_tool_calls()},
+        {"role": "tool", "tool_call_id": "call_0", "content": "first"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "second"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "third"},
+        {"role": "user", "content": "Summarize the values."},
+    ]
+
+    _, processed, _ = hook.get_chat_completion_prompt(
+        model="bedrock/us.anthropic.claude-opus-4-6-v1:0",
+        messages=messages,
+        non_default_params={"cache_control_injection_points": _build_injection_points()},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    forwarded_mark_count: Final = _count_cache_control(processed) + sum(
+        _count_tool_call_cache_controls(message) for message in processed
+    )
+    assert forwarded_mark_count <= 4
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(processed) == forwarded_mark_count
+
+
+def test_cache_control_hook_counts_pydantic_message_tool_call_marks():
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1",
+        type="function",
+        function={"name": "lookup", "arguments": "{}"},
+        cache_control={"type": "ephemeral"},
+    )
+    message: Final = Message(role="assistant", content=None, tool_calls=[tool_call])
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(cast(list[AllMessageValues], [message])) == 1
+
+
+def test_injection_skips_assistant_whose_tool_call_carries_a_longer_ttl_mark():
+    hook: Final = AnthropicCacheControlHook()
+    tool_call_ttl: Final = {"type": "ephemeral", "ttl": "1h"}
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": "Let me look that up.",
+            "tool_calls": [
+                {
+                    "id": "toolu_01A",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    "cache_control": tool_call_ttl,
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01A", "content": "18C and sunny"},
+    ]
+
+    _, processed, _ = hook.get_chat_completion_prompt(
+        model="anthropic/claude-haiku-4-5",
+        messages=messages,
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "assistant"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assistant_message: Final = processed[1]
+    assistant_tool_calls: Final = assistant_message.get("tool_calls")
+    assert assistant_message.get("cache_control") is None
+    assert assistant_message.get("content") == "Let me look that up."
+    assert isinstance(assistant_tool_calls, list)
+    assert assistant_tool_calls[0].get("cache_control") == tool_call_ttl
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(processed) == 1
 
 
 def test_cache_control_hook_caps_at_four_blocks_with_client_cache_control():
@@ -1946,6 +2160,40 @@ class TestEnableAnthropicPromptCaching:
         )
         assert result_sys == "sys"
         assert result_msgs == messages
+
+    @pytest.mark.parametrize(
+        "tool_call_controls",
+        [
+            pytest.param(({"type": "ephemeral"},) * 3, id="three_5m_marks_would_exceed_the_cap"),
+            pytest.param(({"type": "ephemeral", "ttl": "1h"},), id="1h_mark_would_follow_a_5m_default"),
+        ],
+    )
+    def test_seed_stands_down_when_only_assistant_tool_calls_carry_cache_control(self, tool_call_controls):
+        tool_calls: Final = [
+            {
+                "id": f"call_{index}",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+                "cache_control": control,
+            }
+            for index, control in enumerate(tool_call_controls)
+        ]
+        messages: Final = [
+            {"role": "system", "content": "a long system prompt"},
+            {"role": "user", "content": "weather in three cities"},
+            {"role": "assistant", "content": "Checking.", "tool_calls": tool_calls},
+            *({"role": "tool", "tool_call_id": call["id"], "content": "sunny"} for call in tool_calls),
+            {"role": "user", "content": "summarize"},
+        ]
+        params: Final[dict] = {}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=cast(List[AllMessageValues], messages),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            enable_prompt_caching=True,
+        )
+        assert "cache_control_injection_points" not in params
 
     def test_default_ttl_is_anthropics_five_minute_cache(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
@@ -2840,7 +3088,7 @@ class TestOpenAIPromptCacheBreakpoint:
         messages, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs)
         assert system == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
         assert messages == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
-        assert kwargs == {"prompt_cache_options": self.EXPLICIT}
+        assert kwargs == {"prompt_cache_options": {"mode": "implicit"}}
         assert not _contains_key(system, "cache_control")
 
     def test_v1_messages_list_system_marks_last_block_only(self):
@@ -2851,7 +3099,7 @@ class TestOpenAIPromptCacheBreakpoint:
             {"type": "text", "text": "a"},
             {"type": "text", "text": "b", "prompt_cache_breakpoint": self.EXPLICIT},
         ]
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_v1_messages_targets_by_role(self):
         messages = [
@@ -2867,7 +3115,7 @@ class TestOpenAIPromptCacheBreakpoint:
         ]
         assert result[1] == messages[1]
         assert result[2]["content"] == [{"type": "text", "text": "last", "prompt_cache_breakpoint": self.EXPLICIT}]
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_v1_messages_targets_by_index(self):
         messages = [
@@ -2894,8 +3142,9 @@ class TestOpenAIPromptCacheBreakpoint:
         assert not _contains_key(system, "cache_control")
         assert not _contains_key(messages, "cache_control")
 
-    def test_v1_messages_keeps_caller_prompt_cache_options(self):
-        caller_options = {"mode": "explicit", "ttl": "30m"}
+    @pytest.mark.parametrize("mode", ["explicit", "implicit"])
+    def test_v1_messages_keeps_caller_prompt_cache_options(self, mode):
+        caller_options = {"mode": mode, "ttl": "30m"}
         kwargs = {
             "cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT),
             "prompt_cache_options": dict(caller_options),
@@ -2903,6 +3152,15 @@ class TestOpenAIPromptCacheBreakpoint:
         _, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs)
         assert system[0]["prompt_cache_breakpoint"] == self.EXPLICIT
         assert kwargs["prompt_cache_options"] == caller_options
+
+    def test_v1_messages_and_chat_paths_default_to_the_same_implicit_mode(self):
+        messages_kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        self._inject([{"role": "user", "content": "hi"}], "sys", messages_kwargs)
+        _, _, chat_params = self._chat(
+            [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)},
+        )
+        assert messages_kwargs["prompt_cache_options"] == chat_params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_v1_messages_no_prompt_cache_options_when_nothing_injected(self):
         kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
@@ -2937,7 +3195,7 @@ class TestOpenAIPromptCacheBreakpoint:
         result, system = self._inject(messages, "sys", kwargs)
         assert result == messages
         assert system == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
-        assert kwargs == {"prompt_cache_options": self.EXPLICIT}
+        assert kwargs == {"prompt_cache_options": {"mode": "implicit"}}
 
     def test_v1_messages_tail_point_applies_beside_client_system_breakpoint(self):
         system = [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
@@ -2948,7 +3206,7 @@ class TestOpenAIPromptCacheBreakpoint:
             {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]}
         ]
         assert result_system == system
-        assert kwargs == {"prompt_cache_options": self.EXPLICIT}
+        assert kwargs == {"prompt_cache_options": {"mode": "implicit"}}
 
     def test_chat_system_string_wrapped_with_block_breakpoint(self):
         params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
@@ -2960,7 +3218,7 @@ class TestOpenAIPromptCacheBreakpoint:
         }
         assert processed[1] == {"role": "user", "content": "hi"}
         assert returned is params
-        assert returned == {"prompt_cache_options": self.EXPLICIT}
+        assert returned == {"prompt_cache_options": {"mode": "implicit"}}
 
     def test_chat_list_content_marks_last_block(self):
         messages = [
@@ -2982,21 +3240,22 @@ class TestOpenAIPromptCacheBreakpoint:
                 "prompt_cache_breakpoint": self.EXPLICIT,
             },
         ]
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_chat_unprefixed_model_resolves_to_openai(self):
         params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
         _, processed, _ = self._chat([{"role": "system", "content": "sys"}], params, model="gpt-5.6")
         assert processed[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
-    def test_chat_keeps_caller_prompt_cache_options(self):
+    @pytest.mark.parametrize("mode", ["explicit", "implicit"])
+    def test_chat_keeps_caller_prompt_cache_options(self, mode):
         params = {
             "cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT),
-            "prompt_cache_options": {"mode": "implicit"},
+            "prompt_cache_options": {"mode": mode, "ttl": "24h"},
         }
         self._chat([{"role": "system", "content": "sys"}], params)
-        assert params["prompt_cache_options"] == {"mode": "implicit"}
+        assert params["prompt_cache_options"] == {"mode": mode, "ttl": "24h"}
 
     def test_chat_no_prompt_cache_options_when_nothing_injected(self):
         params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
@@ -3030,7 +3289,7 @@ class TestOpenAIPromptCacheBreakpoint:
         _, processed, _ = self._chat(messages, params)
         assert processed[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
         assert processed[1] == messages[1]
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_cap_counts_client_breakpoints_of_both_kinds(self):
         messages = [
@@ -3082,7 +3341,7 @@ class TestOpenAIPromptCacheBreakpointPlacementRules:
         ]
         out, params = self._chat(messages, [{"location": "message", "index": -1}])
         assert out[2]["content"] == [{"type": "text", "text": "sunny", "prompt_cache_breakpoint": self.EXPLICIT}]
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_tool_result_only_turn_is_skipped_on_v1_messages(self):
         messages = [
@@ -3126,7 +3385,7 @@ class TestOpenAIPromptCacheBreakpointPlacementRules:
             {"type": "tool_result", "tool_use_id": "t1", "content": "sunny"},
             {"type": "text", "text": "thanks", "prompt_cache_breakpoint": self.EXPLICIT},
         ]
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_marker_walks_back_to_last_eligible_block(self):
         messages = [
@@ -3194,12 +3453,12 @@ class TestChatPathProviderStamp:
     def test_explicit_openai_provider_uses_openai_dialect(self):
         out, params = self._seed_and_run("gpt-5.6", "openai")
         assert out[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
-        assert params["prompt_cache_options"] == {"mode": "explicit"}
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_bare_gpt_model_without_provider_resolves_to_openai(self):
         out, params = self._seed_and_run("gpt-5.6", None)
         assert out[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
-        assert params["prompt_cache_options"] == {"mode": "explicit"}
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_points_keep_identity_for_models_below_gpt_5_6(self):
         points = copy.deepcopy(self.POINTS)
@@ -3240,7 +3499,7 @@ class TestChatPathProviderStamp:
     def test_regional_openai_api_base_uses_openai_dialect(self):
         out, params = self._seed_and_run("gpt-5.6", None, api_base="https://eu.api.openai.com/v1")
         assert out[0]["content"] == self.OPENAI_STYLE
-        assert params["prompt_cache_options"] == {"mode": "explicit"}
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     @pytest.mark.parametrize("env_var", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
     def test_env_api_base_override_keeps_anthropic_style_markers(self, monkeypatch, env_var):
@@ -3259,7 +3518,7 @@ class TestChatPathProviderStamp:
         monkeypatch.setenv("OPENAI_BASE_URL", self.CUSTOM_API_BASE)
         out, params = self._seed_and_run("gpt-5.6", None, api_base="https://api.openai.com/v1")
         assert out[0]["content"] == self.OPENAI_STYLE
-        assert params["prompt_cache_options"] == {"mode": "explicit"}
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     @pytest.mark.parametrize(
         "api_base,expected",
@@ -3350,7 +3609,7 @@ class TestResponsesInputPartsEligible:
             "text": "second",
             "prompt_cache_breakpoint": self.EXPLICIT,
         }
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     @pytest.mark.parametrize(
         "part",
@@ -3362,7 +3621,7 @@ class TestResponsesInputPartsEligible:
     def test_input_image_and_input_file_parts_are_eligible(self, part):
         out, params = self._chat([{"role": "user", "content": [part]}], [{"location": "message", "index": -1}])
         assert out[0]["content"][0] == {**part, "prompt_cache_breakpoint": self.EXPLICIT}
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
 
 class TestMessagesPathApiBaseGate:
@@ -3407,12 +3666,12 @@ class TestMessagesPathApiBaseGate:
     def test_regional_openai_api_base_uses_openai_dialect(self):
         block, kwargs = self._inject("gpt-5.6", api_base="https://eu.api.openai.com/v1")
         assert block == self.BREAKPOINT_BLOCK
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_default_api_base_uses_openai_dialect(self):
         block, kwargs = self._inject("openai/gpt-5.6")
         assert block == self.BREAKPOINT_BLOCK
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
 
 class TestToolConfigSlotInOpenAIDialect:
@@ -3433,7 +3692,7 @@ class TestToolConfigSlotInOpenAIDialect:
             dynamic_callback_params={},
         )
         assert [msg["content"][0].get("prompt_cache_breakpoint") for msg in out] == [self.EXPLICIT] * 4
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_messages_path_marks_all_four_messages(self):
         out, _, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
@@ -3457,9 +3716,9 @@ class TestPromptCacheBreakpointCapability:
         bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
         with open(bundled) as handle:
             monkeypatch.setattr(litellm, "model_cost", json.load(handle))
-        litellm.utils._cached_get_model_info_helper.cache_clear()
+        litellm.utils.cached_get_model_info_helper.cache_clear()
         yield
-        litellm.utils._cached_get_model_info_helper.cache_clear()
+        litellm.utils.cached_get_model_info_helper.cache_clear()
 
 
     def test_listed_model_uses_the_model_map_flag(self, monkeypatch):
@@ -3496,14 +3755,14 @@ class TestPromptCacheBreakpointCapability:
         assert chat_messages[0]["content"] == [
             {"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}
         ]
-        assert chat_params["prompt_cache_options"] == {"mode": "explicit"}
+        assert chat_params["prompt_cache_options"] == {"mode": "implicit"}
 
         kwargs = {"cache_control_injection_points": copy.deepcopy(points)}
         _, system = AnthropicCacheControlHook.maybe_inject_cache_control(
             [{"role": "user", "content": "hi"}], "sys", kwargs, model="gpt-5.6", custom_llm_provider="openai"
         )
         assert system == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
-        assert kwargs == {"prompt_cache_options": {"mode": "explicit"}}
+        assert kwargs == {"prompt_cache_options": {"mode": "implicit"}}
 
     @pytest.mark.parametrize("model,expected", [("gpt-5.6-2026-01-01", True), ("gpt-5.5-preview-unlisted", False)])
     def test_unlisted_model_falls_back_to_the_version_rule(self, model, expected):

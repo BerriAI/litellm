@@ -6,12 +6,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from itertools import chain
 from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import litellm.caching.dual_cache as dual_cache_module
 from litellm import Router
+from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import active_request_redis_batches, request_redis_batch_scope
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
@@ -25,8 +28,13 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache
-from litellm.router_utils.cooldown_cache import CooldownCache
-from litellm.router_utils.routing_read_batch import RoutingPrefetch
+from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
+from litellm.router_utils.routing_read_batch import (
+    ROUTER_COOLDOWNS_USAGE_TARGET,
+    ROUTER_USAGE_TARGET,
+    RoutingPrefetch,
+    _routing_read_target,  # pyright: ignore[reportPrivateUsage]  # the family rule under test
+)
 
 from .test_redis_batch import FakeClient, FakeRedisCache, replies
 
@@ -275,7 +283,7 @@ def _deployment(deployment_id: str) -> dict:
 
 def _router(redis_cache: FakeRedisCache, routing_strategy: str = "usage-based-routing-v2") -> Router:
     router = Router(model_list=[_deployment("dep-a"), _deployment("dep-b")], routing_strategy=routing_strategy)
-    router._update_redis_cache(cache=redis_cache)
+    router.update_redis_cache(cache=redis_cache)
     return router
 
 
@@ -353,7 +361,12 @@ async def test_a_prefetch_that_does_not_cover_the_routing_keys_is_ignored_and_ro
         router.arm_routing_read_prefetch(_MODEL_GROUP, {})
         armed = request.prefetched["routing_read"]
         assert isinstance(armed, RoutingPrefetch)
-        request.prefetched["routing_read"] = RoutingPrefetch(keys=frozenset({"other"}), result=armed.result)
+        request.prefetched["routing_read"] = RoutingPrefetch(
+            keys=frozenset({"other"}),
+            fetched=armed.fetched,
+            result=armed.result,
+            reservations=armed.reservations,
+        )
         deployment = await router.async_get_available_deployment(
             model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
         )
@@ -361,6 +374,32 @@ async def test_a_prefetch_that_does_not_cover_the_routing_keys_is_ignored_and_ro
 
     assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
     assert len(redis_cache.alone) == 1  # the shared cooldown+usage read, one round trip as in P1
+
+
+@pytest.mark.asyncio
+async def test_a_prefetch_with_incomplete_usage_keys_releases_cooldown_reservations():
+    client: Final = FakeClient(_lua_ok_replies)
+    redis_cache: Final = FakeRedisCache(client)
+    router: Final = _router(redis_cache)
+    cooldown_keys: Final = frozenset(
+        {
+            CooldownCache.get_cooldown_cache_key("dep-a"),
+            CooldownCache.get_cooldown_cache_key("dep-b"),
+        }
+    )
+
+    with request_redis_batch_scope():
+        RoutingPrefetch.arm(router, router.lowesttpm_logger_v2, router.model_list[:1])
+        deployment: Final = await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+
+    fallback_cooldown_mgets: Final = tuple(
+        keys for command, keys in redis_cache.alone if command == "MGET" and cooldown_keys.issubset(keys)
+    )
+
+    assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
+    assert len(fallback_cooldown_mgets) == 1
 
 
 @pytest.mark.asyncio
@@ -377,6 +416,241 @@ async def test_a_failed_prefetch_falls_back_to_the_shared_read():
 
     assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
     assert len(redis_cache.alone) == 1
+    cooldown_keys: Final = frozenset(
+        {
+            CooldownCache.get_cooldown_cache_key("dep-a"),
+            CooldownCache.get_cooldown_cache_key("dep-b"),
+        }
+    )
+    fallback_cooldown_mgets: Final = tuple(
+        keys for command, keys in redis_cache.alone if command == "MGET" and cooldown_keys.issubset(keys)
+    )
+    assert len(fallback_cooldown_mgets) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_armed_routing_read_is_declared_under_the_router_cooldowns_family():
+    """The prefetch is declared before routing runs under a target of its own, so the pipeline that
+    carries it renders ``redis.pipeline router_cooldowns`` instead of a bare ``redis.pipeline``."""
+    client = FakeClient(_lua_ok_replies)
+    redis_cache = FakeRedisCache(client)
+    router = _router(redis_cache, routing_strategy="simple-shuffle")
+    pipeline_targets: list[str | None] = []  # mutable-ok: filled by the recording hook
+
+    async def record(**kwargs: object) -> None:
+        pipeline_targets.append(current_service_target())
+
+    redis_cache.service_logger_obj.async_service_success_hook = record  # pyright: ignore[reportAttributeAccessIssue]  # fake, records the hook call
+
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+    await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not asyncio.current_task()))
+
+    assert pipeline_targets == [ROUTER_COOLDOWNS_TARGET]
+
+
+@pytest.mark.asyncio
+async def test_an_abandoned_prefetch_still_backfills_the_cooldown_it_read(monkeypatch):
+    clock: Final = 1_000_000.0
+    monkeypatch.setattr(dual_cache_module.time, "time", lambda: clock)
+    cooldown_key: Final = CooldownCache.get_cooldown_cache_key("dep-a")
+    active_cooldown: Final = {
+        "exception_received": "429",
+        "status_code": "429",
+        "timestamp": _FAR_FUTURE,
+        "cooldown_time": 60,
+    }
+
+    def replies(command: tuple[Any, ...]) -> Any:
+        if command[0] == "MGET":
+            return [json.dumps(active_cooldown) if key == cooldown_key else None for key in command[1:]]
+        return _lua_ok_replies(command)
+
+    client: Final = FakeClient(replies)
+    redis_cache: Final = FakeRedisCache(client)
+    redis_cache.store[cooldown_key] = active_cooldown
+    router: Final = _router(redis_cache, routing_strategy="simple-shuffle")
+    limiter: Final = _limiter(redis_cache)
+
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        await limiter.atomic_check_and_increment_by_n(
+            descriptors=[_descriptor("api_key", "k1", 10)],
+            increments=[{"requests": 1}],
+        )
+
+    pipeline_count: Final = len(client.pipelines)
+    first_cooldown_mgets: Final = tuple(
+        command
+        for command in chain.from_iterable(pipeline.commands for pipeline in client.pipelines[:pipeline_count])
+        if command[0] == "MGET" and cooldown_key in command[1:]
+    )
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        deployment: Final = await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+        cooldowns: Final = await router.cooldown_cache.async_get_active_cooldowns(["dep-a"], parent_otel_span=None)
+
+    second_cooldown_mgets: Final = tuple(
+        command
+        for command in chain.from_iterable(pipeline.commands for pipeline in client.pipelines[pipeline_count:])
+        if command[0] == "MGET" and cooldown_key in command[1:]
+    )
+
+    assert deployment["model_info"]["id"] == "dep-b"
+    assert [model_id for model_id, _ in cooldowns] == ["dep-a"]
+    assert len(first_cooldown_mgets) == 1
+    assert second_cooldown_mgets == ()
+    assert redis_cache.alone == []
+
+
+@pytest.mark.asyncio
+async def test_prefetch_settlement_keeps_newer_memory_values_and_backfills_misses(monkeypatch):
+    clock: Final = 1_000_000.0
+    monkeypatch.setattr(dual_cache_module.time, "time", lambda: clock)
+    dep_a_key: Final = CooldownCache.get_cooldown_cache_key("dep-a")
+    dep_b_key: Final = CooldownCache.get_cooldown_cache_key("dep-b")
+    old_cooldown: Final = {
+        "exception_received": "429",
+        "status_code": "429",
+        "timestamp": _FAR_FUTURE,
+        "cooldown_time": 60,
+    }
+    newer_memory_cooldown: Final = {
+        "exception_received": "429",
+        "status_code": "429",
+        "timestamp": _FAR_FUTURE + 1,
+        "cooldown_time": 60,
+    }
+    redis_only_cooldown: Final = {
+        "exception_received": "429",
+        "status_code": "429",
+        "timestamp": _FAR_FUTURE + 2,
+        "cooldown_time": 60,
+    }
+
+    def replies(command: tuple[Any, ...]) -> Any:
+        if command[0] == "MGET":
+            return [json.dumps(redis_cache.store[key]) if key in redis_cache.store else None for key in command[1:]]
+        return _lua_ok_replies(command)
+
+    client: Final = FakeClient(replies)
+    redis_cache: Final = FakeRedisCache(client)
+    redis_cache.store[dep_a_key] = old_cooldown
+    redis_cache.store[dep_b_key] = redis_only_cooldown
+    router: Final = _router(redis_cache, routing_strategy="simple-shuffle")
+    memory_cache: Final = router.cooldown_cache.cooldown_store.in_memory_cache
+    assert memory_cache is not None
+
+    with request_redis_batch_scope() as request:
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        memory_cache.set_cache(dep_a_key, newer_memory_cooldown)
+        await request.flush_all()
+
+    prefetched_mgets: Final = tuple(command for command in client.pipelines[0].commands if command[0] == "MGET")
+
+    assert len(prefetched_mgets) == 1
+    assert frozenset(prefetched_mgets[0][1:]) == frozenset({dep_a_key, dep_b_key})
+    assert memory_cache.get_cache(dep_a_key) == newer_memory_cooldown
+    assert memory_cache.get_cache(dep_b_key) == redis_only_cooldown
+
+
+@pytest.mark.asyncio
+async def test_an_abandoned_prefetch_whose_mget_fails_releases_its_reservation(monkeypatch):
+    clock: Final = 1_000_000.0
+    monkeypatch.setattr(dual_cache_module.time, "time", lambda: clock)
+    cooldown_key: Final = CooldownCache.get_cooldown_cache_key("dep-a")
+    active_cooldown: Final = {
+        "exception_received": "429",
+        "status_code": "429",
+        "timestamp": _FAR_FUTURE,
+        "cooldown_time": 60,
+    }
+    mget_replies: Final = iter((ConnectionError("redis down"), None))
+
+    def replies(command: tuple[Any, ...]) -> Any:
+        if command[0] == "MGET":
+            response: Final = next(mget_replies)
+            if isinstance(response, Exception):
+                return response
+            return [json.dumps(active_cooldown) if key == cooldown_key else None for key in command[1:]]
+        return _lua_ok_replies(command)
+
+    client: Final = FakeClient(replies)
+    redis_cache: Final = FakeRedisCache(client)
+    redis_cache.store[cooldown_key] = active_cooldown
+    router: Final = _router(redis_cache, routing_strategy="simple-shuffle")
+
+    with request_redis_batch_scope() as request:
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        await request.flush_all()
+
+    pipeline_count: Final = len(client.pipelines)
+    first_cooldown_mgets: Final = tuple(
+        command
+        for command in chain.from_iterable(pipeline.commands for pipeline in client.pipelines[:pipeline_count])
+        if command[0] == "MGET" and cooldown_key in command[1:]
+    )
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        deployment: Final = await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+        cooldowns: Final = await router.cooldown_cache.async_get_active_cooldowns(["dep-a"], parent_otel_span=None)
+
+    second_cooldown_mgets: Final = tuple(
+        command
+        for command in chain.from_iterable(pipeline.commands for pipeline in client.pipelines[pipeline_count:])
+        if command[0] == "MGET" and cooldown_key in command[1:]
+    )
+
+    assert deployment["model_info"]["id"] == "dep-b"
+    assert [model_id for model_id, _ in cooldowns] == ["dep-a"]
+    assert len(first_cooldown_mgets) == 1
+    assert len(second_cooldown_mgets) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_cooldown_that_leaves_memory_before_routing_is_read_again(monkeypatch):
+    clock: Final = 1_000_000.0
+    monkeypatch.setattr(dual_cache_module.time, "time", lambda: clock)
+    cooldown_key: Final = CooldownCache.get_cooldown_cache_key("dep-a")
+    active_cooldown: Final = {
+        "exception_received": "429",
+        "status_code": "429",
+        "timestamp": _FAR_FUTURE,
+        "cooldown_time": 60,
+    }
+    client: Final = FakeClient(_lua_ok_replies)
+    redis_cache: Final = FakeRedisCache(client)
+    redis_cache.store[cooldown_key] = active_cooldown
+    router: Final = _router(redis_cache, routing_strategy="simple-shuffle")
+    cooldown_store: Final = router.cooldown_cache.cooldown_store
+    memory_cache: Final = cooldown_store.in_memory_cache
+    assert memory_cache is not None
+    memory_cache.set_cache(cooldown_key, active_cooldown)
+
+    with request_redis_batch_scope() as request:
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        await request.flush_all()
+        memory_cache.delete_cache(cooldown_key)
+        deployment: Final = await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+
+    prefetched_mgets: Final = tuple(command for command in client.pipelines[0].commands if command[0] == "MGET")
+    fallback_cooldown_mgets: Final = tuple(
+        keys for command, keys in redis_cache.alone if command == "MGET" and cooldown_key in keys
+    )
+
+    assert len(prefetched_mgets) == 1
+    assert prefetched_mgets[0][1:] == (CooldownCache.get_cooldown_cache_key("dep-b"),)
+    assert deployment["model_info"]["id"] == "dep-b"
+    assert fallback_cooldown_mgets == ((cooldown_key,),)
 
 
 @pytest.mark.asyncio
@@ -415,12 +689,188 @@ async def test_simple_shuffle_prefetches_only_its_cooldown_read_into_the_admissi
     assert redis_cache.alone == []
 
     shuffle = Router(model_list=[_deployment("dep-a")], routing_strategy="simple-shuffle")
-    shuffle._update_redis_cache(cache=redis_cache)
+    shuffle.update_redis_cache(cache=redis_cache)
     with request_redis_batch_scope() as request:
         shuffle.arm_routing_read_prefetch(_MODEL_GROUP, {})
         armed = request.prefetched["routing_read"]
         assert isinstance(armed, RoutingPrefetch)
         assert armed.keys == {CooldownCache.get_cooldown_cache_key("dep-a")}  # no usage counters for shuffle
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("routing_strategy", ["simple-shuffle", "usage-based-routing-v2"])
+@pytest.mark.parametrize("with_limiter", [True, False])
+async def test_requests_within_the_cooldown_read_interval_read_cooldowns_from_redis_once(
+    routing_strategy: str, with_limiter: bool
+):
+    client = FakeClient(_lua_ok_replies)
+    redis_cache = FakeRedisCache(client)
+    router = _router(redis_cache, routing_strategy=routing_strategy)
+    limiter = _limiter(redis_cache)
+    request_round_trips: list[tuple[int, int]] = []
+
+    for _ in range(3):
+        pipeline_count = len(client.pipelines)
+        alone_count = len(redis_cache.alone)
+        with request_redis_batch_scope():
+            router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+            if with_limiter:
+                await limiter.atomic_check_and_increment_by_n(
+                    descriptors=[_descriptor("api_key", "k1", 10)],
+                    increments=[{"requests": 1}],
+                )
+            await router.async_get_available_deployment(
+                model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+            )
+        request_round_trips.append((len(client.pipelines) - pipeline_count, len(redis_cache.alone) - alone_count))
+
+    pipeline_mgets = [command for pipeline in client.pipelines for command in pipeline.commands if command[0] == "MGET"]
+    alone_mgets = [keys for command, keys in redis_cache.alone if command == "MGET"]
+    cooldown_keys = {
+        CooldownCache.get_cooldown_cache_key("dep-a"),
+        CooldownCache.get_cooldown_cache_key("dep-b"),
+    }
+    cooldown_mgets = [command[1:] for command in pipeline_mgets if cooldown_keys.intersection(command[1:])] + [
+        keys for keys in alone_mgets if cooldown_keys.intersection(keys)
+    ]
+
+    assert len(cooldown_mgets) == 1
+    if not with_limiter:
+        assert request_round_trips[1:] == [(0, 0), (0, 0)]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_requests_share_one_cooldown_read_per_interval():
+    client: Final = FakeClient(_lua_ok_replies)
+    redis_cache: Final = FakeRedisCache(client)
+    router: Final = _router(redis_cache)
+    first_armed: Final = asyncio.Event()
+    both_armed: Final = asyncio.Event()
+
+    async def route_after_both_requests_arm():
+        with request_redis_batch_scope():
+            router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+            if first_armed.is_set():
+                both_armed.set()
+            else:
+                first_armed.set()
+            await both_armed.wait()
+            return await router.async_get_available_deployment(
+                model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+            )
+
+    deployments: Final = await asyncio.gather(route_after_both_requests_arm(), route_after_both_requests_arm())
+    cooldown_keys: Final = frozenset(
+        {
+            CooldownCache.get_cooldown_cache_key("dep-a"),
+            CooldownCache.get_cooldown_cache_key("dep-b"),
+        }
+    )
+    cooldown_mgets: Final = tuple(
+        command
+        for pipeline in client.pipelines
+        for command in pipeline.commands
+        if command[0] == "MGET" and cooldown_keys.intersection(command[1:])
+    )
+
+    assert all(deployment["model_info"]["id"] in {"dep-a", "dep-b"} for deployment in deployments)
+    assert len(cooldown_mgets) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_prefetch_reads_cooldowns_again_once_the_read_interval_elapses(monkeypatch):
+    first_time: Final = 1_000_000.0
+    monkeypatch.setattr(dual_cache_module.time, "time", lambda: first_time)
+    active_cooldown = {
+        "exception_received": "429",
+        "status_code": "429",
+        "timestamp": _FAR_FUTURE,
+        "cooldown_time": 60,
+    }
+    mget_results = iter((None, active_cooldown))
+
+    def replies(command: tuple[Any, ...]) -> Any:
+        if command[0] == "MGET":
+            result = next(mget_results)
+            return [
+                None if result is None or key != CooldownCache.get_cooldown_cache_key("dep-a") else json.dumps(result)
+                for key in command[1:]
+            ]
+        return _lua_ok_replies(command)
+
+    client = FakeClient(replies)
+    redis_cache = FakeRedisCache(client)
+    router = _router(redis_cache, routing_strategy="simple-shuffle")
+    cooldown_store = router.cooldown_cache.cooldown_store
+
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+
+    monkeypatch.setattr(
+        dual_cache_module.time,
+        "time",
+        lambda: first_time + cooldown_store.redis_batch_cache_expiry + 1,
+    )
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        deployment = await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+
+    cooldown_keys = {
+        CooldownCache.get_cooldown_cache_key("dep-a"),
+        CooldownCache.get_cooldown_cache_key("dep-b"),
+    }
+    cooldown_mgets = [
+        command
+        for pipeline in client.pipelines
+        for command in pipeline.commands
+        if command[0] == "MGET" and cooldown_keys.intersection(command[1:])
+    ]
+    assert len(cooldown_mgets) == 2
+    assert deployment["model_info"]["id"] == "dep-b"
+
+
+@pytest.mark.asyncio
+async def test_the_prefetch_mget_carries_only_the_keys_whose_read_is_due(monkeypatch):
+    first_time: Final = 1_000_000.0
+    monkeypatch.setattr(dual_cache_module.time, "time", lambda: first_time)
+    client = FakeClient(_lua_ok_replies)
+    redis_cache = FakeRedisCache(client)
+    router = _router(redis_cache, routing_strategy="usage-based-routing-v2")
+    cooldown_store = router.cooldown_cache.cooldown_store
+    usage_cache = router.lowesttpm_logger_v2.router_cache
+    time_offset = cooldown_store.redis_batch_cache_expiry + 0.5
+
+    assert time_offset < usage_cache.redis_batch_cache_expiry
+
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+
+    monkeypatch.setattr(dual_cache_module.time, "time", lambda: first_time + time_offset)
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+
+    cooldown_keys = frozenset(
+        {
+            CooldownCache.get_cooldown_cache_key("dep-a"),
+            CooldownCache.get_cooldown_cache_key("dep-b"),
+        }
+    )
+    second_pipeline_mgets = tuple(command for command in client.pipelines[1].commands if command[0] == "MGET")
+
+    assert len(client.pipelines) == 2
+    assert len(second_pipeline_mgets) == 1
+    assert frozenset(second_pipeline_mgets[0][1:]) == cooldown_keys
 
 
 @pytest.mark.asyncio
@@ -617,3 +1067,19 @@ async def test_identity_prefetch_is_one_mget_after_which_hits_and_misses_alike_c
         assert await cache.async_get_cache("end_user_id:eu-miss") is None
     assert len(client.pipelines) == 1 and redis_cache.alone == []
     assert cache.in_memory_cache.get_cache("end_user_id:eu-miss") is None
+
+
+@pytest.mark.parametrize(
+    ("cooldown_keys", "usage_keys", "expected"),
+    [
+        (("cooldown:a",), (), ROUTER_COOLDOWNS_TARGET),
+        ((), ("usage:a",), ROUTER_USAGE_TARGET),
+        (("cooldown:a",), ("usage:a",), ROUTER_COOLDOWNS_USAGE_TARGET),
+    ],
+)
+def test_the_routing_read_family_follows_the_keys_that_are_actually_due(
+    cooldown_keys: tuple[str, ...], usage_keys: tuple[str, ...], expected: str
+):
+    """A routing MGET is ``router_cooldowns`` when only cooldown keys go out, ``router_usage`` when the
+    cooldowns were already in memory and only usage counters go out, and the combined family otherwise."""
+    assert _routing_read_target(cooldown_keys, usage_keys) == expected

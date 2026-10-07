@@ -62,6 +62,8 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
         ("provider-harness", ["tests/e2e/provider_cache.py"], "run"),
         ("provider-harness", ["tests/e2e/conftest.py"], "run"),
         ("provider-harness", ["tests/e2e/e2e_http.py"], "run"),
+        ("provider-harness", ["tests/e2e_harness/test_provider_edge.py"], "run"),
+        ("provider-harness", ["tests/e2e_harness/logging/test_datadog_reader.py"], "skip"),
         ("provider-harness", ["tests/code_coverage_tests/test_provider_cache.py"], "run"),
         ("provider-harness", ["tests/code_coverage_tests/test_provider_replay_harness.py"], "run"),
         ("provider-harness", [".circleci/config.yml"], "run"),
@@ -73,7 +75,7 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
         ("provider-harness", ["tests/e2e/quota_management/test_quota.py"], "skip"),
         ("provider-harness", ["litellm/main.py"], "skip"),
         ("provider-harness", ["ui/litellm-dashboard/src/App.tsx"], "skip"),
-        ("windows-release", ["litellm-rust/crates/core/src/lib.rs"], "run"),
+        ("windows-release", ["litellm-rust/crates/inference/src/lib.rs"], "run"),
         ("windows-release", ["litellm/rust_bridge/dispatch.py"], "run"),
         ("windows-release", ["rust-toolchain.toml"], "run"),
         ("windows-release", ["pyproject.toml"], "run"),
@@ -137,6 +139,21 @@ def test_classify_decisions(category: str, changed: list[str], expected: str) ->
     assert classify(category, changed) == expected
 
 
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    (
+        ("litellm/caching/redis_cache.py", "run"),
+        ("tests/unit/caching/test_redis_cluster_cache.py", "run"),
+        (".circleci/config.yml", "run"),
+        ("uv.lock", "run"),
+        ("litellm/router.py", "skip"),
+        ("docs/my-website/redis.md", "skip"),
+    ),
+)
+def test_redis_compat_path_filter(changed: str, expected: str) -> None:
+    assert classify("redis-compat", [changed]) == expected
+
+
 def test_markdown_under_ui_counts_as_client_not_docs() -> None:
     assert classify("client", ["ui/litellm-dashboard/README.md"]) == "run"
     assert classify("backend", ["ui/litellm-dashboard/README.md"]) == "skip"
@@ -189,7 +206,7 @@ def _pr_repo(tmp_path: Path, feature_files: dict[str, str]) -> Path:
     _git(work, "config", "user.email", "t@t")
     _git(work, "config", "user.name", "t")
     _git(work, "remote", "add", "origin", str(remote))
-    (work / "litellm_core.py").write_text("x\n")
+    (work / "litellm_inference.py").write_text("x\n")
     _git(work, "add", ".")
     _git(work, "commit", "-qm", "base")
     _git(work, "push", "-q", "origin", "main")

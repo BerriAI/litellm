@@ -1,7 +1,7 @@
 import base64
 import mimetypes
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import (
@@ -95,7 +95,16 @@ class ManagedResourceAccessChecker(Protocol):
     ) -> bool: ...
 
 
-def _is_base64_encoded_unified_file_id(b64_uid: str) -> str | Literal[False]:
+@runtime_checkable
+class ManagedFileIdResolver(Protocol):
+    async def get_unified_file_ids_for_provider_file_ids(
+        self,
+        provider_file_ids: Sequence[str],
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> Mapping[str, str]: ...
+
+
+def _is_base64_encoded_unified_file_id(b64_uid: object) -> str | Literal[False]:
     # Ensure b64_uid is a string and not a mock object
     if not isinstance(b64_uid, str):
         return False
@@ -1187,7 +1196,7 @@ def _model_name_for_batch_response(response: "LiteLLMBatch") -> str | None:
     )
 
 
-def _batch_owner_auth_from_db_object(db_batch_object: "LiteLLM_ManagedObjectTable") -> "UserAPIKeyAuth | None":
+def _batch_owner_auth_from_db_object(db_batch_object: object) -> "UserAPIKeyAuth | None":
     from litellm.proxy._types import UserAPIKeyAuth
 
     created_by: Final = getattr(db_batch_object, "created_by", None)
@@ -1247,7 +1256,7 @@ async def map_raw_file_ids_to_unified(
     if not raw_file_ids or not prisma_client:
         return MappingProxyType({})
     managed_files: Final = await ManagedFileRepository(prisma_client).table.find_many(
-        where={"flat_model_file_ids": {"hasSome": sorted(raw_file_ids)}}  # mutable-ok: prisma where is a plain dict
+        where={"flat_model_file_ids": {"hasSome": sorted(raw_file_ids)}}
     )
     return MappingProxyType(
         {
@@ -1275,7 +1284,7 @@ async def ensure_batch_response_managed_file_ids(
     prisma_client,
     verbose_proxy_logger,
     user_api_key_dict=None,
-    db_batch_object: "LiteLLM_ManagedObjectTable | None" = None,
+    db_batch_object: object | None = None,
     unified_batch_id: str | Literal[False] | None = None,
 ) -> None:
     """Normalize batch file IDs to managed unified IDs before DB persistence."""

@@ -2,11 +2,13 @@ import enum
 import heapq
 from typing import Final
 
-from pydantic import BaseModel
-
 from litellm import print_verbose
+from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_POLLING_INTERVAL
+from litellm.types.llms.base import LiteLLMBaseModel
+
+SCHEDULER_QUEUE_TARGET: Final = "scheduler_queue"
 
 
 class SchedulerCacheKeys(enum.Enum):
@@ -14,7 +16,7 @@ class SchedulerCacheKeys(enum.Enum):
     default_in_memory_ttl = DEFAULT_IN_MEMORY_TTL  # cache queue in-memory for 5s when redis cache available
 
 
-class FlowItem(BaseModel):
+class FlowItem(LiteLLMBaseModel):
     priority: int  # Priority between 0 and 255
     request_id: str
     model_name: str
@@ -115,6 +117,7 @@ class Scheduler:
         """Get the status of items in the queue"""
         return self.queue
 
+    @with_service_target(SCHEDULER_QUEUE_TARGET)
     async def get_queue(self, model_name: str) -> list:
         """
         Return a queue for that specific model group
@@ -128,6 +131,7 @@ class Scheduler:
                 return response
         return self.queue
 
+    @with_service_target(SCHEDULER_QUEUE_TARGET)
     async def save_queue(self, queue: list, model_name: str) -> None:
         """
         Save the updated queue of the model group
