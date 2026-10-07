@@ -99,22 +99,24 @@ class BedrockRerankConfig:
 
         bedrock_results: Final = response.get("results")
         if bedrock_results:
+            parsed_results: Final = TypeAdapter(list[dict[str, object]]).validate_python(bedrock_results)
             _results = [
                 RerankResponseResult(
-                    index=result.get("index"),
-                    relevance_score=result.get("relevanceScore"),
+                    index=TypeAdapter(int).validate_python(result.get("index")),
+                    relevance_score=TypeAdapter(float).validate_python(result.get("relevanceScore")),
                 )
-                for result in bedrock_results
+                for result in parsed_results
             ]
 
         if _results is None:
             raise ValueError(f"No results found in the response={response}")
 
+        response_id: Final = response.get("id")
         return RerankResponse(
-            id=response.get("id") or str(uuid.uuid4()),
+            id=TypeAdapter(str | None).validate_python(response_id) or str(uuid.uuid4()),
             results=_results,
             meta=rerank_meta,
-        )  # Return response
+        )
 
     def transform_response(
         self,

@@ -606,7 +606,11 @@ class BedrockEmbedding(BaseAWSLLM):
         # Get the runtime endpoint
         endpoint_url, _ = self.get_runtime_endpoint(
             api_base=None,
-            aws_bedrock_runtime_endpoint=kwargs.get("aws_bedrock_runtime_endpoint"),
+            aws_bedrock_runtime_endpoint=(
+                kwargs.get("aws_bedrock_runtime_endpoint")
+                if isinstance(kwargs.get("aws_bedrock_runtime_endpoint"), str)
+                else None
+            ),
             aws_region_name=aws_region_name,
         )
 
@@ -630,7 +634,7 @@ class BedrockEmbedding(BaseAWSLLM):
         # LOGGING
         if logging_obj is not None:
             # Create custom curl command for GET request
-            masked_headers: Final = logging_obj._get_masked_headers(prepped.headers)
+            masked_headers: Final = logging_obj._get_masked_headers(dict(prepped.headers.items()))
             formatted_headers: Final = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
             custom_curl = "\n\nGET Request Sent from LiteLLM:\n"
             custom_curl += "curl -X GET \\\n"

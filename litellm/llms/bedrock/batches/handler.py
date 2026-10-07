@@ -222,8 +222,17 @@ class BedrockBatchesHandler:
                 **kwargs,
             )
 
-            # Transform response to a LiteLLMBatch object
             from litellm.types.utils import LiteLLMBatch
+
+            aws_status_raw: Final = status_response.get("status")
+            invocation_arn: Final = status_response.get("invocationArn")
+            model_arn: Final = status_response.get("modelArn")
+            if (
+                not isinstance(aws_status_raw, str)
+                or not isinstance(invocation_arn, str)
+                or not isinstance(model_arn, str)
+            ):
+                raise ValueError("Bedrock async invoke status is missing string status or ARN fields")
 
             output_data_config: Final = status_response.get("outputDataConfig")
             s3_output_data_config: Final = (
@@ -235,20 +244,33 @@ class BedrockBatchesHandler:
             if not isinstance(output_file_id, str):
                 raise ValueError("Bedrock async invoke status did not include an output file ID")
 
+            import time
+
+            from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
+
+            (
+                created_at,
+                in_progress_at,
+                completed_at,
+                failed_at,
+                _,
+                _,
+            ) = BedrockBatchesConfig().parse_timestamps_and_status(status_response, aws_status_raw)
+            failure_message: Final = status_response.get("failureMessage")
             openai_batch_metadata: Final[OpenAIBatchMetadata] = {
                 "output_file_id": output_file_id,
-                "failure_message": status_response.get("failureMessage") or "",
-                "model_arn": status_response["modelArn"],
+                "failure_message": failure_message if isinstance(failure_message, str) else "",
+                "model_arn": model_arn,
             }
 
             result: Final = LiteLLMBatch(
-                id=status_response["invocationArn"],
+                id=invocation_arn,
                 object="batch",
-                status=status_response["status"],
-                created_at=status_response["submitTime"],
-                in_progress_at=status_response["lastModifiedTime"],
-                completed_at=status_response.get("endTime"),
-                failed_at=(status_response.get("endTime") if status_response["status"] == "failed" else None),
+                status=_BEDROCK_MIJ_STATUS_TO_OPENAI.get(aws_status_raw, "failed"),
+                created_at=created_at or int(time.time()),
+                in_progress_at=in_progress_at,
+                completed_at=completed_at,
+                failed_at=failed_at,
                 request_counts=BatchRequestCounts(
                     total=1,
                     completed=1 if status_response["status"] == "completed" else 0,

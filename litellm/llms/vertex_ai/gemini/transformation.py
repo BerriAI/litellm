@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -52,7 +52,6 @@ from litellm.types.llms.vertex_ai import (
     SafetSettingsConfig,
     SystemInstructions,
     ToolConfig,
-    Tools,
 )
 from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 
@@ -713,11 +712,16 @@ def gemini_convert_messages_with_history(
 
     msg_i = 0
     tool_call_responses = []
-    vertex_project = None
-    vertex_credentials = None
-    if litellm_params:
-        vertex_project = litellm_params.get("vertex_project") or litellm_params.get("vertex_ai_project")
-        vertex_credentials = litellm_params.get("vertex_credentials") or litellm_params.get("vertex_ai_credentials")
+    vertex_project_value: Final = (
+        (litellm_params.get("vertex_project") or litellm_params.get("vertex_ai_project")) if litellm_params else None
+    )
+    vertex_project: Final = vertex_project_value if isinstance(vertex_project_value, str) else None
+    vertex_credentials_value: Final = (
+        (litellm_params.get("vertex_credentials") or litellm_params.get("vertex_ai_credentials"))
+        if litellm_params
+        else None
+    )
+    vertex_credentials: Final = TypeAdapter(VERTEX_CREDENTIALS_TYPES | None).validate_python(vertex_credentials_value)
 
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
@@ -1153,9 +1157,12 @@ def transform_request_body(
     if "response_schema" in optional_params:
         supports_response_schema = get_supports_response_schema(model=model, custom_llm_provider=custom_llm_provider)
         if supports_response_schema is False:
+            response_schema: Final = TypeAdapter(dict[str, object]).validate_python(
+                optional_params.get("response_schema")
+            )
             user_response_schema_message: Final = response_schema_prompt(
                 model=model,
-                response_schema=optional_params.get("response_schema"),
+                response_schema=response_schema,
             )
             messages.append({"role": "user", "content": user_response_schema_message})
             optional_params.pop("response_schema")
@@ -1179,10 +1186,23 @@ def transform_request_body(
             content = litellm.VertexGeminiConfig().transform_messages(
                 messages=messages, model=model, litellm_params=litellm_params
             )
-        tools: Final[Tools | None] = optional_params.pop("tools", None)
-        tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
-        include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
-        safety_settings: list[SafetSettingsConfig] | None = optional_params.pop("safety_settings", None)
+        tools_value: Final = optional_params.pop("tools", None)
+        tools: Final[list[dict[str, object]] | None] = (
+            TypeAdapter(list[dict[str, object]]).validate_python(tools_value) if tools_value is not None else None
+        )
+        tool_choice_value: Final = optional_params.pop("tool_choice", None)
+        tool_choice: Final[ToolConfig | None] = (
+            TypeAdapter(ToolConfig).validate_python(tool_choice_value) if tool_choice_value is not None else None
+        )
+        include_server_side_tool_invocations: Final[bool] = TypeAdapter(bool).validate_python(
+            optional_params.pop("include_server_side_tool_invocations", False)
+        )
+        safety_settings_value: Final = optional_params.pop("safety_settings", None)
+        safety_settings: Final[list[SafetSettingsConfig] | None] = (
+            TypeAdapter(list[SafetSettingsConfig]).validate_python(safety_settings_value)
+            if safety_settings_value is not None
+            else None
+        )
         # Drop output_config as it's not supported by Vertex AI
         optional_params.pop("output_config", None)
         config_fields: Final = GenerationConfig.__annotations__.keys()
@@ -1192,7 +1212,10 @@ def transform_request_body(
 
         filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))}
 
-        generation_config: Final[GenerationConfig | None] = GenerationConfig(**filtered_params)
+        generation_config: Final[GenerationConfig] = cast(
+            GenerationConfig,
+            TypeAdapter(dict[str, object]).validate_python(filtered_params),
+        )
 
         # For Gemini 2.x models, also add media_resolution to generation_config (global)
         # as a fallback, since some 2.x versions may not support per-part media_resolution.
@@ -1218,7 +1241,13 @@ def transform_request_body(
             if include_server_side_tool_invocations:
                 if "toolConfig" not in data:
                     data["toolConfig"] = {}
-                data["toolConfig"]["includeServerSideToolInvocations"] = True
+                tool_config: Final = TypeAdapter(ToolConfig).validate_python(data["toolConfig"])
+                data["toolConfig"] = TypeAdapter(ToolConfig).validate_python(
+                    {
+                        **tool_config,
+                        "includeServerSideToolInvocations": True,
+                    }
+                )
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None and len(generation_config) > 0:
@@ -1233,7 +1262,7 @@ def transform_request_body(
                 else:
                     data["serviceTier"] = service_tier.lower()
             else:
-                data["serviceTier"] = service_tier
+                data["serviceTier"] = cast(str, service_tier)
 
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:

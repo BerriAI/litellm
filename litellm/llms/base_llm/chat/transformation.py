@@ -4,7 +4,7 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
@@ -134,7 +134,9 @@ class BaseConfig(ABC):
         return False
 
     def _add_tools_to_optional_params(
-        self, optional_params: dict[str, object], tools: list[object]
+        self,
+        optional_params: dict[str, object],  # mutable-ok: preserves in-place extension contract
+        tools: Sequence[object],
     ) -> dict[str, object]:
         """
         Helper util to add tools to optional_params.
@@ -142,8 +144,11 @@ class BaseConfig(ABC):
         if "tools" not in optional_params:
             optional_params["tools"] = tools
         else:
+            existing_tools: Final = optional_params["tools"]
+            if not isinstance(existing_tools, Sequence):
+                raise TypeError("optional_params['tools'] must be a sequence")
             optional_params["tools"] = [
-                *optional_params["tools"],
+                *existing_tools,
                 *tools,
             ]
         return optional_params
@@ -151,7 +156,7 @@ class BaseConfig(ABC):
     def add_tools_to_optional_params(
         self,
         optional_params: dict[str, object],  # mutable-ok: exact API
-        tools: list[object],  # mutable-ok: exact API
+        tools: Sequence[object],
     ) -> dict[str, object]:  # mutable-ok: matches extension signature
         return self._add_tools_to_optional_params(optional_params, tools)
 

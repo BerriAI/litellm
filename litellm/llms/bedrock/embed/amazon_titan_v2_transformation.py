@@ -13,6 +13,8 @@ import types
 from collections.abc import Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.types.llms.bedrock import (
     AmazonTitanV2EmbeddingRequest,
     AmazonTitanV2EmbeddingResponse,
@@ -89,12 +91,12 @@ class AmazonTitanV2Config:
 
         transformed_responses: Final[list[Embedding]] = []
         for index, response in enumerate(response_list):
-            _parsed_response = AmazonTitanV2EmbeddingResponse(**response)
+            _parsed_response = TypeAdapter(AmazonTitanV2EmbeddingResponse).validate_python(response)
 
             # According to AWS docs, embeddingsByType is always present
             # If binary was requested (encoding_format="base64"), use binary data
             # Otherwise, use float data from embeddingsByType or fallback to embedding field
-            embedding_data: list[float] | list[int]
+            embedding_data: list[float] | list[int] | str
 
             if "embeddingsByType" in _parsed_response and "binary" in _parsed_response["embeddingsByType"]:
                 # Use binary data if available (for encoding_format="base64")

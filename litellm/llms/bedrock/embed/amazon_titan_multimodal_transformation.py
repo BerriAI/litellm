@@ -8,6 +8,8 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-tit
 
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.types.llms.bedrock import (
     AmazonTitanMultimodalEmbeddingConfig,
     AmazonTitanMultimodalEmbeddingRequest,
@@ -70,7 +72,7 @@ class AmazonTitanMultimodalEmbeddingG1Config:
         total_prompt_tokens = 0
         transformed_responses: Final[list[Embedding]] = []
         for index, response in enumerate(response_list):
-            _parsed_response = AmazonTitanMultimodalEmbeddingResponse(**response)
+            _parsed_response = TypeAdapter(AmazonTitanMultimodalEmbeddingResponse).validate_python(response)
             transformed_responses.append(
                 Embedding(
                     embedding=_parsed_response["embedding"],

@@ -711,7 +711,7 @@ def build_vertex_schema(
     # Get valid fields from Schema TypedDict
     valid_schema_fields: Final = set(get_type_hints(Schema).keys())
 
-    defs: Final = parameters.pop("$defs", {})
+    defs: Final = TypeAdapter(dict[str, object]).validate_python(parameters.pop("$defs", {}))
     # Expand $ref references in parameters using the definitions
     # Note: We don't pre-flatten defs as that causes exponential memory growth
     # with circular references (see issue #19098). unpack_defs handles nested
@@ -1334,8 +1334,9 @@ class VertexAITokenCounter(BaseTokenCounter):
                 gemini_convert_messages_with_history,
             )
 
+            gemini_messages: Final = TypeAdapter(list[AllMessageValues]).validate_python(messages or [])
             resolved_contents: Final = (
-                contents if contents is not None else gemini_convert_messages_with_history(messages=messages or [])
+                contents if contents is not None else gemini_convert_messages_with_history(messages=gemini_messages)
             )
 
             count_tokens_params: Final = {

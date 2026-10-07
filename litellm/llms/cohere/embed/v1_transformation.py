@@ -6,6 +6,7 @@ from collections.abc import Sized
 from typing import Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -76,15 +77,17 @@ class CohereEmbeddingConfig:
     ) -> CohereEmbeddingRequestWithModel:
         return self._transform_request(model, input, inference_params)
 
-    def _calculate_usage(self, input: list[str], encoding: _SupportsEncode, meta: dict) -> Usage:
+    def _calculate_usage(self, input: list[str], encoding: _SupportsEncode | None, meta: dict[str, object]) -> Usage:
         input_tokens = 0
 
-        text_tokens: Final[int | None] = meta.get("billed_units", {}).get("input_tokens")
-
-        image_tokens: Final[int | None] = meta.get("billed_units", {}).get("images")
+        billed_units: Final = TypeAdapter(dict[str, object]).validate_python(meta.get("billed_units", {}))
+        text_tokens: Final = TypeAdapter(int | None).validate_python(billed_units.get("input_tokens"))
+        image_tokens: Final = TypeAdapter(int | None).validate_python(billed_units.get("images"))
 
         prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         if image_tokens is None and text_tokens is None:
+            if encoding is None:
+                raise ValueError("A tokenizer is required to calculate Cohere embedding usage")
             for text in input:
                 input_tokens += len(encoding.encode(text))
         else:
@@ -112,7 +115,7 @@ class CohereEmbeddingConfig:
         data: dict[str, object] | CohereEmbeddingRequest,
         model_response: EmbeddingResponse,
         model: str,
-        encoding: _SupportsEncode,
+        encoding: _SupportsEncode | None,
         input: list[str],
     ) -> EmbeddingResponse:
         response_json: Final = response.json()
@@ -139,7 +142,7 @@ class CohereEmbeddingConfig:
         data: dict[str, object] | CohereEmbeddingRequest,  # mutable-ok: mirrors override contract
         model_response: EmbeddingResponse,
         model: str,
-        encoding: _SupportsEncode,
+        encoding: _SupportsEncode | None,
         input: list[str],  # mutable-ok: mirrors override contract
     ) -> EmbeddingResponse:
         return self._transform_response(response, api_key, logging_obj, data, model_response, model, encoding, input)
@@ -149,7 +152,7 @@ class CohereEmbeddingConfig:
         response_json: dict[str, object],
         model_response: EmbeddingResponse,
         model: str,
-        encoding: _SupportsEncode,
+        encoding: _SupportsEncode | None,
         input: list[str],
     ) -> EmbeddingResponse:
         """
@@ -199,7 +202,11 @@ class CohereEmbeddingConfig:
         setattr(
             model_response,
             "usage",
-            self._calculate_usage(input, encoding, response_json.get("meta", {})),
+            self._calculate_usage(
+                input,
+                encoding,
+                TypeAdapter(dict[str, object]).validate_python(response_json.get("meta", {})),
+            ),
         )
 
         return model_response
@@ -209,7 +216,7 @@ class CohereEmbeddingConfig:
         response_json: dict[str, object],  # mutable-ok: exact API
         model_response: EmbeddingResponse,
         model: str,
-        encoding: _SupportsEncode,
+        encoding: _SupportsEncode | None,
         input: list[str],  # mutable-ok: exact API
     ) -> EmbeddingResponse:
         return self._populate_embedding_response(response_json, model_response, model, encoding, input)

@@ -11,6 +11,8 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-tit
 
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.types.llms.azure_ai import ImageEmbeddingInput, ImageEmbeddingRequest
 from litellm.types.llms.openai import EmbeddingCreateParams
 from litellm.types.utils import EmbeddingResponse, Usage
@@ -39,7 +41,7 @@ class AzureAICohereConfig:
         for i in input:
             embedding_input = ImageEmbeddingInput(image=i)
             image_input.append(embedding_input)
-        return ImageEmbeddingRequest(input=image_input, **optional_params)
+        return TypeAdapter(ImageEmbeddingRequest).validate_python({"input": image_input, **optional_params})
 
     def _transform_request(
         self, input: list[str], optional_params: dict[str, object], model: str
@@ -62,7 +64,9 @@ class AzureAICohereConfig:
         ## REMOVE IMAGE EMBEDDINGS FROM input list
         filtered_input: Final = [item for idx, item in enumerate(input) if idx not in image_embedding_idx]
 
-        v1_embeddings_request: Final = EmbeddingCreateParams(input=filtered_input, model=model, **optional_params)
+        v1_embeddings_request: Final = TypeAdapter(EmbeddingCreateParams).validate_python(
+            {"input": filtered_input, "model": model, **optional_params}
+        )
         image_embeddings_request: Final = self._transform_request_image_embeddings(
             input=image_embeddings, optional_params=optional_params
         )

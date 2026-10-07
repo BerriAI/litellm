@@ -12,7 +12,18 @@ from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from io import BytesIO
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, Optional, TypeAlias, TypedDict, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Final,
+    NoReturn,
+    Optional,
+    TypeAlias,
+    TypedDict,
+    TypeVar,
+    cast,
+)
 
 import certifi
 import httpx
@@ -20,6 +31,7 @@ from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import CertTypes, RequestFiles
 from httpx._utils import get_environment_proxies
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
@@ -91,6 +103,15 @@ def _environment_proxy_mounts(
             for pattern, proxy_url in get_environment_proxies().items()
         }
     )
+
+
+class _HTTPHandlerInitParams(TypedDict, total=False):
+    timeout: ReadOnly[float | httpx.Timeout | None]
+    concurrent_limit: ReadOnly[int | None]
+    client: ReadOnly[httpx.Client | None]
+    ssl_verify: ReadOnly[bool | str | None]
+    disable_default_headers: ReadOnly[bool | None]
+    follow_redirects: ReadOnly[bool]
 
 
 class _TCPConnectorKwargs(TypedDict, total=False):
@@ -1810,7 +1831,7 @@ def get_httpx_client(params: dict[str, object] | None = None) -> HTTPHandler:
     if params is not None:
         # Filter out params that are only used for cache key, not for HTTPHandler.__init__
         handler_params: Final = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
-        _new_client = HTTPHandler(**handler_params)
+        _new_client = HTTPHandler(**cast(_HTTPHandlerInitParams, handler_params))
     else:
         _new_client = HTTPHandler(timeout=_default_cached_client_timeout())
 

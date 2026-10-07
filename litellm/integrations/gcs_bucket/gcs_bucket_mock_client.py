@@ -8,9 +8,11 @@ Usage:
     Set GCS_MOCK=true in environment variables or config to enable mock mode.
 """
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import AsyncIterable, Iterable
-from typing import Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from litellm._logging import verbose_logger
 from litellm.integrations.mock_client_factory import (
@@ -18,6 +20,10 @@ from litellm.integrations.mock_client_factory import (
     MockResponse,
     create_mock_client_factory,
 )
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+
+if TYPE_CHECKING:
+    from litellm.llms.vertex_ai.common_utils import all_gemini_url_modes
 
 # Use factory for POST handler
 _config: Final = MockClientConfig(
@@ -213,16 +219,19 @@ def mock_vertex_auth_methods():
 
         def _mock_get_token_and_url(
             self,
-            model,
-            auth_header,
-            vertex_credentials,
-            vertex_project,
-            vertex_location,
-            gemini_api_key,
-            stream,
-            custom_llm_provider,
-            api_base,
-        ):
+            model: str,
+            auth_header: str | None,
+            gemini_api_key: str | None,
+            vertex_project: str | None,
+            vertex_location: str | None,
+            vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+            stream: bool | None,
+            custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+            api_base: str | None,
+            should_use_v1beta1_features: bool | None = False,
+            mode: all_gemini_url_modes = "chat",
+            use_psc_endpoint_format: bool = False,
+        ) -> tuple[str | None, str]:
             """Mock get_token_and_url - returns fake token."""
             verbose_logger.debug("[GCS MOCK] Vertex AI auth: _get_token_and_url called")
             return ("mock-gcs-token", "https://storage.googleapis.com")

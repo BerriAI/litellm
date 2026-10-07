@@ -14,6 +14,8 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/nova-embed.html
 
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
@@ -277,7 +279,7 @@ class AmazonNovaEmbeddingConfig:
                 for item in response["embeddings"]:
                     if "embedding" in item:
                         embedding = Embedding(
-                            embedding=item["embedding"],
+                            embedding=TypeAdapter(list[float] | str).validate_python(item["embedding"]),
                             index=len(embeddings),
                             object="embedding",
                         )
@@ -288,17 +290,16 @@ class AmazonNovaEmbeddingConfig:
                         if "truncatedCharLength" in item:
                             total_tokens += item["truncatedCharLength"] // 4
                         else:
-                            # Rough estimate based on embedding dimension
-                            total_tokens += len(item["embedding"]) // 4
+                            total_tokens += len(embedding["embedding"]) // 4
             elif "embedding" in response:
                 # Direct embedding response (fallback)
                 embedding = Embedding(
-                    embedding=response["embedding"],
+                    embedding=TypeAdapter(list[float] | str).validate_python(response["embedding"]),
                     index=len(embeddings),
                     object="embedding",
                 )
                 embeddings.append(embedding)
-                total_tokens += len(response["embedding"]) // 4
+                total_tokens += len(embedding["embedding"]) // 4
 
         # Count images from original requests for cost calculation
         image_count = 0

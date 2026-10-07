@@ -178,8 +178,10 @@ class AzureAIAgentsConfig(BaseConfig):
         model format: "azure_ai/agents/<agent_id>" or "agents/<agent_id>" or just "<agent_id>"
         """
         agent_id: Final = optional_params.get("agent_id") or optional_params.get("assistant_id")
-        if agent_id:
+        if isinstance(agent_id, str) and agent_id:
             return agent_id
+        if agent_id is not None and not isinstance(agent_id, str):
+            raise ValueError("agent_id must be a string")
 
         # Extract from model name using the static method
         return self.get_agent_id_from_model(model)

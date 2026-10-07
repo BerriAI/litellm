@@ -1621,7 +1621,7 @@ class LiteLLMAnthropicMessagesAdapter:
         return translated_obj
 
     def translate_streaming_openai_chunk_to_anthropic_content_block(
-        self, choices: list[OpenAIStreamingChoice | StreamingChoices]
+        self, choices: Sequence[OpenAIStreamingChoice | StreamingChoices]
     ) -> tuple[
         Literal["text", "tool_use", "thinking"],
         "ContentBlockContentBlockDict",

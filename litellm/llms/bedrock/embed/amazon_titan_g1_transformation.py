@@ -13,6 +13,8 @@ import types
 from collections.abc import Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.types.llms.bedrock import (
     AmazonTitanG1EmbeddingRequest,
     AmazonTitanG1EmbeddingResponse,
@@ -72,7 +74,7 @@ class AmazonTitanG1Config:
 
         transformed_responses: Final[list[Embedding]] = []
         for index, response in enumerate(response_list):
-            _parsed_response = AmazonTitanG1EmbeddingResponse(**response)
+            _parsed_response = TypeAdapter(AmazonTitanG1EmbeddingResponse).validate_python(response)
             transformed_responses.append(
                 Embedding(
                     embedding=_parsed_response["embedding"],
