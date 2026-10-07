@@ -283,6 +283,27 @@ class PartRow(LiteLLMBaseModel):
     truncated: int = Field(..., ge=0, le=1)
 
 
+class TraceAgentRow(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        frozen=True,
+    )
+
+    agent_name: str
+
+
+class TraceAgentsParams(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        frozen=True,
+    )
+
+    all_teams: Literal[0, 1]
+    user_id: str
+    team_ids: tuple[str, ...]
+    start_ms: int = Field(..., ge=-9223372036854775808, le=9223372036854775807)
+    end_ms: int = Field(..., ge=-9223372036854775808, le=9223372036854775807)
+    limit: int = Field(..., ge=0, le=4294967295)
+
+
 TraceTableName: TypeAlias = Literal["otel_traces", "agent_traces_by_key", "spend_logs"]
 
 
@@ -435,6 +456,8 @@ TraceWireModels: TypeAlias = Annotated[
     | LensEvidenceParams
     | LensSampleParams
     | PartRow
+    | TraceAgentRow
+    | TraceAgentsParams
     | TraceQueryHelp,
     Field(..., title="TraceWireModels"),
 ]
