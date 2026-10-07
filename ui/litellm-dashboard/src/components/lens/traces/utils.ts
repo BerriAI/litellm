@@ -9,8 +9,11 @@ import type { Span, TraceMessage, TraceSummary, TraceToolCall } from "./types";
 /*  Formatting                                                         */
 /* ------------------------------------------------------------------ */
 
-export const traceAgentNames = (trace: TraceSummary): readonly string[] =>
-  trace.agent_names ?? (trace.service ? [trace.service] : []);
+/** Same rule as the server's agent filter: the run's agents, else the service that sent it. */
+export const traceAgentNames = (trace: TraceSummary): readonly string[] => {
+  if (trace.agent_names?.length) return trace.agent_names;
+  return trace.service ? [trace.service] : [];
+};
 
 export const fmtMs = (ms: number): string => {
   if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}m`;
