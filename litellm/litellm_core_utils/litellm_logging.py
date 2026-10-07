@@ -4132,7 +4132,6 @@ class Logging(LiteLLMLoggingBaseClass):
         """Helper to check if a callback is internal"""
         INTERNAL_PREFIXES: Final = [
             "_PROXY",
-            "PROXY_",
             "_service_logger.ServiceLogging",
             "sync_deployment_callback_on_success",
         ]
