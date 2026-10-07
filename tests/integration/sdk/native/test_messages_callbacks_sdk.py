@@ -78,7 +78,10 @@ async def test_native_messages_callbacks_see_the_provider_request_and_the_public
 
 
 @pytest.mark.asyncio
-async def test_native_messages_pre_call_body_edit_reaches_the_provider(messages_server: RecordingServer) -> None:
+async def test_native_messages_pre_call_body_edit_reaches_the_provider(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
     class Edit(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
             request_body(kwargs)["temperature"] = 0.25
@@ -91,7 +94,9 @@ async def test_native_messages_pre_call_body_edit_reaches_the_provider(messages_
 @pytest.mark.asyncio
 async def test_native_messages_provider_error_reaches_caller_and_failure_callbacks_as_one_public_error(
     messages_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
     messages_server.enqueue(
         ResponseSpec(body={"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}}, status=400)
     )
@@ -119,7 +124,9 @@ def sse_payload() -> bytes:
 @pytest.mark.asyncio
 async def test_native_messages_stream_relays_provider_events_and_logs_success_once_after_the_last_chunk(
     messages_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
     messages_server.enqueue(STREAM)
     recorder: Final = RecordingLogger()
 
@@ -164,8 +171,9 @@ async def test_native_messages_stream_closed_early_logs_success_once_for_what_wa
 
 
 def test_native_sync_messages_stream_relays_provider_events_and_logs_success_once(
-    messages_server: RecordingServer,
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
     messages_server.enqueue(STREAM)
     recorder: Final = RecordingLogger()
 
@@ -178,7 +186,10 @@ def test_native_sync_messages_stream_relays_provider_events_and_logs_success_onc
     assert len(recorder.wait_for("async_log_success_event")) == 1
 
 
-def test_native_sync_messages_returns_the_provider_message(messages_server: RecordingServer) -> None:
+def test_native_sync_messages_returns_the_provider_message(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
     recorder: Final = RecordingLogger()
 
     response: Final = litellm.anthropic.messages.create(**arguments(messages_server, callbacks=[recorder]))

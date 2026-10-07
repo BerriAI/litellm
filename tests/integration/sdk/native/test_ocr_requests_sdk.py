@@ -604,6 +604,7 @@ async def test_native_settings_observe_mutation_between_calls(
 def test_native_projection_errors_never_select_python(
     ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, required: bool, failure: str
 ) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
     import dataclasses
     import ssl
 

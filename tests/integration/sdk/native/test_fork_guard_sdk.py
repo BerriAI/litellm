@@ -218,6 +218,7 @@ assert os.waitpid(pid, 0)[1] == 0
         env={
             **os.environ,
             "OBJC_DISABLE_INITIALIZE_FORK_SAFETY": "YES",
+            "LITELLM_RUST": "1",
             "LITELLM_LOCAL_MODEL_COST_MAP": "True",
             "WARM_FAST_COUNTER": str(warm_fast_counter),
         },

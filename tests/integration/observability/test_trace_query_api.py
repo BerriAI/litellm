@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
+from litellm.rust_bridge import _native  # noqa: F401
 from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
 from litellm.rust_bridge.trace.generated.types import Trace
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig, span_rows

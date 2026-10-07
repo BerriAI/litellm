@@ -1,6 +1,6 @@
 import asyncio
 import threading
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator, Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from typing import Final
@@ -43,6 +43,15 @@ async def isolate_ocr_test_state() -> AsyncIterator[None]:
 def recording_server() -> Generator[RecordingServer]:
     with recording_service() as server:
         yield server
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
 
 
 @pytest.fixture

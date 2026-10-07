@@ -215,7 +215,10 @@ async def test_cache_controls_and_backend_credential_key_semantics(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("legacy", (False, True))
-async def test_v2_messages_replays_a_completed_stream(recording_server: RecordingServer, legacy: bool) -> None:
+async def test_v2_messages_replays_a_completed_stream(
+    recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, legacy: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
     recording_server.default_response = ResponseSpec(body=None, events=MESSAGES_EVENTS)
     litellm.cache = Cache() if legacy else _v2.Cache.memory()
     recorder: Final = RecordingLogger()

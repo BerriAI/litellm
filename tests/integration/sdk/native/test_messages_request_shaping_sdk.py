@@ -228,7 +228,9 @@ async def test_scoped_headers_override_extra_headers_which_override_forwarded_he
 @pytest.mark.asyncio
 async def test_non_string_metadata_user_id_is_rejected_before_the_provider_call(
     messages_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
     messages_server.expected_requests = 0
 
     with pytest.raises(litellm.BadRequestError, match=r"metadata\.user_id must be a string"):
