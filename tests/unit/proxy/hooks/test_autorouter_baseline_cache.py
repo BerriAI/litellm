@@ -3,6 +3,7 @@ import json
 from collections.abc import AsyncIterator, Callable, Generator, Mapping
 from contextlib import contextmanager
 from datetime import datetime
+from itertools import product
 from types import MappingProxyType
 from typing import Final, cast
 from uuid import uuid4
@@ -523,16 +524,37 @@ async def test_native_count_finishing_after_quarter_worker_budget_keeps_plan_and
 
 
 @pytest.mark.parametrize(
-    "options",
+    "options,on_deployment",
     (
-        {"thinking": {"type": "enabled", "budget_tokens": 2048}},
-        {"extra_body": {"speed": "fast", "output_config": {"effort": "high"}}},
+        ({"thinking": {"type": "enabled", "budget_tokens": 2048}}, False),
+        ({"extra_body": {"speed": "fast", "output_config": {"effort": "high"}}}, False),
+        *product(
+            (
+                {"container": {"id": "container_test"}},
+                {"mcp_servers": [{"type": "url", "name": "test", "url": "https://example.com/mcp"}]},
+                {"inference_geo": "us"},
+                {"safeguards": [{"type": "default"}]},
+            ),
+            (False, True),
+        ),
     ),
 )
 async def test_native_baseline_identity_keeps_the_actual_transformed_body(
-    monkeypatch: pytest.MonkeyPatch, options: dict[str, JsonValue]
+    monkeypatch: pytest.MonkeyPatch, options: dict[str, JsonValue], on_deployment: bool
 ) -> None:
-    rig: Final = _Rig(monkeypatch)
+    models: Final = _MESSAGES.validate_python(
+        [
+            *_MODELS[:2],
+            {
+                **_MODELS[2],
+                "litellm_params": {
+                    **_JSON_OBJECT.validate_python(_MODELS[2]["litellm_params"]),
+                    **(options if on_deployment else {}),
+                },
+            },
+        ]
+    )
+    rig: Final = _Rig(monkeypatch, models=models)
     log: Final = rig.logging()
     with _transport(_upstream):
         await rig.router.anthropic_messages(
@@ -543,7 +565,7 @@ async def test_native_baseline_identity_keeps_the_actual_transformed_body(
             litellm_call_id=rig.call_id,
             litellm_metadata={"user_api_key_hash": "test-caller-hash"},
             litellm_session_id="native-identical",
-            **options,
+            **({} if on_deployment else options),
         )
         observed: Final = _observation(await rig.capture.payload()).observation
     assert observed.outcome == "complete"
@@ -552,6 +574,11 @@ async def test_native_baseline_identity_keeps_the_actual_transformed_body(
         log.baseline_cache_context.baseline_body,
         log.baseline_cache_context.selected_body_digest,
     )
+
+    from litellm.proxy.spend_tracking.baseline_accounting import BaselineHistory, advance_baseline_history
+
+    _, estimates = advance_baseline_history(BaselineHistory(), (observed,))
+    assert estimates[0].provenance == "observed_identical" and estimates[0].usage == observed.usage
 
 
 @pytest.mark.parametrize("tier_limit", (8, 16))
@@ -759,8 +786,20 @@ async def test_native_baseline_projection_matches_direct_baseline_request(
     }
 
 
-async def test_native_baseline_prices_projected_speed_without_changing_actual_spend(
+@pytest.mark.parametrize(
+    "selected,baseline,usage_field,observed_value,multiplier",
+    (
+        ({}, {"speed": "fast"}, "speed", "standard", 3.0),
+        ({"inference_geo": "us"}, {}, "inference_geo", "us", 1.0),
+    ),
+)
+async def test_native_baseline_prices_projected_settings_without_changing_actual_spend(
     monkeypatch: pytest.MonkeyPatch,
+    selected: dict[str, JsonValue],
+    baseline: dict[str, JsonValue],
+    usage_field: str,
+    observed_value: str,
+    multiplier: float,
 ) -> None:
     from litellm.proxy.spend_tracking.baseline_accounting import BaselineHistory, advance_baseline_history
     from litellm.proxy.spend_tracking.savings import baseline_cost_snapshot, price_baseline_comparison
@@ -769,7 +808,8 @@ async def test_native_baseline_prices_projected_speed_without_changing_actual_sp
     def upstream(request: httpx.Request) -> httpx.Response:
         body: Final = _JSON_OBJECT.validate_json(request.content)
         model: Final = body.get("model")
-        assert isinstance(model, str) and body.get("speed") is None
+        assert isinstance(model, str)
+        assert body.get(usage_field) == selected.get(usage_field)
         return httpx.Response(
             200,
             request=request,
@@ -778,7 +818,7 @@ async def test_native_baseline_prices_projected_speed_without_changing_actual_sp
                 "usage": {
                     "input_tokens": 6000,
                     "output_tokens": 10,
-                    "speed": "standard",
+                    usage_field: observed_value,
                     "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
                 },
             },
@@ -788,12 +828,19 @@ async def test_native_baseline_prices_projected_speed_without_changing_actual_sp
         monkeypatch,
         models=_MESSAGES.validate_python(
             [
-                *_MODELS[:2],
+                _MODELS[0],
+                {
+                    **_MODELS[1],
+                    "litellm_params": {
+                        **_JSON_OBJECT.validate_python(_MODELS[1]["litellm_params"]),
+                        **selected,
+                    },
+                },
                 {
                     **_MODELS[2],
                     "litellm_params": {
                         **_JSON_OBJECT.validate_python(_MODELS[2]["litellm_params"]),
-                        "speed": "fast",
+                        **baseline,
                     },
                 },
             ]
@@ -821,7 +868,7 @@ async def test_native_baseline_prices_projected_speed_without_changing_actual_sp
         **captured.prices,
         "input_cost_per_token": 1e-6,
         "output_cost_per_token": 2e-6,
-        "provider_specific_entry": {"fast": 3.0},
+        "provider_specific_entry": {"fast": 3.0, "us": 2.0},
     }
     actual: Final = payload["response_cost"]
     assert isinstance(actual, float)
@@ -834,9 +881,11 @@ async def test_native_baseline_prices_projected_speed_without_changing_actual_sp
     )
     comparison: Final = price_baseline_comparison(snapshot, estimate.usage, estimate.provenance)
     assert comparison is not None and snapshot.actual_token_cost is not None, estimate.reason
-    assert comparison.baseline == pytest.approx(actual + (6000 * 1e-6 + 10 * 2e-6) * 3.0 - snapshot.actual_token_cost)
+    assert comparison.baseline == pytest.approx(
+        actual + (6000 * 1e-6 + 10 * 2e-6) * multiplier - snapshot.actual_token_cost
+    )
     assert comparison.actual == actual
-    assert _JSON_OBJECT.validate_python(response["usage"])["speed"] == "standard"
+    assert _JSON_OBJECT.validate_python(response["usage"])[usage_field] == observed_value
 
 
 async def test_native_request_rewritten_after_capture_preserves_spend_without_guessing_baseline(

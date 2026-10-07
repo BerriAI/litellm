@@ -171,7 +171,7 @@ class AutoRouterBaselineCache(CustomLogger):
             )
             scope: Final = "autorouter-baseline:v3:" + _digest(
                 (
-                    "baseline_request_v3",
+                    "baseline_request_v4",
                     request.user_api_key_hash,
                     session,
                     request.route.router_name,
@@ -363,7 +363,7 @@ async def _capture_native(
             available_at=available,
             outcome="complete",
             baseline_equivalent=same,
-            usage=usage.model_copy(update={"speed": projected.get("speed")})
+            usage=usage.model_copy(update={key: projected.get(key) for key in ("speed", "inference_geo")})
             if usage is not None and not same
             else usage,
             plan=plan,

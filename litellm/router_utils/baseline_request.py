@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from itertools import accumulate
 from types import MappingProxyType
-from typing import Final, cast
+from typing import Final, cast, get_type_hints
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
+
+from litellm.types.llms.anthropic import AnthropicMessagesRequestOptionalParams
 
 CACHE_SETTINGS: Final = (
     "system",
@@ -30,7 +32,7 @@ CACHE_SETTINGS: Final = (
     "context_management",
     "compaction",
 )
-BASELINE_PARAMETERS: Final = (
+_GENERIC_PARAMETERS: Final = (
     *CACHE_SETTINGS,
     "prompt_cache_options",
     "prompt_cache_retention",
@@ -47,6 +49,12 @@ BASELINE_PARAMETERS: Final = (
     "drop_params",
     "additional_drop_params",
 )
+NATIVE_ONLY_PARAMETERS: Final = tuple(
+    key
+    for key in get_type_hints(AnthropicMessagesRequestOptionalParams)
+    if key not in (*_GENERIC_PARAMETERS, "metadata", "stream")
+)
+BASELINE_PARAMETERS: Final = (*_GENERIC_PARAMETERS, *NATIVE_ONLY_PARAMETERS)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _MAX_BYTES: Final = 4 * 1024 * 1024
 _MAX_NODES: Final = 32768
