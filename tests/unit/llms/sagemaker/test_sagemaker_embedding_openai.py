@@ -146,6 +146,20 @@ class TestSagemakerOpenAIEmbeddingConfig:
         assert result.usage is not None
         assert (result.usage.prompt_tokens, result.usage.total_tokens) == (0, 0)
 
+    def test_response_keeps_base64_embedding_strings(self):
+        raw = httpx.Response(200, json={"data": [{"index": 0, "embedding": "AACAPwAAAEA="}], "usage": {"prompt_tokens": 2}})
+
+        result = self.config.transform_embedding_response(
+            model="my-embed-endpoint",
+            raw_response=raw,
+            model_response=EmbeddingResponse(),
+            logging_obj=MagicMock(),
+        )
+
+        assert result.data == [{"object": "embedding", "index": 0, "embedding": "AACAPwAAAEA="}]
+        assert result.usage is not None
+        assert (result.usage.prompt_tokens, result.usage.total_tokens) == (2, 2)
+
     @pytest.mark.parametrize(
         "body",
         [

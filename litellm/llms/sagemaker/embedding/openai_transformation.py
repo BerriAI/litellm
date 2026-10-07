@@ -7,7 +7,7 @@ goes out as `{"input": [...]}` plus the caller's extra body fields, and the resp
 read as the OpenAI embeddings object (`data[].embedding`, `usage`).
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -18,6 +18,7 @@ from pydantic import BaseModel, ValidationError
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from ..common_utils import SagemakerError
@@ -128,7 +129,7 @@ class SagemakerOpenAIEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
