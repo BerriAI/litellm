@@ -69,10 +69,10 @@ class AzureAICohereConfig:
 
     def transform_request(
         self,
-        input: list[str],  # mutable-ok: forwards private contract
-        optional_params: dict,  # mutable-ok: forwards private contract
+        input: list[str],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         model: str,
-    ) -> tuple[ImageEmbeddingRequest, EmbeddingCreateParams, list[int]]:  # mutable-ok: forwards private contract
+    ) -> tuple[ImageEmbeddingRequest, EmbeddingCreateParams, list[int]]:  # mutable-ok: mirrors override contract
         return self._transform_request(input, optional_params, model)
 
     def _transform_response(self, response: EmbeddingResponse) -> EmbeddingResponse:

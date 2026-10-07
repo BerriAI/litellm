@@ -394,7 +394,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def map_web_search_options(
         self,
-        value: dict,  # mutable-ok: forwards private contract
+        value: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> Tools:
         return self._map_web_search_options(value)
 
@@ -414,7 +414,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def search_tool_keys(
         cls,
-    ) -> set:  # mutable-ok: forwards private contract
+    ) -> set[str]:  # mutable-ok: mirrors override contract
         return cls._search_tool_keys()
 
     @classmethod
@@ -459,7 +459,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def drop_search_tools_mixed_with_functions(
         cls,
-        optional_params: dict,  # mutable-ok: forwards private contract
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> None:
         return cls._drop_search_tools_mixed_with_functions(optional_params)
 
@@ -801,9 +801,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def map_function(
         self,
-        value: list[dict],  # mutable-ok: forwards private contract
-        optional_params: dict,  # mutable-ok: forwards private contract
-    ) -> list[Tools]:  # mutable-ok: forwards private contract
+        value: list[dict[str, object]],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> list[Tools]:  # mutable-ok: mirrors override contract
         return self._map_function(value, optional_params)
 
     def _map_response_schema(self, value: dict) -> dict:
@@ -1107,8 +1107,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def map_audio_params(
         self,
-        value: dict,  # mutable-ok: forwards private contract
-    ) -> dict:  # mutable-ok: forwards private contract
+        value: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
         return self._map_audio_params(value)
 
     @staticmethod
@@ -2066,7 +2066,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def calculate_web_search_requests(
         cls,
-        grounding_metadata: list[dict],  # mutable-ok: forwards private contract
+        grounding_metadata: list[dict[str, object]],  # mutable-ok: mirrors override contract
     ) -> int | None:
         return cls._calculate_web_search_requests(grounding_metadata)
 
@@ -2208,11 +2208,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def set_stream_metadata_on_response(
         cls,
-        model_response: object,
-        grounding_metadata: list[dict],  # mutable-ok: forwards private contract
-        url_context_metadata: list[dict],  # mutable-ok: forwards private contract
-        safety_ratings: list[dict],  # mutable-ok: forwards private contract
-        citation_metadata: list[dict],  # mutable-ok: forwards private contract
+        model_response: Union[ModelResponse, "ModelResponseStream"],
+        grounding_metadata: list[dict[str, object]],  # mutable-ok: mirrors override contract
+        url_context_metadata: list[dict[str, object]],  # mutable-ok: mirrors override contract
+        safety_ratings: list[dict[str, object]],  # mutable-ok: mirrors override contract
+        citation_metadata: list[dict[str, object]],  # mutable-ok: mirrors override contract
     ) -> None:
         return cls._set_stream_metadata_on_response(
             model_response, grounding_metadata, url_context_metadata, safety_ratings, citation_metadata
@@ -2479,11 +2479,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def process_candidates(
         cls,
-        _candidates: list[Candidates],  # mutable-ok: forwards private contract
+        _candidates: list[Candidates],  # mutable-ok: mirrors override contract
         model_response: Union[ModelResponse, "ModelResponseStream"],
-        standard_optional_params: dict,  # mutable-ok: forwards private contract
+        standard_optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         cumulative_tool_call_index: int = 0,
-    ) -> tuple[list[dict], list[dict], list, list, int]:  # mutable-ok: forwards private contract
+    ) -> tuple[  # mutable-ok: mirrors override contract
+        list[dict[str, object]],
+        list[dict[str, object]],
+        list[dict[str, object]],
+        list[dict[str, object]],
+        int,
+    ]:
         return cls._process_candidates(
             _candidates, model_response, standard_optional_params, cumulative_tool_call_index
         )
@@ -2631,7 +2637,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def transform_google_generate_content_to_openai_model_response(
         self,
-        completion_response: GenerateContentResponseBody | dict,  # mutable-ok: forwards private contract
+        completion_response: GenerateContentResponseBody | dict[str, object],  # mutable-ok: mirrors override contract
         model_response: ModelResponse,
         model: str,
         logging_obj: LoggingClass,
@@ -2656,10 +2662,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def transform_messages(
         self,
-        messages: list[AllMessageValues],  # mutable-ok: forwards private contract
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
         model: str | None = None,
-        litellm_params: dict | None = None,  # mutable-ok: forwards private contract
-    ) -> list[ContentType]:  # mutable-ok: forwards private contract
+        litellm_params: dict[str, object] | None = None,  # mutable-ok: mirrors override contract
+    ) -> list[ContentType]:  # mutable-ok: mirrors override contract
         return self._transform_messages(messages, model, litellm_params)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

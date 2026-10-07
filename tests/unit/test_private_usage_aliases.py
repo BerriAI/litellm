@@ -2265,11 +2265,18 @@ def _make_private_override(
     is_async: bool,
     result: object,
 ) -> object:
-    def sync_override(*args: object, **kwargs: object) -> object:
-        return result
+    def recorded_args(args: tuple[object, ...]) -> tuple[object, ...]:
+        return args[1:] if descriptor in ("instance", "classmethod") else args
 
-    async def async_override(*args: object, **kwargs: object) -> object:
-        return result
+    def sync_override(
+        *args: object, **kwargs: object
+    ) -> tuple[object, tuple[object, ...], dict[str, object]]:
+        return result, recorded_args(args), kwargs
+
+    async def async_override(
+        *args: object, **kwargs: object
+    ) -> tuple[object, tuple[object, ...], dict[str, object]]:
+        return result, recorded_args(args), kwargs
 
     implementation: Final = async_override if is_async else sync_override
     if descriptor == "classmethod":
@@ -2290,12 +2297,22 @@ def _forwarder_arguments(
     positional: Final = tuple(
         object()
         for parameter in parameters
-        if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        if parameter.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        )
     )
     keyword_only: Final = {
         parameter.name: object() for parameter in parameters if parameter.kind is inspect.Parameter.KEYWORD_ONLY
     }
-    return positional, keyword_only
+    variadic_keyword: Final = {
+        f"forwarder_extra_{index}": object()
+        for index, parameter in enumerate(parameters)
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD
+    }
+    return positional, {**keyword_only, **variadic_keyword}
 
 
 @pytest.mark.asyncio
@@ -2337,9 +2354,9 @@ async def test_public_forwarders_dispatch_to_private_subclass_override(
     if is_async:
         assert inspect.isawaitable(invocation)
         awaited: Final = await cast(Awaitable[object], invocation)
-        assert awaited is expected
+        assert awaited == (expected, args, kwargs)
         return
-    assert invocation is expected
+    assert invocation == (expected, args, kwargs)
 
 
 @pytest.mark.parametrize(

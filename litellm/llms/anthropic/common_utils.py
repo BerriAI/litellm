@@ -667,7 +667,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     @classmethod
     def apply_sampling_param(
         cls,
-        optional_params: dict,  # mutable-ok: forwards private contract
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         model: str,
         param: str,
         value: object,

@@ -117,6 +117,6 @@ class BedrockRerankConfig:
 
     def transform_response(
         self,
-        response: dict,  # mutable-ok: forwards private contract
+        response: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> RerankResponse:
         return self._transform_response(response)

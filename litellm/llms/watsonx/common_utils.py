@@ -354,5 +354,5 @@ class IBMWatsonXMixin:
         self,
         model: str,
         api_params: WatsonXAPIParams,
-    ) -> dict:  # mutable-ok: forwards private contract
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
         return self._prepare_payload(model, api_params)

@@ -80,7 +80,7 @@ class AmazonTitanV2Config:
     def transform_request(
         self,
         input: str,
-        inference_params: dict,  # mutable-ok: forwards private contract
+        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> AmazonTitanV2EmbeddingRequest:
         return self._transform_request(input, inference_params)
 
@@ -126,7 +126,7 @@ class AmazonTitanV2Config:
 
     def transform_response(
         self,
-        response_list: list[dict],  # mutable-ok: forwards private contract
+        response_list: list[dict[str, object]],  # mutable-ok: mirrors override contract
         model: str,
     ) -> EmbeddingResponse:
         return self._transform_response(response_list, model)

@@ -493,7 +493,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def maybe_drop_speed_param(
         cls,
         model: str,
-        optional_params: dict,  # mutable-ok: forwards private contract
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         drop_params: bool,
         custom_llm_provider: str | None = None,
     ) -> None:
@@ -1042,8 +1042,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def map_tools(
         self,
-        tools: list,  # mutable-ok: forwards private contract
-    ) -> tuple[list[AllAnthropicToolsValues], list[AnthropicMcpServerTool]]:  # mutable-ok: forwards private contract
+        tools: list[  # mutable-ok: mirrors override contract
+            ChatCompletionToolParam | AllAnthropicToolsValues | dict[str, object]
+        ],
+    ) -> tuple[list[AllAnthropicToolsValues], list[AnthropicMcpServerTool]]:  # mutable-ok: mirrors override contract
         return self._map_tools(tools)
 
     @staticmethod
@@ -1299,8 +1301,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def map_stop_sequences(
         self,
-        stop: str | list[str] | None,  # mutable-ok: forwards private contract
-    ) -> list[str] | None:  # mutable-ok: forwards private contract
+        stop: str | list[str] | None,  # mutable-ok: mirrors override contract
+    ) -> list[str] | None:  # mutable-ok: mirrors override contract
         return self._map_stop_sequences(stop)
 
     @staticmethod
@@ -2853,7 +2855,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @classmethod
     def convert_tool_response_to_message(
         cls,
-        tool_calls: list[ChatCompletionToolCallChunk],  # mutable-ok: forwards private contract
+        tool_calls: list[ChatCompletionToolCallChunk],  # mutable-ok: mirrors override contract
     ) -> LitellmMessage | None:
         return cls._convert_tool_response_to_message(tool_calls)
 

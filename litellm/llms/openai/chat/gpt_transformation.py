@@ -389,11 +389,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def transform_messages(
         self,
-        messages: list[AllMessageValues],  # mutable-ok: forwards private contract
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
         model: str,
         is_async: bool = False,
     ) -> (
-        list[AllMessageValues]  # mutable-ok: forwards private contract
+        list[AllMessageValues]  # mutable-ok: mirrors override contract
         | Coroutine[object, object, list[AllMessageValues]]
     ):
         return self._transform_messages(messages, model, is_async)

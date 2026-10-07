@@ -792,7 +792,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
     def get_aws_region_name(
         self,
-        optional_params: dict,  # mutable-ok: forwards private contract
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         model: str | None = None,
         model_id: str | None = None,
     ) -> str:

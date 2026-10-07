@@ -207,11 +207,11 @@ class AmazonNovaEmbeddingConfig:
     def transform_request(
         self,
         input: str,
-        inference_params: dict,  # mutable-ok: forwards private contract
+        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
         async_invoke_route: bool = False,
         model_id: str | None = None,
         output_s3_uri: str | None = None,
-    ) -> dict:  # mutable-ok: forwards private contract
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
         return self._transform_request(input, inference_params, async_invoke_route, model_id, output_s3_uri)
 
     def _wrap_async_invoke_request(
@@ -328,9 +328,9 @@ class AmazonNovaEmbeddingConfig:
 
     def transform_response(
         self,
-        response_list: list[dict],  # mutable-ok: forwards private contract
+        response_list: list[dict[str, object]],  # mutable-ok: mirrors override contract
         model: str,
-        batch_data: list[dict] | None = None,  # mutable-ok: forwards private contract
+        batch_data: list[dict[str, object]] | None = None,  # mutable-ok: mirrors override contract
     ) -> EmbeddingResponse:
         return self._transform_response(response_list, model, batch_data)
 
@@ -372,7 +372,7 @@ class AmazonNovaEmbeddingConfig:
 
     def transform_async_invoke_response(
         self,
-        response: dict,  # mutable-ok: forwards private contract
+        response: dict[str, object],  # mutable-ok: mirrors override contract
         model: str,
     ) -> EmbeddingResponse:
         return self._transform_async_invoke_response(response, model)

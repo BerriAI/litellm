@@ -1028,7 +1028,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         self,
         openai_jsonl_content: Sequence[_OpenAIBatchRecord],
         target_model: str = "",
-    ) -> list[_BedrockBatchRecord]:  # mutable-ok: forwards private contract
+    ) -> list[_BedrockBatchRecord]:  # mutable-ok: mirrors override contract
         return self._transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content, target_model)
 
     def transform_create_file_request(

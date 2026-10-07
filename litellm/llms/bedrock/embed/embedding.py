@@ -23,6 +23,7 @@ from litellm.secret_managers.main import get_secret
 from litellm.types.llms.bedrock import (
     AmazonEmbeddingRequest,
     CohereEmbeddingRequest,
+    TwelveLabsAsyncInvokeStatusResponse,
 )
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 
@@ -670,7 +671,7 @@ class BedrockEmbedding(BaseAWSLLM):
         self,
         invocation_arn: str,
         aws_region_name: str,
-        logging_obj=None,
-        **kwargs,  # kwargs-ok: forwards private contract
-    ) -> dict:  # mutable-ok: forwards private contract
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+        **kwargs: object,  # kwargs-ok: mirrors private method extension kwargs
+    ) -> TwelveLabsAsyncInvokeStatusResponse:
         return await self._get_async_invoke_status(invocation_arn, aws_region_name, logging_obj, **kwargs)

@@ -216,9 +216,9 @@ class OpenAIConfig(BaseConfig):
 
     def transform_messages(
         self,
-        messages: list[AllMessageValues],  # mutable-ok: forwards private contract
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
         model: str,
-    ) -> list[AllMessageValues]:  # mutable-ok: forwards private contract
+    ) -> list[AllMessageValues]:  # mutable-ok: mirrors override contract
         return self._transform_messages(messages, model)
 
     def map_openai_params(

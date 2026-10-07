@@ -6234,7 +6234,7 @@ class BaseLLMHTTPHandler:
             BaseEvalsAPIConfig,
             BaseRealtimeHTTPConfig,
         ],
-    ):
+    ) -> None:
         return self._handle_error(e, provider_config)
 
     @staticmethod

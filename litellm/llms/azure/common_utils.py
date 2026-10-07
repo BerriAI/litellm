@@ -789,9 +789,9 @@ class BaseAzureLLM(BaseOpenAILLM):
     @classmethod
     def base_validate_azure_environment(
         cls,
-        headers: dict,  # mutable-ok: forwards private contract
+        headers: dict[str, str],  # mutable-ok: mirrors override contract
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:  # mutable-ok: forwards private contract
+    ) -> dict[str, str]:  # mutable-ok: mirrors override contract
         return cls._base_validate_azure_environment(headers, litellm_params)
 
     @staticmethod

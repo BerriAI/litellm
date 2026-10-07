@@ -55,7 +55,7 @@ class AmazonTitanMultimodalEmbeddingG1Config:
     def transform_request(
         self,
         input: str,
-        inference_params: dict,  # mutable-ok: forwards private contract
+        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> AmazonTitanMultimodalEmbeddingRequest:
         return self._transform_request(input, inference_params)
 
@@ -101,8 +101,8 @@ class AmazonTitanMultimodalEmbeddingG1Config:
 
     def transform_response(
         self,
-        response_list: list[dict],  # mutable-ok: forwards private contract
+        response_list: list[dict[str, object]],  # mutable-ok: mirrors override contract
         model: str,
-        batch_data: list[dict] | None = None,  # mutable-ok: forwards private contract
+        batch_data: list[dict[str, object]] | None = None,  # mutable-ok: mirrors override contract
     ) -> EmbeddingResponse:
         return self._transform_response(response_list, model, batch_data)
