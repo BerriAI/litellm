@@ -3,21 +3,33 @@ import json
 import os
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from itertools import chain
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, TypeVar
 
 import anthropic
 import httpx
 import openai
+import pytest
+import yaml
 from pydantic import JsonValue
 
 from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
-from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
+from tests.integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    Scenario,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from tests.integration._support.database import read_rows
+from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 T = TypeVar("T")
@@ -34,6 +46,25 @@ BASE_INSTRUCTIONS_PATH: Final = ROOT / "litellm" / "proxy" / "common_utils" / "c
 FRESH_CONNECTION: Final = {"Connection": "close"}
 ANTHROPIC_HEADERS: Final = {"anthropic-version": "2023-06-01"}
 USAGE: Final = {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15}
+
+
+def _config_without_model_list(directory: Path) -> Path:
+    shared_config: Final = object_value(yaml.safe_load((ROOT / "tests/integration/proxy_config.yaml").read_text()))
+    config_without_models: Final[Mapping[str, JsonValue]] = MappingProxyType(
+        {name: value for name, value in shared_config.items() if name != "model_list"}
+    )
+    path: Final = directory / "proxy_config_without_model_list.yaml"
+    path.write_text(yaml.safe_dump({**config_without_models}))
+    return path
+
+
+@pytest.fixture(scope="module")
+def gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    with gateway_from_environment() as parent_gateway:
+        directory: Final = tmp_path_factory.mktemp("codex_model_catalog")
+        config: Final = _config_without_model_list(directory)
+        with owned_proxy(parent_gateway, directory, {}, config=config, workers=PROXY_WORKERS) as isolated_gateway:
+            yield isolated_gateway
 
 
 def _generic_tier(identity: str) -> dict[str, JsonValue]:

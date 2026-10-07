@@ -390,7 +390,7 @@ async def _http_streams(url: str, headers: dict[str, str]):
 @pytest.mark.asyncio
 async def test_unchanged_sdk1_langchain_peer_can_list_and_call(proxy_server_url: str) -> None:
     script = """
-import asyncio, json, sys
+import asyncio, json, os, sys
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from langchain_mcp_adapters.tools import load_mcp_tools
@@ -706,7 +706,7 @@ class TestProxyMcpSchemaDiscoveryMode:
 async def authorize_proxy_key(request: Request, api_key: str) -> UserAPIKeyAuth:
     permissions = {
         "sk-schema": LiteLLM_ObjectPermissionTable(object_permission_id="schema", mcp_servers=["schema"]),
-        "sk-9876": LiteLLM_ObjectPermissionTable(object_permission_id="open", mcp_servers=["math_stdio"]),
+        MASTER_KEY: LiteLLM_ObjectPermissionTable(object_permission_id="open", mcp_servers=["math_stdio"]),
         "sk-restricted": LiteLLM_ObjectPermissionTable(
             object_permission_id="restricted", mcp_servers=["math_restricted"]
         ),
@@ -746,7 +746,7 @@ proxy_call_recorder = ProxyCallRecorder()
 
 
 @asynccontextmanager
-async def _scoped_session(url: str, key: str = "sk-9876", **headers: str) -> typing.AsyncIterator[ClientSession]:
+async def _scoped_session(url: str, key: str = MASTER_KEY, **headers: str) -> typing.AsyncIterator[ClientSession]:
     async with asyncio.timeout(30):
         async with _proxy_session(url, Authorization=f"Bearer {key}", **headers) as (read, write):
             async with ClientSession(read, write) as session:
