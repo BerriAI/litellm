@@ -3,7 +3,7 @@ import os
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import click
 import fastapi
@@ -80,16 +80,13 @@ class TestProxyInitializationHelpers:
 
         mock_stream_response = MagicMock()
         mock_stream_response.__iter__.return_value = [MagicMock(), MagicMock()]
-        mock_client.chat.completions.create.side_effect = [
-            mock_response,
-            mock_stream_response,
-        ]
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_client.completions.create.return_value = mock_response
 
         # Execute
-        with pytest.raises(ValueError, match="Invalid test value"):
-            ProxyInitializationHelpers._run_test_chat_completion(
-                "localhost", 8000, "gpt-3.5-turbo", True
-            )
+        ProxyInitializationHelpers._run_test_chat_completion(
+            "localhost", 8000, "gpt-3.5-turbo", True
+        )
 
         # Test with valid string test value
         ProxyInitializationHelpers._run_test_chat_completion(
@@ -97,9 +94,10 @@ class TestProxyInitializationHelpers:
         )
 
         # Assert
-        mock_openai.assert_called_once_with(
-            api_key="My API Key", base_url="http://test-url"
-        )
+        assert mock_openai.call_args_list == [
+            call(api_key="My API Key", base_url="http://localhost:8000"),
+            call(api_key="My API Key", base_url="http://test-url"),
+        ]
         mock_client.chat.completions.create.assert_called()
 
     def test_get_default_unvicorn_init_args(self):
