@@ -199,7 +199,7 @@ ui:
 YAML
   fi
   install=(helm upgrade --install lens "helm/$chart" -n "$namespace" \
-    -f "$qa_dir/common.yaml" -f "$qa_dir/chart.yaml" --wait --timeout 8m)
+    -f "$qa_dir/common.yaml" -f "$qa_dir/chart.yaml" --wait --wait-for-jobs --timeout 8m)
   "${install[@]}" || diagnose
   forward "$control" 14418 "$control_port"
   forward lens-lens-worker 14419 4318
