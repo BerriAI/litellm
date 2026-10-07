@@ -3839,6 +3839,64 @@ class TestHostedOpenAIDialectFlag:
         assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("azure/gpt-5.6", None) is False
 
 
+class TestBedrockMantleGptShipsTheOpenAIDialect:
+    """The shipped cost map flags Bedrock Mantle's GPT-5.6 and newer OpenAI rows, so a configured injection point
+    on one of them reaches the wire as prompt_cache_breakpoint instead of an Anthropic cache_control the Mantle
+    bridge strips (verified live against bedrock-mantle.us-east-1 on 2026-10-07: cache_write_tokens then
+    cached_tokens on the repeat call)."""
+
+    MANTLE_MODEL = "bedrock_mantle/openai.gpt-5.6-sol"
+
+    @pytest.fixture(autouse=True)
+    def _bundled_model_map(self, monkeypatch):
+        bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
+        with open(bundled) as handle:
+            monkeypatch.setattr(litellm, "model_cost", json.load(handle))
+        litellm.utils.cached_get_model_info_helper.cache_clear()
+        yield
+        litellm.utils.cached_get_model_info_helper.cache_clear()
+
+    def test_shipped_entry_makes_the_deployment_eligible(self):
+        assert supports_openai_prompt_cache_breakpoint(self.MANTLE_MODEL) is True
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is True
+        )
+
+    def test_every_flagged_mantle_row_is_an_openai_gpt_5_6_or_newer_model(self):
+        flagged = {
+            key for key, entry in litellm.model_cost.items()
+            if key.startswith("bedrock_mantle/") and entry.get("supports_prompt_cache_breakpoint") is True
+        }
+        assert self.MANTLE_MODEL in flagged
+        for key in flagged:
+            bare = key.rsplit("/", 1)[-1].removeprefix("openai.")
+            assert supports_openai_prompt_cache_breakpoint(bare) is True, key
+
+    def test_seeding_stamps_the_openai_dialect_for_a_configured_point(self):
+        non_default_params = {"cache_control_injection_points": [{"location": "message", "role": "system"}]}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=non_default_params,
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            model=self.MANTLE_MODEL,
+            custom_llm_provider=None,
+        )
+        assert non_default_params["cache_control_injection_points"][0]["_litellm_openai_dialect"] is True
+
+    def test_configured_point_emits_the_openai_marker_and_default_options(self):
+        _, messages, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=self.MANTLE_MODEL,
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert messages[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
+        assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 1
+
+
 class TestRecordGatewayInjection:
     """The injection marker spend accounting gates prompt-caching savings on."""
 
