@@ -42,6 +42,30 @@ describe("RunsToolbar", () => {
     expect(screen.getByText("No matching agents")).toBeVisible();
   });
 
+  it("offers agents whose runs are not loaded yet, merged with the loaded ones", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+    render(
+      <RunsToolbar
+        query=""
+        onQueryChange={vi.fn()}
+        runs={runs}
+        agentOptions={["researcher", "claude-code", "researcher"]}
+      />,
+      { wrapper: withNuqsTestingAdapter({ onUrlUpdate }) },
+    );
+    await user.click(agentBox());
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "billing-agent",
+      "claude-code",
+      "cron",
+      "researcher",
+      "triage",
+    ]);
+    await user.click(screen.getByRole("option", { name: "claude-code" }));
+    expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("agent")).toBe("claude-code");
+  });
+
   it("clears back to all agents", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
