@@ -1990,7 +1990,6 @@ export const agentTraceListCall = async ({
   return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
 };
 
-/** Agent names with a run in the window, scoped like GET /v1/traces. */
 export const agentTraceAgentsCall = async ({
   accessToken,
   startMs,
