@@ -22587,6 +22587,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/traces/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Trace Agents */
+        get: operations["list_trace_agents_v1_traces_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/traces/query": {
         parameters: {
             query?: never;
@@ -47584,6 +47601,11 @@ export interface components {
             /** Spans */
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
+        };
+        /** TraceAgentList */
+        TraceAgentList: {
+            /** Data */
+            data: string[];
         };
         /** TraceFindingCount */
         TraceFindingCount: {
@@ -81096,6 +81118,8 @@ export interface operations {
                 /** @description Window end, unix ms. Default: now */
                 end_ms?: number | null;
                 cursor?: string | null;
+                /** @description Only runs this agent took part in, as named in TraceAgentList */
+                agent?: string | null;
             };
             header?: never;
             path?: never;
@@ -81139,6 +81163,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_trace_agents_v1_traces_agents_get: {
+        parameters: {
+            query?: {
+                /** @description Window start, unix ms. Default: 24h ago */
+                start_ms?: number | null;
+                /** @description Window end, unix ms. Default: now */
+                end_ms?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceAgentList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
