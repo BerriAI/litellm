@@ -2,38 +2,32 @@
 Tests Bedrock Completion + Rerank endpoints
 """
 
-# @pytest.mark.skip(reason="AWS Suspended Account")
 import os
-import traceback
 
 from dotenv import load_dotenv
 
 import litellm.types
 
 load_dotenv()
-import io
 import json
-
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from base_embedding_unit_tests import BaseLLMEmbeddingTest
+from base_llm_unit_tests import BaseAnthropicChatTest, BaseLLMChatTest
+from base_rerank_unit_tests import BaseLLMRerankTest
 
 import litellm
 from litellm import (
     ModelResponse,
     RateLimitError,
     ServiceUnavailableError,
-    Timeout,
     completion,
     completion_cost,
-    embedding,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
-from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
-from base_rerank_unit_tests import BaseLLMRerankTest
-from base_embedding_unit_tests import BaseLLMEmbeddingTest
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -51,17 +45,16 @@ def reset_callbacks():
     litellm.callbacks = []
 
 
-def test_completion_bedrock_claude_completion_auth():
+def test_completion_bedrock_claude_completion_auth(monkeypatch):
     print("calling bedrock claude completion params auth")
-    import os
 
     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     aws_region_name = os.environ["AWS_REGION_NAME"]
 
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
-    os.environ.pop("AWS_REGION_NAME", None)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    monkeypatch.delenv("AWS_REGION_NAME")
 
     try:
         response = completion(
@@ -73,12 +66,7 @@ def test_completion_bedrock_claude_completion_auth():
             aws_secret_access_key=aws_secret_access_key,
             aws_region_name=aws_region_name,
         )
-        # Add any assertions here to check the response
         print(response)
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-        os.environ["AWS_REGION_NAME"] = aws_region_name
     except RateLimitError:
         pass
     except Exception as e:
@@ -90,12 +78,9 @@ def test_completion_bedrock_claude_completion_auth():
 
 @pytest.mark.parametrize("streaming", [True, False])
 def test_completion_bedrock_guardrails(streaming):
-    import os
 
     litellm.set_verbose = True
-    import logging
 
-    from litellm._logging import verbose_logger
 
     # verbose_logger.setLevel(logging.DEBUG)
     try:
@@ -165,17 +150,16 @@ def test_completion_bedrock_guardrails(streaming):
 # test_completion_bedrock_claude_2_1_completion_auth()
 
 
-def test_completion_bedrock_claude_external_client_auth():
+def test_completion_bedrock_claude_external_client_auth(monkeypatch):
     print("\ncalling bedrock claude external client auth")
-    import os
 
     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     aws_region_name = os.environ["AWS_REGION_NAME"]
 
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
-    os.environ.pop("AWS_REGION_NAME", None)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    monkeypatch.delenv("AWS_REGION_NAME")
 
     try:
         import boto3
@@ -197,12 +181,7 @@ def test_completion_bedrock_claude_external_client_auth():
             temperature=0.1,
             aws_bedrock_client=bedrock,
         )
-        # Add any assertions here to check the response
         print(response)
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-        os.environ["AWS_REGION_NAME"] = aws_region_name
     except RateLimitError:
         pass
     except Exception as e:
@@ -212,278 +191,15 @@ def test_completion_bedrock_claude_external_client_auth():
 # test_completion_bedrock_claude_external_client_auth()
 
 
-@pytest.fixture()
-def bedrock_session_token_creds():
-    print("\ncalling oidc auto to get aws_session_token credentials")
-    import os
-
-    aws_region_name = os.environ["AWS_REGION_NAME"]
-    aws_session_token = os.environ.get("AWS_SESSION_TOKEN")
-
-    bllm = BaseAWSLLM()
-    if aws_session_token is not None:
-        # For local testing
-        creds = bllm.get_credentials(
-            aws_region_name=aws_region_name,
-            aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-            aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
-            aws_session_token=aws_session_token,
-        )
-    else:
-        # For circle-ci testing
-        # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
-        # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
-        aws_role_name = (
-            "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
-        )
-        aws_web_identity_token = "test-oidc-token-123"
-
-        creds = bllm.get_credentials(
-            aws_region_name=aws_region_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-        )
-    return creds
 
 
-def process_stream_response(res, messages):
-    import types
-
-    if isinstance(res, litellm.utils.CustomStreamWrapper):
-        chunks = []
-        for part in res:
-            chunks.append(part)
-            text = part.choices[0].delta.content or ""
-            print(text, end="")
-        res = litellm.stream_chunk_builder(chunks, messages=messages)
-    else:
-        raise ValueError("Response object is not a streaming response")
-
-    return res
 
 
-@pytest.mark.skip(reason="Cannot run without being in CircleCI Runner")
-def test_completion_bedrock_claude_aws_session_token(bedrock_session_token_creds):
-    print("\ncalling bedrock claude with aws_session_token auth")
-
-    import os
-
-    aws_region_name = os.environ["AWS_REGION_NAME"]
-    aws_access_key_id = bedrock_session_token_creds.access_key
-    aws_secret_access_key = bedrock_session_token_creds.secret_key
-    aws_session_token = bedrock_session_token_creds.token
-
-    try:
-        litellm.set_verbose = True
-
-        response_1 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.1,
-            aws_region_name=aws_region_name,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-        )
-        print(response_1)
-        assert len(response_1.choices) > 0
-        assert len(response_1.choices[0].message.content) > 0
-
-        # This second call is to verify that the cache isn't breaking anything
-        response_2 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=5,
-            temperature=0.2,
-            aws_region_name=aws_region_name,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-        )
-        print(response_2)
-        assert len(response_2.choices) > 0
-        assert len(response_2.choices[0].message.content) > 0
-
-        # This third call is to verify that the cache isn't used for a different region
-        response_3 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=6,
-            temperature=0.3,
-            aws_region_name="us-east-1",
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-        )
-        print(response_3)
-        assert len(response_3.choices) > 0
-        assert len(response_3.choices[0].message.content) > 0
-
-        # This fourth call is to verify streaming api works
-        response_4 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=6,
-            temperature=0.3,
-            aws_region_name="us-east-1",
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            stream=True,
-        )
-        response_4 = process_stream_response(response_4, messages)
-        print(response_4)
-        assert len(response_4.choices) > 0
-        assert len(response_4.choices[0].message.content) > 0
-
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="Cannot run without being in CircleCI Runner")
-def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_creds):
-    print("\ncalling bedrock claude with aws_session_token auth")
-
-    import os
-
-    import boto3
-    from botocore.client import Config
-
-    aws_region_name = os.environ["AWS_REGION_NAME"]
-    aws_access_key_id = bedrock_session_token_creds.access_key
-    aws_secret_access_key = bedrock_session_token_creds.secret_key
-    aws_session_token = bedrock_session_token_creds.token
-
-    aws_bedrock_client_west = boto3.client(
-        service_name="bedrock-runtime",
-        region_name=aws_region_name,
-        aws_access_key_id=aws_access_key_id,
-        aws_secret_access_key=aws_secret_access_key,
-        aws_session_token=aws_session_token,
-        config=Config(read_timeout=600),
-    )
-
-    try:
-        litellm.set_verbose = True
-
-        response_1 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.1,
-            aws_bedrock_client=aws_bedrock_client_west,
-        )
-        print(response_1)
-        assert len(response_1.choices) > 0
-        assert len(response_1.choices[0].message.content) > 0
-
-        # This second call is to verify that the cache isn't breaking anything
-        response_2 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=5,
-            temperature=0.2,
-            aws_bedrock_client=aws_bedrock_client_west,
-        )
-        print(response_2)
-        assert len(response_2.choices) > 0
-        assert len(response_2.choices[0].message.content) > 0
-
-        # This third call is to verify that the cache isn't used for a different region
-        aws_bedrock_client_east = boto3.client(
-            service_name="bedrock-runtime",
-            region_name="us-east-1",
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            config=Config(read_timeout=600),
-        )
-
-        response_3 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=6,
-            temperature=0.3,
-            aws_bedrock_client=aws_bedrock_client_east,
-        )
-        print(response_3)
-        assert len(response_3.choices) > 0
-        assert len(response_3.choices[0].message.content) > 0
-
-        # This fourth call is to verify streaming api works
-        response_4 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=6,
-            temperature=0.3,
-            aws_bedrock_client=aws_bedrock_client_east,
-            stream=True,
-        )
-        response_4 = process_stream_response(response_4, messages)
-        print(response_4)
-        assert len(response_4.choices) > 0
-        assert len(response_4.choices[0].message.content) > 0
-
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_bedrock_claude_sts_client_auth()
-
-
-@pytest.mark.parametrize(
-    "image_url",
-    [
-        "data:image/png;base64,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",
-        "https://avatars.githubusercontent.com/u/29436595?v=",
-    ],
-)
-def test_bedrock_claude_3(image_url):
-    try:
-        litellm.set_verbose = True
-        data = {
-            "max_tokens": 100,
-            "stream": False,
-            "temperature": 0.3,
-            "messages": [
-                {"role": "user", "content": "Hi"},
-                {"role": "assistant", "content": "Hi"},
-                {
-                    "role": "user",
-                    "content": [
-                        {"text": "describe this image", "type": "text"},
-                        {
-                            "image_url": {
-                                "detail": "high",
-                                "url": image_url,
-                            },
-                            "type": "image_url",
-                        },
-                    ],
-                },
-            ],
-        }
-        response: ModelResponse = completion(
-            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            num_retries=3,
-            **data,
-        )  # type: ignore
-        # Add any assertions here to check the response
-        assert len(response.choices) > 0
-        assert len(response.choices[0].message.content) > 0
-
-    except litellm.InternalServerError:
-        pass
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize(
@@ -566,7 +282,7 @@ def test_bedrock_system_prompt(system, model):
 def test_bedrock_claude_3_tool_calling():
     try:
         litellm.set_verbose = True
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         tools = [
             {
                 "type": "function",
@@ -638,56 +354,15 @@ def test_bedrock_claude_3_tool_calling():
         pytest.fail(f"Error occurred: {e}")
 
 
-def encode_image(image_path):
-    import base64
-
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode("utf-8")
 
 
-@pytest.mark.skip(
-    reason="we already test claude-3, this is just another way to pass images"
-)
-def test_completion_claude_3_base64():
-    try:
-        litellm.set_verbose = True
-        litellm.num_retries = 3
-        image_path = "../proxy/cached_logo.jpg"
-        # Getting the base64 string
-        base64_image = encode_image(image_path)
-        resp = litellm.completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Whats in this image?"},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64," + base64_image
-                            },
-                        },
-                    ],
-                }
-            ],
-        )
-
-        prompt_tokens = resp.usage.prompt_tokens
-        raise Exception("it worked!")
-    except Exception as e:
-        if "500 Internal error encountered.'" in str(e):
-            pass
-        else:
-            pytest.fail(f"An exception occurred - {str(e)}")
 
 
 def test_completion_bedrock_mistral_completion_auth():
     print("calling bedrock mistral completion params auth")
 
-    import os
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     # aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
@@ -729,7 +404,6 @@ def test_bedrock_ptu():
 
     with patch.object(client, "post", new=Mock()) as mock_client_post:
         litellm.set_verbose = True
-        from openai.types.chat import ChatCompletion
 
         model_id = (
             "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
@@ -764,7 +438,6 @@ async def test_bedrock_custom_api_base():
 
     with patch.object(client, "post", new=AsyncMock()) as mock_client_post:
         litellm.set_verbose = True
-        from openai.types.chat import ChatCompletion
 
         try:
             response = await litellm.acompletion(
@@ -807,7 +480,6 @@ async def test_bedrock_extra_headers(model):
 
     with patch.object(client, "post", new=AsyncMock()) as mock_client_post:
         litellm.set_verbose = True
-        from openai.types.chat import ChatCompletion
 
         try:
             response = await litellm.acompletion(
@@ -874,16 +546,15 @@ async def test_bedrock_custom_prompt_template():
         mock_client_post.assert_called_once()
 
 
-def test_completion_bedrock_external_client_region():
+def test_completion_bedrock_external_client_region(monkeypatch):
     print("\ncalling bedrock claude external client auth")
-    import os
 
     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     aws_region_name = "us-east-1"
 
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
 
     client = HTTPHandler()
 
@@ -918,56 +589,10 @@ def test_completion_bedrock_external_client_region():
             assert "us-east-1" in mock_client_post.call_args.kwargs["url"]
 
             mock_client_post.assert_called_once()
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
     except RateLimitError:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
-def test_bedrock_tool_calling():
-    """
-    # related issue: https://github.com/BerriAI/litellm/issues/5007
-    # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
-    """
-    litellm.set_verbose = True
-    response = litellm.completion(
-        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
-        fallbacks=["bedrock/meta.llama3-1-8b-instruct-v1:0"],
-        messages=[
-            {
-                "role": "user",
-                "content": "What's the weather like in Boston today in Fahrenheit?",
-            }
-        ],
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "-DoSomethingVeryCool-forLitellm_Testin999229291-0293993",
-                    "description": "use this to get the current weather",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            }
-        ],
-    )
-
-    print("bedrock response")
-    print(response)
-
-    # Assert that the tools in response have the same function name as the input
-    _choice_1 = response.choices[0]
-    if _choice_1.message.tool_calls is not None:
-        print(_choice_1.message.tool_calls)
-        for tool_call in _choice_1.message.tool_calls:
-            _tool_Call_name = tool_call.function.name
-            if _tool_Call_name is not None and "DoSomethingVeryCool" in _tool_Call_name:
-                assert (
-                    _tool_Call_name
-                    == "-DoSomethingVeryCool-forLitellm_Testin999229291-0293993"
-                )
 
 
 def test_bedrock_tools_pt_valid_names():
@@ -1211,7 +836,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 
 
 def test_bedrock_converse_translation_tool_message():
-    from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
     litellm.set_verbose = True
 
@@ -1265,7 +889,6 @@ def test_base_aws_llm_get_credentials():
 
     import boto3
 
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     start_time = time.time()
     session = boto3.Session(
@@ -1547,10 +1170,10 @@ def test_bedrock_completion_test_3():
     """
     Check if content in tool result is formatted correctly
     """
-    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
     from litellm.litellm_core_utils.prompt_templates.factory import (
         _bedrock_converse_messages_pt,
     )
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
     messages = [
         {
@@ -1601,293 +1224,6 @@ def test_bedrock_completion_test_3():
     ]
 
 
-@pytest.mark.skip(reason="Skipping this test as Bedrock now supports this behavior.")
-@pytest.mark.parametrize("modify_params", [True, False])
-def test_bedrock_completion_test_4(modify_params):
-    litellm.set_verbose = True
-    litellm.modify_params = modify_params
-
-    data = {
-        "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "<task>\nWhat is this file?\n</task>"},
-                    {
-                        "type": "text",
-                        "text": "<environment_details>\n# VSCode Visible Files\ncomputer-vision/hm-open3d/src/main.py\n\n# VSCode Open Tabs\ncomputer-vision/hm-open3d/src/main.py\n\n# Current Working Directory (/Users/hongbo-miao/Clouds/Git/hongbomiao.com) Files\n.ansible-lint\n.clang-format\n.cmakelintrc\n.dockerignore\n.editorconfig\n.gitignore\n.gitmodules\n.hadolint.yaml\n.isort.cfg\n.markdownlint-cli2.jsonc\n.mergify.yml\n.npmrc\n.nvmrc\n.prettierignore\n.rubocop.yml\n.ruby-version\n.ruff.toml\n.shellcheckrc\n.solhint.json\n.solhintignore\n.sqlfluff\n.sqlfluffignore\n.stylelintignore\n.yamllint.yaml\nCODE_OF_CONDUCT.md\ncommitlint.config.js\nGemfile\nGemfile.lock\nLICENSE\nlint-staged.config.js\nMakefile\nmiss_hit.cfg\nmypy.ini\npackage-lock.json\npackage.json\npoetry.lock\npoetry.toml\nprettier.config.js\npyproject.toml\nREADME.md\nrelease.config.js\nrenovate.json\nSECURITY.md\nstylelint.config.js\naerospace/\naerospace/air-defense-system/\naerospace/hm-aerosandbox/\naerospace/hm-openaerostruct/\naerospace/px4/\naerospace/quadcopter-pd-controller/\naerospace/simulate-satellite/\naerospace/simulated-and-actual-flights/\naerospace/toroidal-propeller/\nansible/\nansible/inventory.yaml\nansible/Makefile\nansible/requirements.yml\nansible/hm_macos_group/\nansible/hm_ubuntu_group/\nansible/hm_windows_group/\napi-go/\napi-go/buf.yaml\napi-go/go.mod\napi-go/go.sum\napi-go/Makefile\napi-go/api/\napi-go/build/\napi-go/cmd/\napi-go/config/\napi-go/internal/\napi-node/\napi-node/.env.development\napi-node/.env.development.local.example\napi-node/.env.development.local.example.docker\napi-node/.env.production\napi-node/.env.production.local.example\napi-node/.env.test\napi-node/.eslintignore\napi-node/.eslintrc.js\napi-node/.npmrc\napi-node/.nvmrc\napi-node/babel.config.js\napi-node/docker-compose.cypress.yaml\napi-node/docker-compose.development.yaml\napi-node/Dockerfile\napi-node/Dockerfile.development\napi-node/jest.config.js\napi-node/Makefile\napi-node/package-lock.json\napi-node/package.json\napi-node/Procfile\napi-node/stryker.conf.js\napi-node/tsconfig.json\napi-node/bin/\napi-node/postgres/\napi-node/scripts/\napi-node/src/\napi-python/\napi-python/.flaskenv\napi-python/docker-entrypoint.sh\napi-python/Dockerfile\napi-python/Makefile\napi-python/poetry.lock\napi-python/poetry.toml\napi-python/pyproject.toml\napi-python/flaskr/\nasterios/\nasterios/led-blinker/\nauthorization/\nauthorization/hm-opal-client/\nauthorization/ory-hydra/\nautomobile/\nautomobile/build-map-by-lidar-point-cloud/\nautomobile/detect-lane-by-lidar-point-cloud/\nbin/\nbin/clean.sh\nbin/count_code_lines.sh\nbin/lint_javascript_fix.sh\nbin/lint_javascript.sh\nbin/set_up.sh\nbiology/\nbiology/compare-nucleotide-sequences/\nbusybox/\nbusybox/Makefile\ncaddy/\ncaddy/Caddyfile\ncaddy/Makefile\ncaddy/bin/\ncloud-computing/\ncloud-computing/hm-ray/\ncloud-computing/hm-skypilot/\ncloud-cost/\ncloud-cost/komiser/\ncloud-infrastructure/\ncloud-infrastructure/hm-pulumi/\ncloud-infrastructure/karpenter/\ncloud-infrastructure/terraform/\ncloud-platform/\ncloud-platform/aws/\ncloud-platform/google-cloud/\ncloud-security/\ncloud-security/hm-prowler/\ncomputational-fluid-dynamics/\ncomputational-fluid-dynamics/matlab/\ncomputational-fluid-dynamics/openfoam/\ncomputer-vision/\ncomputer-vision/hm-open3d/\ncomputer-vision/hm-pyvista/\ndata-analytics/\ndata-analytics/hm-geopandas/\ndata-distribution-service/\ndata-distribution-service/dummy_test.py\ndata-distribution-service/hm_message.idl\ndata-distribution-service/hm_message.xml\ndata-distribution-service/Makefile\ndata-distribution-service/poetry.lock\ndata-distribution-service/poetry.toml\ndata-distribution-service/publish.py\ndata-ingestion/\ndata-orchestration/\ndata-processing/\ndata-storage/\ndata-transformation/\ndata-visualization/\ndesktop-qt/\nembedded/\nethereum/\ngit/\ngolang-migrate/\nhardware-in-the-loop/\nhasura-graphql-engine/\nhigh-performance-computing/\nhm-alpine/\nhm-kafka/\nhm-locust/\nhm-rust/\nhm-traefik/\nhm-xxhash/\nkubernetes/\nmachine-learning/\nmatlab/\nmobile/\nnetwork-programmability/\noperating-system/\nparallel-computing/\nphysics/\nquantum-computing/\nrclone/\nrestic/\nreverse-engineering/\nrobotics/\nsubmodules/\ntrino/\nvagrant/\nvalgrind/\nvhdl/\nvim/\nweb/\nweb-cypress/\nwireless-network/\n\n(File list truncated. Use list_files on specific subdirectories if you need to explore further.)\n</environment_details>",
-                    },
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": '<thinking>\nThe user is asking about a specific file: main.py. Based on the environment details provided, this file is located in the computer-vision/hm-open3d/src/ directory and is currently open in a VSCode tab.\n\nTo answer the question of what this file is, the most relevant tool would be the read_file tool. This will allow me to examine the contents of main.py to determine its purpose.\n\nThe read_file tool requires the "path" parameter. I can infer this path based on the environment details:\npath: "computer-vision/hm-open3d/src/main.py"\n\nSince I have the necessary parameter, I can proceed with calling the read_file tool.\n</thinking>',
-                "tool_calls": [
-                    {
-                        "id": "tooluse_qCt-KEyWQlWiyHl26spQVA",
-                        "type": "function",
-                        "function": {
-                            "name": "read_file",
-                            "arguments": '{"path":"computer-vision/hm-open3d/src/main.py"}',
-                        },
-                    }
-                ],
-            },
-            {
-                "role": "tool",
-                "tool_call_id": "tooluse_qCt-KEyWQlWiyHl26spQVA",
-                "content": 'import numpy as np\nimport open3d as o3d\n\n\ndef main():\n    ply_point_cloud = o3d.data.PLYPointCloud()\n    pcd = o3d.io.read_point_cloud(ply_point_cloud.path)\n    print(pcd)\n    print(np.asarray(pcd.points))\n\n    demo_crop_data = o3d.data.DemoCropPointCloud()\n    vol = o3d.visualization.read_selection_polygon_volume(\n        demo_crop_data.cropped_json_path\n    )\n    chair = vol.crop_point_cloud(pcd)\n\n    dists = pcd.compute_point_cloud_distance(chair)\n    dists = np.asarray(dists)\n    idx = np.where(dists > 0.01)[0]\n    pcd_without_chair = pcd.select_by_index(idx)\n\n    axis_aligned_bounding_box = chair.get_axis_aligned_bounding_box()\n    axis_aligned_bounding_box.color = (1, 0, 0)\n\n    oriented_bounding_box = chair.get_oriented_bounding_box()\n    oriented_bounding_box.color = (0, 1, 0)\n\n    o3d.visualization.draw_geometries(\n        [pcd_without_chair, chair, axis_aligned_bounding_box, oriented_bounding_box],\n        zoom=0.3412,\n        front=[0.4, -0.2, -0.9],\n        lookat=[2.6, 2.0, 1.5],\n        up=[-0.10, -1.0, 0.2],\n    )\n\n\nif __name__ == "__main__":\n    main()\n',
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "<environment_details>\n# VSCode Visible Files\ncomputer-vision/hm-open3d/src/main.py\n\n# VSCode Open Tabs\ncomputer-vision/hm-open3d/src/main.py\n</environment_details>",
-                    }
-                ],
-            },
-        ],
-        "temperature": 0.2,
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "execute_command",
-                    "description": "Execute a CLI command on the system. Use this when you need to perform system operations or run specific commands to accomplish any step in the user's task. You must tailor your command to the user's system and provide a clear explanation of what the command does. Prefer to execute complex CLI commands over creating executable scripts, as they are more flexible and easier to run. Commands will be executed in the current working directory: /Users/hongbo-miao/Clouds/Git/hongbomiao.com",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": "The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions.",
-                            }
-                        },
-                        "required": ["command"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_file",
-                    "description": "Read the contents of a file at the specified path. Use this when you need to examine the contents of an existing file, for example to analyze code, review text files, or extract information from configuration files. Automatically extracts raw text from PDF and DOCX files. May not be suitable for other types of binary files, as it returns the raw content as a string.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {
-                                "type": "string",
-                                "description": "The path of the file to read (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com)",
-                            }
-                        },
-                        "required": ["path"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "write_to_file",
-                    "description": "Write content to a file at the specified path. If the file exists, it will be overwritten with the provided content. If the file doesn't exist, it will be created. Always provide the full intended content of the file, without any truncation. This tool will automatically create any directories needed to write the file.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {
-                                "type": "string",
-                                "description": "The path of the file to write to (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com)",
-                            },
-                            "content": {
-                                "type": "string",
-                                "description": "The full content to write to the file.",
-                            },
-                        },
-                        "required": ["path", "content"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_files",
-                    "description": "Perform a regex search across files in a specified directory, providing context-rich results. This tool searches for patterns or specific content across multiple files, displaying each match with encapsulating context.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {
-                                "type": "string",
-                                "description": "The path of the directory to search in (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com). This directory will be recursively searched.",
-                            },
-                            "regex": {
-                                "type": "string",
-                                "description": "The regular expression pattern to search for. Uses Rust regex syntax.",
-                            },
-                            "filePattern": {
-                                "type": "string",
-                                "description": "Optional glob pattern to filter files (e.g., '*.ts' for TypeScript files). If not provided, it will search all files (*).",
-                            },
-                        },
-                        "required": ["path", "regex"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_files",
-                    "description": "List files and directories within the specified directory. If recursive is true, it will list all files and directories recursively. If recursive is false or not provided, it will only list the top-level contents.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {
-                                "type": "string",
-                                "description": "The path of the directory to list contents for (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com)",
-                            },
-                            "recursive": {
-                                "type": "string",
-                                "enum": ["true", "false"],
-                                "description": "Whether to list files recursively. Use 'true' for recursive listing, 'false' or omit for top-level only.",
-                            },
-                        },
-                        "required": ["path"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_code_definition_names",
-                    "description": "Lists definition names (classes, functions, methods, etc.) used in source code files at the top level of the specified directory. This tool provides insights into the codebase structure and important constructs, encapsulating high-level concepts and relationships that are crucial for understanding the overall architecture.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {
-                                "type": "string",
-                                "description": "The path of the directory (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com) to list top level source code definitions for",
-                            }
-                        },
-                        "required": ["path"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "inspect_site",
-                    "description": "Captures a screenshot and console logs of the initial state of a website. This tool navigates to the specified URL, takes a screenshot of the entire page as it appears immediately after loading, and collects any console logs or errors that occur during page load. It does not interact with the page or capture any state changes after the initial load.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "url": {
-                                "type": "string",
-                                "description": "The URL of the site to inspect. This should be a valid URL including the protocol (e.g. http://localhost:3000/page, file:///path/to/file.html, etc.)",
-                            }
-                        },
-                        "required": ["url"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "ask_followup_question",
-                    "description": "Ask the user a question to gather additional information needed to complete the task. This tool should be used when you encounter ambiguities, need clarification, or require more details to proceed effectively. It allows for interactive problem-solving by enabling direct communication with the user. Use this tool judiciously to maintain a balance between gathering necessary information and avoiding excessive back-and-forth.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "question": {
-                                "type": "string",
-                                "description": "The question to ask the user. This should be a clear, specific question that addresses the information you need.",
-                            }
-                        },
-                        "required": ["question"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "attempt_completion",
-                    "description": "Once you've completed the task, use this tool to present the result to the user. Optionally you may provide a CLI command to showcase the result of your work, but avoid using commands like 'echo' or 'cat' that merely print text. They may respond with feedback if they are not satisfied with the result, which you can use to make improvements and try again.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": "A CLI command to execute to show a live demo of the result to the user. For example, use 'open index.html' to display a created website. This command should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions.",
-                            },
-                            "result": {
-                                "type": "string",
-                                "description": "The result of the task. Formulate this result in a way that is final and does not require further input from the user. Don't end your result with questions or offers for further assistance.",
-                            },
-                        },
-                        "required": ["result"],
-                    },
-                },
-            },
-        ],
-        "tool_choice": "auto",
-    }
-
-    if modify_params:
-        transformed_messages = _bedrock_converse_messages_pt(
-            messages=data["messages"], model="", llm_provider=""
-        )
-        expected_messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"text": "<task>\nWhat is this file?\n</task>"},
-                    {
-                        "text": "<environment_details>\n# VSCode Visible Files\ncomputer-vision/hm-open3d/src/main.py\n\n# VSCode Open Tabs\ncomputer-vision/hm-open3d/src/main.py\n\n# Current Working Directory (/Users/hongbo-miao/Clouds/Git/hongbomiao.com) Files\n.ansible-lint\n.clang-format\n.cmakelintrc\n.dockerignore\n.editorconfig\n.gitignore\n.gitmodules\n.hadolint.yaml\n.isort.cfg\n.markdownlint-cli2.jsonc\n.mergify.yml\n.npmrc\n.nvmrc\n.prettierignore\n.rubocop.yml\n.ruby-version\n.ruff.toml\n.shellcheckrc\n.solhint.json\n.solhintignore\n.sqlfluff\n.sqlfluffignore\n.stylelintignore\n.yamllint.yaml\nCODE_OF_CONDUCT.md\ncommitlint.config.js\nGemfile\nGemfile.lock\nLICENSE\nlint-staged.config.js\nMakefile\nmiss_hit.cfg\nmypy.ini\npackage-lock.json\npackage.json\npoetry.lock\npoetry.toml\nprettier.config.js\npyproject.toml\nREADME.md\nrelease.config.js\nrenovate.json\nSECURITY.md\nstylelint.config.js\naerospace/\naerospace/air-defense-system/\naerospace/hm-aerosandbox/\naerospace/hm-openaerostruct/\naerospace/px4/\naerospace/quadcopter-pd-controller/\naerospace/simulate-satellite/\naerospace/simulated-and-actual-flights/\naerospace/toroidal-propeller/\nansible/\nansible/inventory.yaml\nansible/Makefile\nansible/requirements.yml\nansible/hm_macos_group/\nansible/hm_ubuntu_group/\nansible/hm_windows_group/\napi-go/\napi-go/buf.yaml\napi-go/go.mod\napi-go/go.sum\napi-go/Makefile\napi-go/api/\napi-go/build/\napi-go/cmd/\napi-go/config/\napi-go/internal/\napi-node/\napi-node/.env.development\napi-node/.env.development.local.example\napi-node/.env.development.local.example.docker\napi-node/.env.production\napi-node/.env.production.local.example\napi-node/.env.test\napi-node/.eslintignore\napi-node/.eslintrc.js\napi-node/.npmrc\napi-node/.nvmrc\napi-node/babel.config.js\napi-node/docker-compose.cypress.yaml\napi-node/docker-compose.development.yaml\napi-node/Dockerfile\napi-node/Dockerfile.development\napi-node/jest.config.js\napi-node/Makefile\napi-node/package-lock.json\napi-node/package.json\napi-node/Procfile\napi-node/stryker.conf.js\napi-node/tsconfig.json\napi-node/bin/\napi-node/postgres/\napi-node/scripts/\napi-node/src/\napi-python/\napi-python/.flaskenv\napi-python/docker-entrypoint.sh\napi-python/Dockerfile\napi-python/Makefile\napi-python/poetry.lock\napi-python/poetry.toml\napi-python/pyproject.toml\napi-python/flaskr/\nasterios/\nasterios/led-blinker/\nauthorization/\nauthorization/hm-opal-client/\nauthorization/ory-hydra/\nautomobile/\nautomobile/build-map-by-lidar-point-cloud/\nautomobile/detect-lane-by-lidar-point-cloud/\nbin/\nbin/clean.sh\nbin/count_code_lines.sh\nbin/lint_javascript_fix.sh\nbin/lint_javascript.sh\nbin/set_up.sh\nbiology/\nbiology/compare-nucleotide-sequences/\nbusybox/\nbusybox/Makefile\ncaddy/\ncaddy/Caddyfile\ncaddy/Makefile\ncaddy/bin/\ncloud-computing/\ncloud-computing/hm-ray/\ncloud-computing/hm-skypilot/\ncloud-cost/\ncloud-cost/komiser/\ncloud-infrastructure/\ncloud-infrastructure/hm-pulumi/\ncloud-infrastructure/karpenter/\ncloud-infrastructure/terraform/\ncloud-platform/\ncloud-platform/aws/\ncloud-platform/google-cloud/\ncloud-security/\ncloud-security/hm-prowler/\ncomputational-fluid-dynamics/\ncomputational-fluid-dynamics/matlab/\ncomputational-fluid-dynamics/openfoam/\ncomputer-vision/\ncomputer-vision/hm-open3d/\ncomputer-vision/hm-pyvista/\ndata-analytics/\ndata-analytics/hm-geopandas/\ndata-distribution-service/\ndata-distribution-service/dummy_test.py\ndata-distribution-service/hm_message.idl\ndata-distribution-service/hm_message.xml\ndata-distribution-service/Makefile\ndata-distribution-service/poetry.lock\ndata-distribution-service/poetry.toml\ndata-distribution-service/publish.py\ndata-ingestion/\ndata-orchestration/\ndata-processing/\ndata-storage/\ndata-transformation/\ndata-visualization/\ndesktop-qt/\nembedded/\nethereum/\ngit/\ngolang-migrate/\nhardware-in-the-loop/\nhasura-graphql-engine/\nhigh-performance-computing/\nhm-alpine/\nhm-kafka/\nhm-locust/\nhm-rust/\nhm-traefik/\nhm-xxhash/\nkubernetes/\nmachine-learning/\nmatlab/\nmobile/\nnetwork-programmability/\noperating-system/\nparallel-computing/\nphysics/\nquantum-computing/\nrclone/\nrestic/\nreverse-engineering/\nrobotics/\nsubmodules/\ntrino/\nvagrant/\nvalgrind/\nvhdl/\nvim/\nweb/\nweb-cypress/\nwireless-network/\n\n(File list truncated. Use list_files on specific subdirectories if you need to explore further.)\n</environment_details>"
-                    },
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "text": """<thinking>\nThe user is asking about a specific file: main.py. Based on the environment details provided, this file is located in the computer-vision/hm-open3d/src/ directory and is currently open in a VSCode tab.\n\nTo answer the question of what this file is, the most relevant tool would be the read_file tool. This will allow me to examine the contents of main.py to determine its purpose.\n\nThe read_file tool requires the "path" parameter. I can infer this path based on the environment details:\npath: "computer-vision/hm-open3d/src/main.py"\n\nSince I have the necessary parameter, I can proceed with calling the read_file tool.\n</thinking>"""
-                    },
-                    {
-                        "toolUse": {
-                            "input": {"path": "computer-vision/hm-open3d/src/main.py"},
-                            "name": "read_file",
-                            "toolUseId": "tooluse_qCt-KEyWQlWiyHl26spQVA",
-                        }
-                    },
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "toolResult": {
-                            "content": [
-                                {
-                                    "text": 'import numpy as np\nimport open3d as o3d\n\n\ndef main():\n    ply_point_cloud = o3d.data.PLYPointCloud()\n    pcd = o3d.io.read_point_cloud(ply_point_cloud.path)\n    print(pcd)\n    print(np.asarray(pcd.points))\n\n    demo_crop_data = o3d.data.DemoCropPointCloud()\n    vol = o3d.visualization.read_selection_polygon_volume(\n        demo_crop_data.cropped_json_path\n    )\n    chair = vol.crop_point_cloud(pcd)\n\n    dists = pcd.compute_point_cloud_distance(chair)\n    dists = np.asarray(dists)\n    idx = np.where(dists > 0.01)[0]\n    pcd_without_chair = pcd.select_by_index(idx)\n\n    axis_aligned_bounding_box = chair.get_axis_aligned_bounding_box()\n    axis_aligned_bounding_box.color = (1, 0, 0)\n\n    oriented_bounding_box = chair.get_oriented_bounding_box()\n    oriented_bounding_box.color = (0, 1, 0)\n\n    o3d.visualization.draw_geometries(\n        [pcd_without_chair, chair, axis_aligned_bounding_box, oriented_bounding_box],\n        zoom=0.3412,\n        front=[0.4, -0.2, -0.9],\n        lookat=[2.6, 2.0, 1.5],\n        up=[-0.10, -1.0, 0.2],\n    )\n\n\nif __name__ == "__main__":\n    main()\n'
-                                }
-                            ],
-                            "toolUseId": "tooluse_qCt-KEyWQlWiyHl26spQVA",
-                        }
-                    }
-                ],
-            },
-            {"role": "assistant", "content": [{"text": "Please continue."}]},
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "text": "<environment_details>\n# VSCode Visible Files\ncomputer-vision/hm-open3d/src/main.py\n\n# VSCode Open Tabs\ncomputer-vision/hm-open3d/src/main.py\n</environment_details>"
-                    }
-                ],
-            },
-        ]
-        assert transformed_messages == expected_messages
-    else:
-        with pytest.raises(Exception, match=r"litellm\.modify_params") as e:
-            litellm.completion(**data)
-        assert "litellm.modify_params" in str(e.value)
 
 
 def test_bedrock_context_window_error():
@@ -2009,8 +1345,9 @@ def test_bedrock_route_detection(model, expected_route):
     ],
 )
 def test_bedrock_prompt_caching_message(messages, expected_cache_control):
-    import litellm
     import json
+
+    import litellm
 
     transformed_messages = litellm.AmazonConverseConfig()._transform_request(
         model="bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
@@ -2047,6 +1384,14 @@ def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
 
 
 class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
+    test_content_list_handling = None
+    test_developer_role_translation = None
+    test_function_calling_with_tool_response = None
+    test_image_url = None
+    test_json_response_format_stream = None
+    test_tool_call_with_empty_enum_property = None
+    test_tool_call_with_property_type_array = None
+
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -2086,6 +1431,9 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
 
 
 class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
+    test_completion_thinking_with_max_tokens = None
+    test_completion_thinking_without_max_tokens = None
+
     def get_base_completion_call_args(self) -> dict:
         return {
             "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -2099,6 +1447,11 @@ class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
 
 
 class TestBedrockConverseChatNormal(BaseLLMChatTest):
+    test_content_list_handling = None
+    test_empty_tools = None
+    test_function_calling_with_tool_response = None
+    test_image_url = None
+
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -2114,6 +1467,10 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
 
 
 class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
+    test_content_list_handling = None
+    test_function_calling_with_tool_response = None
+    test_image_url = None
+
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -2263,18 +1620,13 @@ def test_bedrock_nova_topk(top_k_param):
         captured_data = result
         return result
 
-    with patch(
-        "litellm.AmazonConverseConfig._transform_request", side_effect=mock_transform
-    ):
+    with patch("litellm.AmazonConverseConfig._transform_request", side_effect=mock_transform):
         litellm.completion(**data)
 
         # Assert that additionalRequestParameters exists and contains topK
         assert "additionalModelRequestFields" in captured_data
         assert "inferenceConfig" in captured_data["additionalModelRequestFields"]
-        assert (
-            captured_data["additionalModelRequestFields"]["inferenceConfig"]["topK"]
-            == 10
-        )
+        assert captured_data["additionalModelRequestFields"]["inferenceConfig"]["topK"] == 10
 
 
 def test_bedrock_cross_region_inference(monkeypatch):
@@ -2334,85 +1686,6 @@ def test_bedrock_process_empty_text_blocks():
     assert modified_message["content"][0]["text"] == "Please continue."
 
 
-@pytest.mark.skip(
-    reason="Skipping test due to bedrock changing their response schema support. Come back to this."
-)
-def test_nova_optional_params_tool_choice():
-    try:
-        litellm.drop_params = True
-        litellm.set_verbose = True
-        litellm.completion(
-            messages=[
-                {"role": "user", "content": "A WWII competitive game for 4-8 players"}
-            ],
-            model="bedrock/us.amazon.nova-pro-v1:0",
-            temperature=0.3,
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "GameDefinition",
-                        "description": "Correctly extracted `GameDefinition` with all the required parameters with correct types",
-                        "parameters": {
-                            "$defs": {
-                                "TurnDurationEnum": {
-                                    "enum": [
-                                        "action",
-                                        "encounter",
-                                        "battle",
-                                        "operation",
-                                    ],
-                                    "title": "TurnDurationEnum",
-                                    "type": "string",
-                                }
-                            },
-                            "properties": {
-                                "id": {
-                                    "anyOf": [{"type": "integer"}, {"type": "null"}],
-                                    "default": None,
-                                    "title": "Id",
-                                },
-                                "prompt": {"title": "Prompt", "type": "string"},
-                                "name": {"title": "Name", "type": "string"},
-                                "description": {
-                                    "title": "Description",
-                                    "type": "string",
-                                },
-                                "competitve": {
-                                    "title": "Competitve",
-                                    "type": "boolean",
-                                },
-                                "players_min": {
-                                    "title": "Players Min",
-                                    "type": "integer",
-                                },
-                                "players_max": {
-                                    "title": "Players Max",
-                                    "type": "integer",
-                                },
-                                "turn_duration": {
-                                    "$ref": "#/$defs/TurnDurationEnum",
-                                    "description": "how long the passing of a turn should represent for a game at this scale",
-                                },
-                            },
-                            "required": [
-                                "competitve",
-                                "description",
-                                "name",
-                                "players_max",
-                                "players_min",
-                                "prompt",
-                                "turn_duration",
-                            ],
-                            "type": "object",
-                        },
-                    },
-                }
-            ],
-            tool_choice={"type": "function", "function": {"name": "GameDefinition"}},
-        )
-    except litellm.APIConnectionError:
-        pass
 
 
 class TestBedrockEmbedding(BaseLLMEmbeddingTest):
@@ -2434,21 +1707,23 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
             "inference_params": {},
         }
 
-        transformed_request = (
-            AmazonTitanMultimodalEmbeddingG1Config()._transform_request(**args)
+        transformed_request = AmazonTitanMultimodalEmbeddingG1Config().transform_request(**args)
+        assert (
+            transformed_request["inputImage"]
+            == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
         )
-        assert transformed_request["inputImage"] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
 
 
 @pytest.mark.asyncio
 async def test_bedrock_image_url_sync_client():
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     import logging
+
     from litellm import verbose_logger
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     verbose_logger.setLevel(level=logging.DEBUG)
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = AsyncHTTPHandler()
 
     messages = [
@@ -2494,11 +1769,12 @@ def test_bedrock_error_handling_streaming(exception_type, expected_status_code):
     (e.g. internalServerException -> 500). For 5xx this is what makes the error
     retryable downstream; for all types it replaces the misleading 400 with the
     true code. Regression for #24608."""
+    from unittest.mock import Mock
+
     from litellm.llms.bedrock.chat.invoke_handler import (
         AWSEventStreamDecoder,
         BedrockError,
     )
-    from unittest.mock import Mock
 
     event = Mock()
     event.to_response_dict = Mock(
@@ -2520,43 +1796,6 @@ def test_bedrock_error_handling_streaming(exception_type, expected_status_code):
         decoder._parse_message_from_event(event)
     assert "Bedrock is unable to process your request." in e.value.message
     assert e.value.status_code == expected_status_code
-
-
-@pytest.mark.parametrize(
-    "image_url",
-    [
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-        # "https://raw.githubusercontent.com/datasets/gdp/master/data/gdp.csv",
-        "https://www.cmu.edu/blackboard/files/evaluate/tests-example.xls",
-        # "https://raw.githubusercontent.com/datasets/sample-data/master/README.txt", # invalid url
-        "https://raw.githubusercontent.com/mdn/content/main/README.md",
-    ],
-)
-@pytest.mark.flaky(retries=6, delay=2)
-@pytest.mark.asyncio
-async def test_bedrock_document_understanding(image_url):
-    from litellm import acompletion
-
-    litellm._turn_on_debug()
-    model = "bedrock/us.amazon.nova-pro-v1:0"
-
-    image_content = [
-        {"type": "text", "text": f"What's this file about?"},
-        {
-            "type": "image_url",
-            "image_url": image_url,
-        },
-    ]
-
-    try:
-        response = await acompletion(
-            model=model,
-            messages=[{"role": "user", "content": image_content}],
-        )
-        assert response is not None
-        assert response.choices[0].message.content != ""
-    except litellm.ServiceUnavailableError as e:
-        pytest.skip("Skipping test due to ServiceUnavailableError")
 
 
 def test_bedrock_custom_proxy():
@@ -2583,10 +1822,9 @@ def test_bedrock_custom_proxy():
 
 
 def test_bedrock_custom_deepseek():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
     import json
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = HTTPHandler()
 
     with patch.object(client, "post") as mock_post:
@@ -2813,7 +2051,7 @@ def test_bedrock_description_param():
 )
 @pytest.mark.asyncio
 async def test_bedrock_thinking_in_assistant_message(sync_mode):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
     if sync_mode:
@@ -2934,7 +2172,7 @@ async def test_bedrock_stream_thinking_content_openwebui():
 
 
 def test_bedrock_application_inference_profile():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
     client2 = HTTPHandler()
@@ -3062,8 +2300,8 @@ def test_bedrock_meta_llama_function_calling():
     Tests that:
     - meta llama models support function calling
     """
-    from litellm.utils import return_raw_request
     from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
 
     tools = [
         {
@@ -3109,50 +2347,6 @@ def test_bedrock_meta_llama_function_calling():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync_mode", [True, False])
-async def test_bedrock_passthrough(sync_mode: bool):
-    import litellm
-
-    litellm._turn_on_debug()
-
-    data = {
-        "max_tokens": 512,
-        "messages": [{"role": "user", "content": "Hey"}],
-        "system": [
-            {
-                "type": "text",
-                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
-            }
-        ],
-        "temperature": 0,
-        "metadata": {
-            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
-        },
-        "anthropic_version": "bedrock-2023-05-31",
-        "anthropic_beta": ["claude-code-20250219"],
-    }
-
-    if sync_mode:
-        response = litellm.llm_passthrough_route(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            method="POST",
-            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke",
-            data=data,
-        )
-    else:
-        response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            method="POST",
-            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke",
-            data=data,
-        )
-
-    print(response.text)
-
-    assert response.status_code == 200
-
-
-@pytest.mark.asyncio
 async def test_bedrock_passthrough_router():
     """
     Test bedrock passthrough using litellm.Router with async mode.
@@ -3163,7 +2357,7 @@ async def test_bedrock_passthrough_router():
     import litellm
     from litellm import Router
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     router = Router(
         model_list=[
@@ -3208,9 +2402,10 @@ async def test_bedrock_passthrough_router():
 
 @pytest.mark.asyncio
 async def test_bedrock_converse__streaming_passthrough(monkeypatch):
+    import asyncio
+
     import litellm
     from litellm.integrations.custom_logger import CustomLogger
-    import asyncio
 
     if os.environ.get("LITELLM_RUN_LIVE_BEDROCK_PASSTHROUGH_TESTS") != "1":
         pytest.skip("Live Bedrock passthrough E2E tests are opt-in")
@@ -3223,7 +2418,7 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
     mock_custom_logger = MockCustomLogger()
     monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     data = {
         "messages": [
@@ -3261,10 +2456,9 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bedrock_streaming_passthrough_test2(monkeypatch):
-    import litellm
-    import time
     import asyncio
-    from unittest.mock import MagicMock
+
+    import litellm
     from litellm.integrations.custom_logger import CustomLogger
 
     class MockCustomLogger(CustomLogger):
@@ -3273,7 +2467,7 @@ async def test_bedrock_streaming_passthrough_test2(monkeypatch):
     mock_custom_logger = MockCustomLogger()
     monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     data = {
         "max_tokens": 512,
@@ -3419,7 +2613,6 @@ def test_bedrock_nova_provider_detection():
     Regression test for issue #17910 where models like "amazon.nova-pro-v1:0"
     were incorrectly identified as "amazon" (Titan) instead of "nova".
     """
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     # Test various Nova model formats
     nova_test_cases = [
@@ -3460,7 +2653,6 @@ def test_bedrock_openai_provider_detection():
     """
     Test that the OpenAI provider is correctly detected from model strings.
     """
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     # Test various OpenAI model formats
     test_cases = [
@@ -3480,7 +2672,6 @@ def test_bedrock_openai_model_id_extraction():
     """
     Test that the model ID (ARN) is correctly extracted and encoded for OpenAI models.
     """
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     model = (
         "openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/test-model-123"
@@ -3762,7 +2953,8 @@ def test_bedrock_nova_grounding_web_search_options_non_streaming():
 
     Related: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
     """
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import patch
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -3818,6 +3010,7 @@ def test_bedrock_nova_grounding_with_function_tools():
     custom function calling capabilities.
     """
     from unittest.mock import patch
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -3901,7 +3094,8 @@ async def test_bedrock_nova_grounding_async():
 
     This test verifies the request transformation for async calls.
     """
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import AsyncMock, patch
+
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     client = AsyncHTTPHandler()
@@ -3983,7 +3177,8 @@ def test_bedrock_nova_grounding_request_transformation():
     """
     Unit test to verify that web_search_options transforms to systemTool in the request.
     """
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()

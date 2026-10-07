@@ -1,6 +1,5 @@
-use litellm_types::{
-    llms::openai::{ChatMessage, ChatMessageContent},
-    utils::ChatCompletionsResponse,
+use litellm_llms_types::formats::chat_completions::{
+    ChatCompletionsResponse, ChatMessage, ChatMessageContent,
 };
 use serde_json::{Map, Value};
 
@@ -41,6 +40,8 @@ pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 pub struct Unsupported(pub &'static str);
 
 pub trait BaseConfig: Sync {
+    fn secret_names(&self) -> Vec<&'static str>;
+
     /// Supported OpenAI parameter names paired with their provider names.
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)];
 

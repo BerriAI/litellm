@@ -1,8 +1,8 @@
 # Create server parameters for stdio connection
 import os
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from contextlib import asynccontextmanager
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from contextlib import asynccontextmanager, nullcontext
 
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -71,7 +71,7 @@ async def test_mcp_server_manager_https_server():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         await mcp_server_manager.load_servers_from_config(
@@ -179,7 +179,7 @@ async def test_mcp_http_transport_list_tools_mock():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
@@ -256,7 +256,7 @@ async def test_mcp_http_transport_call_tool_mock():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
@@ -322,7 +322,7 @@ async def test_mcp_http_transport_call_tool_error_mock():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
@@ -918,6 +918,7 @@ async def test_get_tools_from_mcp_servers():
 
         # Create a mock manager
         mock_manager = AsyncMock()
+        mock_manager.catalog.operation = nullcontext
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id"]
         )
@@ -946,6 +947,7 @@ async def test_get_tools_from_mcp_servers():
             # Test Case 2: Without specific MCP servers
             # Create a different mock manager for the second test case
             mock_manager_2 = AsyncMock()
+            mock_manager_2.catalog.operation = nullcontext
             mock_manager_2.get_allowed_mcp_servers = AsyncMock(
                 return_value=["server1_id", "server2_id"]
             )
@@ -962,6 +964,9 @@ async def test_get_tools_from_mcp_servers():
                 client_ip=None,
                 user_api_key_auth=None,
                 oauth2_headers=None,
+                proxy_logging_obj=None,
+                catalog_auth_header=None,
+                record_listing=True,
             ):
                 if server.server_id == "server1_id":
                     return [mock_tool_1]
@@ -993,6 +998,7 @@ async def test_get_tools_from_mcp_servers():
         # Test Case 3: With specific MCP servers and access groups
         # Create a mock manager
         mock_manager = AsyncMock()
+        mock_manager.catalog.operation = nullcontext
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id", "server3_id"]
         )
@@ -1092,7 +1098,7 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Call list_tools
@@ -1389,7 +1395,7 @@ async def test_mcp_server_manager_alias_tool_prefixing():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Get tools from server
@@ -1449,7 +1455,7 @@ async def test_mcp_server_manager_server_name_tool_prefixing():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Get tools from server
@@ -1509,7 +1515,7 @@ async def test_mcp_server_manager_server_id_tool_prefixing():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Get tools from server
@@ -1555,6 +1561,7 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.args = []
     mock_mcp_server.env = None
     mock_mcp_server.spec_path = None
+    mock_mcp_server.pinned_tools = None
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
@@ -1618,6 +1625,7 @@ async def test_add_update_server_without_alias():
     mock_mcp_server.args = []
     mock_mcp_server.env = None
     mock_mcp_server.spec_path = None
+    mock_mcp_server.pinned_tools = None
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
@@ -1681,6 +1689,7 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.args = []
     mock_mcp_server.env = None
     mock_mcp_server.spec_path = None
+    mock_mcp_server.pinned_tools = None
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
@@ -1993,6 +2002,8 @@ async def test_get_tools_for_single_server():
             raw_headers=None,
             client_ip=None,
             user_api_key_auth=None,
+            proxy_logging_obj=ANY,
+            record_listing=False,
         )
 
         # Verify the result
@@ -2501,7 +2512,7 @@ async def test_filter_tools_by_allowed_tools_integration():
 
         # Mock the MCPClient constructor
         with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+            "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering
@@ -2615,7 +2626,7 @@ async def test_filter_tools_by_disallowed_tools_integration():
 
         # Mock the MCPClient constructor
         with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+            "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering
@@ -2717,7 +2728,7 @@ async def test_filter_tools_no_restrictions_integration():
 
         # Mock the MCPClient constructor
         with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+            "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering

@@ -265,7 +265,7 @@ def test_transform_messages_sanitizes_empty_content():
         {"role": "user", "content": [{"type": "text", "text": ""}]},
         {"role": "user", "content": "Hi"},
     ]
-    result = config._transform_messages(messages=messages, model="databricks-claude", is_async=False)
+    result = config.transform_messages(messages=messages, model="databricks-claude", is_async=False)
     assert "content" not in result[0]
     assert result[1]["content"] == "Hi"
 
@@ -883,3 +883,13 @@ def test_completion_merges_system_messages_when_one_has_empty_content(respx_mock
         {"role": "system", "content": "You are terse."},
         {"role": "user", "content": "Hello"},
     ]
+
+
+def test_chunk_parser_relays_the_served_service_tier():
+    iterator = DatabricksChatResponseIterator(streaming_response=None, sync_stream=True)
+
+    with_tier: Final = iterator.chunk_parser({**_streaming_chunk(), "service_tier": "priority"})
+    assert with_tier.model_dump()["service_tier"] == "priority"
+
+    without_tier: Final = iterator.chunk_parser(_streaming_chunk())
+    assert getattr(without_tier, "service_tier", None) is None

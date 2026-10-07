@@ -4,13 +4,30 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
+import { processActivityData } from "@/components/activity_metrics";
 import type { Organization } from "@/components/networking";
+import type { ModelActivityData } from "@/components/UsagePage/types";
 import * as networking from "@/components/networking";
 import UsagePage from "./UsagePageView";
+
+const modelActivity = (label: string): ModelActivityData => ({
+  label,
+  total_requests: 1,
+  total_successful_requests: 1,
+  total_failed_requests: 0,
+  total_cache_read_input_tokens: 0,
+  total_cache_creation_input_tokens: 0,
+  total_tokens: 10,
+  prompt_tokens: 5,
+  completion_tokens: 5,
+  total_spend: 0.01,
+  top_models: [],
+  daily_data: [],
+});
 
 // Polyfill ResizeObserver for test environment
 beforeAll(() => {
@@ -25,18 +42,25 @@ beforeAll(() => {
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
-  userDailyActivityCall: vi.fn(),
-  userDailyActivityAggregatedCall: vi.fn(),
+  dailyActivityAggregatedCall: vi.fn(),
+  dailyActivityKeyPageCall: vi.fn(),
+  dailyActivityKeySearchCall: vi.fn(),
+  dailyActivityModelTopKeysCall: vi.fn(),
+  dailyActivityExportCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),
   tagListCall: vi.fn(),
 }));
 
 // Mock child components to simplify testing
 vi.mock("@/components/activity_metrics", () => ({
-  ActivityMetrics: ({ modelMetrics }: { modelMetrics?: { __source?: string } }) => (
-    <div>{`activity-source:${modelMetrics?.__source ?? "none"}`}</div>
+  ActivityMetrics: ({ modelMetrics }: { modelMetrics?: Record<string, { label: string }> }) => (
+    <div>
+      {Object.entries(modelMetrics ?? {}).map(([model, metrics]) => (
+        <span key={model}>{metrics.label}</span>
+      ))}
+    </div>
   ),
-  processActivityData: (_data: unknown, key: string) => ({ __source: key }),
+  processActivityData: vi.fn(),
 }));
 
 vi.mock("@/components/view_user_spend", () => ({
@@ -66,16 +90,25 @@ vi.mock("./EndpointUsage/EndpointUsage", () => ({
 
 vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
   const React = await import("react");
-  const UsageViewSelect = ({ value, onChange, canViewTagUsage = false }: any) => {
+  const UsageViewSelect = ({
+    value,
+    onChange,
+    canViewTagUsage = false,
+  }: {
+    value: string;
+    onChange?: (value: string) => void;
+    canViewTagUsage?: boolean;
+  }) => {
     const tagOption = canViewTagUsage ? React.createElement("option", { value: "tag" }, "Tag Usage") : null;
+    const selectProps = {
+      value,
+      onChange: (e: React.ChangeEvent<HTMLSelectElement>) => onChange?.(e.target.value),
+      role: "combobox",
+      "data-testid": "usage-view-select",
+    };
     return React.createElement(
       "select",
-      {
-        value,
-        onChange: (e: any) => onChange?.(e.target.value),
-        role: "combobox",
-        "data-testid": "usage-view-select",
-      },
+      selectProps,
       React.createElement("option", { value: "global" }, "Global Usage"),
       React.createElement("option", { value: "team" }, "Team Usage"),
       React.createElement("option", { value: "organization" }, "Organization Usage"),
@@ -157,8 +190,9 @@ vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
 }));
 
 describe("UsagePage", () => {
-  const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
-  const mockUserDailyActivityCall = vi.mocked(networking.userDailyActivityCall);
+  const mockUserDailyActivityAggregatedCall = vi.fn();
+  const mockDailyActivityAggregatedCall = vi.mocked(networking.dailyActivityAggregatedCall);
+  const mockDailyActivityKeyPageCall = vi.mocked(networking.dailyActivityKeyPageCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
   const mockUseCustomers = vi.mocked(useCustomers);
@@ -353,6 +387,10 @@ describe("UsagePage", () => {
   };
 
   beforeEach(() => {
+    vi.mocked(processActivityData).mockReset();
+    vi.mocked(processActivityData).mockImplementation((_data, key) => ({
+      [key]: modelActivity(`activity-source:${key}`),
+    }));
     mockUseAuthorized.mockReturnValue({
       isLoading: false,
       isAuthorized: true,
@@ -374,7 +412,17 @@ describe("UsagePage", () => {
       error: null,
     } as any);
     mockUserDailyActivityAggregatedCall.mockClear();
-    mockUserDailyActivityCall.mockClear();
+    mockDailyActivityAggregatedCall.mockReset();
+    mockDailyActivityKeyPageCall.mockReset();
+    mockDailyActivityKeyPageCall.mockResolvedValue({
+      api_keys: [],
+      total_api_keys: 0,
+      offset: 0,
+      limit: 50,
+    });
+    mockDailyActivityAggregatedCall.mockImplementation((entity: string, request: unknown) =>
+      entity === "user" ? mockUserDailyActivityAggregatedCall(request) : Promise.resolve({ results: [], metadata: {} }),
+    );
     mockTagListCall.mockClear();
     mockGatewayDailyActivityCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
@@ -462,6 +510,11 @@ describe("UsagePage", () => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(2);
     });
     expect(screen.queryByText("75,000")).not.toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+    expect(screen.getByText("Total Tokens")).toBeInTheDocument();
+    expect(await screen.findByText("425,151")).toBeInTheDocument();
+    expect(screen.getByText("Total Tokens").closest('[data-slot="card"]')).not.toHaveTextContent(/\d/);
+    expect(screen.queryByText("$0.0000")).not.toBeInTheDocument();
 
     await act(async () => {
       releaseSecondFetch();
@@ -469,6 +522,28 @@ describe("UsagePage", () => {
     await waitFor(() => {
       expect(screen.getAllByText("75,000").length).toBeGreaterThan(0);
     });
+    expect(screen.getByText("Total Tokens")).toBeInTheDocument();
+    expect(screen.getByText("$0.0838")).toBeInTheDocument();
+  });
+
+  it("loads key pages separately from the aggregate and refreshes them when the range changes", async () => {
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+    fireEvent.click(screen.getByText("Key Activity"));
+    await waitFor(() => {
+      expect(mockDailyActivityKeyPageCall).toHaveBeenCalledWith("user", expect.any(Object), 0, 50);
+    });
+    expect(mockUserDailyActivityAggregatedCall.mock.lastCall?.[0]).not.toHaveProperty("apiKeyLimit");
+    const pageCallsBeforeRangeChange = mockDailyActivityKeyPageCall.mock.calls.length;
+    fireEvent.click(screen.getByTestId("pick-a-different-range"));
+
+    await waitFor(() => {
+      expect(mockDailyActivityKeyPageCall.mock.calls.length).toBeGreaterThan(pageCallsBeforeRangeChange);
+    });
+    expect(mockUserDailyActivityAggregatedCall.mock.lastCall?.[0]).not.toHaveProperty("apiKeyLimit");
   });
 
   it("should fall back to the spend-derived count when the gateway endpoint is unavailable", async () => {
@@ -793,7 +868,7 @@ describe("UsagePage", () => {
 
   it.each(["organization", "agent"])("should not render the %s usage view for an internal user", async (usageView) => {
     mockUseAuthorized.mockReturnValue(nonAdminSession);
-
+    mockDailyActivityKeyPageCall.mockImplementation(() => new Promise(() => {}));
     renderWithProviders(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
 
     await waitFor(() => {
@@ -924,10 +999,7 @@ describe("UsagePage", () => {
 
       // Initially called with null (global view for admin)
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
-        "test-token",
-        expect.any(Date),
-        expect.any(Date),
-        null,
+        expect.objectContaining({ accessToken: "test-token", entityIds: null }),
       );
     });
   });
@@ -1016,127 +1088,23 @@ describe("UsagePage", () => {
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
-          "test-token",
-          expect.any(Date),
-          expect.any(Date),
-          "user-123",
+          expect.objectContaining({ accessToken: "test-token", entityIds: ["user-123"] }),
         );
       });
     });
   });
 
-  describe("aggregated endpoint fallback", () => {
-    it("should fall back to paginated calls when aggregated endpoint fails", async () => {
+  describe("aggregated endpoint failure", () => {
+    it("shows the failure alert instead of retrying other routes when the aggregated call fails", async () => {
       mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("Aggregated endpoint not available"));
-      mockUserDailyActivityCall.mockResolvedValue({
-        ...mockSpendData,
-        metadata: {
-          ...mockSpendData.metadata,
-          total_pages: 1,
-          page: 1,
-        },
-      });
 
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
-        expect(mockUserDailyActivityCall).toHaveBeenCalled();
       });
-
-      // Should still render the data from the paginated fallback, which lands a render after the call
-      expect(await screen.findByText("75,000")).toBeInTheDocument();
-    });
-
-    it("should stop showing the previous range's paginated pages while a new range is in flight", async () => {
-      // Same rule as the aggregate, one fallback further down. The flag that
-      // decides whether these pages are read belongs to the range the failure
-      // happened on, or the previous range's pages reach the tile through it.
-      let releaseSecondAggregated: () => void = () => {};
-      mockUserDailyActivityAggregatedCall.mockReset();
-      mockUserDailyActivityAggregatedCall
-        .mockRejectedValueOnce(new Error("Aggregated endpoint not available"))
-        .mockImplementationOnce(
-          () =>
-            new Promise((_resolve, reject) => {
-              releaseSecondAggregated = () => reject(new Error("Aggregated endpoint not available"));
-            }),
-        );
-      mockUserDailyActivityCall.mockResolvedValue({
-        ...mockSpendData,
-        metadata: { ...mockSpendData.metadata, total_pages: 1, page: 1 },
-      });
-
-      renderWithProviders(<UsagePage {...defaultProps} />);
-      await waitFor(() => {
-        expect(screen.getAllByText("75,000").length).toBeGreaterThan(0);
-      });
-
-      await act(async () => {
-        fireEvent.click(screen.getByTestId("pick-a-different-range"));
-      });
-
-      await waitFor(() => {
-        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(2);
-      });
-      expect(screen.queryByText("75,000")).not.toBeInTheDocument();
-
-      await act(async () => {
-        releaseSecondAggregated();
-      });
-      await waitFor(() => {
-        expect(screen.getAllByText("75,000").length).toBeGreaterThan(0);
-      });
-    });
-
-    it("should aggregate multiple pages when paginated endpoint has more than 1 page", async () => {
-      mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("Not available"));
-
-      const page1Data = {
-        results: [mockSpendData.results[0]],
-        metadata: {
-          total_spend: 60,
-          total_api_requests: 700,
-          total_successful_requests: 680,
-          total_failed_requests: 20,
-          total_tokens: 35000,
-          total_pages: 2,
-          page: 1,
-        },
-      };
-
-      const page2Data = {
-        results: [
-          {
-            ...mockSpendData.results[0],
-            date: "2025-01-02",
-          },
-        ],
-        metadata: {
-          total_spend: 65.75,
-          total_api_requests: 800,
-          total_successful_requests: 770,
-          total_failed_requests: 30,
-          total_tokens: 40000,
-          total_pages: 2,
-          page: 2,
-        },
-      };
-
-      mockUserDailyActivityCall.mockResolvedValueOnce(page1Data).mockResolvedValueOnce(page2Data);
-
-      renderWithProviders(<UsagePage {...defaultProps} />);
-
-      await waitFor(() => {
-        // Both pages should have been fetched
-        expect(mockUserDailyActivityCall).toHaveBeenCalledTimes(2);
-      });
-
-      // Verify first page call
-      expect(mockUserDailyActivityCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date), 1, null);
-
-      // Verify second page call
-      expect(mockUserDailyActivityCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date), 2, null);
+      expect(mockDailyActivityAggregatedCall.mock.calls.filter((c) => c[0] === "user")).toHaveLength(1);
+      expect(await screen.findByText(/Fetching spend data failed/)).toBeInTheDocument();
     });
   });
 
@@ -1295,6 +1263,50 @@ describe("UsagePage", () => {
         expect(screen.getByText("activity-source:models")).toBeInTheDocument();
       });
       expect(screen.queryByText("activity-source:model_groups")).not.toBeInTheDocument();
+    });
+
+    it("filters Model Activity by model name and shows an empty state when there are no matches", async () => {
+      vi.mocked(processActivityData).mockReturnValue({
+        "openai/gpt-4o": modelActivity("GPT-4o"),
+        "anthropic/claude-3": modelActivity("Claude 3 Sonnet"),
+      });
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      fireEvent.click(screen.getByRole("tab", { name: "Model Activity" }));
+
+      const modelActivityTab = screen.getByRole("tabpanel", { name: "Model Activity" });
+      const searchInput = within(modelActivityTab).getByRole("textbox", { name: "Search models" });
+      fireEvent.change(searchInput, { target: { value: "GPT-4o" } });
+
+      expect(within(modelActivityTab).getByText("GPT-4o")).toBeInTheDocument();
+      expect(within(modelActivityTab).queryByText("Claude 3 Sonnet")).not.toBeInTheDocument();
+
+      fireEvent.change(searchInput, { target: { value: "missing model" } });
+
+      expect(
+        within(modelActivityTab).getByText('No models match "missing model" in this date range'),
+      ).toBeInTheDocument();
+    });
+
+    it("does not show the no-match state when model data is empty", async () => {
+      vi.mocked(processActivityData).mockReturnValue({});
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      fireEvent.click(screen.getByRole("tab", { name: "Model Activity" }));
+
+      const modelActivityTab = screen.getByRole("tabpanel", { name: "Model Activity" });
+      const searchInput = within(modelActivityTab).getByRole("textbox", { name: "Search models" });
+      fireEvent.change(searchInput, { target: { value: "missing model" } });
+
+      expect(
+        within(modelActivityTab).queryByText('No models match "missing model" in this date range'),
+      ).not.toBeInTheDocument();
     });
   });
 

@@ -11,6 +11,7 @@ calculations for DB-sourced models with prompt caching pricing.
 
 import copy
 import os
+from typing import Final
 
 import pytest
 
@@ -800,23 +801,30 @@ def test_update_dictionary_merges_nested_dicts_without_aliasing():
     object stays untouched, and the caller's incoming nested dict is never
     inserted by reference into the merged result.
     """
-    from litellm.utils import _update_dictionary
+    from litellm.utils import update_dictionary
 
-    existing_nested = {"hours_utc": "01:00-02:00"}
+    from typing import cast
+
+    existing_nested = cast(dict[str, object], {"hours_utc": "01:00-02:00", 1: "existing"})
     existing = {"off_peak_pricing": existing_nested}
-    incoming_nested = {"windows": [{"hours_utc": "16:00-19:00", "weekdays": [2]}]}
+    incoming_nested = cast(
+        dict[str, object],
+        {"windows": [{"hours_utc": "16:00-19:00", "weekdays": [2]}], 2: "new"},
+    )
     incoming = {"off_peak_pricing": incoming_nested}
 
-    merged = _update_dictionary(existing, incoming)
+    merged = update_dictionary(existing, incoming)
 
     assert merged["off_peak_pricing"] == {
         "hours_utc": "01:00-02:00",
         "windows": [{"hours_utc": "16:00-19:00", "weekdays": [2]}],
+        1: "existing",
+        2: "new",
     }
-    assert existing_nested == {"hours_utc": "01:00-02:00"}
+    assert existing_nested == {"hours_utc": "01:00-02:00", 1: "existing"}
     assert merged["off_peak_pricing"] is not incoming_nested
 
-    fresh = _update_dictionary({}, incoming)
+    fresh = update_dictionary({}, incoming)
     assert fresh["off_peak_pricing"] == incoming_nested
     assert fresh["off_peak_pricing"] is not incoming_nested
 
@@ -993,3 +1001,21 @@ def test_completion_cost_applies_off_peak_only_deployment_pricing():
     finally:
         _restore_model_cost_entries(original_entries)
         del router
+
+
+def test_completion_registers_cost_per_second_pricing():
+    model_key: Final = "openai/test-cost-per-second-registration"
+    original_entries: Final = _snapshot_model_cost_entries([model_key])
+
+    try:
+        litellm.completion(
+            model=model_key,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            cost_per_second=0.02,
+            mock_response="hello back",
+        )
+
+        assert litellm.model_cost[model_key]["cost_per_second"] == 0.02
+    finally:
+        _restore_model_cost_entries(original_entries)

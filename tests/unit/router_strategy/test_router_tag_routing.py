@@ -393,39 +393,39 @@ async def test_router_free_paid_tier_with_responses_api():
 
 
 def test_get_tags_from_request_kwargs_none():
-    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+    from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 
     # None request kwargs should safely return empty list
-    assert _get_tags_from_request_kwargs(None) == []
+    assert get_tags_from_request_kwargs(None) == []
 
 
 def test_get_tags_from_request_kwargs_various_inputs():
-    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+    from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 
     # Direct "metadata" path
-    assert _get_tags_from_request_kwargs({"metadata": {"tags": ["free"]}}) == ["free"]
-    assert _get_tags_from_request_kwargs({"metadata": {"tags": []}}) == []
-    assert _get_tags_from_request_kwargs({"metadata": {"tags": None}}) == []
-    assert _get_tags_from_request_kwargs({"metadata": {}}) == []
-    assert _get_tags_from_request_kwargs({"metadata": None}) == []
+    assert get_tags_from_request_kwargs({"metadata": {"tags": ["free"]}}) == ["free"]
+    assert get_tags_from_request_kwargs({"metadata": {"tags": []}}) == []
+    assert get_tags_from_request_kwargs({"metadata": {"tags": None}}) == []
+    assert get_tags_from_request_kwargs({"metadata": {}}) == []
+    assert get_tags_from_request_kwargs({"metadata": None}) == []
 
     # Indirect via "litellm_params" - metadata inside
-    assert _get_tags_from_request_kwargs({"litellm_params": {"metadata": {"tags": ["paid"]}}}) == ["paid"]
-    assert _get_tags_from_request_kwargs({"litellm_params": {"metadata": None}}) == []
-    assert _get_tags_from_request_kwargs({"litellm_params": {}}) == []
+    assert get_tags_from_request_kwargs({"litellm_params": {"metadata": {"tags": ["paid"]}}}) == ["paid"]
+    assert get_tags_from_request_kwargs({"litellm_params": {"metadata": None}}) == []
+    assert get_tags_from_request_kwargs({"litellm_params": {}}) == []
 
     # Alternate metadata variable name: "litellm_metadata"
-    assert _get_tags_from_request_kwargs(
+    assert get_tags_from_request_kwargs(
         {"litellm_metadata": {"tags": ["alt"]}},
         metadata_variable_name="litellm_metadata",
     ) == ["alt"]
-    assert _get_tags_from_request_kwargs(
+    assert get_tags_from_request_kwargs(
         {"litellm_params": {"litellm_metadata": {"tags": ["nested-alt"]}}},
         metadata_variable_name="litellm_metadata",
     ) == ["nested-alt"]
 
     # No relevant keys present
-    assert _get_tags_from_request_kwargs({"foo": "bar"}) == []
+    assert get_tags_from_request_kwargs({"foo": "bar"}) == []
 
 
 @pytest.mark.parametrize(
@@ -444,15 +444,15 @@ def test_get_tags_from_request_kwargs_reads_no_tags_from_a_non_dict_shape(reques
     """Metadata and `tags` are request-controlled, so a client can send either as a
     string, a list or null. Every shape that cannot hold string tags reads as untagged
     instead of raising, because callers run on the hot request path."""
-    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+    from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 
-    assert _get_tags_from_request_kwargs(request_kwargs) == []
+    assert get_tags_from_request_kwargs(request_kwargs) == []
 
 
 def test_get_tags_from_request_kwargs_keeps_only_string_tags():
-    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+    from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 
-    assert _get_tags_from_request_kwargs({"metadata": {"tags": ["free", 7, None, "paid"]}}) == ["free", "paid"]
+    assert get_tags_from_request_kwargs({"metadata": {"tags": ["free", 7, None, "paid"]}}) == ["free", "paid"]
 
 
 # --- _split_tags unit tests ---
@@ -647,6 +647,7 @@ async def test_negation_with_positive_tag():
 @pytest.mark.asyncio()
 async def test_negation_all_excluded_raises():
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "gpt-4",
@@ -907,6 +908,7 @@ async def test_positive_tags_unchanged_by_negation():
 @pytest.mark.asyncio()
 async def test_negation_skips_banned_group_and_uses_fallback():
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "primary",
@@ -943,6 +945,7 @@ async def test_negation_skips_banned_group_and_uses_fallback():
 @pytest.mark.asyncio()
 async def test_negation_exhausts_entire_fallback_chain():
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "primary",
@@ -1165,7 +1168,7 @@ class _FakeRouterForChainOverride:
     def __init__(self, all_deployments):
         self._all_deployments = all_deployments
 
-    def _get_all_deployments(self, model_name):
+    def get_all_deployments(self, model_name):
         return self._all_deployments
 
 
@@ -1212,7 +1215,7 @@ def test_chain_tag_filtering_override_falls_back_to_healthy_deployments_on_looku
     from litellm.router_strategy.tag_based_routing import _chain_tag_filtering_override
 
     class _BrokenRouter:
-        def _get_all_deployments(self, model_name):
+        def get_all_deployments(self, model_name):
             raise RuntimeError("model group not found")
 
     healthy_deployments = [{"model_info": {"enable_tag_filtering": False}}]
@@ -1696,6 +1699,7 @@ async def test_required_and_single_tag_matches_trivially():
 async def test_required_and_unmatched_raises_by_default():
     # allow_fail_open unset -> unmatched required-AND raises, same as today's "!" behavior.
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "gpt-4",
@@ -1728,6 +1732,7 @@ async def test_required_and_combined_with_positive_unmatched_raises_by_default()
     # &A eliminates every candidate before the positive-tag preference even runs;
     # this must be gated by allow_fail_open too, not just the required-AND-only path.
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "gpt-4",
@@ -1858,6 +1863,7 @@ async def test_allow_fail_open_per_hop_across_fallback_chain():
     # required-AND fail-open must be re-evaluated fresh on every hop, the same
     # per-hop guarantee the negation feature already established.
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "primary",
@@ -1950,6 +1956,7 @@ async def test_allow_fail_open_resolves_locally_without_triggering_external_fall
 @pytest.mark.asyncio()
 async def test_negation_combined_with_positive_unmatched_raises_by_default():
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "gpt-4",
@@ -2287,6 +2294,7 @@ async def test_required_and_exhausts_primary_group_falls_through_to_fallback_gro
     # where the tag is satisfiable. No allow_fail_open involved; this is the plain
     # fallback-chain mechanics already established for "!" extended to "&".
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "primary",
@@ -2332,6 +2340,7 @@ async def test_required_and_negation_and_allow_fail_open_combine_across_three_mo
     #   carrier is legitimately excluded, not hidden behind an invented tag, so the
     #   opted-in allow_fail_open falls back to the group's own default deployment.
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "primary",
@@ -2393,6 +2402,7 @@ async def test_unknown_tag_denial_is_scoped_per_hop_not_leaked_across_fallback_g
     # discover what its own group knows; a deny decision from a prior hop's group
     # must not leak forward and block a later hop that has no relevant knowledge.
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "primary",
@@ -2526,7 +2536,7 @@ async def test_plain_tag_exhaustion_with_universal_default_tag_raises_by_default
     router = _quality_high_cost_low_router()
 
     with patch(
-        "litellm.router._async_get_cooldown_deployments",
+        "litellm.router.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["quality-high-1", "quality-high-2"]),
     ):
         with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
@@ -2551,7 +2561,7 @@ async def test_plain_tag_exhaustion_with_universal_default_tag_falls_open_when_a
     from unittest.mock import AsyncMock, patch
 
     with patch(
-        "litellm.router._async_get_cooldown_deployments",
+        "litellm.router.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["quality-high-1", "quality-high-2"]),
     ):
         response = await router.acompletion(
@@ -2868,6 +2878,7 @@ def _tagged_marker_router(tier_tags=None):
             },
         ],
         enable_tag_filtering=True,
+        num_retries=0,
     )
     router.auto_routers = {
         "gpt4o": [TaggedPreRoutingStrategy(tags=("route",), strategy=_RewriteToTierStrategy("gemini-flash"))]

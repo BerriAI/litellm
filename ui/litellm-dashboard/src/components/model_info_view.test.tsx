@@ -295,6 +295,35 @@ describe("ModelInfoView", () => {
     expect(modelInfoArg.id).toBe("123");
   });
 
+  it("does not echo the displayed mode into the test connection request", async () => {
+    // /model/info fills model_info.mode in from the cost map for display. Sending that
+    // value back would pin the probe to it and skip the mode the provider requires,
+    // so the page forwards only the row's id and lets the proxy resolve the mode.
+    const user = userEvent.setup();
+    const displayedModel = {
+      ...defaultModelData,
+      litellm_params: { ...defaultModelData.litellm_params, model: "bedrock_mantle/anthropic.claude-haiku-4-5" },
+      model_info: { ...defaultModelData.model_info, mode: "chat", key: "anthropic.claude-haiku-4-5" },
+    };
+    mockUseModelsInfo.mockReturnValue({ data: { data: [displayedModel] }, isLoading: false, error: null });
+    mockModelInfoV1Call.mockResolvedValue({ data: [displayedModel] });
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /test connection/i }));
+
+    await waitFor(() => {
+      expect(mockTestConnectionRequest).toHaveBeenCalled();
+    });
+
+    const [, , modelInfoArg, modeArg] = mockTestConnectionRequest.mock.calls[0];
+    expect(modelInfoArg).toEqual({ id: "123" });
+    expect(modeArg).toBeUndefined();
+  });
+
   it("should display error notification when connection test fails", async () => {
     const user = userEvent.setup();
     mockTestConnectionRequest.mockRejectedValue(new Error("Connection failed"));

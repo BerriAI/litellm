@@ -46,9 +46,11 @@ import os
 from types import MappingProxyType
 from typing import Final
 
+import openai
 import pytest
 from e2e_config import REQUEST_TIMEOUT, unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from management.management_client import ManagementClient, build_client
 from models import KeyGenerateBody, KeyGenerateResponse, LiteLLMParamsBody, TeamNewBody, UserNewBody
@@ -171,6 +173,15 @@ def _assert_file_round_trip(client: OpenAI, native_id: str, marker: str) -> None
 
 class TestAzureContainerFiles:
     @pytest.mark.covers("llm.responses.azure_openai.code_interpreter.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CONTAINERS,
+            providers=(Provider.AZURE,),
+            models=(AZURE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_service_account_key_reads_container_file_by_native_id(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -186,6 +197,15 @@ class TestAzureContainerFiles:
         _assert_file_round_trip(client, native_id, marker)
 
     @pytest.mark.covers("llm.responses.azure_openai.code_interpreter.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CONTAINERS,
+            providers=(Provider.AZURE,),
+            models=(AZURE_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_service_account_key_reads_container_file_created_by_a_streamed_response(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -198,3 +218,32 @@ class TestAzureContainerFiles:
         )
         resources.defer(lambda: client.containers.delete(native_id, extra_query=AZURE_PROVIDER_QUERY))
         _assert_file_round_trip(client, native_id, marker)
+
+
+class TestOpenAIContainerFiles:
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CONTAINERS,
+            providers=(Provider.OPENAI,),
+        )
+    )
+    def test_container_file_lifecycle_through_the_gateway(self, resources: ResourceManager, sdk: SdkClients) -> None:
+        client: Final = sdk.openai(resources.key())
+        marker: Final = unique_marker()
+
+        container: Final = client.containers.create(
+            name=f"e2e-container-{marker}", expires_after={"anchor": "last_active_at", "minutes": 5}
+        )
+        resources.defer(lambda: client.containers.delete(container.id))
+        assert not client.containers.files.list(container.id).data, "a new container must start with no files"
+
+        payload: Final = f"e2e container payload {marker}".encode()
+        uploaded: Final = client.containers.files.create(container.id, file=(f"{marker}.txt", payload))
+        listed: Final = tuple(entry.id for entry in client.containers.files.list(container.id).data)
+        assert uploaded.id in listed, f"uploaded file {uploaded.id} missing from the container listing {listed}"
+        assert client.containers.files.content.retrieve(uploaded.id, container_id=container.id).read() == payload
+
+        client.containers.files.delete(uploaded.id, container_id=container.id)
+        with pytest.raises(openai.NotFoundError):
+            client.containers.files.retrieve(uploaded.id, container_id=container.id)

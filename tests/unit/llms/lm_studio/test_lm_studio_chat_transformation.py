@@ -61,11 +61,11 @@ def test_lm_studio_get_openai_compatible_provider_info():
     config = LMStudioChatConfig()
 
     # Test default behavior (no API key provided)
-    _, api_key = config._get_openai_compatible_provider_info(None, None)
+    _, api_key = config.get_openai_compatible_provider_info(None, None)
     assert api_key == "fake-api-key"
 
     # Test explicit API key
-    _, api_key = config._get_openai_compatible_provider_info(None, "test-key")
+    _, api_key = config.get_openai_compatible_provider_info(None, "test-key")
     assert api_key == "test-key"
 
 
@@ -80,6 +80,6 @@ def test_lm_studio_get_openai_compatible_provider_info_with_env():
             "LM_STUDIO_API_KEY": "env_api_key",
         },
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "http://localhost:1234/v1"
         assert api_key == "env_api_key"

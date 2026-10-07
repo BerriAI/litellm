@@ -64,7 +64,7 @@ class PassThroughStreamingHandler:
     @staticmethod
     def _stamp_first_chunk_if_needed(litellm_logging_obj: LiteLLMLoggingObj) -> None:
         if litellm_logging_obj.completion_start_time is None:
-            litellm_logging_obj._update_completion_start_time(completion_start_time=datetime.now())
+            litellm_logging_obj.update_completion_start_time(completion_start_time=datetime.now())
 
     @staticmethod
     async def schedule_stream_failure_logging(
@@ -294,9 +294,9 @@ class PassThroughStreamingHandler:
         - Vertex AI
         - OpenAI
         """
-        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
-            _is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection
-            _is_provider_error_chunk,  # pyright: ignore[reportPrivateUsage]  # provider errors must not become cache evidence
+        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+            is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection
+            is_provider_error_chunk,  # pyright: ignore[reportPrivateUsage]  # provider errors must not become cache evidence
         )
 
         # Transport reads can split event names and JSON payloads. Recognize terminal
@@ -309,8 +309,8 @@ class PassThroughStreamingHandler:
         ] = (
             endpoint_type == EndpointType.ANTHROPIC
             and not incomplete_tail.strip()
-            and _is_message_stop_chunk(complete_frames)
-            and not _is_provider_error_chunk(complete_frames)
+            and is_message_stop_chunk(complete_frames)
+            and not is_provider_error_chunk(complete_frames)
         )
         try:
             # TinyFish billing is owned by the detached poller; the $0 fallback below is only for streams with no run_id
