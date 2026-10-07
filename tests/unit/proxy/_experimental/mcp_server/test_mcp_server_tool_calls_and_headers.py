@@ -1715,10 +1715,9 @@ async def test_handle_list_tools_converts_permission_httpexception_to_mcp_error(
         "list_resource_templates",
     ],
 )
-async def test_rate_limited_catalog_lists_return_mcp_errors(_mcp_request_ctx, handler_name):
+async def test_rate_limited_catalog_lists_return_mcp_errors(handler_name):
     from mcp.shared.exceptions import MCPError
 
-    from litellm.proxy._experimental.mcp_server import server as mcp_server
     from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
     user_api_key_auth: Final = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
@@ -1732,22 +1731,29 @@ async def test_rate_limited_catalog_lists_return_mcp_errors(_mcp_request_ctx, ha
     rate_limit_error: Final = ProxyRateLimitError(detail="server RPM exceeded")
     enforce_rate_limit: Final = AsyncMock(side_effect=rate_limit_error)
     proxy_logging: Final = MagicMock(enforce_mcp_server_rate_limits=enforce_rate_limit)
+    execute_list: Final = {
+        "list_prompts": mcp_operations._execute_list_prompts,
+        "list_resources": mcp_operations._execute_list_resources,
+        "list_resource_templates": mcp_operations._execute_list_resource_templates,
+    }[handler_name]
+    context: Final = mcp_operations.prepare_context(
+        user_api_key_auth,
+        mcp_servers=[server_config.server_id],
+    )
 
     with (
-        patch.object(
-            mcp_server,
-            "get_or_extract_auth_context",
-            new=AsyncMock(return_value=(user_api_key_auth, None, [server_config.server_id], None, None, None, None)),
-        ),
         patch.object(mcp_operations, "_get_allowed_mcp_servers", new=AsyncMock(return_value=[server_config])),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", new=proxy_logging),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
     ):
         with pytest.raises(MCPError) as exc_info:
-            await getattr(mcp_server, handler_name)(_mcp_request_ctx(), _paged_params())
+            await execute_list(context, _paged_params())
 
     assert exc_info.value.error.code == INVALID_REQUEST
     assert exc_info.value.error.message == "server RPM exceeded"
-    enforce_rate_limit.assert_awaited_once_with(user_api_key_auth, server_config)
+    assert enforce_rate_limit.await_count == 1
+    assert enforce_rate_limit.await_args.args[0].api_key == user_api_key_auth.api_key
+    assert enforce_rate_limit.await_args.args[1] is server_config
 
 
 @pytest.mark.asyncio

@@ -80,6 +80,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     AggregateToolListing,
     ServerListOk,
     ServerOutcome,
+    classify_list_exception,
     outcome_wire_value,
 )
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -276,6 +277,14 @@ async def _admit_mcp_servers(
         admitted_servers=tuple(server for server, error in results if error is None),
         rejected_servers=tuple((server, error) for server, error in results if error is not None),
     )
+
+
+async def _mcp_server_rate_limit_rejection(
+    server: MCPServer,
+    user_api_key_auth: UserAPIKeyAuth | None,
+) -> ProxyRateLimitError | None:
+    admission: Final = await _admit_mcp_servers((server,), user_api_key_auth)
+    return admission.rejected_servers[0][1] if admission.rejected_servers else None
 
 
 async def _build_virtual_call_logging_obj(
@@ -1162,8 +1171,7 @@ async def _get_tools_from_mcp_servers(
             aggregated = AggregateToolListing(
                 tools=[tool for tools, _ in results for tool in tools],
                 outcomes={
-                    _aggregate_server_key(server): outcome
-                    for server, (_, outcome) in zip(admitted_servers, results)
+                    _aggregate_server_key(server): outcome for server, (_, outcome) in zip(admitted_servers, results)
                 }
                 | {
                     _aggregate_server_key(server): classify_list_exception(error)
