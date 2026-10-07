@@ -6,6 +6,7 @@ import os
 import selectors
 import sys
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Final
@@ -42,6 +43,7 @@ from litellm.experimental_mcp_client.client import (
     MCPClient,
     _first_non_cancelled_cause,
     _TransportContext,
+    _TransportStreams,
     as_mcp_read_timeout,
     strip_auth_scheme,
 )
@@ -3532,8 +3534,10 @@ async def test_optional_catalog_distinguishes_absent_capability_from_failed_cont
     ],
 )
 @pytest.mark.parametrize("ttl", [0, 5000])
+@pytest.mark.parametrize("cleanup_phase", ["transport", "http_client"])
+@pytest.mark.parametrize("cleanup_seconds", [0, 2, 6])
 async def test_optional_discovery_retains_freshness_across_pages(
-    kind: str, field: str, entry: dict[str, str], ttl: int
+    kind: str, field: str, entry: dict[str, str], ttl: int, cleanup_phase: str, cleanup_seconds: int
 ) -> None:
     def respond(request: httpx2.Request) -> httpx2.Response:
         payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
@@ -3558,9 +3562,33 @@ async def test_optional_discovery_retains_freshness_across_pages(
         return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": listing_result})
 
     client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", protocol_version="2026-07-28")
-    result: Final = await getattr(client, "list_" + kind + "_result")(raise_on_error=True)
+    clock: Final = _ManualClockLoop()
+    transport_ctx, http_client = client._create_transport_context()
+    original_close: Final = http_client.aclose
+
+    @asynccontextmanager
+    async def transport_with_cleanup() -> AsyncIterator[_TransportStreams]:
+        async with transport_ctx as streams:
+            yield streams
+        if cleanup_phase == "transport":
+            clock.advance(cleanup_seconds)
+
+    async def close_http_client() -> None:
+        await original_close()
+        if cleanup_phase == "http_client":
+            clock.advance(cleanup_seconds)
+
+    try:
+        with (
+            patch.object(client, "_create_transport_context", return_value=(transport_with_cleanup(), http_client)),
+            patch.object(http_client, "aclose", side_effect=close_http_client),
+            patch.object(mcp_client_module, "time", Mock(monotonic=clock.time)),
+        ):
+            result: Final = await getattr(client, "list_" + kind + "_result")(raise_on_error=True)
+    finally:
+        clock.close()
     assert len(getattr(result, kind)) == 2
     assert result.cache_scope == "private"
     assert result.next_cursor is None
-    assert (0 < result.ttl_ms <= ttl) if ttl else result.ttl_ms == 0
+    assert result.ttl_ms == max(0, ttl - cleanup_seconds * 1000)
     assert len(await getattr(client, "list_" + kind)(raise_on_error=True)) == 2

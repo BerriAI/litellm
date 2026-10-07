@@ -1036,6 +1036,14 @@ class MCPClient:
             # Return a default error result instead of raising
             return self.error_tool_result(e)
 
+    async def _run_optional_discovery(self, operation: Callable[[ClientSession], Awaitable[_ListPage]]) -> _ListPage:
+        async def timed_operation(session: ClientSession) -> tuple[_ListPage, float]:
+            result: Final = await operation(session)
+            return result, time.monotonic()
+
+        result, received = await self.run_with_session(timed_operation)
+        return age_freshness(result, time.monotonic() - received)
+
     async def _list_optional_pages(
         self,
         fetch_page: Callable[[PaginatedRequestParams | None], Awaitable[_ListPage]],
@@ -1091,7 +1099,7 @@ class MCPClient:
                 return ListPromptsResult(prompts=[])
 
         try:
-            result: Final = await self.run_with_session(_list_prompts_operation)
+            result: Final = await self._run_optional_discovery(_list_prompts_operation)
             prompt_count: Final = len(result.prompts)
             prompt_names: Final = [prompt.name for prompt in result.prompts]
             verbose_logger.info(
@@ -1187,7 +1195,7 @@ class MCPClient:
                 return ListResourcesResult(resources=[])
 
         try:
-            result: Final = await self.run_with_session(_list_resources_operation)
+            result: Final = await self._run_optional_discovery(_list_resources_operation)
             resource_count: Final = len(result.resources)
             resource_names: Final = [resource.name for resource in result.resources]
             verbose_logger.info(
@@ -1244,7 +1252,7 @@ class MCPClient:
                 return ListResourceTemplatesResult(resource_templates=[])
 
         try:
-            result: Final = await self.run_with_session(_list_resource_templates_operation)
+            result: Final = await self._run_optional_discovery(_list_resource_templates_operation)
             resource_template_count: Final = len(result.resource_templates)
             resource_template_names: Final = [resource_template.name for resource_template in result.resource_templates]
             verbose_logger.info(
