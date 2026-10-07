@@ -5,31 +5,11 @@ pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 use crate::{Error, base_llm::messages::streaming::StreamDecoder};
 
 pub const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
-const VERSION_PATH_SUFFIX: &str = "/v1";
 
-pub struct MessagesWireRequest {
-    pub body: serde_json::Value,
-    pub headers: Headers,
-}
-
-pub(crate) fn messages_request_body(request: &MessagesRequest) -> Result<serde_json::Value, Error> {
+pub fn messages_request_body(request: &MessagesRequest) -> Result<serde_json::Value, Error> {
     serde_json::to_value(request).map_err(|error| {
         Error::InvalidRequest(crate::ErrorDetail::invalid("Messages request body", error))
     })
-}
-
-/// The Messages endpoint under an Anthropic-compatible base. A base already ending in
-/// `/v1/messages` is used as is, and one trailing `/v1` is dropped before the suffix goes on,
-/// so the same base serves a provider's OpenAI-compatible routes too.
-pub fn complete_messages_url(api_base: &str) -> String {
-    let api_base = api_base.trim_end_matches('/');
-    if api_base.ends_with(MESSAGES_PATH_SUFFIX) {
-        return api_base.to_string();
-    }
-    let api_base = api_base
-        .strip_suffix(VERSION_PATH_SUFFIX)
-        .unwrap_or(api_base);
-    format!("{api_base}{MESSAGES_PATH_SUFFIX}")
 }
 
 pub trait BaseMessagesConfig: Sync {
@@ -73,21 +53,6 @@ pub trait BaseMessagesConfig: Sync {
         Ok(response)
     }
 
-    fn request_body(&self, request: &MessagesRequest) -> Result<serde_json::Value, Error> {
-        messages_request_body(request)
-    }
-
-    fn prepare_wire_request(
-        &self,
-        request: &MessagesRequest,
-        headers: Headers,
-    ) -> Result<MessagesWireRequest, Error> {
-        Ok(MessagesWireRequest {
-            body: self.request_body(request)?,
-            headers,
-        })
-    }
-
     fn secret_names(&self) -> &'static [&'static str];
 
     /// Shapes the forwarded headers and names the credential, the way Python's
@@ -123,24 +88,6 @@ mod tests {
 
     use super::*;
     use crate::base_llm::auth::AuthScheme;
-
-    #[rstest]
-    #[case::bare_host("https://h.example", "https://h.example/v1/messages")]
-    #[case::trailing_slash(
-        "https://h.example/anthropic/",
-        "https://h.example/anthropic/v1/messages"
-    )]
-    #[case::version_suffix("https://h.example/v1", "https://h.example/v1/messages")]
-    #[case::version_suffix_with_slash("https://h.example/v1/", "https://h.example/v1/messages")]
-    #[case::other_version_kept("https://h.example/v3", "https://h.example/v3/v1/messages")]
-    #[case::complete_endpoint("https://h.example/v1/messages", "https://h.example/v1/messages")]
-    #[case::complete_endpoint_with_slash(
-        "https://h.example/x/v1/messages/",
-        "https://h.example/x/v1/messages"
-    )]
-    fn complete_messages_url_appends_the_suffix_once(#[case] base: &str, #[case] expected: &str) {
-        assert_eq!(complete_messages_url(base), expected);
-    }
 
     struct DefaultsConfig;
 

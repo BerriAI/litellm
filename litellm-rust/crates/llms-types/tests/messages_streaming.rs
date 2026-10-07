@@ -58,6 +58,16 @@ fn stream_events_and_deltas_preserve_extensions(#[case] wire: Value) {
 }
 
 #[rstest]
+#[case::delta_missing(json!({"type":"message_delta","delta":{}}))]
+#[case::delta_explicit_null(json!({"type":"message_delta","delta":{},"usage":null}))]
+#[case::stop_missing(json!({"type":"message_stop"}))]
+#[case::stop_explicit_null(json!({"type":"message_stop","usage":null}))]
+fn stream_event_usage_distinguishes_missing_and_explicit_null(#[case] wire: Value) {
+    let parsed: MessagesStreamEvent = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+}
+
+#[rstest]
 #[case::text(json!({"type":"text_delta","text":17}))]
 #[case::thinking(json!({"type":"thinking_delta","thinking":null}))]
 #[case::future(json!({"type":"future_delta","payload":true}))]

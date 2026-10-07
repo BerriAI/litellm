@@ -9,6 +9,7 @@ use litellm_llms_types::{
     recognized::Recognized,
 };
 use litellm_python_compat::{json::from_json, repr::repr, truthy::truthy};
+use litellm_llms_types::serde_compat::Nullable;
 use serde_json::Value;
 
 use crate::base_llm::messages::context::{
@@ -194,7 +195,15 @@ pub(super) fn translate_reasoning_effort(
             ..request
         });
     }
-    let Some(budget) = fit_budget_to_max_tokens(budget, request.params.max_tokens) else {
+    let Some(budget) = fit_budget_to_max_tokens(
+        budget,
+        request
+            .params
+            .max_tokens
+            .as_ref()
+            .and_then(Nullable::value)
+            .copied(),
+    ) else {
         return Ok(request);
     };
     let enabled = ThinkingConfig::enabled(budget);
@@ -293,7 +302,17 @@ fn translate_adaptive_effort_for_non_adaptive_model(
     Ok(MessagesRequest {
         params: MessagesOptionalParams {
             thinking: budget
-                .and_then(|budget| fit_budget_to_max_tokens(budget, request.params.max_tokens))
+                .and_then(|budget| {
+                    fit_budget_to_max_tokens(
+                        budget,
+                        request
+                            .params
+                            .max_tokens
+                            .as_ref()
+                            .and_then(Nullable::value)
+                            .copied(),
+                    )
+                })
                 .map(|budget| Recognized::Known(ThinkingConfig::enabled(budget))),
             output_config: without_effort(request.params.output_config),
             ..request.params
@@ -312,7 +331,9 @@ fn drop_incompatible_temperature_for_thinking(
     let pinned = request
         .params
         .temperature
-        .is_some_and(|temperature| temperature != 1.0);
+        .as_ref()
+        .and_then(Nullable::value)
+        .is_some_and(|temperature| *temperature != 1.0);
     let thinking_enabled = matches!(known_thinking(&request), Some(ThinkingConfig::Enabled(_)));
     let effort_enabled = known_effort(&request).is_some();
     if !pinned || !(thinking_enabled || effort_enabled) {

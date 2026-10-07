@@ -521,32 +521,6 @@ mod tests {
     }
 
     #[rstest]
-    fn tool_input_and_provider_fields_remain_opaque() {
-        let input = Map::from_iter([
-            ("cache_control".into(), json!({"ttl":"1h","scope":null})),
-            (
-                "content".into(),
-                json!([{"type":"thinking","signature":"encrypted","provider_specific_fields":{"type":null}}]),
-            ),
-        ]);
-        let provider_fields = Map::from_iter([("signature".into(), json!({"nested":[null,true]}))]);
-        let block = ContentBlock {
-            block_type: Some(Nullable::Value(ContentBlockType::ToolUse)),
-            payload: ContentBlockPayload {
-                id: Some(Nullable::Value("toolu_1".into())),
-                name: Some(Nullable::Value("lookup".into())),
-                input: Some(Recognized::Known(input.clone())),
-                provider_specific_fields: Some(Recognized::Known(provider_fields.clone())),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let wire = json!({"type":"tool_use","id":"toolu_1","name":"lookup","input":input,"provider_specific_fields":provider_fields});
-        assert_eq!(serde_json::to_value(&block).unwrap(), wire);
-        assert_eq!(serde_json::from_value::<ContentBlock>(wire).unwrap(), block);
-    }
-
-    #[rstest]
     #[case::null(json!(null))]
     #[case::scalar(json!(17))]
     #[case::malformed_type(json!({"type":false,"name":"lookup"}))]

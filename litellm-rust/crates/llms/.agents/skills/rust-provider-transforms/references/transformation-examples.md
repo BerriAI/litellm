@@ -54,7 +54,7 @@ Regression: deserialize a real `ToolDefinition`, run `bedrock_tool_definition`, 
 
 Bedrock Invoke carries `anthropic_beta` in the body, removes the HTTP beta header, and omits body `model` and `stream` because the endpoint identifies both. Vertex also omits body `model`
 
-The shared `prepare_wire_request` default retains normal request serialization and headers. Providers override the hook for their own wire policy; `inference-messages` invokes it before request interceptors. A shared wire hook is justified by these differing contracts
+The `inference-messages` handler serializes `MessagesRequest` with `messages_request_body` before request interceptors and forwards authenticated headers separately. Provider-specific wire payload changes belong in the provider request transformation
 
 For Invoke streaming, retain the typed request's stream intent even though wire serialization removes `stream`. Test request preparation and streaming selection together; checking only the serialized body misses that dependency
 

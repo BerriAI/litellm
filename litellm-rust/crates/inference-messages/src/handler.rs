@@ -8,10 +8,11 @@ use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     messages::{
         streaming::{ByteStream, StreamDecoder, encode_anthropic_sse},
-        transformation::BaseMessagesConfig,
+        transformation::{BaseMessagesConfig, messages_request_body},
     },
 };
 use litellm_llms_types::formats::messages::MessagesResponse;
+use litellm_llms_types::serde_compat::Nullable;
 use litellm_tracing::ByteChunk;
 use serde_json::Value;
 
@@ -64,24 +65,20 @@ impl MessagesRoute {
             model: request_context.model.clone(),
             provider: request_context.custom_llm_provider.clone(),
         };
-        let prepared_wire = provider
-            .config()
-            .prepare_wire_request(&body, authenticated.headers)?;
-        let stream_default =
-            prepared_wire.body.get("stream").is_none() && body.params.stream.unwrap_or(false);
+        let wire_body = messages_request_body(&body)?;
         let wire = context
             .interceptors
             .before_provider_request(
                 WireRequest {
                     url,
-                    headers: prepared_wire.headers,
-                    body: prepared_wire.body,
+                    headers: authenticated.headers,
+                    body: wire_body,
                 },
                 request_context,
             )
             .await?;
         let stream = match wire.body.get("stream") {
-            None => stream_default,
+            None => false,
             Some(Value::Null) => false,
             Some(Value::Bool(stream)) => *stream,
             Some(value) => {

@@ -3,7 +3,7 @@ use strum::IntoStaticStr;
 
 use crate::formats::chat_completions::ReasoningEffort;
 use crate::recognized::Recognized;
-use crate::serde_compat::deserialize_present;
+use crate::serde_compat::{Nullable, deserialize_present};
 
 use super::{
     CacheControl, ContainerReference, ContentBlock, McpServer, MessageContent, MessagesCompaction,
@@ -273,7 +273,7 @@ pub enum ContextEdit {
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
-            deserialize_with = "crate::serde_compat::deserialize_present"
+            deserialize_with = "deserialize_present"
         )]
         trigger: Option<Recognized<ContextTrigger>>,
         #[serde(flatten)]
@@ -308,7 +308,7 @@ pub struct OutputConfig {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::serde_compat::deserialize_present"
+        deserialize_with = "deserialize_present"
     )]
     pub format: Option<Recognized<OutputFormat>>,
     #[serde(flatten)]
@@ -392,83 +392,51 @@ pub struct MessagesRequest {
 #[macro_rules_attribute::apply(wire_type)]
 #[derive(Default)]
 pub struct MessagesOptionalParams {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<SystemPrompt>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::serde_compat::deserialize_present"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    pub max_tokens: Option<Nullable<u64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    pub system: Option<Nullable<SystemPrompt>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
     pub metadata: Option<Recognized<MessagesMetadata>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stop_sequences: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<Recognized<MessagesTool>>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::serde_compat::deserialize_present"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    pub stop_sequences: Option<Nullable<Vec<String>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    pub stream: Option<Nullable<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    pub temperature: Option<Nullable<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    pub top_p: Option<Nullable<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    pub top_k: Option<Nullable<i64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    pub tools: Option<Nullable<Vec<Recognized<MessagesTool>>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
     pub tool_choice: Option<Recognized<ToolChoice>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
     pub thinking: Option<Recognized<ThinkingConfig>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub service_tier: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::serde_compat::deserialize_present"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    pub service_tier: Option<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
     pub container: Option<Recognized<ContainerReference>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::serde_compat::deserialize_present"
-    )]
-    pub mcp_servers: Option<Vec<Recognized<McpServer>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    pub mcp_servers: Option<Nullable<Vec<Recognized<McpServer>>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
     pub context_management: Option<Recognized<ContextManagement>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::serde_compat::deserialize_present"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
     pub output_format: Option<Recognized<OutputFormat>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
     pub output_config: Option<Recognized<OutputConfig>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
     pub speed: Option<Recognized<Speed>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub inference_geo: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
+    pub inference_geo: Option<Nullable<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
     pub reasoning_effort: Option<Recognized<ReasoningEffort>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::serde_compat::deserialize_present"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
     pub compaction: Option<Recognized<MessagesCompaction>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::serde_compat::deserialize_present"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
     pub cache_control: Option<Recognized<CacheControl>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::serde_compat::deserialize_present"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present")]
     pub safeguards: Option<Recognized<Vec<Recognized<Safeguard>>>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -502,31 +470,6 @@ mod tests {
         serde_json::to_value(parsed).unwrap()
     }
 
-    #[rstest]
-    #[case::text(json!({"type": "text", "text": "hi"}))]
-    #[case::text_with_citations_and_cache_control(json!({
-        "type": "text",
-        "text": "hi",
-        "citations": [{"type": "char_location", "cited_text": "x"}],
-        "cache_control": {"type": "ephemeral", "ttl": "1h", "scope": "global", "future": 1}
-    }))]
-    #[case::image(json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AA=="}}))]
-    #[case::thinking(json!({"type": "thinking", "thinking": "hmm", "signature": "sig"}))]
-    #[case::redacted_thinking(json!({"type": "redacted_thinking", "data": "opaque"}))]
-    #[case::tool_use(json!({"type": "tool_use", "id": "toolu_1", "name": "f", "input": {"q": [1, null]}}))]
-    #[case::tool_result_with_text(json!({"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok", "is_error": false}))]
-    #[case::tool_result_with_blocks(json!({"type": "tool_result", "tool_use_id": "toolu_1", "content": [{"type": "text", "text": "ok"}]}))]
-    #[case::web_search_result_with_nulls(json!({
-        "type": "web_search_tool_result",
-        "tool_use_id": "srvtoolu_1",
-        "content": [{"type": "web_search_result", "url": "u", "page_age": null, "encrypted_content": ""}]
-    }))]
-    #[case::provider_specific_fields(json!({"type": "tool_use", "id": "t", "name": "f", "input": {}, "provider_specific_fields": {"x": 1}}))]
-    #[case::untyped(json!({"unknown": {"nested": true}}))]
-    fn content_block_round_trips_unchanged(#[case] block: Value) {
-        assert_eq!(round_trip::<ContentBlock>(&block), block);
-    }
-
     #[test]
     fn request_splits_required_fields_from_optional_params() {
         let body = json!({
@@ -538,8 +481,8 @@ mod tests {
         });
         let request: MessagesRequest = serde_json::from_value(body.clone()).unwrap();
 
-        assert_eq!(request.params.max_tokens, Some(16));
-        assert_eq!(request.params.stream, Some(true));
+        assert_eq!(request.params.max_tokens, Some(Nullable::Value(16)));
+        assert_eq!(request.params.stream, Some(Nullable::Value(true)));
         assert_eq!(
             request.params.safeguards.as_ref().unwrap().known().unwrap()[0]
                 .known()

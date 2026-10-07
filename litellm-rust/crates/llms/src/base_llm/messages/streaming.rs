@@ -112,10 +112,14 @@ mod tests {
                 extra: Default::default(),
             },
             MessagesStreamEvent::MessageStop {
-                usage: Some(Box::new(MessagesUsage {
-                    output_tokens: Some(litellm_llms_types::serde_compat::Nullable::Value(7)),
-                    ..MessagesUsage::default()
-                })),
+                usage: Some(litellm_llms_types::serde_compat::Nullable::Value(Box::new(
+                    MessagesUsage {
+                        output_tokens: Some(
+                            litellm_llms_types::serde_compat::Nullable::Value(7),
+                        ),
+                        ..MessagesUsage::default()
+                    },
+                ))),
                 extra: Default::default(),
             },
         ]

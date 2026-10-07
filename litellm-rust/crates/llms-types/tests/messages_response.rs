@@ -88,6 +88,7 @@ fn response_wire() -> Value {
         "stop_reason":"refusal","stop_sequence":null,
         "stop_details":{"type":"refusal","category":null,"explanation":"reason"},
         "usage":{"input_tokens":9,"output_tokens":3,"server_tool_use":{"web_search_requests":2},"iterations":[{"type":"compaction","input_tokens":7,"output_tokens":1},{"type":"message","input_tokens":2,"output_tokens":2}],"future":null},
+        "container":{"id":"container_1"},
         "context_management":{"applied_edits":[{"type":"compact_20260112","summary_input_tokens":7,"summary_output_tokens":1,"warnings":["warning"]}]},
         "safeguard_results":[{"future":[1,null]}],"future_response":true
     })
@@ -96,7 +97,10 @@ fn response_wire() -> Value {
 #[rstest]
 fn response_exposes_content_usage_and_metadata(response_wire: Value) {
     let response: MessagesResponse = serde_json::from_value(response_wire.clone()).unwrap();
-    assert_eq!(response.stop_reason, Some(StopReason::Refusal));
+    assert_eq!(
+        response.stop_reason,
+        Some(Nullable::Value(StopReason::Refusal))
+    );
     assert_eq!(
         response
             .stop_details
@@ -130,6 +134,16 @@ fn response_exposes_content_usage_and_metadata(response_wire: Value) {
             .web_search_requests,
         Some(Recognized::Known(2))
     );
+    assert_eq!(
+        response
+            .container
+            .as_ref()
+            .unwrap()
+            .known()
+            .unwrap()
+            .id,
+        Some(Recognized::Known("container_1".into()))
+    );
     let iterations = usage.iterations.as_ref().unwrap().known().unwrap();
     assert_eq!(
         iterations[0].known().unwrap().iteration_type,
@@ -155,6 +169,20 @@ fn response_exposes_content_usage_and_metadata(response_wire: Value) {
         Some(Recognized::Known(7))
     );
     assert_eq!(serde_json::to_value(response).unwrap(), response_wire);
+}
+
+#[rstest]
+#[case::missing(json!({
+    "id":"msg_1","type":"message","role":"assistant","model":"test-model","content":[]
+}))]
+#[case::explicit_nulls(json!({
+    "id":"msg_1","type":"message","role":"assistant","model":"test-model","content":[],
+    "stop_reason":null,"stop_sequence":null,"usage":null,"container":null,
+    "stop_details":null,"context_management":null,"safeguard_results":null
+}))]
+fn optional_response_fields_distinguish_missing_and_explicit_null(#[case] wire: Value) {
+    let response: MessagesResponse = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(response).unwrap(), wire);
 }
 
 #[rstest]

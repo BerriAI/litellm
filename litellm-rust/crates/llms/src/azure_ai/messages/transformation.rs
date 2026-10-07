@@ -4,6 +4,7 @@ use litellm_llms_types::formats::messages::{
     CacheControl, ContentBlock, Message, MessageContent, MessagesOptionalParams, MessagesRequest,
     SystemPrompt,
 };
+use litellm_llms_types::serde_compat::Nullable;
 
 use crate::{
     Error,
@@ -67,7 +68,12 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
                     .map(strip_scope_from_message)
                     .collect(),
                 params: MessagesOptionalParams {
-                    system: request.params.system.map(strip_scope_from_system),
+                    system: request.params.system.map(|system| match system {
+                        Nullable::Null => Nullable::Null,
+                        Nullable::Value(system) => {
+                            Nullable::Value(strip_scope_from_system(system))
+                        }
+                    }),
                     ..request.params
                 },
                 ..request

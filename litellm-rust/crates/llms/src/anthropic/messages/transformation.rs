@@ -1,12 +1,13 @@
 use litellm_auth::CredentialPlacement;
 use litellm_llms_types::{
     formats::messages::{
-        ContextEdit, ContextManagement, ContextTrigger, Message, MessagesOptionalParams,
-        MessagesRequest, Speed,
+        ContentBlock, ContentBlockType, ContextEdit, ContextManagement, ContextTrigger, Message,
+        MessagesOptionalParams, MessagesRequest, Speed, SystemPrompt,
     },
     providers::anthropic::{AnthropicBeta, BetaSet},
     recognized::Recognized,
 };
+use litellm_llms_types::serde_compat::Nullable;
 use serde_json::{Map, Value, json};
 
 use super::{
@@ -25,10 +26,7 @@ use crate::{
     },
     base_llm::{
         auth::AuthScheme,
-        messages::{
-            normalization::strip_billing_metadata,
-            transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
-        },
+        messages::transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
     },
 };
 
@@ -117,7 +115,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ThinkingSemantics {
+pub(crate) enum ThinkingSemantics {
     /// Claude's rules: disabled thinking is dropped, legacy and adaptive thinking and effort
     /// are rewritten for the model, and a temperature that conflicts with thinking is removed.
     Anthropic,
@@ -126,25 +124,25 @@ pub enum ThinkingSemantics {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BillingMetadata {
+pub(crate) enum BillingMetadata {
     Forward,
     Strip,
 }
 
 /// How an Anthropic-wire host diverges from the first-party request policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RequestPolicy {
-    pub thinking: ThinkingSemantics,
-    pub billing_metadata: BillingMetadata,
+pub(crate) struct RequestPolicy {
+    pub(crate) thinking: ThinkingSemantics,
+    pub(crate) billing_metadata: BillingMetadata,
 }
 
-pub const FIRST_PARTY_REQUEST_POLICY: RequestPolicy = RequestPolicy {
+pub(crate) const FIRST_PARTY_REQUEST_POLICY: RequestPolicy = RequestPolicy {
     thinking: ThinkingSemantics::Anthropic,
     billing_metadata: BillingMetadata::Forward,
 };
 
 /// A third-party host that speaks the Anthropic wire format but is not Claude.
-pub const COMPATIBLE_HOST_REQUEST_POLICY: RequestPolicy = RequestPolicy {
+pub(crate) const COMPATIBLE_HOST_REQUEST_POLICY: RequestPolicy = RequestPolicy {
     thinking: ThinkingSemantics::Passthrough,
     billing_metadata: BillingMetadata::Strip,
 };
@@ -156,11 +154,126 @@ pub(crate) fn transform_messages_request(
     transform_messages_request_with(request, context, FIRST_PARTY_REQUEST_POLICY)
 }
 
+fn is_billing_metadata(text: &str) -> bool {
+    text.starts_with("x-anthropic-billing-header:")
+}
+
+fn is_billing_metadata_block(block: &ContentBlock) -> bool {
+    matches!(
+        block.block_type,
+        Some(Nullable::Value(ContentBlockType::Text))
+    ) && matches!(&block.text, Some(Nullable::Value(text)) if is_billing_metadata(text))
+}
+
+fn without_billing_metadata(system: SystemPrompt) -> Option<SystemPrompt> {
+    match system {
+        SystemPrompt::Text(text) if text.is_empty() || is_billing_metadata(&text) => None,
+        SystemPrompt::Text(text) => Some(SystemPrompt::Text(text)),
+        SystemPrompt::Blocks(blocks) => {
+            let kept: Vec<ContentBlock> = blocks
+                .into_iter()
+                .filter(|block| !is_billing_metadata_block(block))
+                .collect();
+            (!kept.is_empty()).then_some(SystemPrompt::Blocks(kept))
+        }
+    }
+}
+
+pub(crate) fn strip_billing_metadata(request: MessagesRequest) -> MessagesRequest {
+    MessagesRequest {
+        params: MessagesOptionalParams {
+            system: request
+                .params
+                .system
+                .and_then(Nullable::into_value)
+                .and_then(without_billing_metadata)
+                .map(Nullable::Value),
+            ..request.params
+        },
+        ..request
+    }
+}
+
 pub(crate) fn transform_messages_request_with(
     request: MessagesRequest,
     context: &MessagesTransformContext,
     policy: RequestPolicy,
 ) -> Result<MessagesRequest, Error> {
+    let params = request.params;
+    let request = MessagesRequest {
+        params: MessagesOptionalParams {
+            max_tokens: params
+                .max_tokens
+                .filter(|value| matches!(value, Nullable::Value(_))),
+            system: params
+                .system
+                .filter(|value| matches!(value, Nullable::Value(_))),
+            metadata: params
+                .metadata
+                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+            stop_sequences: params
+                .stop_sequences
+                .filter(|value| matches!(value, Nullable::Value(_))),
+            stream: params
+                .stream
+                .filter(|value| matches!(value, Nullable::Value(_))),
+            temperature: params
+                .temperature
+                .filter(|value| matches!(value, Nullable::Value(_))),
+            top_p: params
+                .top_p
+                .filter(|value| matches!(value, Nullable::Value(_))),
+            top_k: params
+                .top_k
+                .filter(|value| matches!(value, Nullable::Value(_))),
+            tools: params
+                .tools
+                .filter(|value| matches!(value, Nullable::Value(_))),
+            tool_choice: params
+                .tool_choice
+                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+            thinking: params
+                .thinking
+                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+            service_tier: params
+                .service_tier
+                .filter(|value| matches!(value, Nullable::Value(_))),
+            container: params
+                .container
+                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+            mcp_servers: params
+                .mcp_servers
+                .filter(|value| matches!(value, Nullable::Value(_))),
+            context_management: params
+                .context_management
+                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+            output_format: params
+                .output_format
+                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+            output_config: params
+                .output_config
+                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+            speed: params
+                .speed
+                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+            inference_geo: params
+                .inference_geo
+                .filter(|value| matches!(value, Nullable::Value(_))),
+            reasoning_effort: params
+                .reasoning_effort
+                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+            compaction: params
+                .compaction
+                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+            cache_control: params
+                .cache_control
+                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+            safeguards: params
+                .safeguards
+                .filter(|value| !matches!(value, Recognized::Unrecognized(Value::Null))),
+        },
+        ..request
+    };
     if request.params.max_tokens.is_none() {
         return Err(Error::MissingField("max_tokens"));
     }
@@ -178,7 +291,13 @@ pub(crate) fn transform_messages_request_with(
         .context_management
         .clone()
         .map(map_openai_context_management_to_anthropic);
-    let messages = if has_advisor_tool(request.params.tools.as_deref()) {
+    let messages = if has_advisor_tool(
+        request
+            .params
+            .tools
+            .as_ref()
+            .and_then(Nullable::as_deref),
+    ) {
         request.messages
     } else {
         strip_advisor_blocks(request.messages)
@@ -202,7 +321,7 @@ pub(crate) fn update_headers_with_anthropic_beta(
 
 fn feature_betas(request: &MessagesRequest) -> BetaSet {
     let params = &request.params;
-    let tools = params.tools.as_deref();
+    let tools = params.tools.as_ref().and_then(Nullable::as_deref);
     [
         requires_native_compaction_beta(params.compaction.as_ref(), &request.messages)
             .then_some(AnthropicBeta::Compact20260904),
@@ -297,7 +416,12 @@ fn drop_unsupported_params(
             ..request
         });
     }
-    let temperature = match params.temperature {
+    let temperature = match params
+        .temperature
+        .as_ref()
+        .and_then(Nullable::value)
+        .copied()
+    {
         Some(temperature) if temperature != 1.0 => {
             reject(
                 "temperature",
@@ -308,16 +432,16 @@ fn drop_unsupported_params(
         }
         temperature => temperature,
     };
-    if let Some(top_p) = params.top_p {
+    if let Some(top_p) = params.top_p.as_ref().and_then(Nullable::value).copied() {
         reject("top_p", json!(top_p).to_string(), "")?;
     }
-    if let Some(top_k) = params.top_k {
+    if let Some(top_k) = params.top_k.as_ref().and_then(Nullable::value).copied() {
         reject("top_k", json!(top_k).to_string(), "")?;
     }
     Ok(MessagesRequest {
         params: MessagesOptionalParams {
             speed,
-            temperature,
+            temperature: temperature.map(Nullable::Value),
             top_p: None,
             top_k: None,
             ..params
@@ -511,6 +635,52 @@ mod tests {
         );
         assert_eq!(transformed["thinking"], thinking);
         assert_eq!(transformed["system"], system);
+    }
+
+    #[rstest]
+    #[case::first_party(FIRST_PARTY_REQUEST_POLICY)]
+    #[case::compatible_host(COMPATIBLE_HOST_REQUEST_POLICY)]
+    fn top_level_explicit_null_params_are_omitted(#[case] policy: RequestPolicy) {
+        let transformed = transform_with(
+            json!({
+                "tools": null,
+                "thinking": null,
+                "metadata": null,
+                "tool_choice": null
+            }),
+            policy,
+        );
+        assert!(transformed.get("tools").is_none());
+        assert!(transformed.get("thinking").is_none());
+        assert!(transformed.get("metadata").is_none());
+        assert!(transformed.get("tool_choice").is_none());
+    }
+
+    #[rstest]
+    #[case::first_party(FIRST_PARTY_REQUEST_POLICY)]
+    #[case::compatible_host(COMPATIBLE_HOST_REQUEST_POLICY)]
+    fn explicit_null_max_tokens_matches_missing(#[case] policy: RequestPolicy) {
+        let context = MessagesTransformContext::with_lookup(
+            MessagesModelCapabilities::default(),
+            false,
+            &no_env,
+        );
+        let missing: MessagesRequest = serde_json::from_value(json!({
+            "model": "claude",
+            "messages": [{"role": "user", "content": "Hello"}]
+        }))
+        .unwrap();
+        let explicit_null: MessagesRequest = serde_json::from_value(json!({
+            "model": "claude",
+            "max_tokens": null,
+            "messages": [{"role": "user", "content": "Hello"}]
+        }))
+        .unwrap();
+        let missing_error =
+            transform_messages_request_with(missing, &context, policy).unwrap_err();
+        let explicit_null_error =
+            transform_messages_request_with(explicit_null, &context, policy).unwrap_err();
+        assert_eq!(explicit_null_error, missing_error);
     }
 
     #[rstest]

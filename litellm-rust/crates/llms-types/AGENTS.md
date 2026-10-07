@@ -15,6 +15,7 @@
 
 - Keep one canonical definition and import path; update consumers together rather than adding duplicate models or compatibility re-exports
 - Preserve each contract's missing/null distinction, unknown fields, discriminator handling and malformed-input acceptance
+- When omission and explicit null differ, use `Option<Nullable<T>>` or `Option<Recognized<T>>` with `deserialize_present` as appropriate
 - Keep one representation of a field; typed fields must not also live in an extension map
 - Allow shape validation, constructors, accessors, schema generation and exact value conversions; defaults describe data, not runtime policy
 

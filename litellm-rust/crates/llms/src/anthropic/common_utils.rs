@@ -7,7 +7,7 @@ use litellm_http::request::{
 use litellm_llms_types::{
     formats::messages::{
         BlockContent, BuiltinMessagesTool, ContentBlock, ContentBlockPayload, ContentBlockType,
-        EffortLevel, Message, MessageContent, MessagesCompaction, MessagesTool,
+        EffortLevel, Message, MessageContent, MessageRole, MessagesCompaction, MessagesTool,
     },
     providers::anthropic::{AnthropicBeta, BetaSet},
     recognized::Recognized,
@@ -429,7 +429,7 @@ pub fn strip_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
     messages
         .into_iter()
         .map(|message| {
-            if message.role.as_str() != "assistant" {
+            if message.role != MessageRole::Assistant {
                 return message;
             }
             let MessageContent::Blocks(blocks) = &message.content else {

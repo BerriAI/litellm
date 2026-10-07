@@ -214,11 +214,14 @@ pub struct MessageStopUsagePromoter {
 }
 
 fn promoted_usage(
-    delta: Option<Box<MessagesUsage>>,
+    delta: Option<Nullable<Box<MessagesUsage>>>,
     stop: Option<&MessagesUsage>,
     start: Option<&MessagesUsage>,
-) -> Option<Box<MessagesUsage>> {
-    let delta = delta.map(|usage| *usage).unwrap_or_default();
+) -> Option<Nullable<Box<MessagesUsage>>> {
+    let delta = delta
+        .and_then(Nullable::into_value)
+        .map(|usage| *usage)
+        .unwrap_or_default();
     let merged = MessagesUsage {
         input_tokens: stop
             .and_then(|stop| stop.input_tokens.and_then(Nullable::into_value))
@@ -252,7 +255,7 @@ fn promoted_usage(
             .or_else(|| start.and_then(|start| start.cache_creation.clone())),
         ..delta
     };
-    (merged != MessagesUsage::default()).then(|| Box::new(merged))
+    (merged != MessagesUsage::default()).then(|| Nullable::Value(Box::new(merged)))
 }
 
 fn promoted(
@@ -292,7 +295,13 @@ impl StreamTransformer for MessageStopUsagePromoter {
                 Ok(pending.into_iter().collect())
             }
             MessagesStreamEvent::MessageStop { usage, extra } => Ok(pending
-                .map(|delta| promoted(delta, usage.as_deref(), self.start_usage.as_ref()))
+                .map(|delta| {
+                    promoted(
+                        delta,
+                        usage.as_ref().and_then(Nullable::as_deref),
+                        self.start_usage.as_ref(),
+                    )
+                })
                 .into_iter()
                 .chain([MessagesStreamEvent::MessageStop { usage, extra }])
                 .collect()),

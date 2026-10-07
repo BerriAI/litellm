@@ -6,7 +6,7 @@
 
 - Payload shaping, metadata filtering, tool-ID rewriting, web-search replay handling, thinking translation and beta selection are Anthropic policy and stay here or in Anthropic helpers
 - Azure reuses the shaping, request transformation and beta merge, and Bedrock reuses the shaping. That reuse does not make this policy part of the shared Messages contract
-- Shared Anthropic-wire request policies belong here and land with the foundation; provider adapters opt into them without widening thinking helpers beyond this module
+- The first-party request policy is wired today. The DeepSeek adapter in #45100 consumes the compatible-host policy; this does not imply general adapter opt-in
 - `web_search_result`, `web_search_tool_result_error` and encrypted-content schemas belong to `litellm-llms-types`. Only the decisions about flattening, encrypted results, betas and capabilities live here
 
 # invariants

@@ -7,6 +7,7 @@ use litellm_inference_messages::{MessagesCallResponse, messages_body};
 use litellm_inference_testing::{
     RecordingSecrets, http_config, no_secrets, provider_http, resources,
 };
+use litellm_llms_types::serde_compat::Nullable;
 use rstest::rstest;
 
 use super::*;
@@ -116,7 +117,11 @@ async fn the_provider_message_is_returned(call: MessagesCall, #[case] provider: 
         json!([{"type": "text", "text": "hi"}])
     );
     assert_eq!(
-        message.stop_reason.as_ref().map(|reason| reason.as_str()),
+        message
+            .stop_reason
+            .as_ref()
+            .and_then(Nullable::value)
+            .map(|reason| reason.as_str()),
         Some("end_turn")
     );
 }
@@ -153,7 +158,11 @@ async fn the_message_passes_through_losslessly(call: MessagesCall) {
     .await;
 
     assert_eq!(
-        message.stop_reason.as_ref().map(|reason| reason.as_str()),
+        message
+            .stop_reason
+            .as_ref()
+            .and_then(Nullable::value)
+            .map(|reason| reason.as_str()),
         Some("refusal")
     );
     assert_eq!(serde_json::to_value(&message).unwrap(), upstream_body);

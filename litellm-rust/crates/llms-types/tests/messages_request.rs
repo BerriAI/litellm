@@ -152,24 +152,50 @@ fn nested_content_is_available_without_reparsing_json() {
 
 #[rstest]
 #[case::typed(json!({
+    "max_tokens":1024,"system":"be concise",
     "metadata":{"user_id":"user"},
+    "stop_sequences":["STOP"],"stream":true,"temperature":0.4,"top_p":0.9,"top_k":40,
+    "tools":[{"name":"lookup","input_schema":{"type":"object"}}],
     "tool_choice":{"type":"tool","name":"lookup","disable_parallel_tool_use":true},
     "mcp_servers":[{"type":"url","name":"server","url":"https://example.test","tool_configuration":{"allowed_tools":["lookup"]}}],
+    "thinking":{"type":"enabled","budget_tokens":1024},
+    "service_tier":"auto",
     "container":{"id":"container_1","expires_at":null,"skills":[{"type":"custom","skill_id":"skill_1","version":"1"}]},
+    "context_management":{"edits":[]},
+    "output_format":{"type":"json_schema","schema":{"type":"object"},"strict":true},
+    "speed":"fast",
+    "inference_geo":"us",
+    "reasoning_effort":"high",
     "compaction":{"type":"summarize","instructions":"summarize"},
     "output_config":{"format":{"type":"json_schema","schema":{"type":"object"},"strict":true}},
     "cache_control":{"type":"ephemeral"},
     "safeguards":[{"type":"dangerous_tool_use","classifier_context":{"future":null}}]
 }))]
 #[case::unknown_and_wrong_shapes(json!({
-    "metadata":false,"tool_choice":{"type":"future"},"mcp_servers":[false],"container":"container_id",
-    "compaction":17,"output_format":[],"output_config":{"format":"future"},"cache_control":false,"safeguards":"future"
+    "metadata":false,"tool_choice":{"type":"future"},"thinking":false,"mcp_servers":[false],
+    "container":"container_id","context_management":false,"compaction":17,"output_format":[],
+    "output_config":{"format":"future"},"speed":"turbo","reasoning_effort":17,
+    "cache_control":false,"safeguards":"future"
 }))]
+#[case::missing(json!({}))]
 #[case::explicit_nulls(json!({
-    "metadata":null,"tool_choice":null,"container":null,"compaction":null,"output_format":null,
-    "output_config":{"format":null},"cache_control":null,"safeguards":null
+    "max_tokens":null,"system":null,"metadata":null,"stop_sequences":null,"stream":null,
+    "temperature":null,"top_p":null,"top_k":null,"tools":null,"tool_choice":null,
+    "thinking":null,"service_tier":null,"container":null,"mcp_servers":null,
+    "context_management":null,"output_format":null,"output_config":null,"speed":null,
+    "inference_geo":null,"reasoning_effort":null,"compaction":null,
+    "cache_control":null,"safeguards":null
 }))]
 fn optional_contracts_preserve_wire_values(#[case] params: Value) {
+    use litellm_llms_types::formats::messages::MessagesOptionalParams;
+
+    let parsed: MessagesOptionalParams = serde_json::from_value(params.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), params);
+}
+
+#[rstest]
+#[case::nested_explicit_null(json!({"output_config":{"format":null}}))]
+fn optional_contracts_preserve_nested_explicit_nulls(#[case] params: Value) {
     use litellm_llms_types::formats::messages::MessagesOptionalParams;
 
     let parsed: MessagesOptionalParams = serde_json::from_value(params.clone()).unwrap();

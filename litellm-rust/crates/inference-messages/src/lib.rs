@@ -10,6 +10,7 @@ use litellm_auth::AuthServices;
 use litellm_host::interceptors::{ExecutionFacts, Interceptors, ResultSource};
 
 use litellm_inference::{caching::CallCache, context::CallContext};
+use litellm_llms_types::serde_compat::Nullable;
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 
@@ -64,7 +65,13 @@ impl MessagesRoute {
         model = %call.body.model,
         provider,
         resolved_model,
-        stream = call.body.params.stream == Some(true),
+        stream = call
+            .body
+            .params
+            .stream
+            .as_ref()
+            .and_then(Nullable::value)
+            == Some(&true),
         outcome
     ))]
     async fn run(

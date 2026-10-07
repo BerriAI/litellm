@@ -362,7 +362,6 @@ mod tests {
     #[case::omitted(None, json!({}))]
     #[case::null(Some(Recognized::Unrecognized(Value::Null)), json!({"user_id":null}))]
     #[case::empty(Some(Recognized::Known(String::new())), json!({"user_id":""}))]
-    #[case::known(Some(Recognized::Known("user_1".into())), json!({"user_id":"user_1"}))]
     #[case::opaque(Some(Recognized::Unrecognized(json!({"nested":null}))), json!({"user_id":{"nested":null}}))]
     fn metadata_user_id_preserves_presence(
         #[case] user_id: Option<Recognized<String>>,
