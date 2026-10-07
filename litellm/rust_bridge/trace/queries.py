@@ -16,6 +16,8 @@ from .generated.models import (
     LensEvidenceParams,
     LensSampleParams,
     PartRow,
+    TraceAgentRow,
+    TraceAgentsParams,
     TraceQueryColumn,
 )
 from .generated.types import ReadQueryName
@@ -68,4 +70,7 @@ LENS_CONTENT: Final[ReadQuery[LensContentParams, PartRow]] = ReadQuery(
 )
 LENS_EVIDENCE: Final[ReadQuery[LensEvidenceParams, CountRow]] = ReadQuery(
     "evidence", LensEvidenceParams, TypeAdapter(QueryResponse[CountRow])
+)
+TRACE_AGENTS: Final[ReadQuery[TraceAgentsParams, TraceAgentRow]] = ReadQuery(
+    "trace_agents", TraceAgentsParams, TypeAdapter(QueryResponse[TraceAgentRow])
 )
