@@ -707,7 +707,7 @@ class ManagementClient:
             response_type=NoBody,
         )
 
-    @step('Send a /chat/completions request to {model} with the prompt "{content}"')
+    @step("Send a /chat/completions request to {model}")
     def chat_status(self, key: str, model: str, content: str) -> StreamingResponse:
         return self.proxy.transport.send(
             "/chat/completions",
