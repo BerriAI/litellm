@@ -2,6 +2,8 @@
 
 Lens reviews recorded activity and saves evidence-linked findings in the LiteLLM dashboard under Observability, Lens (`/ui/lens/`)
 
+Response usefulness ratings (0–10), feedback APIs, and permissions are documented in [Feedback](feedback.md)
+
 ## Install
 
 Build LiteLLM and its worker from the same source commit with the same release identity. The worker runs separately and connects to your gateway using a limited worker token

@@ -580,6 +580,7 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger, run_spend_event
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.lens.endpoints import router as lens_router
+from litellm.proxy.lens.feedback import router as lens_feedback_router
 from litellm.proxy.list_api.common import (
     ManagementProblem,
     problem_response,
@@ -20111,6 +20112,7 @@ app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
 app.include_router(lens_router)
+app.include_router(lens_feedback_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(prompt_caching_requests_router)
