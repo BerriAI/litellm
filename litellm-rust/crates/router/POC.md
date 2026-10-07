@@ -107,6 +107,31 @@ Rust keeps running the loop and asks Python at fixed points, with one host op pe
 
 Some of these features read the model list (the auto router looks up its tier groups), so they depend on increment 2 keeping the Python side in step with the snapshot
 
+#### Approaches (sketch, 2026-10-07)
+
+Where each feature sits in Python's flow today (spec sections 2.2 and 2.4):
+- the pre-routing hook runs at the start of every pick, retries included, before candidates are resolved. It can rewrite the model, the messages and the tier's `litellm_params`, and stamps `routing_decision`, consumed tags and the session affinity TTL into the metadata bucket
+- CustomLogger `async_filter_deployments` (which is also how the optional pre-call checks plug in: prompt caching, encrypted content affinity, deployment affinity, model rate limits) is filter 8 of 15, after cooldowns, and routing plugins are filter 11
+- a custom routing strategy replaces `async_get_available_deployment` as a whole
+- the proxy's fallback access and budget checks run before each cross-group fallback target, inside the fallback loop Rust already owns
+- fallback events and `router_cooldown_event_callback` are notifications with no answer
+
+Two facts hold whichever way we go. First, the features that learn from outcomes (the adaptive router, the affinity and rate-limit checks) do it through their own `CustomLogger`s in `litellm.callbacks`, and every attempt still calls `litellm.<op>` with logging, so they keep getting those events with no forwarding from Rust. That only works if the Python-side router stops removing them: `discard()` today drops the router's own callbacks and its `optional_callbacks` together, and only the first should go. Second, their state lives on the Python-side router, which increment 2 already keeps in step with the snapshot
+
+Option A, one host op per hook point. New `RouterHostCall` variants (`PreRoute`, `Narrow`, `Pick`, `AllowFallback`, `Notify`) that the engine sends only when the snapshot says the feature is on. Python answers each by calling the existing method on the Python-side router, rebuilding the deployment dicts and request kwargs those methods expect from ids
+- good: Rust keeps the whole pipeline and its order, every decision shows up in the differential harness, and features can move to native code one op at a time
+- costs: up to four extra crossings per attempt with features on, and an adapter per hook. The pre-routing hook in particular writes into the request's metadata and can move the request to another group, which the engine then has to follow for fallback lookups (Python looks the chain up by the tier group first)
+
+Option B, hand selection to Python for configs that use these features. The attempt's target becomes `Select { group, excluded, retry_skipped }` instead of a deployment id: Python runs `async_get_available_deployment` on the Python-side router (pre-routing hook, filters, plugins, custom strategy, all of it), with Rust's active cooldowns passed in as `_excluded_deployment_ids`, calls `litellm.<op>` in the same op, and reports back the deployment and group it used. Rust keeps retries, backoff, fallback chains, cooldowns and usage
+- good: still one crossing per attempt, exact Python behavior for every selection feature at once, and the same path could later carry tags, `order`, team models, aliases and wildcards, which is most of what the proxy needs
+- costs: for these configs Rust no longer makes the pick, so the POC's claim that Rust drives filter and pick only holds for plain configs. Python's "no deployments" error reads Python's own cooldown cache for its message and cooldown time, so a rejection from Python selection needs mapping onto Rust's state
+
+Option C, hybrid (recommended). Option B for everything on the selection side, and Option A only for the hooks that sit inside the loop Rust owns: an `AllowFallback` op before each fallback target, and notifications folded into the ops Python already applies at the end of a call. That gets every selection feature to parity cheaply, keeps the fallback checks where the proxy expects them, and leaves room to port simple filters (tags, `order`, rate limits) to native Rust later, one at a time
+
+Option D, keep declining and port features natively. Pure-config filters could move to Rust as native code, but the model-driven routers (auto, complexity, adaptive, quality) and custom strategies or plugins are user or ML code that has to stay in Python, so they need A or B eventually anyway
+
+Before prototyping, the choice that matters is whether giving up Rust-made picks for feature configs (B and C) is acceptable for what the POC has to prove, or whether Rust must make every pick (A)
+
 ### Increment 4: what the proxy needs to switch over
 
 Today the proxy always gets `PythonRouter`, because it builds `Router(...)` with arguments the Rust backend declines (`router_general_settings`, `search_tools`, `ignore_invalid_deployments`, `fallback_access_check`, `fallback_budget_check`, `auto_router_capability_limit`). Switching over needs three things:
@@ -183,6 +208,6 @@ Increment 2 (runtime model list changes): `RustRouter.upsert_deployment`, `add_d
 
 Suite survey (2026-10-07, every test run on both backends with Rust pinned to `RUST_REQUIRED`): no Rust-only failure was a wrong routing decision. In `tests/local_testing/test_router_{fallbacks,retries,timeout}.py`, 23 tests pass on Python and fail on Rust: 11 use configs the backend declines (rpm/tpm, wildcards, routing strategies, dict fallback entries, `allowed_fails_policy`) and 12 patch a `PythonRouter` internal (`should_retry_this_error`, `_time_to_sleep_before_retry`, `make_call`, `log_retry`, `_get_stream_timeout`); those modules also hold live tests that need provider keys, so they stay Python-only. In `tests/unit/test_router/test_router.py` 777 of 992 fail on Rust: 248 declined configs, and the rest call `PythonRouter` internals (`async_function_with_fallbacks_common_utils`, the Anthropic stream helpers, ...) or read views increment 4 has to provide (`get_model_group_info`, `get_deployment_by_model_group_name`, `get_deployment_model_info`, `get_model_list`, `get_model_access_groups`, `get_deployment_credentials_with_provider`, ...). Suites that test Python helpers directly (`router_utils/test_fallback_event_handlers.py`, `test_cooldown_handlers.py`, `litellm_core_utils/test_fallback_generalizations.py`) never call the router's own methods, so running them twice adds nothing. Opted in: `tests/unit/test_router_streaming_fallback_metadata.py`, and `tests/unit/test_router_retry_policy_update.py` with increment 2. The parity suites under `tests/test_litellm_rust/router` carry the behavior coverage instead
 
-Next: increment 3, sketching the options for calling Python-only features from Rust (see below), then increment 4
+Next: pick an approach for increment 3 (sketched under its section), prototype it, then increment 4
 
 Known gaps to close or decline: CustomLogger fallback-event hooks and `router_cooldown_event_callback` (increment 3), the 200-key `InMemoryCache` eviction, fallback keys containing `/` (provider-prefixed matching needs the cost map)
