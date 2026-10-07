@@ -66,7 +66,13 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_route_relative_request_path,
     well_known_root_suffix,
 )
-from litellm.proxy._experimental.mcp_server.ui_session_utils import is_ui_session_credential
+from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+    ActingUser,
+    GrantedToolsetIds,
+    acting_user_auth,
+    granted_toolset_ids,
+    is_ui_session_credential,
+)
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -565,10 +571,8 @@ if MCP_AVAILABLE:
         )
         opts: Final = (
             base_options.model_copy(
-                update={  # mutable-ok: Pydantic update payload
-                    "capabilities": base_options.capabilities.model_copy(
-                        update={"prompts": None, "resources": None}  # mutable-ok: Pydantic update payload
-                    )
+                update={
+                    "capabilities": base_options.capabilities.model_copy(update={"prompts": None, "resources": None})
                 }
             )
             if _mcp_proxy_mode.get()
@@ -909,6 +913,8 @@ if MCP_AVAILABLE:
                 return await operations.GatewayOperations(_capture_host_progress_callback(ctx)).execute(
                     ListPromptsRequest(params=params), context
                 )
+        except MCPError:
+            raise
         except Exception as exc:  # noqa: BLE001  # preserve native listing fallback for ingress failures
             verbose_logger.exception("Error in list_prompts endpoint: %s", exc)
             return ListPromptsResult(prompts=[])
@@ -929,6 +935,8 @@ if MCP_AVAILABLE:
                 return await operations.GatewayOperations(_capture_host_progress_callback(ctx)).execute(
                     ListResourcesRequest(params=params), context
                 )
+        except MCPError:
+            raise
         except Exception as exc:  # noqa: BLE001  # preserve native listing fallback for ingress failures
             verbose_logger.exception("Error in list_resources endpoint: %s", exc)
             return ListResourcesResult(resources=[])
@@ -943,6 +951,8 @@ if MCP_AVAILABLE:
                 return await operations.GatewayOperations(_capture_host_progress_callback(ctx)).execute(
                     ListResourceTemplatesRequest(params=params), context
                 )
+        except MCPError:
+            raise
         except Exception as exc:  # noqa: BLE001  # preserve native listing fallback for ingress failures
             verbose_logger.exception("Error in list_resource_templates endpoint: %s", exc)
             return ListResourceTemplatesResult(resource_templates=[])
@@ -1497,7 +1507,7 @@ if MCP_AVAILABLE:
         if _is_admin_terminated_session_id(_session_id, time.monotonic()):
             terminated_response: Final = JSONResponse(
                 status_code=404,
-                content={  # mutable-ok: JSONResponse content must be a plain dict
+                content={
                     "error": "Not Found",
                     "details": "mcp-session-id was terminated by an administrator. Send initialize to start a new session.",
                 },
@@ -1517,16 +1527,21 @@ if MCP_AVAILABLE:
     async def _apply_toolset_scope(
         user_api_key_auth: UserAPIKeyAuth,
         toolset_id: str,
+        acting_user: ActingUser = acting_user_auth,
+        granted: GrantedToolsetIds = granted_toolset_ids,
     ) -> UserAPIKeyAuth:
         """
-        Restrict a key's MCP permissions to a single toolset.
+        Pin a principal's MCP permissions to a single toolset for /toolset/{name}/mcp.
 
-        When a request arrives via /toolset/{name}/mcp we override the key's
-        object_permission so that only the toolset's tools are visible.
+        A virtual key (and an admin session) has its object_permission rewritten to
+        the toolset's servers and tools. A keyless subject resolves per grant source,
+        so a non-admin dashboard session first becomes its admitted user and the
+        toolset rides along as ``mcp_toolset_id``, which every source's grant is
+        intersected with; a team-granted toolset is served without the user's own
+        row capping it.
 
-        Raises HTTPException(403) if the key has an explicit toolset grant list
-        that does not include toolset_id (i.e. mcp_toolsets is set but empty,
-        or set to a list that omits this toolset).  Admin keys always pass.
+        Raises HTTPException(403) unless the principal holds toolset_id through one
+        of its grant sources. Admins always pass.
         """
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
         from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
@@ -1542,26 +1557,31 @@ if MCP_AVAILABLE:
                 detail="API key is scoped to no MCP servers; toolset access is denied.",
             )
 
-        # Access control: non-admin keys must have this toolset in their grant list.
-        # Use _user_has_admin_view so that PROXY_ADMIN_VIEW_ONLY is also treated as admin.
-        is_admin: Final = _user_has_admin_view(user_api_key_auth)
-        if not is_admin:
-            op: Final = user_api_key_auth.object_permission
-            granted: Final = getattr(op, "mcp_toolsets", None) if op else None
-            # granted=None → key has no explicit toolset grants → deny (same semantics as
-            # fetch_mcp_toolsets which returns [] for non-admin keys with no grants configured).
-            # granted=[] or list without toolset_id → also deny.
-            if granted is None or toolset_id not in granted:
+        acting: Final = await acting_user(user_api_key_auth)
+        is_admin: Final = _user_has_admin_view(acting)
+        if not is_admin and toolset_id not in await granted(acting):
+            raise HTTPException(
+                status_code=403,
+                detail=f"API key does not have access to toolset '{toolset_id}'.",
+            )
+        if _is_mcp_admitted_user_subject(acting):
+            resource_server_id: Final = acting.mcp_session_resource_server_id
+            if resource_server_id is not None and resource_server_id not in (
+                await operations.global_mcp_server_manager.resolve_toolset_tool_permissions(
+                    toolset_ids=[toolset_id], requires_fresh_policy=acting.requires_fresh_policy
+                )
+            ):
                 raise HTTPException(
                     status_code=403,
                     detail=f"API key does not have access to toolset '{toolset_id}'.",
                 )
+            return acting.model_copy(update={"mcp_toolset_id": toolset_id})
 
         tool_permissions = await operations.global_mcp_server_manager.resolve_toolset_tool_permissions(
             toolset_ids=[toolset_id]
         )
         server_ids: Final = list(tool_permissions.keys())
-        existing_op: Final = user_api_key_auth.object_permission
+        existing_op: Final = acting.object_permission
         if existing_op is not None:
             updated_op = existing_op.model_copy(
                 update={
@@ -1578,8 +1598,16 @@ if MCP_AVAILABLE:
                 mcp_servers=server_ids,
                 mcp_tool_permissions=tool_permissions,
             )
-        return user_api_key_auth.model_copy(update={"object_permission": updated_op, "mcp_toolset_id": toolset_id})
+        return acting.model_copy(update={"object_permission": updated_op, "mcp_toolset_id": toolset_id})
 
+    async def _toolset_server_ids(toolset_id: str) -> set[str]:
+        return set(
+            await operations.global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=[toolset_id])
+        )
+
+    from litellm.proxy._experimental.mcp_server.catalog import catalog_operation
+
+    @catalog_operation(lambda: operations.global_mcp_server_manager)
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
         mcp_servers: list[str] | None,
@@ -1969,7 +1997,7 @@ if MCP_AVAILABLE:
                 supported: Final = ", ".join(configured_versions())
                 await JSONResponse(
                     status_code=400,
-                    content={  # mutable-ok: JSON-RPC error payload
+                    content={
                         "jsonrpc": "2.0",
                         "id": None,
                         "error": {
@@ -2009,8 +2037,7 @@ if MCP_AVAILABLE:
             toolset_allowed_server_ids: set[str] | None = None
             if active_toolset_id and user_api_key_auth is not None:
                 user_api_key_auth = await _apply_toolset_scope(user_api_key_auth, active_toolset_id)
-                op: Final = user_api_key_auth.object_permission
-                toolset_allowed_server_ids = set(op.mcp_servers or []) if op else set()
+                toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
 
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived
@@ -2314,7 +2341,7 @@ if MCP_AVAILABLE:
                 supported: Final = ", ".join(configured_versions())
                 await JSONResponse(
                     status_code=400,
-                    content={  # mutable-ok: JSON-RPC error payload
+                    content={
                         "jsonrpc": "2.0",
                         "id": None,
                         "error": {
@@ -2357,8 +2384,7 @@ if MCP_AVAILABLE:
             toolset_allowed_server_ids: set[str] | None = None
             if active_toolset_id and user_api_key_auth is not None:
                 user_api_key_auth = await _apply_toolset_scope(user_api_key_auth, active_toolset_id)
-                op: Final = user_api_key_auth.object_permission
-                toolset_allowed_server_ids = set(op.mcp_servers or []) if op else set()
+                toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
 
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import uuid
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -8,8 +9,10 @@ import pytest
 
 import litellm
 import litellm.caching.redis_cache as redis_cache_module
-from litellm.caching.caching import Cache
+from litellm._internal_context import current_service_target
+from litellm.caching.caching import Cache, CacheMode, response_cache_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, _RedisTimeoutLogThrottle
 from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
@@ -51,9 +54,7 @@ def test_cache_key_debug_log_does_not_include_prompt_material(caplog):
     assert re.fullmatch(r"[0-9a-f]{64}", cache_key)
 
     created_cache_key_logs = [
-        record.getMessage()
-        for record in caplog.records
-        if "Created cache key:" in record.getMessage()
+        record.getMessage() for record in caplog.records if "Created cache key:" in record.getMessage()
     ]
     assert created_cache_key_logs
     assert all(prompt_marker not in message for message in created_cache_key_logs)
@@ -86,13 +87,8 @@ def test_add_cache_timeout_only_joins_redis_throttle_for_redis_backends(backend,
 def _embedding_response(prompt_tokens, num_items):
     return EmbeddingResponse(
         model="amazon.titan-embed-image-v1",
-        data=[
-            Embedding(embedding=[0.0], index=i, object="embedding")
-            for i in range(num_items)
-        ],
-        usage=Usage(
-            prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens
-        ),
+        data=[Embedding(embedding=[0.0], index=i, object="embedding") for i in range(num_items)],
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens),
     )
 
 
@@ -144,9 +140,7 @@ def test_semantic_cache_key_excludes_prompt_so_paraphrases_share_a_bucket():
     )
     key_b = cache.get_cache_key(
         model="gpt-4o-mini",
-        messages=[
-            {"role": "user", "content": "Tell me the colour of the daytime sky."}
-        ],
+        messages=[{"role": "user", "content": "Tell me the colour of the daytime sky."}],
         metadata=dict(tenant),
     )
     assert key_a == key_b
@@ -155,12 +149,8 @@ def test_semantic_cache_key_excludes_prompt_so_paraphrases_share_a_bucket():
 def test_semantic_cache_key_isolates_tenants():
     messages = [{"role": "user", "content": "What color is the sky?"}]
     cache = _semantic_cache()
-    key_a = cache.get_cache_key(
-        model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-A"}
-    )
-    key_b = cache.get_cache_key(
-        model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-B"}
-    )
+    key_a = cache.get_cache_key(model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-A"})
+    key_b = cache.get_cache_key(model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-B"})
     key_team = cache.get_cache_key(
         model="gpt-4o-mini",
         messages=messages,
@@ -244,24 +234,18 @@ def test_semantic_cache_key_still_separates_models_and_params():
     cache = _semantic_cache()
     messages = [{"role": "user", "content": "hi"}]
     tenant = {"user_api_key": "hash-A"}
-    assert cache.get_cache_key(
-        model="gpt-4o-mini", messages=messages, metadata=dict(tenant)
-    ) != cache.get_cache_key(model="gpt-4o", messages=messages, metadata=dict(tenant))
+    assert cache.get_cache_key(model="gpt-4o-mini", messages=messages, metadata=dict(tenant)) != cache.get_cache_key(
+        model="gpt-4o", messages=messages, metadata=dict(tenant)
+    )
     assert cache.get_cache_key(
         model="gpt-4o-mini", messages=messages, temperature=0, metadata=dict(tenant)
-    ) != cache.get_cache_key(
-        model="gpt-4o-mini", messages=messages, temperature=1, metadata=dict(tenant)
-    )
+    ) != cache.get_cache_key(model="gpt-4o-mini", messages=messages, temperature=1, metadata=dict(tenant))
 
 
 def test_exact_cache_key_still_includes_prompt():
     cache = Cache(type=LiteLLMCacheType.LOCAL)
-    key_a = cache.get_cache_key(
-        model="gpt-4o-mini", messages=[{"role": "user", "content": "a"}]
-    )
-    key_b = cache.get_cache_key(
-        model="gpt-4o-mini", messages=[{"role": "user", "content": "b"}]
-    )
+    key_a = cache.get_cache_key(model="gpt-4o-mini", messages=[{"role": "user", "content": "a"}])
+    key_b = cache.get_cache_key(model="gpt-4o-mini", messages=[{"role": "user", "content": "b"}])
     assert key_a != key_b
 
 
@@ -279,9 +263,7 @@ def test_exact_cache_key_includes_anthropic_messages_params(anthropic_param):
     cache = Cache(type=LiteLLMCacheType.LOCAL)
     messages = [{"role": "user", "content": "which greek letter?"}]
     baseline = cache.get_cache_key(model="claude-sonnet-4-5", messages=messages)
-    assert baseline != cache.get_cache_key(
-        model="claude-sonnet-4-5", messages=messages, **anthropic_param
-    )
+    assert baseline != cache.get_cache_key(model="claude-sonnet-4-5", messages=messages, **anthropic_param)
 
 
 @pytest.mark.asyncio
@@ -376,7 +358,9 @@ async def test_embedding_cache_serves_base64_string_embeddings_on_repeat(monkeyp
             self.provider_calls += 1
             return EmbeddingResponse(
                 model=model,
-                data=[Embedding(embedding="AACAPwAAAEA=", index=idx, object="embedding") for idx, _ in enumerate(input)],
+                data=[
+                    Embedding(embedding="AACAPwAAAEA=", index=idx, object="embedding") for idx, _ in enumerate(input)
+                ],
             )
 
     embedder = Base64Embedder()
@@ -403,3 +387,152 @@ def test_provider_specific_cache_key_ignores_litellm_owned_kwargs(monkeypatch: p
     assert cache.get_cache_key(**request, _litellm_control={"stream_chunk_size": 64}) == base_key
     assert cache.get_cache_key(**request, litellm_trace_id="trace-1") == base_key
     assert cache.get_cache_key(**{**request, "top_k": 6}) != base_key
+
+
+class PhaseRecordingCache(InMemoryCache):
+    """Records the target and the active span each read / write ran under, as a Redis span would."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: list[tuple[str | None, str]] = []
+
+    def _record(self) -> None:
+        from opentelemetry import trace
+
+        span = trace.get_current_span()
+        self.seen.append((current_service_target(), getattr(span, "name", "")))
+
+    def get_cache(self, key, **kwargs):
+        self._record()
+        return super().get_cache(key, **kwargs)
+
+    def set_cache(self, key, value, **kwargs):
+        self._record()
+        super().set_cache(key, value, **kwargs)
+
+
+@pytest.fixture
+def v2_span_exporter(monkeypatch):
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.otel import OpenTelemetryV2Config
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.plumbing import providers
+    from litellm.proxy import proxy_server
+
+    config = OpenTelemetryV2Config(exporter="in_memory")
+    exporter = InMemorySpanExporter()
+    logger = OpenTelemetryV2(config=config, tracer_provider=providers.build_tracer_provider(config, exporter=exporter))
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    return exporter
+
+
+_REQUEST: Final = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "phase me"}]}
+
+
+@pytest.mark.asyncio
+async def test_facade_lookup_and_store_run_inside_the_response_cache_phases(v2_span_exporter):
+    """The native bridge calls ``Cache.async_get_cache`` / ``async_add_cache`` straight, never through
+    ``caching_handler``, so the ``cache.get llm_response`` / ``cache.set llm_response`` phase and the
+    ``llm_response`` target come from the facade: the store runs under them too, and a hit reads back."""
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    backend = PhaseRecordingCache()
+    assert await cache.async_get_cache(dynamic_cache_object=backend, **_REQUEST) is None
+    await cache.async_add_cache({"id": "resp-1"}, dynamic_cache_object=backend, **_REQUEST)
+    assert await cache.async_get_cache(dynamic_cache_object=backend, **_REQUEST) == {"id": "resp-1"}
+    assert backend.seen == [
+        ("llm_response", "cache.get llm_response"),
+        ("llm_response", "cache.set llm_response"),
+        ("llm_response", "cache.get llm_response"),
+    ]
+    assert [s.name for s in v2_span_exporter.get_finished_spans()] == [
+        "cache.get llm_response",
+        "cache.set llm_response",
+        "cache.get llm_response",
+    ]
+    assert current_service_target() is None
+
+
+def test_sync_facade_lookup_and_store_run_inside_the_response_cache_phases(v2_span_exporter):
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    backend = PhaseRecordingCache()
+    assert cache.get_cache(dynamic_cache_object=backend, **_REQUEST) is None
+    cache.add_cache({"id": "resp-1"}, **_REQUEST)
+    assert backend.seen == [("llm_response", "cache.get llm_response")]
+    assert [s.name for s in v2_span_exporter.get_finished_spans()] == [
+        "cache.get llm_response",
+        "cache.set llm_response",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_lookup_already_inside_the_phase_does_not_open_a_second_one(v2_span_exporter):
+    """``caching_handler`` opens the phase around the facade call; the facade joins it."""
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    backend = PhaseRecordingCache()
+    with response_cache_phase("get"):
+        await cache.async_get_cache(dynamic_cache_object=backend, **_REQUEST)
+    assert backend.seen == [("llm_response", "cache.get llm_response")]
+    assert [s.name for s in v2_span_exporter.get_finished_spans()] == ["cache.get llm_response"]
+
+
+_TOOL_TURN_ITEM: Final = {"role": "user", "content": "hi"}
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        pytest.param({"messages": [_TOOL_TURN_ITEM] * 4}, True, id="four-messages-are-cached"),
+        pytest.param({"messages": [_TOOL_TURN_ITEM] * 5}, False, id="five-messages-skip-the-cache"),
+        pytest.param({"input": [_TOOL_TURN_ITEM] * 4}, True, id="four-responses-items-are-cached"),
+        pytest.param({"input": [_TOOL_TURN_ITEM] * 5}, False, id="five-responses-items-skip-the-cache"),
+        pytest.param({"input": "one prompt"}, True, id="string-input-is-one-message"),
+        pytest.param({"input": ["a", "b", "c", "d", "e"]}, True, id="embedding-strings-are-not-messages"),
+    ],
+)
+def test_should_use_cache_stops_past_the_default_max_messages(kwargs: dict[str, object], expected: bool) -> None:
+    assert Cache(type=LiteLLMCacheType.LOCAL).should_use_cache(**kwargs) is expected
+
+
+def test_responses_sdk_items_count_toward_max_messages() -> None:
+    from openai.types.responses import ResponseFunctionToolCall
+
+    call: Final = ResponseFunctionToolCall(type="function_call", call_id="c1", name="ls", arguments="{}")
+
+    assert Cache(type=LiteLLMCacheType.LOCAL).should_use_cache(input=[_TOOL_TURN_ITEM, call, call, call, call]) is False
+
+
+def test_max_messages_is_configurable_and_none_disables_it() -> None:
+    three: Final = [_TOOL_TURN_ITEM] * 3
+
+    assert Cache(type=LiteLLMCacheType.LOCAL, max_messages=2).should_use_cache(messages=three) is False
+    assert Cache(type=LiteLLMCacheType.LOCAL, max_messages=3).should_use_cache(messages=three) is True
+    assert Cache(type=LiteLLMCacheType.LOCAL, max_messages=None).should_use_cache(messages=three * 50) is True
+
+
+def test_max_messages_beats_an_explicit_use_cache_opt_in() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, mode=CacheMode.default_off)
+
+    assert cache.should_use_cache(messages=[_TOOL_TURN_ITEM] * 4, cache={"use-cache": True}) is True
+    assert cache.should_use_cache(messages=[_TOOL_TURN_ITEM] * 5, cache={"use-cache": True}) is False
+
+
+def test_completion_past_max_messages_is_neither_served_from_nor_written_to_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    tag: Final = uuid.uuid4().hex
+    four: Final = [{"role": "user", "content": f"{tag} turn {index}"} for index in range(4)]
+    five: Final = [*four, {"role": "user", "content": f"{tag} turn 4"}]
+
+    def answer(messages: list[dict[str, str]], mock_response: str) -> str:
+        response: Final = litellm.completion(model="gpt-4o-mini", messages=messages, mock_response=mock_response)
+        assert isinstance(response, litellm.ModelResponse), response
+        choice: Final = response.choices[0]
+        assert isinstance(choice, litellm.Choices), choice
+        return str(choice.message.content)
+
+    assert answer(four, "four first") == "four first"
+    assert answer(four, "four second") == "four first", "a 4-message repeat missed the cache"
+    assert answer(five, "five first") == "five first"
+    assert answer(five, "five second") == "five second", "a 5-message repeat was served from the cache"

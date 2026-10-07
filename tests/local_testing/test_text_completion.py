@@ -1,13 +1,14 @@
 import asyncio
-from typing import Final
 import json
+import os
 import traceback
+from types import MappingProxyType
+from typing import Final
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -25,6 +26,14 @@ from litellm import (
 
 litellm.num_retries = 3
 
+
+FIREWORKS_TEXT_COMPLETION: Final = MappingProxyType(
+    {
+        "model": "text-completion-openai/accounts/fireworks/models/glm-5p3-flash",
+        "api_base": "https://api.fireworks.ai/inference/v1",
+        "api_key": os.environ.get("FIREWORKS_AI_API_KEY"),
+    }
+)
 
 token_prompt = [
     [
@@ -3778,8 +3787,9 @@ def test_completion_openai_prompt():
     try:
         print("\n text 003 test\n")
         response = text_completion(
-            model="gpt-3.5-turbo-instruct",
             prompt=["What's the weather in SF?", "How is Manchester?"],
+            max_tokens=5,
+            **FIREWORKS_TEXT_COMPLETION,
         )
         print(response)
         assert len(response.choices) == 2
@@ -3841,9 +3851,9 @@ def test_completion_chatgpt_prompt():
 def test_completion_gpt_instruct():
     try:
         response = text_completion(
-            model="gpt-3.5-turbo-instruct-0914",
+            model="gpt-5.4-nano",
             prompt="What's the weather in SF?",
-            custom_llm_provider="openai",
+            custom_llm_provider="text-completion-openai",
         )
         print(response)
         response_str = response["choices"][0]["text"]
@@ -3862,7 +3872,7 @@ def test_text_completion_basic():
         print("\n test 003 with logprobs \n")
         litellm.set_verbose = False
         response = text_completion(
-            model="gpt-3.5-turbo-instruct",
+            model="text-completion-openai/gpt-5.4-nano",
             prompt="good morning",
             max_tokens=10,
             logprobs=10,
@@ -3886,13 +3896,11 @@ def test_completion_text_003_prompt_array():
     try:
         litellm.set_verbose = False
         response = text_completion(
-            model="gpt-3.5-turbo-instruct",
             prompt=token_prompt,  # token prompt is a 2d list
+            max_tokens=5,
+            **FIREWORKS_TEXT_COMPLETION,
         )
-        print("\n\n response")
-
-        print(response)
-        # response_str = response["choices"][0]["text"]
+        assert len(response.choices) == len(token_prompt)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -3921,55 +3929,11 @@ def test_completion_text_003_prompt_array():
 
 
 ##### hugging face tests
-@pytest.mark.skip(reason="local test")
-def test_completion_hf_prompt_array():
-    try:
-        litellm.set_verbose = True
-        print("\n testing hf mistral\n")
-        response = text_completion(
-            model="huggingface/mistralai/Mistral-7B-Instruct-v0.3",
-            prompt=token_prompt,  # token prompt is a 2d list,
-            max_tokens=0,
-            temperature=0.0,
-            # echo=True, # hugging face inference api is currently raising errors for this, looks like they have a regression on their side
-        )
-        print("\n\n response")
-
-        print(response)
-        print(response.choices)
-        assert len(response.choices) == 2
-        # response_str = response["choices"][0]["text"]
-    except litellm.RateLimitError:
-        print("got rate limit error from hugging face... passsing")
-        return
-    except Exception as e:
-        print(str(e))
-        if "is currently loading" in str(e):
-            return
-        if "Service Unavailable" in str(e):
-            return
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_hf_prompt_array()
 
 
-@pytest.mark.skip(
-    reason="HF Inference API is unstable, this is now the 3rd time it's stopped working"
-)
-def test_text_completion_stream():
-    try:
-        for _ in range(2):  # check if closed client used
-            response = text_completion(
-                model="huggingface/deepseek-ai/DeepSeek-R1",
-                prompt="good morning",
-                stream=True,
-                max_tokens=10,
-            )
-            for chunk in response:
-                print(f"chunk: {chunk}")
-    except Exception as e:
-        pytest.fail(f"GOT exception for HF In streaming{e}")
 
 
 # test_text_completion_stream()
@@ -4135,24 +4099,14 @@ def test_completion_vllm(provider):
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
 
 
-@pytest.mark.skip(reason="fireworks is having an active outage")
-def test_completion_fireworks_ai_multiple_choices():
-    litellm._turn_on_debug()
-    response = litellm.text_completion(
-        model="fireworks_ai/llama-v3p1-8b-instruct",
-        prompt=["halo", "hi", "halo", "hi"],
-    )
-    print(response.choices)
-
-    assert len(response.choices) == 4
 
 
 @pytest.mark.parametrize("stream", [True, False])
 def test_text_completion_with_echo(stream):
     litellm.set_verbose = True
     response = litellm.text_completion(
-        model="davinci-002",
         prompt="hello",
+        **FIREWORKS_TEXT_COMPLETION,
         max_tokens=1,  # only see the first token
         stop="\n",  # stop at the first newline
         logprobs=1,  # return log prob
@@ -4166,6 +4120,8 @@ def test_text_completion_with_echo(stream):
             print(chunk)
     else:
         assert isinstance(response, TextCompletionResponse)
+        assert response.choices[0].text.startswith("hello")
+        assert response.choices[0].logprobs.token_logprobs
 
 
 def test_text_completion_ollama():

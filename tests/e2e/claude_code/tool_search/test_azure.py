@@ -45,6 +45,8 @@ from __future__ import annotations
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
+
 from claude_code._env import require_proxy_client
 from claude_code.http_probe import (
     assert_tool_search_shape,
@@ -61,6 +63,16 @@ AZURE_MODELS = [
 
 @pytest.mark.skip(reason="stage red: Azure Foundry tool_search_server not supported in workspace for probed models")
 @pytest.mark.covers("llm.messages.azure_foundry.tool_search.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.AZURE_AI,),
+        models=tuple(AZURE_MODELS),
+        capabilities=(Capability.TOOL_SEARCH,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_tool_search_azure(compat_result):
     """Probe `/v1/messages` with a `tool_search_tool_regex_20251119`
     tool and assert the proxy + upstream accept it for every Azure (Microsoft Foundry)

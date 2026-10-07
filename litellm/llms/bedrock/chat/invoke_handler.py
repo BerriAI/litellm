@@ -18,8 +18,8 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
@@ -42,9 +42,15 @@ from litellm.types.utils import GenericStreamingChunk as GChunk
 
 from ..common_utils import (
     BedrockError,
+    BedrockEventStreamResponseDict,
+    bedrock_event_stream_header,
+    bedrock_event_stream_response,
+    bedrock_stream_event_error_status,
     build_bedrock_stream_error,
+    build_bedrock_stream_event_error,
     error_response_text,
     get_bedrock_response_stream_shape,
+    get_bedrock_stream_event_statuses,
     get_bedrock_tool_name,
 )
 
@@ -53,6 +59,7 @@ from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConf
 
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
+    from botocore.model import Shape
 
 converse_config: Final = AmazonConverseConfig()
 _STREAM_HEAD_BYTES: Final = 200
@@ -194,6 +201,7 @@ async def make_call(
     json_mode: bool | None = False,
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
+    timeout: float | httpx.Timeout | None = None,
 ) -> "tuple[MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
@@ -212,6 +220,7 @@ async def make_call(
             data=data,
             stream=not fake_stream,
             logging_obj=logging_obj,
+            timeout=timeout,
         )
 
         if response.status_code != 200:
@@ -284,10 +293,11 @@ def make_sync_call(
     json_mode: bool | None = False,
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
+    timeout: float | httpx.Timeout | None = None,
 ) -> "tuple[MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
-            client = _get_httpx_client(
+            client = get_httpx_client(
                 params=(
                     {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
                     if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify")
@@ -301,6 +311,7 @@ def make_sync_call(
             data=signed_json_body if signed_json_body is not None else data,
             stream=not fake_stream,
             logging_obj=logging_obj,
+            timeout=timeout,
         )
 
         if response.status_code != 200:
@@ -365,10 +376,14 @@ def _response_header(response_headers: Mapping[str, str] | None, name: str) -> s
 
 
 class _EventStreamTally:
-    def __init__(self) -> None:
+    def __init__(self, event_statuses: Mapping[str, int | None] | None) -> None:
+        self.event_statuses = event_statuses
         self.bytes_received = 0
         self.bytes_decoded = 0
         self.events = 0
+        self.recognized_events = 0
+        self.unrecognized_event_types: frozenset[str] = frozenset()
+        self.unrecognized_head = b""
         self.head = b""
 
     def add_chunk(self, chunk: bytes) -> None:
@@ -376,13 +391,24 @@ class _EventStreamTally:
         if len(self.head) < _STREAM_HEAD_BYTES:
             self.head = (self.head + chunk)[:_STREAM_HEAD_BYTES]
 
-    def add_event(self, event: "EventStreamMessage") -> None:
+    def add_event(self, event: "EventStreamMessage", headers: Mapping[str, object]) -> None:
         self.events += 1
         self.bytes_decoded += event.prelude.total_length
+        event_type: Final = bedrock_event_stream_header(headers, ":event-type")
+        if (
+            self.event_statuses is None
+            or bedrock_event_stream_header(headers, ":message-type") != "event"
+            or (event_type is not None and event_type in self.event_statuses)
+        ):
+            self.recognized_events += 1
+            return
+        self.unrecognized_event_types = self.unrecognized_event_types | {event_type or "<missing>"}
+        if not self.unrecognized_head:
+            self.unrecognized_head = event.payload[:_STREAM_HEAD_BYTES]
 
     def undecoded_stream_error(self, response_headers: Mapping[str, str] | None) -> BedrockError | None:
         undecoded: Final = self.bytes_received - self.bytes_decoded
-        if self.events and not undecoded:
+        if self.recognized_events and not undecoded:
             return None
         detail: Final = (
             f"content-type={_response_header(response_headers, 'content-type')!r}, "
@@ -395,6 +421,15 @@ class _EventStreamTally:
                 message=(
                     "Bedrock answered the stream with HTTP 200 but its body decoded to no events "
                     f"({detail}, first bytes={self.head!r})"
+                ),
+            )
+        if not self.recognized_events:
+            return BedrockError(
+                status_code=502,
+                message=(
+                    f"Bedrock answered the stream with HTTP 200 but none of its {self.events} events carried a known "
+                    f"event type (event types={sorted(self.unrecognized_event_types)}, {detail}, "
+                    f"first payload={self.unrecognized_head!r})"
                 ),
             )
         return BedrockError(
@@ -742,6 +777,12 @@ class AWSEventStreamDecoder:
             tool_use=None,
         )
 
+    def chunk_parser(
+        self,
+        chunk_data: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> GChunk | ModelResponseStream | dict[str, object]:  # mutable-ok: mirrors override contract
+        return self._chunk_parser(chunk_data)
+
     def iter_bytes(
         self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
     ) -> Iterator[GChunk | ModelResponseStream | dict]:
@@ -749,17 +790,16 @@ class AWSEventStreamDecoder:
         from botocore.eventstream import EventStreamBuffer
 
         event_stream_buffer: Final = EventStreamBuffer()
-        tally: Final = _EventStreamTally()
+        tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         for chunk in iterator:
             event_stream_buffer.add_data(chunk)
             tally.add_chunk(chunk)
             for event in event_stream_buffer:
-                tally.add_event(event)
-                message = self._parse_message_from_event(event)
+                message = self._decode_event(event, tally)
                 if message:
                     # sse_event = ServerSentEvent(data=message, event="completion")
                     _data = json.loads(message)
-                    yield self._chunk_parser(chunk_data=_data)
+                    yield self.chunk_parser(chunk_data=_data)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
@@ -771,21 +811,20 @@ class AWSEventStreamDecoder:
         from botocore.eventstream import EventStreamBuffer
 
         event_stream_buffer: Final = EventStreamBuffer()
-        tally: Final = _EventStreamTally()
+        tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         async for chunk in iterator:
             event_stream_buffer.add_data(chunk)
             tally.add_chunk(chunk)
             for event in event_stream_buffer:
-                tally.add_event(event)
-                message = self._parse_message_from_event(event)
+                message = self._decode_event(event, tally)
                 if message:
                     _data = json.loads(message)
-                    yield self._chunk_parser(chunk_data=_data)
+                    yield self.chunk_parser(chunk_data=_data)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
 
-    def _parse_message_from_event(self, event) -> str | None:
+    def _response_stream_shape(self) -> "Shape":
         response_stream_shape: Final = get_bedrock_response_stream_shape()
         if response_stream_shape is None:
             raise BedrockError(
@@ -795,11 +834,29 @@ class AWSEventStreamDecoder:
                     "Ensure botocore is correctly installed."
                 ),
             )
-        response_dict: Final = event.to_response_dict()
+        return response_stream_shape
+
+    def _decode_event(self, event: "EventStreamMessage", tally: _EventStreamTally) -> str | None:
+        response_stream_shape: Final = self._response_stream_shape()
+        response_dict: Final = bedrock_event_stream_response(event)
+        tally.add_event(event, response_dict["headers"])
+        return self._parse_message_from_response(response_dict, response_stream_shape)
+
+    def _parse_message_from_event(self, event: "EventStreamMessage") -> str | None:
+        response_stream_shape: Final = self._response_stream_shape()
+        return self._parse_message_from_response(bedrock_event_stream_response(event), response_stream_shape)
+
+    def _parse_message_from_response(
+        self, response_dict: BedrockEventStreamResponseDict, response_stream_shape: "Shape"
+    ) -> str | None:
         parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             raise build_bedrock_stream_error(response_dict, response_stream_shape)
+        event_type: Final = bedrock_event_stream_header(response_dict["headers"], ":event-type")
+        event_error_status: Final = bedrock_stream_event_error_status(event_type)
+        if event_type is not None and event_error_status is not None:
+            raise build_bedrock_stream_event_error(event_type, event_error_status, response_dict["body"])
         if "chunk" in parsed_response:
             chunk = parsed_response.get("chunk")
             if not chunk:
@@ -904,7 +961,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
         """
         tool_use: ChatCompletionToolCallChunk | None = None
         if self.json_mode is True and tool_calls is not None:
-            message: Final = litellm.AnthropicConfig()._convert_tool_response_to_message(tool_calls=tool_calls)
+            message: Final = litellm.AnthropicConfig().convert_tool_response_to_message(tool_calls=tool_calls)
             if message is not None:
                 text = message.content or ""
                 tool_use = None

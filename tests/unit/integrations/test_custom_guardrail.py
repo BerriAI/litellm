@@ -12,7 +12,7 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
-from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.guardrails import GuardrailEventHooks, LoggingOnlyScope, Mode
 from litellm.types.utils import (
     Choices,
     GenericGuardrailAPIInputs,
@@ -1963,7 +1963,7 @@ class TestOnlyScanNewMessages:
     def _guardrail(self, **overrides):
         params = dict(guardrail_name="test-guard", only_scan_new_messages=True)
         params.update(overrides)
-        return CustomGuardrail(**params)
+        return CustomGuardrail(**params)  # pyright: ignore[reportArgumentType]  # params values mix str/bool
 
     def _cache(self):
         from litellm.caching import DualCache
@@ -2577,6 +2577,32 @@ class TestLoggingOnlyApplyGuardrail:
         assert "standard_logging_guardrail_information" not in kwargs["litellm_params"]["metadata"]
         assert kwargs["standard_logging_object"] == {"guardrail_information": None}
 
+    @pytest.mark.parametrize(
+        "scope,expected_calls",
+        (
+            (None, [("request", ["hello there"]), ("response", ["general kenobi"])]),
+            ("both", [("request", ["hello there"]), ("response", ["general kenobi"])]),
+            ("input", [("request", ["hello there"])]),
+            ("output", [("response", ["general kenobi"])]),
+        ),
+    )
+    @pytest.mark.asyncio
+    async def test_logging_only_scope_scans_configured_directions(
+        self,
+        scope: LoggingOnlyScope | None,
+        expected_calls: list[tuple[str, list[str]]],
+    ) -> None:
+        guardrail: Final = _ApplyOnlyObserver()
+        guardrail.logging_only_scope = scope
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == expected_calls
+        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert len(entries) == len(expected_calls)
+        assert [entry["guardrail_mode"] for entry in entries] == ["logging_only"] * len(expected_calls)
+
     @pytest.mark.asyncio
     async def test_appends_to_pre_call_verdicts_without_duplicating_them(self):
         guardrail = _ApplyOnlyObserver()
@@ -2605,6 +2631,39 @@ class TestLoggingOnlyApplyGuardrail:
         assert out_response is response
 
     @pytest.mark.asyncio
+    async def test_output_scope_scans_response_when_request_copy_fails(self):
+        import threading
+
+        guardrail: Final = _ApplyOnlyObserver()
+        guardrail.logging_only_scope = "output"
+        call: Final = _logged_call([{"role": "user", "content": "hello there", "lock": threading.Lock()}])
+        kwargs: Final = call[0]
+        response: Final = call[1]
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == [("response", ["general kenobi"])]
+        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [entry["guardrail_name"] for entry in entries] == ["apply-only-observer"]
+        assert [entry["guardrail_status"] for entry in entries] == ["success"]
+
+    @pytest.mark.asyncio
+    async def test_request_copy_failure_does_not_drop_the_response_scan_for_explicit_both_scope(self):
+        import threading
+
+        guardrail: Final = _ApplyOnlyObserver()
+        guardrail.logging_only_scope = "both"
+        call: Final = _logged_call([{"role": "user", "content": "hello there", "lock": threading.Lock()}])
+        kwargs: Final = call[0]
+        response: Final = call[1]
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == [("response", ["general kenobi"])]
+        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [entry["guardrail_status"] for entry in entries] == ["success"]
+
+    @pytest.mark.asyncio
     async def test_block_verdict_is_recorded_without_raising(self):
         guardrail = _ApplyOnlyObserver(block=True)
         kwargs, response = _logged_call([{"role": "user", "content": "flagged content"}])
@@ -2614,6 +2673,45 @@ class TestLoggingOnlyApplyGuardrail:
         assert guardrail.calls == [("request", ["flagged content"])]
         entries = out_kwargs["standard_logging_object"]["guardrail_information"]
         assert [e["guardrail_status"] for e in entries] == ["guardrail_intervened"]
+
+    @pytest.mark.asyncio
+    async def test_input_scan_error_aborts_the_response_scan(self):
+        class _FailingObserver(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                self.calls.append((input_type, list(inputs.get("texts") or [])))
+                if input_type == "request":
+                    raise RuntimeError("guardrail service unavailable")
+                return GenericGuardrailAPIInputs(texts=[])
+
+        guardrail = _FailingObserver()
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == [("request", ["hello there"])]
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_status"] for e in entries] == ["guardrail_failed_to_respond"]
+
+    @pytest.mark.asyncio
+    async def test_input_scan_error_does_not_drop_the_response_scan_for_explicit_both_scope(self):
+        class _FailingBothObserver(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                self.calls.append((input_type, list(inputs.get("texts") or [])))
+                if input_type == "request":
+                    raise RuntimeError("guardrail service unavailable")
+                return GenericGuardrailAPIInputs(texts=[])
+
+        guardrail = _FailingBothObserver()
+        guardrail.logging_only_scope = "both"
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_status"] for e in entries] == ["guardrail_failed_to_respond", "success"]
 
     @pytest.mark.asyncio
     async def test_call_type_without_translation_is_skipped(self):
@@ -2933,15 +3031,24 @@ class _NativeLifecycleLoggingGuardrail(CustomGuardrail):
 
 
 @pytest.mark.asyncio
+async def test_native_lifecycle_guardrail_logging_only_scope_scans_only_input():
+    guardrail: Final = _NativeLifecycleLoggingGuardrail()
+    guardrail.logging_only_scope = "input"
+    kwargs, response = _logged_call([{"role": "user", "content": "native lifecycle input"}])
+
+    await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+    assert guardrail.calls == [("request", ["native lifecycle input"])]
+
+
+@pytest.mark.asyncio
 async def test_native_lifecycle_guardrail_logging_only_scans_assembled_response():
     """A use_native_lifecycle_hooks guardrail accepts mode logging_only and its
     async_logging_hook scans kwargs["async_complete_streaming_response"], not the raw result."""
     from litellm.types.utils import Choices, Message, ModelResponse
 
     guardrail = _NativeLifecycleLoggingGuardrail()
-    assembled = ModelResponse(
-        choices=[Choices(message=Message(role="assistant", content="assembled stream text"))]
-    )
+    assembled = ModelResponse(choices=[Choices(message=Message(role="assistant", content="assembled stream text"))])
     sentinel_result = object()
     kwargs = {
         "model": "gpt-5.4-mini",
@@ -3166,3 +3273,37 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         )
 
         assert self._logged_response(data) == "allow"
+
+
+class TestCustomGuardrailTimeout:
+    def test_timeout_constructor_exposes_it(self):
+        guardrail = CustomGuardrail(guardrail_name="g1", timeout=2.5)
+
+        assert guardrail.timeout == 2.5
+
+    def test_timeout_unset_stays_none(self):
+        guardrail = CustomGuardrail(guardrail_name="g1")
+
+        assert guardrail.timeout is None
+
+    @pytest.mark.parametrize("configured, expected", [(None, 10.0), (3, 3)])
+    def test_unset_timeout_keeps_default_assigned_before_super_init(self, configured, expected):
+        class PresetTimeoutGuardrail(CustomGuardrail):
+            def __init__(self, **kwargs):
+                self.timeout = 10.0
+                super().__init__(guardrail_name="preset", **kwargs)
+
+        guardrail = PresetTimeoutGuardrail(timeout=configured)
+
+        assert guardrail.timeout == expected
+
+    def test_update_in_memory_litellm_params_refreshes_timeout(self):
+        from litellm.types.guardrails import LitellmParams
+
+        guardrail = CustomGuardrail(guardrail_name="g1", timeout=2.5)
+
+        guardrail.update_in_memory_litellm_params(
+            LitellmParams(guardrail="generic_guardrail_api", mode="pre_call", timeout=7)
+        )
+
+        assert guardrail.timeout == 7.0
