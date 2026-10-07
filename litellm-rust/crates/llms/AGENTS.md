@@ -23,6 +23,7 @@
 - A schema-looking object inside `const`, `enum` or `examples` is literal data; schema rewrites must not traverse it
 - Python parity can change an existing Rust contract, including forwarded credentials; make that compatibility change explicit
 - Folder names and public helpers alone do not prove runtime reachability; trace the actual caller
+- For Rust-only work, Python code and fixtures are read-only references; record divergences and missing host projections explicitly
 
 # skills
 

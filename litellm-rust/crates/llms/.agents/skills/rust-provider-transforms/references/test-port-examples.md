@@ -14,6 +14,8 @@ Boundary projections of Python globals, cost-map capabilities and kwargs belong 
 
 Replacing `Error::Unsupported` with an implementation is not inherently a scope violation. Determine whether the implementation is authorized and whether it stays within the source contract. A request to port tests with simple fixes and report larger failures does not become unrestricted parity work
 
+When the scope is `litellm-rust/` only, do not change Python implementations, fixtures or guides to make a port pass. Shared wire machinery and its tests land in the foundation PR; a provider example changes only its adapter, inline tests, guide and module export. Check each PR diff independently for these boundaries
+
 For a simple failure, retain the source assertion, fix the behavior and run the affected case. Examples include preserving thinking display during enabled-to-adaptive conversion or translating an Azure `api-key` to `x-api-key`
 
 For an unresolved dependency outside the authorized scope, report the input, expected/actual result and required implementation. Do not weaken assertions, ignore the test or count an unresolved scenario as ported
@@ -67,6 +69,8 @@ Similarly, native Messages system normalization follows the existing Python help
 The Bedrock schema helper is consumed by the actual tool transform, region projection feeds URL/signing preparation, and the wire hook feeds the handler. Test those observable connections where a disconnected helper could otherwise pass
 
 Workspace forwarding on Invoke is an additional behavior with Mantle-only reference coverage. Explicit AWS credential projection is a pre-existing gap. Distinguish these from the confirmed literal-rewrite and region-validation bugs
+
+The Rust-only stack leaves Python's Bedrock kwargs and capability projection unchanged. Region, endpoint, workspace and metadata settings therefore need a separate host-integration follow-up. A historical ledger may include tests proposed alongside Python fixes; label that snapshot and never use it as evidence of parity with unchanged Python
 
 Decoder tests plus a shared HTTP-error mapping preserve upstream status. A public Chat helper using that decoder does not prove deployed Chat reachability. Check provider selection and route calls before claiming blast radius
 

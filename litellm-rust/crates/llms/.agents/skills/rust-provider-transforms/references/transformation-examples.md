@@ -71,15 +71,17 @@ region: Final = _BEDROCK_REGION.validate_python(
 BaseAWSLLM._validate_aws_region_name(region)
 ```
 
-The actual caller keeps the specific type-check suppression and reason required by repository rules. Test `route_host.shaping`, not the shared validator in isolation
+This is a follow-up example, not an implemented Python change in the Rust-only stack. The unchanged bridge does not project these Bedrock kwargs. A future boundary change must keep the specific type-check suppression and reason required by repository rules and test `route_host.shaping`, not the shared validator in isolation
 
 ## Metadata and connection ownership
 
-Bedrock request metadata needs both a Python projection of configured fields/sources and a Rust resolver. Preserve identity precedence, reserved prefixes, caller-header replacement and signing coverage. Removing the bridge wiring disconnects otherwise passing helper tests from calls
+Bedrock request metadata needs both a host projection of configured fields/sources and a Rust resolver. Preserve identity precedence, reserved prefixes, caller-header replacement and signing coverage. The Rust-only stack implements the resolver and typed inputs; the unchanged Python bridge does not supply them. Passing native tests do not establish Python SDK integration
 
 Invoke currently applies `aws_bedrock_project_id` as a workspace header even though the Python workspace contract is Mantle's. This is an additional behavior to report, not a demonstrated provider failure. Do not treat Mantle tests as proof of Invoke parity
 
 Per-call AWS access keys, roles, profiles and sessions are still not projected into Messages signing inputs. This predates the implemented Invoke transform; report it as a known gap rather than a new regression or silently expanding a test-port task to fix it
+
+The unchanged Python bridge also omits the newer mid-conversation-system, cache-TTL, structured-output, tool-search and effort-ceiling capabilities. They retain Rust defaults until the host projects them. Compatible Rust adapters intentionally preserve native thinking and sampling fields; Python configs that still inherit Claude shaping may behave differently. Document these differences instead of editing the Python reference
 
 ## System turns and credential precedence
 
