@@ -2,7 +2,7 @@ from collections.abc import Generator
 
 import pytest
 
-from tests.test_litellm_rust.support.recording_server import RecordingServer, recording_service
+from tests._support.recording_server import RecordingServer, recording_service
 
 
 @pytest.fixture

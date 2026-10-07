@@ -15,9 +15,9 @@ from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompleti
 from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import CallTypes, ModelResponse
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE, request_body
+from tests.integration._support.native.callback_recorder import RecordingLogger
+from tests._support.recording_server import RecordingServer, ResponseSpec
+from tests.integration._support.native.requests import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE, request_body
 
 pytestmark = pytest.mark.requires_rust_extension
 Route: TypeAlias = Literal["chat", "responses"]

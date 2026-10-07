@@ -3,7 +3,7 @@ from typing import Final
 import pytest
 
 import litellm
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
+from tests._support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 MODELS: Final = ("cohere/parse-v5.0", "azure_ai/Cohere-parse-v5.0")

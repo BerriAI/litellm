@@ -8,9 +8,9 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
 from litellm.types.utils import CallTypes
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import OCR_RESPONSE, call_native, call_native_aocr
+from tests.integration._support.native.callback_recorder import RecordingLogger
+from tests._support.recording_server import RecordingServer, ResponseSpec
+from tests.integration._support.native.requests import OCR_RESPONSE, call_native, call_native_aocr
 
 pytestmark = pytest.mark.requires_rust_extension
 

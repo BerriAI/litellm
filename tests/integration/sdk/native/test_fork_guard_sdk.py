@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
+from tests._support.child_interpreter import run_child_interpreter
 
 pytestmark = pytest.mark.requires_rust_extension
 

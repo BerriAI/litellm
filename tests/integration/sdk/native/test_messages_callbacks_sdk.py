@@ -9,10 +9,10 @@ from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_di
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
-from tests.test_litellm_rust.support.isolation import rebound
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import (
+from tests.integration._support.native.callback_recorder import RecordingLogger, drain_logging
+from tests.integration._support.native.isolation import rebound
+from tests._support.recording_server import RecordingServer, ResponseSpec
+from tests.integration._support.native.requests import (
     MESSAGES,
     MESSAGES_EVENTS,
     MESSAGES_MODEL,

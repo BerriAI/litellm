@@ -39,7 +39,7 @@ from litellm._lazy_imports import (
     UTILS_MODULE_NAMES,
     _lazy_import_utils_module,
 )
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
+from tests._support.child_interpreter import run_child_interpreter
 
 
 def test_import_litellm_does_not_load_fastapi_or_bpe_table():

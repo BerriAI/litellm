@@ -15,9 +15,9 @@ from litellm._logging import trace_id_var
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import OCR_RESPONSE, call_aocr, call_ocr
+from tests.integration._support.native.callback_recorder import RecordingLogger, drain_logging
+from tests._support.recording_server import RecordingServer, ResponseSpec
+from tests.integration._support.native.requests import OCR_RESPONSE, call_aocr, call_ocr
 
 pytestmark = pytest.mark.requires_rust_extension
 

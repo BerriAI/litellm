@@ -13,11 +13,11 @@ from litellm.caching.caching_handler import (
 )
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.utils import ModelResponse
-from tests.test_litellm_rust.support.cache import cache_key, invoke, payload
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
-from tests.test_litellm_rust.test_inference import RESPONSES_MODEL, RESPONSES_RESPONSE
+from tests.integration._support.native.cache import cache_key, invoke, payload
+from tests.integration._support.native.callback_recorder import RecordingLogger, drain_logging
+from tests._support.recording_server import RecordingServer, ResponseSpec
+from tests.integration._support.native.requests import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
+from tests.integration.sdk.native.test_inference_sdk import RESPONSES_MODEL, RESPONSES_RESPONSE
 
 pytestmark = pytest.mark.requires_rust_extension
 

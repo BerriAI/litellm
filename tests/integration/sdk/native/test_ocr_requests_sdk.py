@@ -10,9 +10,9 @@ import pytest
 from pydantic import JsonValue
 
 import litellm
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import (
+from tests.integration._support.native.callback_recorder import RecordingLogger
+from tests._support.recording_server import RecordingServer, ResponseSpec
+from tests.integration._support.native.requests import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
     call_native,

@@ -23,7 +23,7 @@ from litellm.secret_managers.cyberark_secret_manager import CyberArkSecretManage
 from litellm.secret_managers.hashicorp_secret_manager import HashicorpSecretManager
 from litellm.secret_managers.secret_manager_handler import get_secret_from_manager
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
-from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
+from tests._support.recording_server import ResponseSpec, recording_service
 
 if TYPE_CHECKING:
     from litellm.rust_bridge._native import _SecretManagerRuntime

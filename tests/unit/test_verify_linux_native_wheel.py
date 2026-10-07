@@ -35,7 +35,7 @@ class _VerifierModule(Protocol):
     ]
 
 
-_REPO_ROOT: Final = Path(__file__).resolve().parents[3]
+_REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 _MODULE_PATH: Final = _REPO_ROOT / ".github" / "scripts" / "verify_linux_native_wheel.py"
 _SPEC: Final = importlib.util.spec_from_file_location("verify_linux_native_wheel", _MODULE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None

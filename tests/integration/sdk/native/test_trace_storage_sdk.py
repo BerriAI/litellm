@@ -40,8 +40,8 @@ from scripts.seed_tracing_fixtures import (
     response_pattern,
     spend_fixtures,
 )
-from tests.test_litellm_rust.support.clickhouse import clickhouse_service
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
+from tests.integration._support.native.clickhouse import clickhouse_service
+from tests._support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 QUERY_ROWS: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])

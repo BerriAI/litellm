@@ -1,10 +1,11 @@
 import asyncio
-import os
+import threading
 from collections.abc import AsyncIterator, Generator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from typing import Final
 
+import fakeredis
 import pytest
 import pytest_asyncio
 
@@ -12,14 +13,10 @@ import litellm
 from litellm import utils
 from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.rust_bridge.configuration import (
-    _CONFIGURATION,
-    _parse_env_bool,
-)
-from tests.integration._support.native.callback_recorder import drain_logging
-from tests.integration._support.native.clickhouse import clickhouse_url as clickhouse_url
-from tests.integration._support.native.isolation import isolated_callback_registries, rebound
+from litellm.rust_bridge.configuration import _CONFIGURATION
 from tests._support.recording_server import RecordingServer, recording_service
+from tests.integration._support.native.callback_recorder import drain_logging
+from tests.integration._support.native.isolation import isolated_callback_registries, rebound
 
 
 @pytest_asyncio.fixture(autouse=True, loop_scope="function")
@@ -48,20 +45,6 @@ def recording_server() -> Generator[RecordingServer]:
         yield server
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    if not _parse_env_bool(os.environ.get("LITELLM_RUST")):
-        skip: Final = pytest.mark.skip(reason="requires LITELLM_RUST=1 and a compiled Rust extension")
-        for item in items:
-            if "test_litellm_rust" in item.path.parts:
-                item.add_marker(skip)
-        return
-
-    try:
-        from litellm.rust_bridge import _native  # noqa: F401  # validates the installed extension
-    except ImportError as error:
-        raise pytest.UsageError("LITELLM_RUST=1 requires a compiled litellm.rust_bridge._native extension") from error
-
-
 @pytest.fixture
 def isolated_azure_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (
@@ -77,3 +60,16 @@ def isolated_azure_auth(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(litellm, "api_key", None)
     monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", False)
+
+
+@pytest.fixture
+def redis_url() -> Generator[str]:
+    server: Final = fakeredis.TcpFakeServer(("127.0.0.1", 0), server_type="redis")
+    worker: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        yield f"redis://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)

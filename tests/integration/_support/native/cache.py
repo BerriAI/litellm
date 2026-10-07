@@ -16,9 +16,9 @@ from litellm.rust_bridge.dispatch import call_hook
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, LiteLLMMessagesRequest
 from litellm.rust_bridge.responses.entrypoints import NATIVE_ARESPONSES, LiteLLMResponsesRequest
 from litellm.types.utils import ModelResponse
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
-from tests.test_litellm_rust.test_inference import RESPONSES_MODEL, RESPONSES_RESPONSE
+from tests._support.recording_server import RecordingServer, ResponseSpec
+from tests.integration._support.native.requests import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
+from tests.integration.sdk.native.test_inference_sdk import RESPONSES_MODEL, RESPONSES_RESPONSE
 
 
 def payload(value: object) -> object:

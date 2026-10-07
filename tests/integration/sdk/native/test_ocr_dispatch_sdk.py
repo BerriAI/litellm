@@ -4,8 +4,8 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import OCR_DOCUMENT, OCR_MODEL, OCR_RESPONSE
+from tests._support.recording_server import RecordingServer, ResponseSpec
+from tests.integration._support.native.requests import OCR_DOCUMENT, OCR_MODEL, OCR_RESPONSE
 
 pytestmark = pytest.mark.requires_rust_extension
 

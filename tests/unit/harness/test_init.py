@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 from litellm import harness
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
+from tests._support.child_interpreter import run_child_interpreter
 from litellm.utils import ProviderConfigManager
 
 PUBLIC_NAMES = [
