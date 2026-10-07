@@ -93,12 +93,14 @@ pub(super) async fn execute(
                 })?;
 
             let status = response.status();
+            let request_url = (!status.is_success()).then(|| response.url().to_string());
             let text = response.text().await.map_err(|err| {
                 Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
             })?;
 
             if !status.is_success() {
                 return Err(Error::Transport(litellm_http::transport::Error::Http {
+                    request_url,
                     status: status.as_u16(),
                     body: truncate_error_body(&text),
                 }));
@@ -322,6 +324,7 @@ mod tests {
             );
         }
         let upstream = Error::Transport(litellm_http::transport::Error::Http {
+            request_url: None,
             status: 500,
             body: "boom".to_string(),
         });

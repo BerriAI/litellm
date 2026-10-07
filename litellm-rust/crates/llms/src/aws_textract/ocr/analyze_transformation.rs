@@ -124,8 +124,9 @@ impl BaseOcrConfig for TextractAnalyzeDocumentConfig {
         error_message: String,
         status_code: u16,
         headers: Vec<(String, String)>,
+        request_url: Option<String>,
     ) -> Error {
-        error_class(error_message, status_code, headers)
+        error_class(error_message, status_code, headers, request_url)
     }
 }
 

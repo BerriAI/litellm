@@ -370,8 +370,10 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         error_message: String,
         status_code: u16,
         headers: Vec<(String, String)>,
+        request_url: Option<String>,
     ) -> Error {
         Error::Provider {
+            request_url,
             status: status_code,
             body: error_message,
             headers,

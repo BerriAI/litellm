@@ -64,6 +64,7 @@ impl ResponsesWebSocketConnection {
             let (socket, _) = result.map_err(|error| match *error {
                 tokio_tungstenite::tungstenite::Error::Http(response) => {
                     Error::Transport(litellm_http::transport::Error::Http {
+                        request_url: Some(url.to_string()),
                         status: response.status().as_u16(),
                         body: String::new(),
                     })

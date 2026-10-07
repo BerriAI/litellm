@@ -4,7 +4,7 @@ use pyo3::{
     prelude::*,
 };
 
-use crate::errors::{RustUpstreamError, by_fault};
+use crate::errors::{by_fault, upstream_error};
 
 pub(super) fn to_pyerr(error: Error) -> PyErr {
     let status = error.http_status_code();
@@ -14,10 +14,13 @@ pub(super) fn to_pyerr(error: Error) -> PyErr {
                 status,
                 body,
                 headers,
-            } => upstream_error(py, status, body, headers)?,
-            Error::Transport(litellm_http::transport::Error::Http { status, body }) => {
-                upstream_error(py, status, body, Vec::new())?
-            }
+                request_url,
+            } => upstream_error(py, status, body, headers, request_url)?,
+            Error::Transport(litellm_http::transport::Error::Http {
+                status,
+                body,
+                request_url,
+            }) => upstream_error(py, status, body, Vec::new(), request_url)?,
             Error::RequestFormat => {
                 let error = by_fault(true, Error::RequestFormat.to_string());
                 error
@@ -49,17 +52,6 @@ fn is_request(error: &Error) -> bool {
         )
 }
 
-fn upstream_error(
-    py: Python<'_>,
-    status: u16,
-    body: String,
-    headers: Vec<(String, String)>,
-) -> PyResult<PyErr> {
-    let error = RustUpstreamError::new_err((status, body));
-    error.value(py).setattr("headers", headers)?;
-    Ok(error)
-}
-
 fn attach_status(error: PyErr, status: Option<u16>) -> PyErr {
     if let Some(status) = status {
         Python::attach(|py| {
@@ -76,6 +68,7 @@ mod tests {
     use pyo3::exceptions::PyValueError;
 
     use super::*;
+    use crate::errors::RustUpstreamError;
 
     #[test]
     fn preserves_python_validation_and_provider_details() {
@@ -94,6 +87,7 @@ mod tests {
                 400
             );
             let mapped = to_pyerr(Error::Provider {
+                request_url: None,
                 status: 429,
                 body: r#"{"message":"rate limited"}"#.to_string(),
                 headers: vec![("Retry-After".to_string(), "17".to_string())],

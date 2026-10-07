@@ -224,6 +224,11 @@ async fn an_upstream_error_keeps_its_status_and_body(
     assert_eq!(
         error,
         Error::Transport(litellm_http::transport::Error::Http {
+            request_url: Some(format!(
+                "{}{}",
+                upstream.uri(),
+                only_request(&upstream).await.url.path()
+            )),
             status,
             body: "upstream said no".into()
         })

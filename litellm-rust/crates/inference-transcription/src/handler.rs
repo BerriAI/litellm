@@ -32,11 +32,13 @@ pub async fn execute_audio_transcription_provider_call(
             Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
         })?;
     let status = response.status();
+    let request_url = (!status.is_success()).then(|| response.url().to_string());
     let text = response.text().await.map_err(|error| {
         Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
     })?;
     if !status.is_success() {
         return Err(Error::Transport(litellm_http::transport::Error::Http {
+            request_url,
             status: status.as_u16(),
             body: truncate_error_body(&text),
         }));
