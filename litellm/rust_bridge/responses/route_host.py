@@ -27,7 +27,11 @@ def arguments(request: Mapping[str, object]) -> Mapping[str, object]:
 def map_failure(error: Exception, request: Mapping[str, object]) -> Exception:
     provider: Final = optional_str(request.get("custom_llm_provider")) or "openai"
     return failures.map_native_failure(
-        error, str(request["model"]), provider, arguments(request), optional_str(request.get("api_base"))
+        error,
+        str(request["model"]),
+        provider,
+        arguments(request),
+        optional_str(request.get("api_base")) or optional_str(request.get("base_url")),
     )
 
 

@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 import litellm
-from litellm.rust_bridge.responses.route_host import arguments, connection_defaults, response
+from litellm.rust_bridge.responses.route_host import arguments, connection_defaults, map_failure, response
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -78,3 +78,23 @@ def test_connection_defaults_preserve_openai_precedence(
     monkeypatch.setattr(litellm, "openai_key", provider_key)
     monkeypatch.setattr(litellm, "api_base", "https://configured.invalid/v1")
     assert connection_defaults("openai") == (expected, litellm.api_base)
+
+
+class _UpstreamFailure(Exception):
+    headers: Final = ()
+
+
+@pytest.mark.parametrize(
+    ("api_base", "base_url", "expected"),
+    (
+        (None, "https://alias.invalid/v1", "https://alias.invalid/v1"),
+        ("", "https://alias.invalid/v1", "https://alias.invalid/v1"),
+        ("https://base.invalid/v1", "https://alias.invalid/v1", "https://base.invalid/v1"),
+    ),
+)
+def test_failure_preserves_the_explicit_endpoint(api_base: str | None, base_url: str, expected: str) -> None:
+    upstream: Final = _UpstreamFailure(429, '{"error":{"message":"rate limited"}}')
+    mapped: Final = map_failure(upstream, {"model": "openai/test-model", "api_base": api_base, "base_url": base_url})
+    assert isinstance(mapped, litellm.RateLimitError)
+    assert str(mapped.response.request.url) == expected
+    assert mapped.__context__ is upstream

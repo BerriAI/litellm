@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Mapping
 from dataclasses import replace
-from types import MappingProxyType
 from typing import Final, Protocol, cast  # noqa: TID251  # narrows the parametrized path to its protocol
 
 import httpx
@@ -50,9 +49,10 @@ class _ManagedSecrets(CustomSecretManager):
 
 
 def _native_request() -> NativeCall:
+    supplied: Final = _public_kwargs()
     return NativeCall(
         args=(),
-        kwargs=MappingProxyType({}),
+        kwargs=supplied,
         bound={
             "model": MESSAGES_MODEL,
             "messages": MESSAGES,
@@ -61,7 +61,7 @@ def _native_request() -> NativeCall:
             "api_key": None,
             "api_base": None,
             "custom_llm_provider": None,
-            **MappingProxyType({}),
+            **supplied,
         },
     )
 

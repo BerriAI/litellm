@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Awaitable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
-from types import MappingProxyType
 from typing import Final, Literal, Protocol, TypeAlias, cast
 
 import httpx
@@ -61,9 +60,10 @@ class _VaultSecrets(CustomSecretManager):
 
 
 def _native_request(api_base: str) -> NativeCall:
+    supplied: Final = _public_kwargs(api_base)
     return NativeCall(
         args=(),
-        kwargs=MappingProxyType({}),
+        kwargs=supplied,
         bound={
             "model": OCR_MODEL,
             "document": OCR_DOCUMENT,
@@ -72,7 +72,7 @@ def _native_request(api_base: str) -> NativeCall:
             "timeout": None,
             "custom_llm_provider": None,
             "extra_headers": None,
-            **MappingProxyType({}),
+            **supplied,
         },
     )
 
