@@ -64,6 +64,10 @@ mod _native {
             py.get_type::<crate::cache::NativeCacheHandle>(),
         )?;
         dict.set_item(
+            "Router",
+            py.get_type::<crate::routes::router::NativeRouter>(),
+        )?;
+        dict.set_item(
             "_SecretManagerRuntime",
             py.get_type::<crate::secrets::runtime::NativeSecretManager>(),
         )
@@ -118,6 +122,7 @@ mod tests {
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",
+                "Router",
             ];
             #[cfg(feature = "huggingface")]
             expected.push("HuggingFaceEncoding");

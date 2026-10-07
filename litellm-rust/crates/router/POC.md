@@ -84,7 +84,7 @@ Later: other strategies, routing groups, filters (aliases, patterns, access grou
 ## Log
 
 - 2026-10-06: design agreed, branch created
-- 2026-10-07: steps 2 and 3 landed, facade verification running
+- 2026-10-07: steps 2, 3 and 4 landed, facade verification running
 
 ## Checkpoint 2026-10-07
 
@@ -100,6 +100,11 @@ Design notes made while implementing:
 - Sleeps are a host op so tests can observe them and the sync driver can block
 - Python's shared-logging behavior is kept: with `litellm_logging_obj` passed, only the first failure runs the failure callbacks and fallback-hop failures cool down through `_trigger_cooldown_for_failed_deployment`
 
-Next: step 4. Export the engine from `python-bridge` (a `Router` pyclass holding `Engine`, with `acompletion`/`completion` style entrypoints going through `host-python::run_call`), and the Python side: `RustRouter` builds a callback-free `PythonRouter` for normalization and kwargs building, projects deployments and settings, and answers `Invoke` with a helper that calls `litellm.<op>(**kwargs)` and classifies the exception. Then step 5 (harness)
+- Step 4: `python-bridge` exports `Router` (`src/routes/router/`): `Router(deployments, settings, providers, redis_url, seed)` holds the `Engine`; `route(call, driver, asynchronous)` runs one call through `host-python::run_call` with `HookChain::new()`. `Invoke` and `Sleep` are host ops on `RouterHostCall`; async answers await the driver's coroutine inline, sync answers call `invoke_sync`/`sleep_sync`. `map_error` asks the driver for the exception to raise (ops applied, rejections materialized once per id), `encode_response` asks it for the final response (ops applied, retry/fallback headers added)
+- Python: `RustRouter` (`litellm/router_backends/rust_router.py`) builds a `PythonRouter` from the same arguments minus Redis and `discard()`s it, so normalization, `generate_model_id` and attempt kwargs building stay Python and no router callbacks are registered. It projects deployments and resolved settings to the native router. `acompletion`/`completion` are served; streaming, `priority`, `specific_deployment`, request-level `model_group_retry_policy`, `include_fallback_errors`, `_router_weights`, `mock_timeout`, `mock_testing_rate_limit_error` and client-side credentials raise `NotImplementedError`. Other members raise `NotImplementedError` naming the member, except the read views `model_list`, `model_names`, `get_model_names`
+- `litellm/router_backends/rust_call.py::RoutedCall` is the per-call driver: it mirrors `_acompletion`/`_completion`'s body after selection (same `PythonRouter` helpers through a typed `AttemptRouter` protocol), classifies exceptions, and applies the router's ops to numbered metadata buckets
+- Tests: `tests/unit/router_backends/test_rust_call.py` (classification, buckets, rejections, debug text), `tests/test_litellm_rust/router/test_rust_router.py` (native; same config and seed through both backends: identical pick sequences, headers, error text, cooldown-then-reject sequence, sync path, facade selection)
+
+Next: step 5. Parametrize the existing `Router(...)` behavior tests over both backends (the Rust side's `NotImplementedError`s and mismatches become the to-do list), and grow the differential harness: scripted failures per deployment, a live `redis-server` shared by both backends and compared key by key (values, TTLs). Then streaming (buffer to the first content chunk in the driver) and the generic operations (`aresponses`, `aanthropic_messages`)
 
 Known gaps to close or decline: chat streaming pre-first-chunk failures (Python goes straight to fallbacks, no in-group retry), `include_fallback_errors`, request-level `model_group_retry_policy`/`specific_deployment`/`priority`, CustomLogger fallback-event hooks, `router_cooldown_event_callback`, the 200-key `InMemoryCache` eviction, fallback keys containing `/` (provider-prefixed matching needs the cost map)

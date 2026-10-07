@@ -49,6 +49,7 @@ litellm-secrets = { workspace = true, features = ["aws", "azure", "google", "has
 litellm-secrets-types.workspace = true
 litellm-llms-types.workspace = true
 litellm-host-python.workspace = true
+litellm-router.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 pyo3.workspace = true
 prost.workspace = true

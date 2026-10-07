@@ -55,6 +55,9 @@ def test_supported_configs_have_no_reason(arguments: Mapping[str, object]) -> No
         ({"model_list": [_deployment({"model_info": {"team_id": "t"}})]}, "model_info.team_id"),
         ({"model_list": [_deployment({"tpm": 100})]}, "tpm"),
         ({"model_list": [{"litellm_params": {"model": "m"}}]}, "cannot read"),
+        ({"fallbacks": [{"openai/gpt": ["other"]}]}, "fallbacks entries"),
+        ({"fallbacks": [{"gpt": [{"model": "other"}]}]}, "fallbacks entries"),
+        ({"context_window_fallbacks": [{"gpt": "big"}]}, "context_window_fallbacks entries"),
     ),
 )
 def test_unsupported_configs_name_the_reason(arguments: Mapping[str, object], named: str) -> None:

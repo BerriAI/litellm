@@ -5,6 +5,7 @@ mod inference;
 pub(crate) mod messages;
 pub(crate) mod ocr;
 pub(crate) mod responses;
+pub(crate) mod router;
 pub(crate) mod token_counter;
 pub(crate) mod traces;
 

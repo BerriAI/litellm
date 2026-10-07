@@ -180,6 +180,18 @@ class ResponsesWebSocketConnection:
     def close(self) -> Future[None]: ...
 
 @final
+class Router:
+    def __new__(
+        cls,
+        deployments: Sequence[Mapping[str, object]],
+        settings: Mapping[str, object],
+        providers: Sequence[str],
+        redis_url: str | None = None,
+        seed: int | None = None,
+    ) -> Router: ...
+    def route(self, call: Mapping[str, object], driver: object, asynchronous: bool) -> object: ...
+
+@final
 class TokenCounter:
     @staticmethod
     def from_tokenizer(tokenizer: Tokenizer, fast: bool = False) -> TokenCounter: ...

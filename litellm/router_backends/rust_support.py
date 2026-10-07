@@ -26,6 +26,7 @@ _DEFAULTS: Final[Mapping[str, object]] = MappingProxyType(
     {name: _default(parameter) for name, parameter in _SIGNATURE.parameters.items()}
 )
 _CALLBACKS: Final = TypeAdapter(tuple[object, ...])
+_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 SUPPORTED_ARGUMENTS: Final = frozenset(
     {
@@ -59,7 +60,13 @@ _UNSUPPORTED_LITELLM_PARAMS: Final = frozenset(
     {"order", "tags", "tag_regex", "tpm", "rpm", "max_parallel_requests", "silent_model"}
 )
 _UNSUPPORTED_MODEL_INFO: Final = frozenset({"team_id", "order", "allowed_fails", "allowed_fails_policy", "blocked"})
-_CALLBACK_HOOKS: Final = ("async_filter_deployments", "async_pre_call_check")
+_CALLBACK_HOOKS: Final = (
+    "async_filter_deployments",
+    "async_pre_call_check",
+    "log_success_fallback_event",
+    "log_failure_fallback_event",
+)
+_FALLBACK_ARGUMENTS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "default_fallbacks")
 
 
 class _RawDeployment(BaseModel):
@@ -87,6 +94,7 @@ def unsupported_reason(arguments: Mapping[str, object]) -> str | None:
             reason
             for reason in (
                 _argument_reason(arguments),
+                _fallbacks_reason(arguments),
                 _model_list_reason(arguments.get("model_list")),
                 _global_reason(),
             )
@@ -104,6 +112,39 @@ def _argument_reason(arguments: Mapping[str, object]) -> str | None:
             if name not in SUPPORTED_ARGUMENTS and value != _DEFAULTS[name]
         ),
         None,
+    )
+
+
+def _fallbacks_reason(arguments: Mapping[str, object]) -> str | None:
+    """Fallback chains the Rust router reads: group names only, keyed by names without a provider prefix,
+    which Python matches through the cost map."""
+    configured: Final = tuple(
+        (name, arguments.get(name) or cast(object, getattr(litellm, name, None)))  # cast-ok: untyped global
+        for name in _FALLBACK_ARGUMENTS
+    )
+    return next(
+        (f"{name} entries other than group names" for name, value in configured if not _plain_chain(value)),
+        None,
+    )
+
+
+def _plain_chain(value: object) -> bool:
+    entries: Final = _CALLBACKS.validate_python(value) if isinstance(value, (list, tuple)) else ()
+    return all(_plain_entry(entry) for entry in entries)
+
+
+def _plain_entry(entry: object) -> bool:
+    if isinstance(entry, str):
+        return True
+    chains: Final[Mapping[str, object]] = _MAPPING.validate_python(entry) if isinstance(entry, Mapping) else {}
+    return bool(chains) and all(_plain_chain_of(key, targets) for key, targets in chains.items())
+
+
+def _plain_chain_of(key: str, targets: object) -> bool:
+    return (
+        "/" not in key
+        and isinstance(targets, (list, tuple))
+        and all(isinstance(target, str) for target in _CALLBACKS.validate_python(targets))
     )
 
 
