@@ -9808,13 +9808,16 @@ class TestGetUserObjectPermission:
             mock_get_perm.assert_not_awaited()
             prisma_client.db.litellm_usertable.find_unique.assert_awaited_once()
 
-    async def test_missing_user_row_places_no_ceiling(self):
+    @pytest.mark.parametrize("fresh_policy", [False, True])
+    async def test_missing_user_row_places_no_ceiling(self, fresh_policy):
         """Whether this human is entitled at all is unknown when their row is absent, which is the
         state before the level existed, so it must not deny."""
         from litellm.caching.dual_cache import DualCache
 
         prisma_client = self._prisma_with_user(None)
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="ghost")
+        auth.requires_fresh_policy = fresh_policy
+        prisma_client.writer_db = prisma_client.db
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
@@ -10177,7 +10180,8 @@ class TestScopedSessionAdmission:
 
 
 @pytest.mark.asyncio
-async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(monkeypatch):
+@pytest.mark.parametrize("failure", [RuntimeError("unavailable"), ValueError("User doesn't exist in db")])
+async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(monkeypatch, failure):
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_UserTable
@@ -10192,7 +10196,7 @@ async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     assert await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True) == "current"
     database.db.litellm_usertable.find_unique.assert_not_awaited()
-    database.writer_db.litellm_usertable.find_unique.side_effect = RuntimeError("unavailable")
+    database.writer_db.litellm_usertable.find_unique.side_effect = failure
     with pytest.raises(HTTPException) as denied:
         await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True)
     assert denied.value.status_code == 503

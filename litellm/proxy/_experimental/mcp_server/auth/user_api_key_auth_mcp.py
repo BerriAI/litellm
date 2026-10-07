@@ -73,6 +73,7 @@ from litellm.repositories.table_repositories import (
     MCPServerRepository,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -3181,6 +3182,8 @@ class MCPRequestHandler:
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
             return object_permission_id
+        except UserNotFoundError:
+            return None
         except Exception as e:  # noqa: BLE001  # Legacy callers retain their existing optional user-ceiling behavior
             if check_db_only:
                 raise HTTPException(503, "User policy is unavailable") from e

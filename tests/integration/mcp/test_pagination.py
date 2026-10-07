@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 import httpx
 import pytest
@@ -504,3 +505,59 @@ def test_complete_initial_page_keeps_bare_routes_with_a_cached_database_revision
                 assert revision and revision[0]["reload_revision"] > 0
                 asyncio.run(exercise(Gateway(gateway.client, owner, second.url), first, second))
                 assert read_rows(query, ("mcp_catalog",)) == revision
+
+
+@pytest.mark.parametrize("entry", ["mcp", "server_mcp"])
+def test_missing_user_keeps_explicit_key_and_team_grants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: Literal["mcp", "server_mcp"]
+):
+    import subprocess
+    import sys
+    import uuid
+
+    from integration._support.database import read_rows, scratch_database
+    from integration._support.mcp import McpCaller, register_mcp, tool_calls
+
+    with scratch_database() as database_url:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        subprocess.run(
+            [sys.executable, "-I", "-m", "prisma", "db", "push", "--schema",
+             "litellm/proxy/schema.prisma", "--skip-generate"],
+            check=True, capture_output=True, text=True,
+        )
+        with paginated_mcp_peer(page_size=3) as allowed, paginated_mcp_peer(page_size=3) as private, httpx.Client() as client:
+            seed = Gateway(client, "sk-pagination-test", allowed.url)
+            config = tmp_path / "database-proxy.yaml"
+            config.write_text(yaml.safe_dump({
+                "model_list": [], "general_settings": {"master_key": seed.key, "store_model_in_db": True},
+            }))
+            environment = {"DATABASE_URL": database_url, "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "shared-pagination-test"}
+            options = dict(config=config, database_setup=(), remove_environment=("DATABASE_URL_READ_REPLICA", "LITELLM_LICENSE", "LITELLM_LICENSE_PATH"))
+            with (
+                owned_proxy(seed, tmp_path / "a", environment, **options) as a,
+                owned_proxy(seed, tmp_path / "b", environment, **options) as b,
+                a.scenario() as scenario,
+            ):
+                identity = register_mcp(scenario, allowed, "allowed")
+                register_mcp(scenario, private, "private")
+                team = scenario.team(object_permission={"mcp_servers": [identity]})
+                for policy in ({"object_permission": {"mcp_servers": [identity]}}, {"team_id": team}):
+                    user = "missing-" + uuid.uuid4().hex
+                    key = scenario.key(user_id=user, **policy)
+                    assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,)) == []
+                    for replica in (a, b):
+                        caller = McpCaller(replica, key, entry, alias="allowed")
+                        allowed.drain()
+                        private.drain()
+                        listing = caller.list_tools()
+                        assert listing.ok, listing
+                        assert len(listing.tools) == 3, listing
+                        name = next(name for name in listing.tools if name.endswith("add2"))
+                        called = caller.call(name, {"a": 3, "b": 4})
+                        assert called.ok and called.text == "7", called
+                        assert len(tool_calls(allowed.drain())) == 1
+                        assert private.drain() == ()
+                        forbidden = caller.call("private-add2", {"a": 3, "b": 4})
+                        assert not forbidden.ok, forbidden
+                        assert tool_calls(allowed.drain()) == ()
+                        assert private.drain() == ()
