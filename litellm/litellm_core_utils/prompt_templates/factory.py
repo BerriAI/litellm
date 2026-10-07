@@ -206,7 +206,10 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tu
     return system_content_str, msg_i
 
 
-def _ollama_bad_message(model: str, message: dict, msg_i: int, detail: str) -> "litellm.BadRequestError":
+_OLLAMA_USER_ROLES: Final = frozenset({"user", "tool", "function"})
+
+
+def _ollama_bad_message(model: str, message: AllMessageValues, msg_i: int, detail: str) -> "litellm.BadRequestError":
     return litellm.BadRequestError(
         message=BAD_MESSAGE_ERROR_STR + f"the {message['role']} message at index {msg_i} {detail}",
         model=model,
@@ -214,40 +217,64 @@ def _ollama_bad_message(model: str, message: dict, msg_i: int, detail: str) -> "
     )
 
 
-def _ollama_image_url(model: str, message: dict, part: dict, msg_i: int) -> str:
-    image_url: Final = part["image_url"]
-    if isinstance(image_url, str):
-        return image_url
-    if isinstance(image_url, dict):
-        return image_url["url"]
-    raise _ollama_bad_message(
-        model,
-        message,
-        msg_i,
-        f"has a {type(image_url).__name__} image_url; image_url must be a URL string or an object with a url",
-    )
+def _ollama_content_part(
+    model: str, message: AllMessageValues, part: Mapping[str, object], msg_i: int
+) -> tuple[str, str]:
+    match part:
+        case {"type": "text", "text": str() as text}:
+            return text, ""
+        case {"type": "text", "text": bad_text}:
+            raise _ollama_bad_message(
+                model, message, msg_i, f"has a {type(bad_text).__name__} text part; text must be a string"
+            )
+        case {"type": "image_url", "image_url": str() as image_url}:
+            return "", image_url
+        case {"type": "image_url", "image_url": {"url": str() as image_url}}:
+            return "", image_url
+        case {"type": "image_url", "image_url": bad_image_url}:
+            raise _ollama_bad_message(
+                model,
+                message,
+                msg_i,
+                f"has a {type(bad_image_url).__name__} image_url; image_url must be a URL string or an object with a url",
+            )
+        case _:
+            return "", ""
 
 
-def _ollama_user_message_parts(model: str, message: dict, msg_i: int) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def _ollama_user_message_parts(
+    model: str, message: AllMessageValues, msg_i: int
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
     msg_content: Final = message.get("content")
     if msg_content is None:
         return (), ()
     if isinstance(msg_content, str):
         return ((msg_content,) if msg_content else ()), ()
-    if isinstance(msg_content, list):
-        texts: Final = tuple(part["text"] for part in msg_content if part.get("type", "") == "text" and part["text"])
-        image_urls: Final = tuple(
-            _ollama_image_url(model, message, part, msg_i)
-            for part in msg_content
-            if part.get("type", "") == "image_url"
+    if not isinstance(msg_content, list):
+        raise _ollama_bad_message(
+            model,
+            message,
+            msg_i,
+            f"has {type(msg_content).__name__} content; content must be a string or a list of content parts",
         )
-        return texts, image_urls
-    raise _ollama_bad_message(
-        model,
-        message,
-        msg_i,
-        f"has {type(msg_content).__name__} content; content must be a string or a list of content parts",
+    parts: Final = tuple(_ollama_content_part(model, message, part, msg_i) for part in msg_content)
+    texts: Final = tuple(text for text, _ in parts if text)
+    image_urls: Final = tuple(image_url for _, image_url in parts if image_url)
+    return texts, image_urls
+
+
+def _ollama_user_turn(model: str, messages: Sequence[AllMessageValues], msg_i: int) -> tuple[str, tuple[str, ...], int]:
+    user_run: Final = tuple(
+        itertools.takewhile(
+            lambda message: message["role"] in _OLLAMA_USER_ROLES, (messages[i] for i in range(msg_i, len(messages)))
+        )
     )
+    user_parts: Final = tuple(
+        _ollama_user_message_parts(model, message, msg_i + offset) for offset, message in enumerate(user_run)
+    )
+    user_content_str: Final = "\n".join("\n".join(texts) for texts, _ in user_parts if texts)
+    image_urls: Final = tuple(itertools.chain.from_iterable(urls for _, urls in user_parts))
+    return user_content_str, image_urls, len(user_run)
 
 
 def ollama_pt(
@@ -255,19 +282,14 @@ def ollama_pt(
 ) -> (
     str | OllamaVisionModelObject
 ):  # https://github.com/ollama/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
-    user_message_types: Final = {"user", "tool", "function"}
     msg_i = 0
     images: Final = []
     prompt = ""
     while msg_i < len(messages):
         init_msg_i = msg_i
-        user_run = tuple(itertools.takewhile(lambda message: message["role"] in user_message_types, messages[msg_i:]))
-        user_parts = tuple(
-            _ollama_user_message_parts(model, message, msg_i + offset) for offset, message in enumerate(user_run)
-        )
-        images.extend(itertools.chain.from_iterable(image_urls for _, image_urls in user_parts))
-        user_content_str = "\n".join("\n".join(texts) for texts, _ in user_parts if texts)
-        msg_i += len(user_run)
+        user_content_str, image_urls, user_run_len = _ollama_user_turn(model, messages, msg_i)
+        images.extend(image_urls)
+        msg_i += user_run_len
 
         if user_content_str:
             prompt += f"### User:\n{user_content_str}\n\n"
