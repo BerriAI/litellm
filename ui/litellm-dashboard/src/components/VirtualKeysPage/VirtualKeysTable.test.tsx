@@ -32,14 +32,10 @@ vi.mock("../networking", async (importOriginal) => ({
   regenerateKeyCall: vi.fn(),
 }));
 
+const { authorizedSession } = vi.hoisted(() => ({ authorizedSession: vi.fn() }));
+
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
-  default: vi.fn(() => ({
-    accessToken: "test-token",
-    userId: "test-user",
-    userRole: "Admin",
-    premiumUser: true,
-    token: "test-token",
-  })),
+  default: authorizedSession,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
@@ -157,6 +153,15 @@ const mockTeam: Team = {
   spend: 0,
 };
 
+const authorizedUser = (overrides: { userId?: string | null } = {}) => ({
+  accessToken: "test-token",
+  userId: "test-user",
+  userRole: "Admin",
+  premiumUser: true,
+  token: "test-token",
+  ...overrides,
+});
+
 const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
 const mockUseTeams = useTeams as MockedFunction<typeof useTeams>;
 const mockUseKeyInfo = useKeyInfo as MockedFunction<typeof useKeyInfo>;
@@ -193,6 +198,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
 
+  authorizedSession.mockReturnValue(authorizedUser());
   mockUseKeys.mockReturnValue(keysResult([mockKey]));
   mockUseKeyInfo.mockReturnValue(keyInfoResult(undefined));
 
@@ -1142,6 +1148,225 @@ describe("a failed keys fetch does not rewrite the URL", () => {
     });
     await waitFor(() => {
       expect(lastSearchParam(onUrlUpdate, "page")).toBeNull();
+    });
+  });
+});
+
+describe("My Keys filter", () => {
+  const myKeysSwitch = () => screen.findByRole("switch", { name: "My Keys" });
+  const applyDrawer = () => fireEvent.click(screen.getByTestId("filter-drawer-apply"));
+  const reopenFilters = () => fireEvent.click(screen.getByTestId("datatable-filters-trigger"));
+  const scopedKeyOptions = {
+    userID: "test-user",
+    includeTeamKeys: false,
+    includeCreatedByKeys: false,
+    substringMatching: false,
+  };
+  const broadKeyOptions = {
+    includeTeamKeys: true,
+    includeCreatedByKeys: true,
+    substringMatching: true,
+  };
+
+  it("renders the switch off by default at the top of the filters drawer, with its explainer tooltip", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<VirtualKeysTable />);
+
+    openFilters();
+
+    expect(await myKeysSwitch()).not.toBeChecked();
+
+    const drawer = screen.getByTestId("filter-drawer-body");
+    await user.hover(within(drawer).getByLabelText("question-circle"));
+    expect(
+      await screen.findByText(
+        "Show only keys assigned to your user account. Team keys and keys you created for others are excluded.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("scopes the key list to the signed-in user when the switch is applied", async () => {
+    renderWithProviders(<VirtualKeysTable />);
+
+    openFilters();
+    fireEvent.click(await myKeysSwitch());
+    applyDrawer();
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining(scopedKeyOptions));
+    });
+  });
+
+  it("restores the broad key list options when the switch is turned back off", async () => {
+    renderWithProviders(<VirtualKeysTable />);
+
+    openFilters();
+    fireEvent.click(await myKeysSwitch());
+    applyDrawer();
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "test-user" }));
+    });
+
+    reopenFilters();
+    fireEvent.click(await myKeysSwitch());
+    applyDrawer();
+
+    const expectedOptions = { userID: undefined, ...broadKeyOptions };
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining(expectedOptions));
+    });
+    expect(screen.queryByTestId("filter-chip-my_keys")).not.toBeInTheDocument();
+  });
+
+  it("locks the manual User ID field to the signed-in user while the switch is on", async () => {
+    renderWithProviders(<VirtualKeysTable />);
+
+    openFilters();
+    fireEvent.click(await myKeysSwitch());
+
+    const userIdInput = await screen.findByPlaceholderText(/Enter User ID/);
+    expect(userIdInput).toBeDisabled();
+    expect(userIdInput).toHaveValue("test-user");
+  });
+
+  it("lets the signed-in user ID win over a manually entered User ID filter", async () => {
+    renderWithProviders(<VirtualKeysTable />);
+
+    openFilters();
+    fireEvent.change(await screen.findByPlaceholderText(/Enter User ID/), { target: { value: "someone-else" } });
+    applyDrawer();
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "someone-else" }));
+    });
+
+    reopenFilters();
+    fireEvent.click(await myKeysSwitch());
+    applyDrawer();
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "test-user" }));
+    });
+    expect(screen.queryByTestId("filter-chip-user_id")).not.toBeInTheDocument();
+  });
+
+  it("keeps narrowing the scoped list with Team, Organization, Key ID, Status and the search box", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<VirtualKeysTable />);
+
+    openFilters();
+    fireEvent.click(await myKeysSwitch());
+    await chooseSelectOption(user, await screen.findByPlaceholderText(/Select a team/), /Test Team/);
+    await chooseSelectOption(user, await screen.findByPlaceholderText(/Select an organization/), /Test Organization/);
+    fireEvent.change(screen.getByPlaceholderText(/Enter Key ID/), { target: { value: mockKey.token } });
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Status" }), "Revoked (blocked)");
+    applyDrawer();
+
+    fireEvent.change(screen.getByPlaceholderText(/Search by key alias or ID/), { target: { value: "prod" } });
+
+    const expectedOptions = {
+      ...scopedKeyOptions,
+      teamID: "team-1",
+      organizationID: "org-1",
+      keyHash: mockKey.token,
+      status: "revoked",
+      search: "prod",
+    };
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining(expectedOptions));
+    });
+  });
+
+  it("snaps back to page one when the switch flips", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { page: "3" }, onUrlUpdate });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(3, 50, expect.anything());
+    });
+
+    openFilters();
+    fireEvent.click(await myKeysSwitch());
+    applyDrawer();
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "test-user" }));
+    });
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "page")).toBeNull();
+    });
+  });
+
+  it("persists the switch in the URL so a reload restores the scoped list", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const first = renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
+
+    openFilters();
+    fireEvent.click(await myKeysSwitch());
+    applyDrawer();
+
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "my_keys")).toBe("true");
+    });
+    first.unmount();
+
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { my_keys: "true" } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "test-user" }));
+    });
+    expect(await screen.findByTestId("filter-chip-my_keys")).toHaveTextContent("My Keys");
+    expect(screen.getByTestId("filter-chip-my_keys")).toHaveTextContent("On");
+  });
+
+  it("shows My Keys as an active filter chip and returns to the broad list when it is removed", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { my_keys: "true" }, onUrlUpdate });
+
+    expect(await screen.findByTestId("filter-chip-my_keys")).toHaveTextContent("My Keys");
+    expect(screen.getByTestId("filter-chip-my_keys")).toHaveTextContent("On");
+
+    fireEvent.click(screen.getByTestId("filter-chip-remove-my_keys"));
+
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "my_keys")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ userID: undefined, includeTeamKeys: true }),
+      );
+    });
+    expect(screen.queryByTestId("filter-chip-my_keys")).not.toBeInTheDocument();
+  });
+
+  it("lifts the My Keys scoping back to the broad list on Clear all", async () => {
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { my_keys: "true", filter_status: "revoked" } });
+
+    fireEvent.click(await screen.findByTestId("datatable-clear-filters"));
+
+    const expectedOptions = { userID: undefined, status: undefined, ...broadKeyOptions };
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining(expectedOptions));
+    });
+    expect(screen.queryByTestId("filter-chip-my_keys")).not.toBeInTheDocument();
+  });
+
+  it("keeps the switch off and disabled and never scopes by a missing user ID", async () => {
+    authorizedSession.mockReturnValue(authorizedUser({ userId: null }));
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { my_keys: "true" } });
+
+    openFilters();
+    const switchControl = await myKeysSwitch();
+    expect(switchControl).toHaveAttribute("aria-disabled", "true");
+    expect(switchControl).not.toBeChecked();
+    expect(screen.queryByTestId("filter-chip-my_keys")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ userID: undefined, includeTeamKeys: true }),
+      );
     });
   });
 });

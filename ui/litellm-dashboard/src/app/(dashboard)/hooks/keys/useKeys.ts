@@ -45,6 +45,9 @@ export interface KeyListCallOptions {
   sortOrder?: string | null;
   expand?: string | null;
   status?: string | null;
+  includeTeamKeys?: boolean;
+  includeCreatedByKeys?: boolean;
+  substringMatching?: boolean;
 }
 
 const keyListCall = async (accessToken: string, page: number, pageSize: number, options: KeyListCallOptions = {}) => {
@@ -71,11 +74,11 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
         expand: options.expand,
         status: options.status,
         return_full_object: "true",
-        include_team_keys: "true",
-        include_created_by_keys: "true",
+        include_team_keys: options.includeTeamKeys ?? true,
+        include_created_by_keys: options.includeCreatedByKeys ?? true,
         // Opt into substring matching so the admin key-list search box keeps
         // matching partial user_id/key_alias. /key/list is exact by default.
-        substring_matching: "true",
+        substring_matching: options.substringMatching ?? true,
       })
         .filter(([, value]) => value !== undefined && value !== null)
         .map(([key, value]) => [key, String(value)]),
