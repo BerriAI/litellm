@@ -171,6 +171,9 @@ class RealtimeResponse(BaseModel):
     content_type: Literal["application/x-realtime"]
     events: tuple[dict[str, JsonValue], ...]
     session_model: str | None = None
+    session_type: str | None = None
+    created_event: Literal["session.created", "transcription_session.created"] = "session.created"
+    created_repeats: int = 1
 
 
 StoredResponse: TypeAlias = Annotated[
