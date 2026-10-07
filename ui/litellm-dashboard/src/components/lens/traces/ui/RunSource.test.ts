@@ -7,15 +7,15 @@ const url = "https://acme.slack.com/archives/C1/p1";
 
 describe("sourceApp", () => {
   it.each([
-    ["slack", "Slack thread"],
-    ["teams", "Teams thread"],
-    ["discord", "Discord thread"],
-    ["linear", "Linear issue"],
-    ["github", "GitHub thread"],
-    ["jira", "Jira issue"],
-    ["custom", "Agent conversation"],
-  ] as const)("labels type %s as %s", (type, link) => {
-    expect(sourceApp({ type, url })?.link).toBe(link);
+    ["slack", "Slack"],
+    ["teams", "Teams"],
+    ["discord", "Discord"],
+    ["linear", "Linear"],
+    ["github", "GitHub"],
+    ["jira", "Jira"],
+    ["custom", "Conversation"],
+  ] as const)("labels type %s as %s", (type, label) => {
+    expect(sourceApp({ type, url })?.label).toBe(label);
   });
 
   it("shows the Slack logo for slack sources", () => {
@@ -23,7 +23,7 @@ describe("sourceApp", () => {
   });
 
   it("uses the declared type, not the url host", () => {
-    expect(sourceApp({ type: "custom", url })?.link).toBe("Agent conversation");
+    expect(sourceApp({ type: "custom", url })?.label).toBe("Conversation");
   });
 
   it.each(["javascript:alert(1)", "http://acme.slack.com/archives/C1/p1", "not a url", ""])("rejects %s", (bad) => {
