@@ -11934,7 +11934,7 @@ def test_static_root_path_authorization_discovery_preserves_issuer(
     from fastapi.testclient import TestClient
 
     server: Final = _create_oauth2_server(server_id="example", name="example", server_name="example", alias="example")
-    _isolated_mcp_registry[server.server_id] = server
+    _isolated_mcp_registry[server.server_id] = server  # rebind-ok: the fixture hands the test an empty registry to fill
     app: Final = FastAPI(root_path="/gateway")
     app.include_router(_gateway_root_path_discovery_router)
     with TestClient(app) as client:
