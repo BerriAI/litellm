@@ -174,7 +174,7 @@ class TestBaseResponsesAPIStreamingIterator:
     def test_process_chunk_with_response_completed_event(self):
         """
         Test that _process_chunk correctly processes a ResponseCompletedEvent
-        and calls update_responses_api_response_id_with_model_id for the final chunk.
+        and calls _update_responses_api_response_id_with_model_id for the final chunk.
         """
         # Mock dependencies
         mock_response = Mock()
@@ -248,7 +248,7 @@ class TestBaseResponsesAPIStreamingIterator:
     def test_process_chunk_with_delta_event_no_id_update(self):
         """
         Test that _process_chunk correctly processes a delta event
-        and does NOT call update_responses_api_response_id_with_model_id.
+        and does NOT call _update_responses_api_response_id_with_model_id.
         """
         # Mock dependencies
         mock_response = Mock()

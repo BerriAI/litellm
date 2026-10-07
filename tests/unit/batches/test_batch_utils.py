@@ -2835,7 +2835,7 @@ def sample_file_content_dict():
     ]
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-def testget_file_content_as_dictionary(sample_file_content):
+def test_get_file_content_as_dictionary(sample_file_content):
     result = get_file_content_as_dictionary(sample_file_content)
     assert len(result) == 2
     assert result[0]["id"] == "batch_req_6769ca596b38819093d7ae9f522de924"
@@ -2884,7 +2884,7 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
     Test that cost is calculated for completed batches when no explicit cost data is provided.
 
     Regression test for: When batch status is "completed" and explicit batch_cost/batch_usage/batch_models
-    are not provided, the system should compute batch data by calling handle_completed_batch.
+    are not provided, the system should compute batch data by calling _handle_completed_batch.
     """
     from unittest.mock import AsyncMock, patch
 
@@ -2975,7 +2975,7 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
-async def testhandle_completed_batch_computes_real_cost_from_output_file(
+async def test_handle_completed_batch_computes_real_cost_from_output_file(
     sample_file_content_dict,
 ):
     """Integration: a completed batch's cost and usage are computed from its output
@@ -3024,7 +3024,7 @@ async def test_batch_retrieve_cost_tracking_with_explicit_cost_data():
     Test that explicit cost data is used when provided, skipping computation.
 
     Regression test for: When batch_cost, batch_usage, and batch_models are explicitly
-    provided in kwargs, they should be used directly without calling handle_completed_batch.
+    provided in kwargs, they should be used directly without calling _handle_completed_batch.
     """
     from unittest.mock import AsyncMock, patch
 

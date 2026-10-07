@@ -366,7 +366,7 @@ def setup_and_teardown():
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("is_async", [True, False])
-def testassemble_complete_response_from_streaming_chunks_1(is_async):
+def test_assemble_complete_response_from_streaming_chunks_1(is_async):
     """
     Test 1 - ModelResponse with 1 list of streaming chunks. Assert chunks are added to the streaming_chunks, after final chunk sent assert complete_streaming_response is not None
     """
@@ -461,7 +461,7 @@ def testassemble_complete_response_from_streaming_chunks_1(is_async):
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("is_async", [True, False])
-def testassemble_complete_response_from_streaming_chunks_2(is_async):
+def test_assemble_complete_response_from_streaming_chunks_2(is_async):
     """
     Test 2 - TextCompletionResponse with 1 list of streaming chunks. Assert chunks are added to the streaming_chunks, after final chunk sent assert complete_streaming_response is not None
     """
@@ -563,7 +563,7 @@ def testassemble_complete_response_from_streaming_chunks_2(is_async):
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("is_async", [True, False])
-def testassemble_complete_response_from_streaming_chunks_3(is_async):
+def test_assemble_complete_response_from_streaming_chunks_3(is_async):
 
     request_kwargs = {
         "model": "test_model",
@@ -632,7 +632,7 @@ def testassemble_complete_response_from_streaming_chunks_3(is_async):
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("is_async", [True, False])
-def testassemble_complete_response_from_streaming_chunks_4(is_async):
+def test_assemble_complete_response_from_streaming_chunks_4(is_async):
     """
     Test 4 - build a complete response when 1 chunk is poorly formatted
 

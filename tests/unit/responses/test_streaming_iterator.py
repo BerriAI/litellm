@@ -2267,7 +2267,7 @@ async def test_cached_responses_stream_async_hit_triggers_success_callbacks(
         request_kwargs={"model": "test-model", "input": "hello", "stream": True},
         preset_cache_key="responses-stream-cache-key",
         original_function=litellm.aresponses,
-        should_store_result_in_cache=lambda original_function, kwargs: True,
+        _should_store_result_in_cache=lambda original_function, kwargs: True,
     )
 
     iterator = CachedResponsesAPIStreamingIterator(
@@ -2322,7 +2322,7 @@ def test_cached_responses_stream_sync_hit_triggers_success_callbacks(monkeypatch
         request_kwargs={"model": "test-model", "input": "hello", "stream": True},
         preset_cache_key="responses-stream-cache-key",
         original_function=litellm.responses,
-        should_store_result_in_cache=lambda original_function, kwargs: True,
+        _should_store_result_in_cache=lambda original_function, kwargs: True,
     )
 
     iterator = CachedResponsesAPIStreamingIterator(
