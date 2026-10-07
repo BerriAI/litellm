@@ -3,11 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from itertools import accumulate
 from types import MappingProxyType
-from typing import Final, cast, get_type_hints
+from typing import Final, cast
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from litellm.types.llms.anthropic import AnthropicMessagesRequestOptionalParams
+from litellm.llms.anthropic.pass_through.messages.utils import anthropic_messages_optional_param_keys
 
 CACHE_SETTINGS: Final = (
     "system",
@@ -51,7 +51,7 @@ _GENERIC_PARAMETERS: Final = (
 )
 NATIVE_ONLY_PARAMETERS: Final = tuple(
     key
-    for key in get_type_hints(AnthropicMessagesRequestOptionalParams)
+    for key in sorted(anthropic_messages_optional_param_keys())
     if key not in (*_GENERIC_PARAMETERS, "metadata", "stream")
 )
 BASELINE_PARAMETERS: Final = (*_GENERIC_PARAMETERS, *NATIVE_ONLY_PARAMETERS)

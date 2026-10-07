@@ -161,7 +161,7 @@ def prepare_native_messages(
 
 
 @lru_cache(maxsize=1)
-def _anthropic_messages_optional_param_keys() -> frozenset[str]:
+def anthropic_messages_optional_param_keys() -> frozenset[str]:
     """
     Valid AnthropicMessagesRequestOptionalParams keys.
 
@@ -193,7 +193,7 @@ class AnthropicMessagesRequestUtils:
         Returns:
             AnthropicMessagesRequestOptionalParams instance with only the valid parameters
         """
-        valid_keys: Final = _anthropic_messages_optional_param_keys()
+        valid_keys: Final = anthropic_messages_optional_param_keys()
         filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         if model is not None:
             from litellm.llms.anthropic.chat.transformation import AnthropicConfig
