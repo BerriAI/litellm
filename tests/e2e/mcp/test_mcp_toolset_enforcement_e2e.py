@@ -18,6 +18,7 @@ import pytest
 from datadog_mcp import SEARCH_LOGS_TOOL, register_datadog_mcp
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 from mcp_client import McpClient
 from models import ToolsetCreateBody, ToolsetTool
@@ -60,6 +61,12 @@ def _wire_prefix(wire_name: str, tool_name: str, catalog: frozenset[str]) -> str
 
 class TestMcpToolsetEnforcement:
     @pytest.mark.covers("mcp.list_tools.api_key.toolset_scoped")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_key_granted_a_toolset_lists_exactly_its_tools(self, client: McpClient, resources: ResourceManager) -> None:
         server_id: Final = register_datadog_mcp(client, resources, allowed_tools=None)
         client.await_registered(server_id)

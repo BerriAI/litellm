@@ -30,6 +30,7 @@ import pytest
 
 from e2e_config import CHEAP_ANTHROPIC_MODEL, LINEAR_MCP_URL, LINEAR_STORAGE_STATE, unique_marker
 from e2e_http import AuthHeaders
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, KeyGenerateBody, McpChatTool, McpServerCreateBody, ObjectPermission
 from proxy_client import ProxyClient
@@ -70,6 +71,16 @@ class TestMcpChatCompletionOauth:
 
     @pytest.mark.covers("mcp.list_tools.oauth.succeeds")
     @pytest.mark.covers("mcp.call_tool.oauth.succeeds")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_completion_uses_linear_with_x_litellm_api_key_header(
         self, chat_client: ChatMcpClient, resources: ResourceManager
     ) -> None:
@@ -134,6 +145,16 @@ class TestMcpChatCompletionOauth:
 
     @pytest.mark.covers("mcp.list_tools.oauth.succeeds")
     @pytest.mark.covers("mcp.call_tool.oauth.succeeds")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_completion_uses_linear_with_authorization_bearer_header(
         self, chat_client: ChatMcpClient, resources: ResourceManager
     ) -> None:
