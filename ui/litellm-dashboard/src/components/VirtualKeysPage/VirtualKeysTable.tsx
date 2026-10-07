@@ -126,9 +126,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const columnFilters = useMemo(
     () =>
       withMyKeysFilter(
-        urlColumnFilters
-          .filter(isUsableFilter)
-          .filter((filter) => canFilterByUserId || filter.id !== "user_id"),
+        urlColumnFilters.filter(isUsableFilter).filter((filter) => canFilterByUserId || filter.id !== "user_id"),
         myKeysEnabled,
       ),
     [urlColumnFilters, myKeysEnabled, canFilterByUserId],
