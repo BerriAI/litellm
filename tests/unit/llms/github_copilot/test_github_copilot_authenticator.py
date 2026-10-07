@@ -163,6 +163,72 @@ class TestGitHubCopilotAuthenticator:
             assert api_key == "new-api-key"
             authenticator._refresh_api_key.assert_called_once()
 
+    @pytest.mark.parametrize(
+        "malformed",
+        ["[]", json.dumps({"token": "tid=abc", "expires_at": "soon"})],
+        ids=["json-list", "text-expires-at"],
+    )
+    def test_get_api_key_malformed_file_refreshes_like_missing(self, tmp_path, monkeypatch, malformed):
+        """A file that is not a Copilot key object is ignored, refreshed over, never answered with a parse error."""
+        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+        api_key_file = tmp_path / "api-key.json"
+        api_key_file.write_text(malformed)
+        refreshed = {"token": "new-api-key", "expires_at": (datetime.now() + timedelta(hours=1)).timestamp()}
+        auth = Authenticator()
+
+        with patch.object(auth, "_refresh_api_key", return_value=refreshed) as mock_refresh:
+            assert auth.get_api_key() == "new-api-key"
+
+        mock_refresh.assert_called_once()
+        assert json.loads(api_key_file.read_text()) == refreshed
+
+    @pytest.mark.parametrize(
+        "malformed",
+        ["[]", json.dumps({"token": "tid=abc", "expires_at": "soon"})],
+        ids=["json-list", "text-expires-at"],
+    )
+    def test_get_api_key_malformed_file_is_kept_when_refresh_fails(self, tmp_path, monkeypatch, malformed):
+        """Ignoring the file never deletes it, so a failed refresh leaves the operator's file for inspection."""
+        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+        api_key_file = tmp_path / "api-key.json"
+        api_key_file.write_text(malformed)
+        auth = Authenticator()
+
+        with (
+            patch.object(auth, "_refresh_api_key", side_effect=RefreshAPIKeyError(message="no login", status_code=401)),
+            pytest.raises(GetAPIKeyError),
+        ):
+            auth.get_api_key()
+
+        assert api_key_file.read_text() == malformed
+
+    @pytest.mark.parametrize(
+        "malformed",
+        ["[]", json.dumps({"endpoints": {"api": 5}}), json.dumps({"token": "t", "expires_at": 1, "endpoints": []})],
+        ids=["json-list", "number-api", "list-endpoints"],
+    )
+    def test_get_api_base_malformed_file_returns_none(self, tmp_path, monkeypatch, malformed):
+        """get_api_base runs before get_api_key on every request, so it must survive malformed shapes too."""
+        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+        (tmp_path / "api-key.json").write_text(malformed)
+
+        assert Authenticator().get_api_base() is None
+
+    def test_get_api_base_keeps_endpoints_when_the_key_is_malformed(self, tmp_path, monkeypatch):
+        """The endpoint is read on its own, so a bad key never sends the refreshed key to the default host."""
+        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+        tenant_api = "https://api.tenant.githubcopilot.com"
+        (tmp_path / "api-key.json").write_text(
+            json.dumps({"token": "tid=abc", "expires_at": "soon", "endpoints": {"api": tenant_api}})
+        )
+        refreshed = {"token": "new-api-key", "expires_at": (datetime.now() + timedelta(hours=1)).timestamp()}
+        auth = Authenticator()
+
+        assert auth.get_api_base() == tenant_api
+        with patch.object(auth, "_refresh_api_key", return_value=refreshed) as mock_refresh:
+            assert auth.get_api_key() == "new-api-key"
+        mock_refresh.assert_called_once()
+
     def test_refresh_api_key(self, authenticator, mock_http_client):
         """Test refreshing an API key."""
         mock_client, mock_response = mock_http_client

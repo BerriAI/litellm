@@ -2,16 +2,16 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import Any, Final
+from typing import Any, Final, TypeVar
 
 import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import can_block_current_thread
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 from .common_utils import (
-    APIKeyExpiredError,
     GetAccessTokenError,
     GetAPIKeyError,
     GetDeviceCodeError,
@@ -23,6 +23,28 @@ DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
 DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
 DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
 DEFAULT_GITHUB_API_KEY_URL: Final = "https://api.github.com/copilot_internal/v2/token"
+
+
+class CopilotCachedKey(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="ignore", hide_input_in_errors=True)
+
+    token: str
+    expires_at: float
+
+
+class CopilotEndpoints(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="ignore", hide_input_in_errors=True)
+
+    api: str | None = None
+
+
+class CopilotCachedEndpoints(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="ignore", hide_input_in_errors=True)
+
+    endpoints: CopilotEndpoints | None = None
+
+
+ApiKeyFileView = TypeVar("ApiKeyFileView", CopilotCachedKey, CopilotCachedEndpoints)
 
 
 class Authenticator:
@@ -99,23 +121,11 @@ class Authenticator:
         Raises:
             GetAPIKeyError: If unable to obtain an API key.
         """
-        try:
-            with open(self.api_key_file, "r") as f:
-                api_key_info = json.load(f)
-                if api_key_info.get("expires_at", 0) > datetime.now().timestamp():
-                    return api_key_info.get("token")
-                else:
-                    verbose_logger.warning("API key expired, refreshing")
-                    raise APIKeyExpiredError(
-                        message="API key expired",
-                        status_code=401,
-                    )
-        except OSError:
-            verbose_logger.warning("No API key file found or error opening file")
-        except (json.JSONDecodeError, KeyError) as e:
-            verbose_logger.warning("Error reading API key from file: %s", e)
-        except APIKeyExpiredError:
-            pass  # Already logged in the try block
+        cached: Final = self._read_api_key_file(CopilotCachedKey)
+        if cached is not None and cached.expires_at > datetime.now().timestamp():
+            return cached.token
+        if cached is not None:
+            verbose_logger.warning("API key expired, refreshing")
 
         try:
             api_key_info = self._refresh_api_key()
@@ -148,14 +158,22 @@ class Authenticator:
         Returns:
             Optional[str]: The GitHub Copilot API endpoint, or None if not found.
         """
+        cached: Final = self._read_api_key_file(CopilotCachedEndpoints)
+        if cached is None or cached.endpoints is None:
+            return None
+        return cached.endpoints.api
+
+    def _read_api_key_file(self, view: type[ApiKeyFileView]) -> ApiKeyFileView | None:
         try:
             with open(self.api_key_file, "r") as f:
-                api_key_info: Final = json.load(f)
-                endpoints: Final = api_key_info.get("endpoints", {})
-                api_endpoint: Final = endpoints.get("api")
-                return api_endpoint
-        except (OSError, json.JSONDecodeError, KeyError) as e:
-            verbose_logger.warning("Error reading API endpoint from file: %s", e)
+                raw: Final = f.read()
+        except OSError:
+            verbose_logger.warning("No API key file found or error opening file")
+            return None
+        try:
+            return view.model_validate_json(raw)
+        except ValidationError as e:
+            verbose_logger.warning("Ignoring %s, not a Copilot API key file: %s", self.api_key_file, e)
             return None
 
     def _refresh_api_key(self) -> dict[str, Any]:
