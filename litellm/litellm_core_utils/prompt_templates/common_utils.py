@@ -197,12 +197,10 @@ def get_semantic_cache_prompt_from_messages(messages: Sequence[Mapping[str, obje
     The text a semantic cache embeds for a request: `get_str_from_messages` plus the text inside
     Messages API `tool_result` blocks, so a tool turn does not embed identically to the turn before it
     """
-    return "".join(_semantic_cache_message_text(message) for message in messages)
-
-
-def _semantic_cache_message_text(message: Mapping[str, object]) -> str:
-    return _semantic_cache_content_text(message.get("content")) + extract_search_results_text(
-        message.get("search_results")
+    return "".join(
+        _semantic_cache_content_text(message.get("content"))
+        + extract_search_results_text(message.get("search_results"))
+        for message in messages
     )
 
 
@@ -211,24 +209,13 @@ def _semantic_cache_content_text(content: object) -> str:
         return content
     if not isinstance(content, list):
         return ""
-    return "".join(_semantic_cache_block_text(block) for block in content)
+    return "".join(_semantic_cache_block_text(block) for block in content if isinstance(block, Mapping))
 
 
-def _semantic_cache_block_text(block: object) -> str:
-    if not isinstance(block, Mapping):
-        return ""
-    if block.get("type") != "tool_result":
-        return _text_field(block)
-    result: Final = block.get("content")
-    if isinstance(result, str):
-        return result
-    if isinstance(result, list):
-        return "".join(_text_field(inner) for inner in result)
-    return ""
-
-
-def _text_field(block: object) -> str:
-    text: Final = block.get("text") if isinstance(block, Mapping) else None
+def _semantic_cache_block_text(block: Mapping[str, object]) -> str:
+    if block.get("type") == "tool_result":
+        return _semantic_cache_content_text(block.get("content"))
+    text: Final = block.get("text")
     return text if isinstance(text, str) else ""
 
 
