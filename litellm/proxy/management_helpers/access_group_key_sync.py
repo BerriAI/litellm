@@ -28,8 +28,6 @@ schema.
 from collections.abc import Sequence
 from typing import Final, Protocol
 
-from pydantic import BaseModel
-
 from litellm.proxy._types import (
     LiteLLM_VerificationToken,
     RegenerateKeyRequest,
@@ -38,11 +36,12 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     _delete_cache_access_object,  # pyright: ignore[reportPrivateUsage]  # the access-group endpoints reach for this same cache primitive
 )
-from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.repositories.table_repositories import AccessGroupRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class _MovedGroupRow(BaseModel):
+class _MovedGroupRow(LiteLLMBaseModel):
     access_group_id: str
 
 
@@ -75,7 +74,7 @@ _REPOINT_KEY_SQL: Final = (
 def _raw_executor(prisma_client: object) -> _RawExecutor:
     """Narrow the untyped Prisma client down to the raw-query call this module makes, pinned to the writer."""
     db: Final = AccessGroupRepository(prisma_client).prisma_client.db  # pyright: ignore[reportAny]  # untyped Prisma client
-    return WriterPinnedClient(db).db  # pyright: ignore[reportAny, reportReturnType]  # untyped Prisma client behind the pin
+    return writer_wrapper(db)  # pyright: ignore[reportAny, reportReturnType]  # untyped Prisma client behind the pin
 
 
 async def _invalidate_access_group_cache(access_group_id: str) -> None:

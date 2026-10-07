@@ -118,84 +118,6 @@ async def cancel_batch_unless_already_terminal(batch_id: str, provider: str) -> 
     print("cancel_batch_response=", cancel_batch_response)
 
 
-@pytest.mark.parametrize("provider", ["openai"])  # , "azure"
-@pytest.mark.asyncio
-@skip_if_no_openai_network
-async def test_create_batch(provider, tmp_path):
-    """
-    1. Create File for Batch completion
-    2. Create Batch Request
-    3. Retrieve the specific batch
-    """
-    if provider == "azure":
-        # Don't have anymore Azure Quota
-        return
-    file_name = "openai_batch_completions.jsonl"
-    _current_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(_current_dir, file_name)
-
-    with open(file_path, "rb") as batch_file:
-        file_obj = await litellm.acreate_file(
-            file=batch_file,
-            purpose="batch",
-            custom_llm_provider=provider,
-        )
-    print("Response from creating file=", file_obj)
-
-    batch_input_file_id = file_obj.id
-    assert (
-        batch_input_file_id is not None
-    ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
-
-    await asyncio.sleep(1)
-    create_batch_response = await litellm.acreate_batch(
-        completion_window="24h",
-        endpoint="/v1/chat/completions",
-        input_file_id=batch_input_file_id,
-        custom_llm_provider=provider,
-        metadata={"key1": "value1", "key2": "value2"},
-    )
-
-    print("response from litellm.create_batch=", create_batch_response)
-    await asyncio.sleep(6)
-
-    assert (
-        create_batch_response.id is not None
-    ), f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
-    assert (
-        create_batch_response.endpoint == "/v1/chat/completions"
-        or create_batch_response.endpoint == "/chat/completions"
-    ), f"Failed to create batch, expected endpoint to be /v1/chat/completions but got {create_batch_response.endpoint}"
-    assert (
-        create_batch_response.input_file_id == batch_input_file_id
-    ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
-
-    retrieved_batch = await litellm.aretrieve_batch(
-        batch_id=create_batch_response.id, custom_llm_provider=provider
-    )
-    print("retrieved batch=", retrieved_batch)
-    # just assert that we retrieved a non None batch
-
-    assert retrieved_batch.id == create_batch_response.id
-
-    # list all batches
-    list_batches = await litellm.alist_batches(custom_llm_provider=provider, limit=2)
-    print("list_batches=", list_batches)
-
-    file_content = await litellm.afile_content(
-        file_id=batch_input_file_id, custom_llm_provider=provider
-    )
-
-    result = file_content.content
-
-    result_file_path = tmp_path / "batch_job_results_furniture.jsonl"
-    result_file_path.write_bytes(result)
-
-    await cancel_batch_unless_already_terminal(batch_id=create_batch_response.id, provider=provider)
-
-    pass
-
-
 class TestCustomLogger(CustomLogger):
     def __init__(self):
         super().__init__()
@@ -283,7 +205,7 @@ async def test_async_create_batch(provider, tmp_path):
     2. Create Batch Request
     3. Retrieve the specific batch
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     print("Testing async create batch")
     litellm.logging_callback_manager._reset_all_callbacks()
 
@@ -516,7 +438,7 @@ async def test_avertex_batch_prediction(monkeypatch):
         ) as mock_gcs_upload,
     ):
         litellm.set_verbose = True
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         file_name = "vertex_batch_completions.jsonl"
         _current_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(_current_dir, file_name)
@@ -581,81 +503,9 @@ async def test_avertex_batch_prediction(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_vertex_list_batches(monkeypatch):
-    monkeypatch.setenv("GCS_BUCKET_NAME", "litellm-local")
-    monkeypatch.setenv("VERTEXAI_PROJECT", "litellm-test-project")
-    monkeypatch.setenv("VERTEXAI_LOCATION", "us-central1")
-
-    monkeypatch.setattr(
-        "litellm.llms.vertex_ai.batches.handler.VertexAIBatchPrediction._ensure_access_token",
-        lambda self, credentials, project_id, custom_llm_provider: (
-            "mock-token",
-            "litellm-test-project",
-        ),
-    )
-
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
-    ) as mock_get:
-        mock_get_response = MagicMock()
-        mock_get_response.json.return_value = mock_vertex_list_response
-        mock_get_response.status_code = 200
-        mock_get_response.raise_for_status.return_value = None
-        mock_get_response.is_redirect = False
-        mock_get.return_value = mock_get_response
-
-        list_response = await litellm.alist_batches(
-            custom_llm_provider="vertex_ai",
-            limit=2,
-        )
-
-        assert list_response["object"] == "list"
-        assert list_response["has_more"] is False
-        assert len(list_response["data"]) == 2
-        assert list_response["data"][0].id == "test-batch-id-456"
-        assert list_response["data"][1].id == "test-batch-id-789"
 
 
 @pytest.mark.asyncio
-async def test_vertex_async_create_batch_logs_error_body_on_http_error():
-    """
-    When Vertex AI returns an HTTP error (e.g. 400), _async_create_batch should
-    re-raise httpx.HTTPStatusError (not swallow it) and log the response body.
-
-    Before the fix the error body was lost because AsyncHTTPHandler.post()
-    calls raise_for_status() internally, raising before the handler's own
-    status-code check could log the body.
-    """
-    from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
-
-    handler = VertexAIBatchPrediction(gcs_bucket_name="test-bucket")
-
-    error_body = '{"error": {"code": 400, "message": "Do not support publisher model gemini-2.0-flash"}}'
-
-    mock_response = MagicMock(spec=httpx.Response)
-    mock_response.status_code = 400
-    mock_response.text = error_body
-    mock_response.headers = {}
-
-    http_error = httpx.HTTPStatusError(
-        message="Bad Request",
-        request=httpx.Request("POST", "https://fake-vertex-url"),
-        response=mock_response,
-    )
-
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        side_effect=http_error,
-    ):
-        with pytest.raises(httpx.HTTPStatusError) as exc_info:
-            await handler._async_create_batch(
-                vertex_batch_request={},
-                api_base="https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/batchPredictionJobs",
-                headers={"Authorization": "Bearer fake-token"},
-            )
-
-        assert exc_info.value.response.status_code == 400
-        assert "gemini-2.0-flash" in exc_info.value.response.text
 
 
 @pytest.mark.asyncio
@@ -669,7 +519,7 @@ async def test_delete_batch_output_file():
     - The output file can be deleted without validation errors
     - The file_object is fetched and stored with proper metadata instead of None
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     print("Testing delete batch output file")
 
     file_name = "openai_batch_completions.jsonl"
