@@ -164,16 +164,22 @@ async def make_call(
     json_mode: bool | None = False,
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
+    timeout: float | httpx.Timeout | None = None,
 ) -> "tuple[MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
+            _params: Final = (
+                {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify")
+                else {}
+            )
+            if timeout is not None:
+                if isinstance(timeout, (float, int)):
+                    timeout = httpx.Timeout(timeout)
+                _params["timeout"] = timeout
             client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.BEDROCK,
-                params=(
-                    {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                    if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify")
-                    else None
-                ),
+                params=_params if _params else None,
             )  # Create a new client if none provided
 
         response: Final = await client.post(
@@ -182,6 +188,7 @@ async def make_call(
             data=data,
             stream=not fake_stream,
             logging_obj=logging_obj,
+            timeout=timeout,
         )
 
         if response.status_code != 200:
@@ -263,16 +270,20 @@ def make_sync_call(
     json_mode: bool | None = False,
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
+    timeout: float | httpx.Timeout | None = None,
 ) -> "tuple[MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
-            client = _get_httpx_client(
-                params=(
-                    {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                    if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify")
-                    else None
-                )
+            _params: Final = (
+                {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify")
+                else {}
             )
+            if timeout is not None:
+                if isinstance(timeout, (float, int)):
+                    timeout = httpx.Timeout(timeout)
+                _params["timeout"] = timeout
+            client = _get_httpx_client(params=_params if _params else None)
 
         response: Final = client.post(
             api_base,
@@ -280,6 +291,7 @@ def make_sync_call(
             data=signed_json_body if signed_json_body is not None else data,
             stream=not fake_stream,
             logging_obj=logging_obj,
+            timeout=timeout,
         )
 
         if response.status_code != 200:

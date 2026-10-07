@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import boto3
 import httpx
@@ -616,3 +616,62 @@ def test_session_tags_sign_the_request_and_stay_out_of_the_body(monkeypatch):
     sent = client.post.call_args.kwargs
     assert "Credential=ASIACONVERSETAGGED/" in sent["headers"]["Authorization"]
     assert "aws_session_tags" not in sent["data"]
+
+
+@pytest.mark.asyncio
+async def test_converse_async_streaming_forwards_timeout():
+    client = MagicMock(spec=AsyncHTTPHandler)
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = httpx.Headers({"content-type": "application/vnd.amazon.eventstream"})
+
+    async def _chunks(*args, **kwargs):
+        if False:
+            yield b""
+
+    mock_response.aiter_bytes = _chunks
+    client.post = AsyncMock(return_value=mock_response)
+
+    llm = BedrockConverseLLM()
+    with patch("litellm.llms.bedrock.chat.converse_handler.run_aws_signing", new_callable=AsyncMock) as mock_sign:
+        mock_sign.return_value = MagicMock(headers={})
+        await llm.async_streaming(
+            model="bedrock/converse/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-5-sonnet-20240620-v1:0/converse-stream",
+            model_response=ModelResponse(),
+            timeout=12.5,
+            encoding=None,
+            logging_obj=MagicMock(),
+            stream=True,
+            optional_params={},
+            litellm_params={},
+            credentials=None,
+            client=client,
+        )
+
+    assert client.post.call_count == 1
+    assert client.post.call_args.kwargs.get("timeout") == 12.5
+
+
+def test_converse_sync_streaming_forwards_timeout(monkeypatch):
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    client = MagicMock(spec=HTTPHandler)
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = httpx.Headers({"content-type": "application/vnd.amazon.eventstream"})
+    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+    client.post = MagicMock(return_value=mock_response)
+
+    with patch.object(BedrockConverseLLM, "get_credentials", return_value=RESOLVED_CREDENTIALS):
+        BedrockConverseLLM().completion(
+            **_completion_kwargs(
+                optional_params={"stream": True},
+                timeout=12.5,
+                client=client,
+            )
+        )
+
+    assert client.post.call_count == 1
+    assert client.post.call_args.kwargs.get("timeout") == 12.5
+
