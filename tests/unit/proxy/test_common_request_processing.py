@@ -2346,6 +2346,33 @@ class TestCommonRequestProcessingHelpers:
         assert plain.code == "429"
         assert plain.provider_specific_fields is None
 
+    async def test_proxy_exception_from_route_error_helper(self):
+        """The shared route error -> ProxyException conversion keeps the status an exception
+        carries, never the OpenAI SDK's ``code`` field (``None`` on most litellm exceptions)."""
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_route_error,
+        )
+
+        own = ProxyException(message="already shaped", type="invalid_request_error", param=None, code=429)
+        assert proxy_exception_from_route_error(own) is own
+
+        http = proxy_exception_from_route_error(HTTPException(status_code=403, detail="forbidden"))
+        assert (http.code, http.type, http.message) == ("403", "permission_error", "forbidden")
+
+        not_found = litellm.NotFoundError(
+            message="no such assistant", model="gpt-5.4-mini", llm_provider="openai", num_retries=2
+        )
+        not_found.provider_specific_fields = {"request_id": "req_123"}
+        assert not_found.code is None
+        assert str(not_found) != not_found.message
+        mapped = proxy_exception_from_route_error(not_found)
+        assert (mapped.code, mapped.type, mapped.param) == ("404", "invalid_request_error", None)
+        assert mapped.message == not_found.message
+        assert mapped.provider_specific_fields == {"request_id": "req_123"}
+
+        plain = proxy_exception_from_route_error(ValueError("boom"))
+        assert (plain.code, plain.type, plain.message) == ("500", "internal_server_error", "boom")
+
     async def test_create_streaming_response_first_chunk_error_string_code(self):
         """
         Test that when the first chunk contains a string error code, a JSON error response is returned

@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import litellm
 from litellm.proxy import proxy_server
 
 from .conftest import normalize  # type: ignore[import-not-found]
@@ -178,3 +179,37 @@ def test_delete_assistant_no_router_error(client, auth_as, no_router, path):
         response = client.delete(path)
     assert response.status_code == 500
     assert len(response.content) > 0
+
+
+# ---------------------------------------------------------------------------
+# Provider errors keep their mapped status on every assistants route
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "router_method"),
+    [
+        ("GET", "/v1/assistants", "aget_assistants"),
+        ("POST", "/v1/assistants", "acreate_assistants"),
+        ("DELETE", "/v1/assistants/asst_1", "adelete_assistant"),
+    ],
+)
+def test_assistants_routes_keep_the_mapped_provider_status(
+    client, auth_as, patched_assistants, method, path, router_method
+):
+    """A litellm NotFoundError carries status 404 and the SDK's ``code=None``; the route answers 404 with its message."""
+    upstream_error = litellm.NotFoundError(
+        message="NotFoundError: OpenAIException - Error code: 404",
+        model="gpt-5.4-mini",
+        llm_provider="openai",
+    )
+    getattr(patched_assistants, router_method).side_effect = upstream_error
+    with auth_as():
+        response = client.request(method, path, json={"model": "gpt-5.4-mini"} if method == "POST" else None)
+    assert response.status_code == 404
+    assert response.json()["error"] == {
+        "message": upstream_error.message,
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "404",
+    }
