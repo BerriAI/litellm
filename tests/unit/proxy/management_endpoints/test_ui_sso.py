@@ -3428,17 +3428,23 @@ class TestCLIKeyRegenerationFlow:
 
     @pytest.mark.asyncio
     async def test_cli_sso_callback_defaults_a_role_less_db_user_to_view_only(self):
-        from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+        from typing import Final
+
+        from litellm.proxy._types import LitellmUserRoles
         from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
 
-        mock_request = MagicMock(spec=Request)
+        mock_request: Final = MagicMock(spec=Request)
         mock_request.scope = {}
         mock_request.base_url = "http://internal-proxy.local/"
-        created_without_a_role = LiteLLM_UserTable(
+        db_row_without_a_role: Final = LiteLLM_UserTable(
             user_id="created-without-a-role", user_role=None, teams=[], models=[]
         )
-        mock_cache = MagicMock(redis_cache=None)
-        mock_cache.get_cache.return_value = {
+        prisma_client: Final = MagicMock()
+        prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=db_row_without_a_role)
+        prisma_client.db.litellm_usertable.update_many = AsyncMock()
+        user_cache: Final = MagicMock(async_get_cache=AsyncMock(return_value=None), async_set_cache=AsyncMock())
+        session_cache: Final = MagicMock(redis_cache=None)
+        session_cache.get_cache.return_value = {
             "poll_secret_hash": "poll-secret-hash",
             "user_code_hash": "user-code-hash",
             "sso_complete": False,
@@ -3447,24 +3453,23 @@ class TestCLIKeyRegenerationFlow:
         }
         with (
             patch.dict(os.environ, {"PROXY_BASE_URL": "https://test.example.com", "SERVER_ROOT_PATH": ""}),
-            patch(
-                "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
-                return_value=created_without_a_role,
-            ),
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
-            patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", user_cache),
+            patch("litellm.proxy.proxy_server.cli_sso_session_cache", session_cache),
+            patch("litellm.proxy.proxy_server.user_custom_sso", None),
         ):
-            response = await cli_sso_callback(
+            response: Final = await cli_sso_callback(
                 request=mock_request,
                 key="cli-session-no-role",
                 result={"user_email": "created-without-a-role@example.com", "user_id": "created-without-a-role"},
             )
 
         assert response.status_code == 200
-        stored_session = mock_cache.set_cache.call_args.kwargs["value"]["session_data"]
+        stored_session: Final = session_cache.set_cache.call_args.kwargs["value"]["session_data"]
         assert stored_session["user_id"] == "created-without-a-role"
         assert stored_session["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+        db_update: Final = prisma_client.db.litellm_usertable.update_many.call_args.kwargs["data"]
+        assert "user_role" not in db_update
 
     @pytest.mark.asyncio
     async def test_cli_poll_key_returns_teams_for_selection(self):
