@@ -14635,7 +14635,7 @@ class Router:
             key="_autorouter_baseline_route",
             value=(
                 BaselineRouteStamp(router_name, baseline_model, baseline_id, caller_parameters)
-                if router_name and baseline_model and baseline_id
+                if router_name and baseline_model
                 else None
             ),
         )
