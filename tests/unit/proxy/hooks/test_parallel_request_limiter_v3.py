@@ -1890,7 +1890,7 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
             Exception(
                 "EVALSHA - all keys must map to the same key slot"
             ),  # First group fails
-            [1234, 1, 1234, 2],  # Second group succeeds
+            [1234, 2],  # Second group succeeds
         ]
         handler.batch_rate_limiter_script = mock_script
 
@@ -1910,8 +1910,7 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
             keys_to_fetch=test_keys, now_int=1234
         )
 
-        # Verify results: 2 from fallback + 4 from successful script = 6 total
-        assert len(results) == 6, f"Expected 6 results, got {len(results)}"
+        assert results == [1234, 1, 1234, 2]
 
         # Verify script was called twice (once per slot group)
         assert mock_script.call_count == 2
@@ -6738,14 +6737,109 @@ class _ScriptedRedis:
         return run
 
 
-def _handler_with_redis(redis, fail_closed: bool | None = None):
+def _handler_with_redis(
+    redis,
+    fail_closed: bool | None = None,
+    force_hash_tag_grouping: bool | None = None,
+):
     internal_usage_cache = InternalUsageCache(DualCache(redis_cache=redis))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
-    if fail_closed is None:
+    if fail_closed is None and force_hash_tag_grouping is None:
         return _PROXY_MaxParallelRequestsHandler(internal_usage_cache=internal_usage_cache)
+    if fail_closed is None:
+        return _PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=internal_usage_cache,
+            force_hash_tag_grouping_resolver=lambda: force_hash_tag_grouping,
+        )
+    if force_hash_tag_grouping is None:
+        return _PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=internal_usage_cache,
+            fail_closed_resolver=lambda: fail_closed,
+        )
     return _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=internal_usage_cache,
         fail_closed_resolver=lambda: fail_closed,
+        force_hash_tag_grouping_resolver=lambda: force_hash_tag_grouping,
     )
+
+
+@pytest.mark.parametrize("force_hash_tag_grouping", [True, False], ids=["forced", "default"])
+@pytest.mark.asyncio
+async def test_redis_batch_rate_limiter_respects_hash_tag_grouping_opt_in(force_hash_tag_grouping: bool):
+    redis: Final = _ScriptedRedis()
+    handler: Final = _handler_with_redis(redis, force_hash_tag_grouping=force_hash_tag_grouping)
+    keys: Final = [
+        "{api_key:sk-abc}:window",
+        "{api_key:sk-abc}:requests",
+        "{team:t1}:window",
+        "{team:t1}:requests",
+        "{end_user:u28551}:window",
+        "{end_user:u28551}:requests",
+    ]
+
+    await handler._execute_redis_batch_rate_limiter_script(keys_to_fetch=keys, now_int=1234)
+
+    expected_calls: Final = (
+        [
+            [
+                "{api_key:sk-abc}:window",
+                "{api_key:sk-abc}:requests",
+                "{end_user:u28551}:window",
+                "{end_user:u28551}:requests",
+            ],
+            ["{team:t1}:window", "{team:t1}:requests"],
+        ]
+        if force_hash_tag_grouping
+        else [keys]
+    )
+    assert redis.batch_call_keys == expected_calls
+
+
+@pytest.mark.asyncio
+async def test_redis_batch_rate_limiter_returns_values_in_caller_order():
+    redis: Final = _ScriptedRedis()
+    handler: Final = _handler_with_redis(redis, force_hash_tag_grouping=True)
+    now: Final = 1234
+    keys_to_fetch: Final = [
+        "{api_key:sk-abc}:window",
+        "{api_key:sk-abc}:requests",
+        "{team:t1}:window",
+        "{team:t1}:requests",
+        "{end_user:u28551}:window",
+        "{end_user:u28551}:requests",
+    ]
+
+    results: Final = await handler._execute_redis_batch_rate_limiter_script(
+        keys_to_fetch=keys_to_fetch, now_int=now
+    )
+
+    assert results == [now, 1, now, 2, now, 1]
+
+
+def test_default_hash_tag_grouping_resolver_uses_litellm_setting(monkeypatch: pytest.MonkeyPatch):
+    redis: Final = _ScriptedRedis()
+    handler: Final = _handler_with_redis(redis)
+    keys: Final = [
+        "{api_key:sk-abc}:window",
+        "{api_key:sk-abc}:requests",
+        "{team:t1}:window",
+        "{team:t1}:requests",
+        "{end_user:u28551}:window",
+        "{end_user:u28551}:requests",
+    ]
+
+    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", True)
+    assert list(handler._group_keys_by_hash_tag(keys).values()) == [
+        [
+            "{api_key:sk-abc}:window",
+            "{api_key:sk-abc}:requests",
+            "{end_user:u28551}:window",
+            "{end_user:u28551}:requests",
+        ],
+        ["{team:t1}:window", "{team:t1}:requests"],
+    ]
+
+    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", False)
+    assert handler._group_keys_by_hash_tag(keys) == {"all_keys": keys}
 
 
 async def _admit(handler, auth, data=None):
