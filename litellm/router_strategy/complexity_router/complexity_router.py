@@ -59,6 +59,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in
 from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_ENDPOINT
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
@@ -1341,6 +1342,22 @@ class ComplexityRouter(CustomLogger):
                 api_base=connection.api_base,
                 http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
                 provider=config.provider,
+            )
+        if config.provider == "databricks":
+            databricks_api_key: Final = config.api_key or next(
+                (key for key in map(get_secret_str, DATABRICKS_DECISIONS_ENDPOINT.api_key_env) if key), None
+            )
+            databricks_api_base: Final = config.api_base or get_secret_str(DATABRICKS_DECISIONS_ENDPOINT.api_base_env)
+            if not databricks_api_key or not databricks_api_base:
+                raise ValueError(
+                    "opensource_classifier_config provider 'databricks' requires api_key or DATABRICKS_API_KEY "
+                    "(or DATABRICKS_TOKEN) and api_base or DATABRICKS_API_BASE"
+                )
+            return HttpJevClassifierClient(
+                api_key=databricks_api_key,
+                api_base=databricks_api_base,
+                http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+                provider="databricks",
             )
         api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
         if not api_key:

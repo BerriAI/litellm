@@ -63,6 +63,20 @@ _STRANDS_RESPONSE: Final[Mapping[str, object]] = {
     "usage": {"input_tokens": 216, "output_tokens": 3},
     "latency_ms": 3722.17,
 }
+_DATABRICKS_ENDPOINT: Final = "databricks-openjev-qwen35-4b"
+_DATABRICKS_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "/mosaicml/local_model",
+    "answers": {
+        "is_defect": {"type": "noul", "noul": 0.9},
+        "sentiment": {
+            "type": "choice",
+            "choice": "positive",
+            "confidence": 0.8,
+            "probabilities": {"positive": 0.8, "negative": 0.2},
+        },
+    },
+    "usage": {"input_tokens": 214, "output_tokens": 0},
+}
 _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
     (
         "perplexity",
@@ -599,3 +613,113 @@ async def test_strands_decider_provider_resolution_and_router_dispatch(
     assert provider_resolution[:2] == ("strands-decider-2B-hobson-v19", "strands_decider")
     assert route.called
     assert response.model == _STRANDS_RESPONSE["model"]
+
+
+@pytest.mark.asyncio
+async def test_databricks_requires_api_base_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("DATABRICKS_API_BASE", raising=False)
+    monkeypatch.setenv("DATABRICKS_API_KEY", "dapi-key")
+
+    with pytest.raises(litellm.BadRequestError, match="DATABRICKS_API_BASE"):
+        await litellm.adecisions(
+            model=f"databricks/{_DATABRICKS_ENDPOINT}",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_databricks_requires_a_key_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", "https://workspace.example/serving-endpoints")
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+
+    with pytest.raises(litellm.AuthenticationError, match="Missing API key for Decisions provider 'databricks'"):
+        await litellm.adecisions(
+            model=f"databricks/{_DATABRICKS_ENDPOINT}",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_base", ["https://workspace.example/serving-endpoints", "https://workspace.example/serving-endpoints/"])
+async def test_databricks_posts_the_jev_body_to_the_serving_endpoint_invocations_route(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    api_base: str,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", api_base)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.setenv("DATABRICKS_TOKEN", "dapi-token")
+    route: Final = respx_mock.post(
+        f"https://workspace.example/serving-endpoints/{_DATABRICKS_ENDPOINT}/invocations"
+    ).respond(json=_DATABRICKS_RESPONSE)
+    questions: Final = {
+        "is_defect": {"type": "noul", "instructions": "Is this a defect?"},
+        "sentiment": {"type": "choice", "criteria": {"positive": None, "negative": "unhappy"}},
+    }
+
+    response: Final = await litellm.adecisions(
+        model=f"databricks/{_DATABRICKS_ENDPOINT}",
+        state={"ticket": "export hangs"},
+        questions=questions,
+    )
+
+    assert route.called
+    sent: Final = respx_mock.calls[0].request
+    assert sent.headers["authorization"] == "Bearer dapi-token"
+    assert json.loads(sent.content) == {
+        "model": _DATABRICKS_ENDPOINT,
+        "state": {"ticket": "export hangs"},
+        "questions": questions,
+    }
+    assert response.model == "/mosaicml/local_model"
+    assert isinstance(response.answers["is_defect"], NoulAnswer)
+    assert isinstance(response.answers["sentiment"], ChoiceAnswer)
+    assert response.hidden_params["custom_llm_provider"] == "databricks"
+    assert response.hidden_params["model"] == f"databricks/{_DATABRICKS_ENDPOINT}"
+
+
+@pytest.mark.asyncio
+async def test_databricks_router_deployment_sends_its_own_key_to_its_own_base(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", "https://other-workspace.example/serving-endpoints")
+    monkeypatch.setenv("DATABRICKS_API_KEY", "env-key-stays-home")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decider",
+                "litellm_params": {
+                    "model": f"databricks/{_DATABRICKS_ENDPOINT}",
+                    "api_base": "https://workspace.example/serving-endpoints",
+                    "api_key": "deployment-key",
+                },
+            }
+        ]
+    )
+    route: Final = respx_mock.post(
+        f"https://workspace.example/serving-endpoints/{_DATABRICKS_ENDPOINT}/invocations"
+    ).respond(json=_DATABRICKS_RESPONSE)
+
+    response: Final = await router.adecisions(
+        model="decider",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    )
+
+    assert route.called
+    assert respx_mock.calls[0].request.headers["authorization"] == "Bearer deployment-key"
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)

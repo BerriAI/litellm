@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.decisions.transformation import DecisionsProviderConfig
 from litellm.llms.cloudflare.decisions.transformation import CLOUDFLARE_DECISIONS_ENDPOINT
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, get_httpx_client
+from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_ENDPOINT
 from litellm.llms.openrouter.decisions.transformation import OPENROUTER_DECISIONS_ENDPOINT
 from litellm.llms.perplexity.decisions.transformation import PERPLEXITY_DECISIONS_ENDPOINT
 from litellm.llms.strands_decider.decisions.transformation import STRANDS_DECIDER_DECISIONS_ENDPOINT
@@ -31,6 +32,7 @@ DECISIONS_ENDPOINTS: Final[Mapping[str, DecisionsProviderConfig]] = MappingProxy
         "openrouter": OPENROUTER_DECISIONS_ENDPOINT,
         "cloudflare": CLOUDFLARE_DECISIONS_ENDPOINT,
         "strands_decider": STRANDS_DECIDER_DECISIONS_ENDPOINT,
+        "databricks": DATABRICKS_DECISIONS_ENDPOINT,
     }
 )
 
