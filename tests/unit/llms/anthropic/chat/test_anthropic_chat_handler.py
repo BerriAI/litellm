@@ -2,7 +2,7 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import chain
-from typing import Final
+from typing import Final, Literal, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -14,6 +14,13 @@ from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.anthropic import (
+    ContentBlockDelta,
+    ContentBlockStop,
+    ContentJsonBlockDelta,
+    MessageBlockDelta,
+    ToolUseBlock,
+)
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -534,19 +541,27 @@ def test_regular_tool_finish_reason():
     assert model_response.choices[0].finish_reason == "tool_calls"
 
 
-def _tool_use_events(index: int, tool_id: str, name: str, arguments: str) -> tuple[dict, ...]:
+class _ToolUseBlockStart(TypedDict):
+    type: Literal["content_block_start"]
+    index: int
+    content_block: ToolUseBlock
+
+
+def _tool_use_events(
+    index: int, tool_id: str, name: str, arguments: str
+) -> tuple[_ToolUseBlockStart, ContentBlockDelta, ContentBlockStop]:
     return (
-        {
-            "type": "content_block_start",
-            "index": index,
-            "content_block": {"type": "tool_use", "id": tool_id, "name": name, "input": {}},
-        },
-        {
-            "type": "content_block_delta",
-            "index": index,
-            "delta": {"type": "input_json_delta", "partial_json": arguments},
-        },
-        {"type": "content_block_stop", "index": index},
+        _ToolUseBlockStart(
+            type="content_block_start",
+            index=index,
+            content_block=ToolUseBlock(type="tool_use", id=tool_id, name=name, input={}, caller=None),
+        ),
+        ContentBlockDelta(
+            type="content_block_delta",
+            index=index,
+            delta=ContentJsonBlockDelta(type="input_json_delta", partial_json=arguments),
+        ),
+        ContentBlockStop(type="content_block_stop", index=index),
     )
 
 
@@ -557,11 +572,9 @@ def test_response_format_tool_with_user_tool_call_streams_tool_calls_finish_reas
     )
     user_tool: Final = _tool_use_events(1 if json_tool_first else 0, "toolu_user", "get_weather", '{"location": "NY"}')
     tool_events: Final = json_tool + user_tool if json_tool_first else user_tool + json_tool
-    message_delta: Final = {
-        "type": "message_delta",
-        "delta": {"stop_reason": "tool_use"},
-        "usage": {"output_tokens": 20},
-    }
+    message_delta: Final = MessageBlockDelta(
+        type="message_delta", delta={"stop_reason": "tool_use"}, usage={"output_tokens": 20}
+    )
     iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=True)
 
     chunks: Final = [iterator.chunk_parser(event) for event in (*tool_events, message_delta)]
