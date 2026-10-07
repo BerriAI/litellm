@@ -15229,8 +15229,8 @@
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
         "cache_creation_input_token_cost_batches": 1.25e-06,
-        "cache_read_input_token_cost": 2e-07,
-        "cache_read_input_token_cost_batches": 1e-07,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_batches": 5e-08,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "anthropic",
@@ -15267,7 +15267,7 @@
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
         "prompt_cache_min_tokens": 512,
-        "source": "https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing",
         "supports_web_search": true
     },
     "claude-sonnet-4-6": {
