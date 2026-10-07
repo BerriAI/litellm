@@ -1185,7 +1185,7 @@ async def test_initialize_scheduled_jobs_recovers_from_transient_read_error(monk
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -1232,7 +1232,7 @@ async def test_initialize_scheduled_jobs_normalizes_string_general_settings(monk
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
