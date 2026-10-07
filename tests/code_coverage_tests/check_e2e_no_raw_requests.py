@@ -14,6 +14,7 @@ import ast
 import sys
 from itertools import chain
 from pathlib import Path
+from typing import Final
 
 TESTS_DIR = Path(__file__).resolve().parents[1]
 SCANNED_DIRS = ("e2e", "e2e_harness")
@@ -65,12 +66,12 @@ def _violations_in(path: Path) -> tuple[str, ...]:
 
 
 def _scanned_files() -> tuple[Path, ...]:
-    trees = (sorted((TESTS_DIR / scanned).rglob("*.py")) for scanned in SCANNED_DIRS)
+    trees: Final = (sorted((TESTS_DIR / scanned).rglob("*.py")) for scanned in SCANNED_DIRS)
     return tuple(chain.from_iterable(trees))
 
 
 def main() -> int:
-    violations = tuple(chain.from_iterable(_violations_in(path) for path in _scanned_files()))
+    violations: Final = tuple(chain.from_iterable(_violations_in(path) for path in _scanned_files()))
     for violation in violations:
         print(violation)
     if violations:
