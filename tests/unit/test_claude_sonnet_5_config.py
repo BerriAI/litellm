@@ -10,8 +10,10 @@ populate ``litellm.anthropic_models`` at import, which is what lets a bare
 ``anthropic/*`` wildcard deployment).
 
 Sonnet 5.5 (``claude-sonnet-5-5``) is covered here too. It carries the same
-gen-5 profile but thinking cannot be turned off and forced tool use is not
-supported, same as Opus 5.5
+gen-5 profile, and forced tool use is not supported, same as Opus 5.5. Thinking
+cannot be turned off via ``thinking.type=disabled``, the Sonnet 5 shape; the
+off-equivalent is ``thinking.type=between_tools``, which ``maybe_drop_disabled_thinking``
+remaps a caller's ``disabled`` request to.
 """
 
 import json
@@ -79,9 +81,29 @@ def test_sonnet_5_5_present_in_bundled_backup(model_name):
 )
 def test_sonnet_5_5_thinking_profile(local_model_cost_map, model, provider):
     """Sonnet 5.5 has thinking always on with the adaptive thinking surface, and
-    no forced tool use, same as Opus 5.5."""
+    no forced tool use, same as Opus 5.5. Unlike the rest of that family, it also
+    has a real off-equivalent for thinking: between_tools."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     assert AnthropicModelInfo._is_adaptive_thinking_model(model, provider) is True
     assert AnthropicModelInfo._is_always_on_thinking_model(model, provider) is True
+    assert AnthropicModelInfo._supports_between_tools_thinking(model, provider) is True
     assert AnthropicModelInfo.forced_tool_use_unsupported(model.removeprefix("anthropic/")) is True
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [
+        ("claude-opus-5-5", "anthropic"),
+        ("claude-fable-5", "anthropic"),
+        ("claude-mythos-5", "anthropic"),
+    ],
+)
+def test_other_always_on_thinking_models_lack_between_tools(local_model_cost_map, model, provider):
+    """Sonnet 5.5 is the only always-on-thinking family with a confirmed
+    between_tools off-equivalent today; the rest must keep falling back to the
+    drop-and-warn path in maybe_drop_disabled_thinking."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    assert AnthropicModelInfo._is_always_on_thinking_model(model, provider) is True
+    assert AnthropicModelInfo._supports_between_tools_thinking(model, provider) is False

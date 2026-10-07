@@ -7593,6 +7593,33 @@ def test_disabled_thinking_omitted_for_always_on_models_converse(
     else:
         assert additional.get("thinking") == {"type": "disabled"}
 
+
+def test_disabled_thinking_on_sonnet_5_5_tool_result_turn_remaps_to_between_tools_converse(
+    local_model_cost_map, monkeypatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    messages: Final = [
+        {"role": "user", "content": "Look it up"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "found"},
+    ]
+    tools: Final = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
+
+    result: Final = AmazonConverseConfig()._transform_request(
+        model="us.anthropic.claude-sonnet-5-5",
+        messages=messages,
+        optional_params={"maxTokens": 64, "tools": tools, "thinking": {"type": "disabled"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("additionalModelRequestFields", {}).get("thinking") == {"type": "between_tools"}
+
+
 @pytest.mark.parametrize(
     "model",
     ["anthropic.claude-fable-5-1", "us.anthropic.claude-fable-5-1"],
