@@ -749,6 +749,102 @@ async def test_chunk_processor_logs_failure_not_success_on_mid_stream_exception(
     assert isinstance(recorder.failure_kwargs[0]["exception"], httpx.ReadTimeout)
 
 
+def _anthropic_message_start_frame() -> bytes:
+    return _anthropic_sse(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 52, "output_tokens": 1},
+            },
+        },
+    )
+
+
+def _anthropic_overloaded_error_frame() -> bytes:
+    return _anthropic_sse("error", {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}})
+
+
+def _anthropic_stream_of(frames: tuple[bytes, ...]):
+    mock = MagicMock(spec=httpx.Response)
+    mock.status_code = 200
+
+    async def _aiter_bytes():
+        for frame in frames:
+            yield frame
+
+    mock.aiter_bytes = _aiter_bytes
+    return mock
+
+
+@pytest.mark.parametrize(
+    "frames, billed",
+    [
+        pytest.param(
+            (_anthropic_message_start_frame(), _anthropic_overloaded_error_frame()), True, id="error-after-message-start"
+        ),
+        pytest.param((_anthropic_overloaded_error_frame(),), False, id="error-frame-only"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_chunk_processor_logs_a_provider_error_frame_as_a_failure_when_closed_at_the_frame(frames, billed):
+    """The router retries a /v1/messages stream whose provider sent `event: error` before any content by closing
+    it at the frame. That attempt never completed: it logs once as a failure carrying whatever usage the provider
+    had reported, and the request's one-shot success log stays free for the retry that shares the logging object."""
+    recorder = _EventRecorder()
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="test-error-frame",
+        function_id="test-error-frame",
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    stream = PassThroughStreamingHandler.chunk_processor(
+        response=_anthropic_stream_of(frames),
+        request_body={"model": "claude-sonnet-5", "stream": True},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+    )
+    received = []
+    async for chunk in stream:
+        received.append(chunk)
+        if b"event: error" in chunk:
+            break
+    await stream.aclose()
+
+    for _ in range(300):
+        if recorder.failure_kwargs:
+            break
+        await asyncio.sleep(0.01)
+
+    assert received == list(frames)
+    assert recorder.success_kwargs == []
+    assert logging_obj.model_call_details.get("has_dispatched_final_stream_success") is not True
+    assert len(recorder.failure_kwargs) == 1
+    failure_payload = recorder.failure_kwargs[0]["standard_logging_object"]
+    assert failure_payload["status"] == "failure"
+    assert isinstance(recorder.failure_kwargs[0]["exception"], litellm.InternalServerError)
+    if billed:
+        assert failure_payload["prompt_tokens"] == 52
+        assert failure_payload["response_cost"] > 0
+    else:
+        assert failure_payload["response_cost"] == 0
+
+
 def _google_sse(prompt_tokens: int, completion_tokens: int, text: str) -> bytes:
     payload = {
         "candidates": [{"content": {"parts": [{"text": text}], "role": "model"}, "index": 0}],

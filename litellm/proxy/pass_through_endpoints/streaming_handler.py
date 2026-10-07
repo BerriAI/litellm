@@ -1,5 +1,5 @@
 import traceback
-from collections.abc import Coroutine, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, Protocol
@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
@@ -297,6 +298,7 @@ class PassThroughStreamingHandler:
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection
             is_provider_error_chunk,  # pyright: ignore[reportPrivateUsage]  # provider errors must not become cache evidence
+            parse_anthropic_error_event,
         )
 
         # Transport reads can split event names and JSON payloads. Recognize terminal
@@ -312,7 +314,18 @@ class PassThroughStreamingHandler:
             and is_message_stop_chunk(complete_frames)
             and not is_provider_error_chunk(complete_frames)
         )
+        provider_error_event: Final = (
+            parse_anthropic_error_event(complete_frames) if endpoint_type == EndpointType.ANTHROPIC else None
+        )
         try:
+            if provider_error_event is not None:
+                await PassThroughStreamingHandler._log_anthropic_error_frame_as_failure(
+                    litellm_logging_obj=litellm_logging_obj,
+                    request_body=request_body,
+                    raw_bytes=raw_bytes,
+                    error_event=provider_error_event,
+                )
+                return
             # TinyFish billing is owned by the detached poller; the $0 fallback below is only for streams with no run_id
             if endpoint_type == EndpointType.TINYFISH:
                 if sse_poller_spawned(litellm_logging_obj):
@@ -372,6 +385,22 @@ class PassThroughStreamingHandler:
             )
         except Exception as e:
             verbose_proxy_logger.error("Error in _route_streaming_logging_to_handler: %s", e)
+
+    @staticmethod
+    async def _log_anthropic_error_frame_as_failure(
+        litellm_logging_obj: LiteLLMLoggingObj,
+        request_body: Mapping[str, object],
+        raw_bytes: Sequence[bytes],
+        error_event: tuple[str, str, int],
+    ) -> None:
+        error_type, message, status_code = error_event
+        await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
+            litellm_logging_obj=litellm_logging_obj, request_body=request_body, all_chunks=raw_bytes
+        )
+        frame_error: Final = anthropic_error_frame_exception(
+            error_type, message, status_code, str(litellm_logging_obj.model)
+        )
+        await litellm_logging_obj.dispatch_failure_handlers(frame_error, "", prefer_async_handlers=True)
 
     @staticmethod
     def _build_passthrough_logging_result(

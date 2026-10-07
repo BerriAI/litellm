@@ -15408,6 +15408,30 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_superseded_stream_is_closed_before_the_retry_opens():
+    """Both attempts log through the request's one logging object, so the superseded attempt's end-of-stream
+    logging must be queued before the retry starts producing its own: the router closes the dropped stream
+    before it asks the group for another."""
+    router = _anthropic_messages_retry_router(num_retries=1)
+    superseded = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+    )
+    superseded_closed_when_retry_opened: list[bool] = []
+
+    def retry_stream():
+        superseded_closed_when_retry_opened.append(superseded.closed)
+        return _anthropic_messages_retried_stream()
+
+    provider = _AnthropicMessagesScriptedProvider(lambda: superseded, retry_stream)
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert superseded_closed_when_retry_opened == [True]
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_stream_dropped_after_content_keeps_the_error_and_is_not_retried():
     """A drop once content reached the client cannot be retried without a second overlapping message
     lifecycle, so it keeps surfacing the provider's error after a single attempt."""

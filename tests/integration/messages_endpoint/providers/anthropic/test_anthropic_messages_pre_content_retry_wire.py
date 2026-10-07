@@ -124,12 +124,12 @@ def _stream(gateway: Gateway, body: Mapping[str, JsonValue]) -> tuple[int, tuple
     return response.status_code, parse_sse(response.text)
 
 
+def _rows(request_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT status, model_group FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (request_id,))
+
+
 def _success_rows(request_id: str) -> list[dict[str, JsonValue]]:
-    return eventually(
-        lambda: read_rows('SELECT status, model_group FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (request_id,)),
-        lambda rows: len(rows) >= 1,
-        seconds=70,
-    )
+    return eventually(lambda: _rows(request_id), lambda rows: len(rows) >= 1, seconds=70)
 
 
 def _assert_completed_by_retry(
@@ -141,6 +141,8 @@ def _assert_completed_by_retry(
     assert delta_text(events) == _TEXT, events
     assert [request.target for request in wire.drain()] == ["/v1/messages"] * attempts
     assert _success_rows(_served_id(prompt, attempts)) == [{"status": "success", "model_group": model}]
+    superseded_rows: Final = {attempt: _rows(_served_id(prompt, attempt)) for attempt in range(1, attempts)}
+    assert not any(superseded_rows.values()), superseded_rows
 
 
 def _assert_rejected_before_content(
