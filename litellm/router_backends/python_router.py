@@ -3107,7 +3107,9 @@ class PythonRouter:
                                 prepared_fallback_hidden_params = PythonRouter._adopt_fallback_response_headers(
                                     wrapper_ref, fallback_response
                                 )
-                            PythonRouter._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
+                            PythonRouter._apply_fallback_hidden_params_to_item(
+                                fallback_item, prepared_fallback_hidden_params
+                            )
                             if (
                                 fallback_item
                                 and isinstance(fallback_item, ModelResponseStream)
@@ -3557,9 +3559,11 @@ class PythonRouter:
                 self._ageneric_api_call_with_fallbacks_responses_attempt
             )
             if e.generated_content and not e.is_pre_first_chunk:
-                initial_kwargs["input"] = PythonRouter._build_responses_continuation_input(  # rebind-ok: fallback hop input
-                    initial_kwargs.get("input"),
-                    e.generated_content,
+                initial_kwargs["input"] = (
+                    PythonRouter._build_responses_continuation_input(  # rebind-ok: fallback hop input
+                        initial_kwargs.get("input"),
+                        e.generated_content,
+                    )
                 )
             # The Responses-API path stores observability metadata
             # under "litellm_metadata" (not the default "metadata") —
@@ -3707,7 +3711,9 @@ class PythonRouter:
                                 prepared_fallback_hidden_params = PythonRouter._adopt_fallback_response_headers(
                                     wrapper_ref, fallback_response
                                 )
-                            PythonRouter._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
+                            PythonRouter._apply_fallback_hidden_params_to_item(
+                                fallback_item, prepared_fallback_hidden_params
+                            )
                             if (
                                 fallback_item
                                 and isinstance(fallback_item, ModelResponseStream)
