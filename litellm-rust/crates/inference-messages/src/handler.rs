@@ -64,19 +64,25 @@ impl MessagesRoute {
             model: request_context.model.clone(),
             provider: request_context.custom_llm_provider.clone(),
         };
+        let prepared_wire = provider
+            .config()
+            .prepare_wire_request(&body, authenticated.headers)?;
+        let stream_default =
+            prepared_wire.body.get("stream").is_none() && body.params.stream.unwrap_or(false);
         let wire = context
             .interceptors
             .before_provider_request(
                 WireRequest {
                     url,
-                    headers: authenticated.headers,
-                    body: serde_json::to_value(&body).map_err(serialize_failure)?,
+                    headers: prepared_wire.headers,
+                    body: prepared_wire.body,
                 },
                 request_context,
             )
             .await?;
         let stream = match wire.body.get("stream") {
-            None | Some(Value::Null) => false,
+            None => stream_default,
+            Some(Value::Null) => false,
             Some(Value::Bool(stream)) => *stream,
             Some(value) => {
                 return Err(Error::InvalidRequest(

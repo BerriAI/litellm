@@ -1,19 +1,50 @@
 use serde_json::{Map, Value};
 
+use super::{
+    ContentBlock, ContextManagementResponse, MessagesContainer, MessagesUsage, StopDetails,
+};
+use crate::recognized::Recognized;
+
 #[macro_rules_attribute::apply(wire_type)]
 pub struct MessagesResponse {
     pub id: String,
     #[serde(rename = "type")]
-    pub message_type: String,
-    pub role: String,
+    pub message_type: super::MessageType,
+    pub role: super::MessageRole,
     pub model: String,
-    pub content: Vec<Value>,
-    pub stop_reason: Option<String>,
+    pub content: Vec<Recognized<ContentBlock>>,
+    pub stop_reason: Option<super::StopReason>,
     pub stop_sequence: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub container: Option<Value>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub usage: Option<Recognized<MessagesUsage>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub container: Option<Recognized<MessagesContainer>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub stop_details: Option<Recognized<StopDetails>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub context_management: Option<Recognized<ContextManagementResponse>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub safeguard_results: Option<Recognized<Vec<Map<String, Value>>>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -33,14 +64,17 @@ mod tests {
     ) -> MessagesResponse {
         MessagesResponse {
             id: "msg_1".to_string(),
-            message_type: "message".to_string(),
-            role: "assistant".to_string(),
+            message_type: super::super::MessageType::Message,
+            role: super::super::MessageRole::Assistant,
             model: "claude".to_string(),
             content: vec![],
-            stop_reason: stop_reason.map(str::to_string),
+            stop_reason: stop_reason.map(|value| value.to_string().into()),
             stop_sequence: stop_sequence.map(str::to_string),
-            usage,
-            container,
+            usage: usage.map(|value| serde_json::from_value(value).unwrap()),
+            container: container.map(|value| serde_json::from_value(value).unwrap()),
+            stop_details: None,
+            context_management: None,
+            safeguard_results: None,
             extra: Map::new(),
         }
     }

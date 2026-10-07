@@ -31,15 +31,12 @@ fn display_text(content: &Recognized<ChatMessageContent>) -> String {
         Recognized::Known(ChatMessageContent::Text(text)) => text.clone(),
         Recognized::Known(ChatMessageContent::Parts(blocks)) => blocks
             .iter()
-            .filter(|block| {
-                !matches!(
-                    block,
-                    Recognized::Unrecognized(value)
-                        if value
-                            .get("type")
-                            .and_then(Value::as_str)
-                            .is_some_and(|kind| HIDDEN_BLOCK_TYPES.contains(&kind))
-                )
+            .filter(|block| match block {
+                Recognized::Known(_) => true,
+                Recognized::Unrecognized(value) => !value
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| HIDDEN_BLOCK_TYPES.contains(&kind)),
             })
             .filter_map(|block| block.text())
             .collect::<Vec<_>>()
@@ -601,6 +598,7 @@ mod tests {
 
     #[rstest]
     #[case::first_user(r#"{"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"reply"},{"role":"user","content":"last"}]}"#, Some("first"))]
+    #[case::typed_content(r#"{"messages":[{"role":"user","content":[{"type":"text","text":"first"},{"type":"image_url","image_url":"image","text":"second"},{"type":"tool_use","text":"hidden"},{"type":"future","text":"third"},17]}]}"#, Some("first\n\nsecond\n\nthird"))]
     #[case::malformed("not-json", None)]
     #[case::missing("{}", None)]
     #[case::not_messages(r#"{"messages":[{"role":"user"}]}"#, None)]

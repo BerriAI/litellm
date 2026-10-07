@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 #[case::video(json!({"type":"video_url","video_url":"https://example.test/video"}))]
 #[case::audio(json!({"type":"input_audio","input_audio":{"data":"AA==","format":"wav"}}))]
 #[case::file(json!({"type":"file","file":{"file_id":"file_1","video_metadata":{"fps":1,"start_offset":"1s"}}}))]
+#[case::document(json!({"type":"document","source":{"type":"text","media_type":"text/plain","data":"doc"},"citations":{"enabled":true}}))]
 #[case::refusal(json!({"type":"refusal","refusal":"refused"}))]
 fn known_content_parts_are_typed_and_lossless(#[case] wire: Value) {
     let parsed: Recognized<ChatContentPart> = serde_json::from_value(wire.clone()).unwrap();
