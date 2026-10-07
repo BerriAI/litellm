@@ -128,7 +128,9 @@ async def test_schema_binding_rejects_non_positive_retention(native: ModuleType)
 @pytest.mark.requires_rust_extension
 async def test_schema_binding_rejects_invalid_database(native: ModuleType) -> None:
     with pytest.raises(ValueError, match=r"database.*retention"):
-        native.NativeTraceConfig("db; DROP DATABASE default", "http://localhost:8123", 14, OTLP_MAX_ATTRIBUTE_VALUE_BYTES)
+        native.NativeTraceConfig(
+            "db; DROP DATABASE default", "http://localhost:8123", 14, OTLP_MAX_ATTRIBUTE_VALUE_BYTES
+        )
 
 
 @pytest.mark.requires_rust_extension
@@ -136,4 +138,3 @@ def test_invalid_url_error_does_not_expose_credentials(native: ModuleType) -> No
     with pytest.raises(RuntimeError, match="invalid ClickHouse HTTP URL") as error:
         native.NativeTraceConfig("traces", "secret://writer:password@example.com", 7, OTLP_MAX_ATTRIBUTE_VALUE_BYTES)
     assert "password" not in str(error.value)
-

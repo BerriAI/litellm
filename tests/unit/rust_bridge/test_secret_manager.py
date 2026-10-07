@@ -11,6 +11,7 @@ from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 from litellm.types.secret_managers.main import KeyManagementSettings
 from tests._support.rust_secret_manager import preserve_manager_globals as preserve_manager_globals
 
+
 def test_custom_subclass_is_not_captured_for_a_native_handle() -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
 
@@ -22,20 +23,24 @@ def test_custom_subclass_is_not_captured_for_a_native_handle() -> None:
     assert native._SecretManagerRuntime.from_client(manager) is None
     assert manager.sync_read_secret("KEY") == "custom:KEY"
 
+
 @pytest.mark.parametrize("system", ("google_secret_manager", "hashicorp_vault", "cyberark"))
 def test_enterprise_backends_cannot_initialize_without_entitlement(system: str) -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
     with pytest.raises(ValueError, match=r"[Ee]nterprise|[Pp]remium"):
         native._SecretManagerRuntime.from_config(system, {"CYBERARK_API_KEY": "key"})
 
+
 def test_azure_factory_rejects_unencrypted_vault_endpoints() -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
     with pytest.raises(ValueError, match="https"):
         native._SecretManagerRuntime.from_config("azure_key_vault", {"AZURE_KEY_VAULT_URI": "http://127.0.0.1:1"})
 
+
 def test_uncaptured_clients_have_no_native_handle() -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
     assert native._SecretManagerRuntime.from_client(SimpleNamespace()) is None
+
 
 @pytest.mark.parametrize("explicit_capture", (False, True))
 def test_config_capture_preserves_credentials_and_excludes_unrelated_environment(
@@ -62,6 +67,7 @@ def test_config_capture_preserves_credentials_and_excludes_unrelated_environment
     assert "initial-access" not in repr(retained)
     assert retained.settings == KeyManagementSettings().model_dump(mode="json")
 
+
 def test_kms_sdk_client_capture_preserves_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     import boto3
 
@@ -81,6 +87,7 @@ def test_kms_sdk_client_capture_preserves_environment(monkeypatch: pytest.Monkey
     finally:
         client.close()
 
+
 def test_same_named_custom_client_is_not_captured() -> None:
     class AWSSecretsManagerV2:
         pass
@@ -89,6 +96,7 @@ def test_same_named_custom_client_is_not_captured() -> None:
     capture_secret_manager(client, "aws_secret_manager")
 
     assert native_secret_manager_config(client) is None
+
 
 def test_public_aws_bootstrap_read_does_not_hit_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "bootstrap-value")

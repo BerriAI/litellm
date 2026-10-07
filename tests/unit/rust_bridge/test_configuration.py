@@ -112,5 +112,3 @@ def test_process_override_and_reset_apply_to_existing_threads() -> None:
         assert executor.submit(configuration.rust_enabled).result() is True
         configuration.reset_rust_configuration()
         assert executor.submit(configuration.rust_enabled).result() is False
-
-

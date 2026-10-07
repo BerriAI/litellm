@@ -696,4 +696,3 @@ def test_non_ocr_relay_keeps_the_passthrough_object(native_path: str, body: obje
 
     assert result == {"response": logged}
     assert logging_obj.call_type == "allm_passthrough_route"
-

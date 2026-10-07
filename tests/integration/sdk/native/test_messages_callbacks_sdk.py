@@ -82,6 +82,7 @@ async def test_native_messages_pre_call_body_edit_reaches_the_provider(
     messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("LITELLM_RUST", "1")
+
     class Edit(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
             request_body(kwargs)["temperature"] = 0.25
