@@ -2083,7 +2083,7 @@ def test_init_auto_router_deployment_success(mock_auto_router, model_list):
         auto_router_config=None,
         default_model="gpt-5-mini",
         embedding_model="text-embedding-3-small",
-        litellm_router_instance=router,
+        litellm_router_instance=router.backend,
         max_input_chars=DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     )
 

@@ -544,7 +544,7 @@ async def test_aadapter_completion():
 
     # Create a router with a patched _aadapter_completion method
     with patch.object(
-        Router, "_aadapter_completion", new_callable=AsyncMock
+        PythonRouter, "_aadapter_completion", new_callable=AsyncMock
     ) as mock_method:
         mock_method.return_value = mock_response
 
