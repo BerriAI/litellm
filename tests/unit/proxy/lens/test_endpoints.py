@@ -1030,6 +1030,7 @@ async def test_internal_service_authentication_is_separate_from_gateway_keys(
         (200, b"invalid JSON", False),
         (200, b"x" * 17000, False),
     ),
+    ids=("ready", "unavailable", "invalid-json", "oversized-response"),
 )
 @pytest.mark.usefixtures("httpx_transport")
 async def test_service_status_uses_internal_auth_and_only_advertises_the_public_url(

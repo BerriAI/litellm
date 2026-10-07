@@ -79,7 +79,11 @@ async def test_inflight_records_count_toward_the_queue_limit() -> None:
         assert exporter.buffered_bytes == 0
 
 
-@pytest.mark.parametrize("value", ["a" * MAX_EVENT_BYTES, "界" * (MAX_EVENT_BYTES // 2)])
+@pytest.mark.parametrize(
+    "value",
+    ["a" * MAX_EVENT_BYTES, "界" * (MAX_EVENT_BYTES // 2)],
+    ids=("oversized-ascii", "oversized-unicode"),
+)
 def test_oversized_event_is_rejected_before_queueing(value: str) -> None:
     with pytest.raises(OverflowError):
         encode_record({"messages": value})
