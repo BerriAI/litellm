@@ -96,6 +96,17 @@ describe("buildRegenerateKeyPayload", () => {
     ]);
   });
 
+  it("omits a blank duration so the proxy leaves the expiry unchanged", () => {
+    const payload = buildRegenerateKeyPayload(values({ duration: "" }));
+
+    expect(payload).not.toHaveProperty("duration");
+    expect(JSON.stringify(payload)).not.toContain("duration");
+  });
+
+  it("keeps a typed duration", () => {
+    expect(buildRegenerateKeyPayload(values({ duration: "30d" })).duration).toBe("30d");
+  });
+
   it("does not mutate the values it is handed", () => {
     const original = values({ max_budget: 42.567 });
 
