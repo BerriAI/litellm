@@ -274,7 +274,7 @@ class RedisSemanticCache(BaseCache):
         return prompt or None
 
     @classmethod
-    def _collect_responses_input_text(cls, value: object, prompt_parts: list[str]) -> None:
+    def _collect_responses_input_text(cls, value: object, prompt_parts: list[str]) -> None:  # noqa: C901  # one branch per Responses input shape
         value = cls._coerce_response_input_value(value)
         if value is None:
             return
