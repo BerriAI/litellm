@@ -76,7 +76,7 @@ from litellm.repositories.verification_token_repository import (
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
-from litellm.utils import _update_dictionary
+from litellm.utils import update_dictionary
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -404,7 +404,7 @@ async def new_organization(
     ```bash
     curl --location 'http://0.0.0.0:4000/organization/new' \
 
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     --header 'Content-Type: application/json' \
 
@@ -422,7 +422,7 @@ async def new_organization(
     ```bash
     curl --location 'http://0.0.0.0:4000/organization/new' \
 
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     --header 'Content-Type: application/json' \
 
@@ -770,7 +770,7 @@ async def update_organization(
         updated_metadata: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(
             updated_organization_row_json.get("metadata", {})
         )
-        merged_metadata: Final[Mapping[str, object]] = _update_dictionary(
+        merged_metadata: Final[Mapping[str, object]] = update_dictionary(
             existing_dict=cast(  # cast-ok: prisma de-serializes a Json column to the plain python dict it stores
                 "dict[str, object]", existing_metadata
             ).copy(),
@@ -1111,13 +1111,13 @@ async def list_organization(
     Example:
     ```
     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_alias=my-org' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example with org_id:
     ```
     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_id=123e4567-e89b-12d3-a456-426614174000' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -1311,7 +1311,7 @@ async def organization_member_add(
     Example:
     ```
     curl -X POST 'http://0.0.0.0:4000/organization/member_add' \
-    -H 'Authorization: Bearer sk-1234' \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -H 'Content-Type: application/json' \
     -d '{
         "organization_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",

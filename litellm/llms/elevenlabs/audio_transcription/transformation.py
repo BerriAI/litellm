@@ -147,7 +147,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                         )
 
             # Store full response in hidden params
-            response._hidden_params = response_json
+            response.hidden_params = response_json
 
             return response
 

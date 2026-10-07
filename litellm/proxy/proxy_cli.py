@@ -498,7 +498,7 @@ class ProxyInitializationHelpers:
         if ciphers is not None:
             print("\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n")
 
-        kwargs: Final[dict[str, Any]] = {
+        kwargs: Final[dict[str, object]] = {
             "target": "litellm.proxy.proxy_server:app",
             "address": host,
             "port": port,
@@ -1229,7 +1229,7 @@ def run_server(
 
                 litellm.json_logs = True
 
-                litellm._turn_on_json()
+                litellm.turn_on_json()
             ### GENERAL SETTINGS ###
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
@@ -1499,7 +1499,7 @@ def run_server(
         import litellm
 
         if detailed_debug is True:
-            litellm._turn_on_debug()
+            litellm.turn_on_debug()
 
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app

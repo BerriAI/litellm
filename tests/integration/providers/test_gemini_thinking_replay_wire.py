@@ -12,6 +12,7 @@ import anthropic
 import httpx
 import openai
 import pytest
+from _pytest.mark.structures import ParameterSet
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario, eventually
@@ -485,7 +486,7 @@ def _only_request(wire: Wire, provider: Provider, stream: bool) -> Mapping[str, 
     return _JSON_OBJECT.validate_json(received[0].body)
 
 
-def _happy_cells() -> tuple[pytest.ParameterSet, ...]:
+def _happy_cells() -> tuple[ParameterSet, ...]:
     return tuple(
         pytest.param(
             provider, endpoint, stream, client, id=f"{provider}-{endpoint}-{'stream' if stream else 'sync'}-{client}"

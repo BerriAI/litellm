@@ -50,7 +50,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _deserialize_json_dict,
     _flow_endpoints_missing,
     _mcp_oauth_discovery_on_startup_enabled,
-    _oauth_endpoints_unresolved,
+    oauth_endpoints_unresolved,
     _deserialize_json_list,
     _normalize_mcp_server_cost_info,
     _obo_retry_applies,
@@ -877,7 +877,7 @@ class TestMCPServerManager:
         assert resolved[0].scopes == ["mcp.read"]
         assert manager.config_mcp_servers[server.server_id] is resolved[0]
         assert server.authorization_url is None
-        assert manager._oauth_discovery_slot(server.server_id) is None
+        assert manager.oauth_discovery_slot(server.server_id) is None
 
     @pytest.mark.asyncio
     async def test_table_oauth_discovery_can_be_deferred_until_first_use(self):
@@ -903,7 +903,7 @@ class TestMCPServerManager:
             server = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
 
         discovery.assert_not_awaited()
-        assert manager._oauth_discovery_slot(server.server_id) is not None
+        assert manager.oauth_discovery_slot(server.server_id) is not None
         manager.registry[server.server_id] = server
 
         with patch.object(manager, "_descovery_metadata", new=discovery):
@@ -960,7 +960,7 @@ class TestMCPServerManager:
         assert len({id(resolution) for resolution in resolutions}) == 1
         assert resolutions[0].authorization_url == "https://idp.example.com/authorize"
         assert resolutions[0].token_url == "https://idp.example.com/token"
-        assert manager._oauth_discovery_slot(server.server_id) is None
+        assert manager.oauth_discovery_slot(server.server_id) is None
 
     @pytest.mark.asyncio
     async def test_lazy_oauth_discovery_timeout_is_bounded(self):
@@ -992,7 +992,7 @@ class TestMCPServerManager:
         assert exc.value.status_code == 503
         assert "timed out" in str(exc.value.detail)
         discovery.assert_awaited_once_with(server)
-        assert manager._oauth_discovery_slot(server.server_id) is not None
+        assert manager.oauth_discovery_slot(server.server_id) is not None
 
     @pytest.mark.asyncio
     async def test_cancelling_one_waiter_does_not_cancel_shared_discovery(self):
@@ -1073,7 +1073,7 @@ class TestMCPServerManager:
         assert replacement.token_url is None
         assert resolved.authorization_url == "https://idp.example.com/authorize"
         assert resolved.token_url == "https://idp.example.com/token"
-        assert manager._oauth_discovery_slot(replacement.server_id) is None
+        assert manager.oauth_discovery_slot(replacement.server_id) is None
 
     def test_registry_swap_reconcile_keeps_slot_for_issuer_anchored_server_without_url(self):
         manager = MCPServerManager()
@@ -1090,9 +1090,9 @@ class TestMCPServerManager:
         manager.registry[server.server_id] = server
         manager._set_oauth_discovery_deferred(server.server_id, True)
 
-        manager._reconcile_oauth_discovery_slots_for_servers([server])
+        manager.reconcile_oauth_discovery_slots_for_servers([server])
 
-        assert manager._oauth_discovery_slot(server.server_id) is not None
+        assert manager.oauth_discovery_slot(server.server_id) is not None
 
         resolved = server.model_copy(
             update={
@@ -1101,12 +1101,12 @@ class TestMCPServerManager:
             }
         )
         manager.registry[resolved.server_id] = resolved
-        manager._reconcile_oauth_discovery_slots_for_servers([resolved])
+        manager.reconcile_oauth_discovery_slots_for_servers([resolved])
 
-        assert manager._oauth_discovery_slot(server.server_id) is None
+        assert manager.oauth_discovery_slot(server.server_id) is None
 
     def _assert_oauth_discovery_state_removed(self, manager, server_id):
-        assert manager._oauth_discovery_slot(server_id) is None
+        assert manager.oauth_discovery_slot(server_id) is None
 
     @pytest.mark.asyncio
     async def test_deactivated_server_clears_lazy_oauth_discovery_state(self):
@@ -1148,7 +1148,7 @@ class TestMCPServerManager:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                "litellm.proxy._experimental.mcp_server.db.MCPServerRepository",
                 return_value=repository,
             ),
             patch(
@@ -1181,7 +1181,7 @@ class TestMCPServerManager:
         manager.registry[server.server_id] = server
         previous_registry = manager.registry
         manager._set_oauth_discovery_deferred(server.server_id, True)
-        old_generation = manager._oauth_discovery_slot(server.server_id).generation
+        old_generation = manager.oauth_discovery_slot(server.server_id).generation
         resolved = server.model_copy(
             update={
                 "authorization_url": "https://idp.example.com/authorize",
@@ -1200,7 +1200,8 @@ class TestMCPServerManager:
         raw_row = MagicMock()
         raw_row.model_dump.return_value = row.model_dump()
         repository = MagicMock()
-        repository.table.find_many = AsyncMock(return_value=[raw_row])
+        other_row: Final = row.model_copy(update={"server_id": "changed-other", "server_name": "changed_other", "auth_type": MCPAuth.none})
+        repository.table.find_many = AsyncMock(return_value=[raw_row, other_row])
 
         async def publish_while_staged(*_args, **_kwargs):
             assert manager.registry is previous_registry
@@ -1208,7 +1209,7 @@ class TestMCPServerManager:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                "litellm.proxy._experimental.mcp_server.db.MCPServerRepository",
                 return_value=repository,
             ),
             patch(
@@ -1217,16 +1218,16 @@ class TestMCPServerManager:
             ),
             patch.object(
                 manager,
-                "_maybe_register_openapi_tools",
+                "maybe_register_openapi_tools",
                 new=AsyncMock(side_effect=publish_while_staged),
             ),
-            patch.object(manager, "_prime_oauth_metadata_discovery_for_servers"),
+            patch.object(manager, "prime_oauth_metadata_discovery_for_servers"),
         ):
             await manager.reload_servers_from_database()
 
         assert previous_registry[server.server_id] is resolved
         assert manager.registry[server.server_id] is server
-        retry_slot = manager._oauth_discovery_slot(server.server_id)
+        retry_slot = manager.oauth_discovery_slot(server.server_id)
         assert retry_slot is not None
         assert retry_slot.generation > old_generation
 
@@ -1277,7 +1278,8 @@ class TestMCPServerManager:
         table = SimpleNamespace(
             find_many=AsyncMock(return_value=[_row(cached.server_id, corrupted), _row("healthy-sibling", stored)])
         )
-        prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table))
+        prisma = SimpleNamespace(db=SimpleNamespace(litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)), litellm_mcpservertable=table))
+        prisma.writer_db = prisma.db
         monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
         with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
@@ -1326,7 +1328,7 @@ class TestMCPServerManager:
         assert manager.config_mcp_servers[server.server_id].authorization_url == "https://idp.example.com/authorize"
         assert manager.config_mcp_servers[server.server_id].token_url is None
         assert manager.config_mcp_servers[server.server_id].scopes is None
-        assert manager._oauth_discovery_slot(server.server_id) is not None
+        assert manager.oauth_discovery_slot(server.server_id) is not None
 
     @pytest.mark.asyncio
     async def test_create_mcp_client_triggers_deferred_oauth_discovery(self):
@@ -1553,7 +1555,7 @@ class TestMCPServerManager:
         manager = MCPServerManager()
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            patch.object(manager, "_hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            patch.object(manager, "hydrate_config_servers_dcr_clients", new=AsyncMock()),
             caplog.at_level(logging.WARNING, logger="LiteLLM"),
         ):
             await manager.load_servers_from_config(self._id_jag_config())
@@ -1569,7 +1571,7 @@ class TestMCPServerManager:
         manager = MCPServerManager()
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            patch.object(manager, "_hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            patch.object(manager, "hydrate_config_servers_dcr_clients", new=AsyncMock()),
             caplog.at_level(logging.WARNING, logger="LiteLLM"),
         ):
             await manager.load_servers_from_config(self._id_jag_config())
@@ -1593,7 +1595,7 @@ class TestMCPServerManager:
         }
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            patch.object(manager, "_hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            patch.object(manager, "hydrate_config_servers_dcr_clients", new=AsyncMock()),
             caplog.at_level(logging.WARNING, logger="LiteLLM"),
         ):
             await manager.load_servers_from_config(config)
@@ -1607,7 +1609,7 @@ class TestMCPServerManager:
         manager = MCPServerManager()
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            patch.object(manager, "_hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            patch.object(manager, "hydrate_config_servers_dcr_clients", new=AsyncMock()),
             caplog.at_level(logging.WARNING, logger="LiteLLM"),
         ):
             await manager.load_servers_from_config(self._id_jag_config())
@@ -3854,7 +3856,7 @@ class TestMCPServerManager:
             _should_strip_caller_authorization(
                 mcp_server=oauth_delegate,
                 raw_headers={
-                    "x-litellm-api-key": "Bearer sk-1234",
+                    "x-litellm-api-key": "Bearer sk-9876",
                     "authorization": "Bearer upstream",
                 },
                 user_api_key_auth=UserAPIKeyAuth(user_id="alice", api_key=None),
@@ -7358,7 +7360,7 @@ class TestMCPServerManager:
         manager.record_listed_tools(server, [MCPTool(name="echo", description="old", inputSchema={})], None)
         manager.record_listed_tools(other, [MCPTool(name="ping", description="kept", inputSchema={})], None)
 
-        manager._invalidate_server_definition_caches(server.server_id)
+        manager.invalidate_server_definition_caches(server.server_id)
 
         assert manager.get_listed_tool(server, "echo") is None
         kept = manager.get_listed_tool(other, "ping")
@@ -7389,7 +7391,7 @@ class TestMCPServerManager:
 
         listing = asyncio.create_task(list_tools())
         await fetch_started.wait()
-        manager._invalidate_server_definition_caches(server.server_id)
+        manager.invalidate_server_definition_caches(server.server_id)
         release_fetch.set()
         await listing
 
@@ -7426,7 +7428,7 @@ class TestMCPServerManager:
             )
 
         manager.build_mcp_server_from_table = AsyncMock(return_value=new)
-        manager._maybe_register_openapi_tools = register_while_a_listing_records
+        manager.maybe_register_openapi_tools = register_while_a_listing_records
         manager.prime_oauth_metadata_discovery = MagicMock()
         record = LiteLLM_MCPServerTable(
             server_id="srv", server_name="srv", url="http://new", transport=MCPTransport.http
@@ -7473,7 +7475,7 @@ class TestMCPServerManager:
             discoverable_endpoints._OAUTH_METADATA_CACHE[metadata_key] = (time.time() + 300, {"resource": new.url})
 
         manager.build_mcp_server_from_table = AsyncMock(return_value=new)
-        manager._maybe_register_openapi_tools = register_while_discovery_fills
+        manager.maybe_register_openapi_tools = register_while_discovery_fills
         manager.prime_oauth_metadata_discovery = MagicMock()
         record = LiteLLM_MCPServerTable(
             server_id="srv", server_name="srv", url="http://new", transport=MCPTransport.http
@@ -8831,7 +8833,7 @@ class TestMCPServerTimestamps:
         with (
             patch("litellm.proxy._experimental.mcp_server.db.update_mcp_server", new=update_mcp_server_mock),
             patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                "litellm.proxy._experimental.mcp_server.db.MCPServerRepository",
                 return_value=repo_instance,
             ),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
@@ -8917,10 +8919,10 @@ class TestMCPServerTimestamps:
             client_id="cid",
             client_secret="csec",
         )
-        assert _oauth_endpoints_unresolved(m2m_shaped) is False
+        assert oauth_endpoints_unresolved(m2m_shaped) is False
 
         interactive_unresolved = m2m_shaped.model_copy(update={"client_id": None, "client_secret": None})
-        assert _oauth_endpoints_unresolved(interactive_unresolved) is True
+        assert oauth_endpoints_unresolved(interactive_unresolved) is True
 
     def test_dcr_bridge_relay_arm_needs_its_registration_endpoint(self):
         """A dcr_bridge server with no admin-configured client can only register callers through the
@@ -8940,11 +8942,11 @@ class TestMCPServerTimestamps:
             token_url="https://idp.example.com/token",
             registration_url=None,
         )
-        assert _oauth_endpoints_unresolved(relay_arm) is True
+        assert oauth_endpoints_unresolved(relay_arm) is True
         assert (
-            _oauth_endpoints_unresolved(relay_arm.model_copy(update={"registration_url": "https://idp/reg"})) is False
+            oauth_endpoints_unresolved(relay_arm.model_copy(update={"registration_url": "https://idp/reg"})) is False
         )
-        assert _oauth_endpoints_unresolved(relay_arm.model_copy(update={"client_id": "admin-client"})) is False
+        assert oauth_endpoints_unresolved(relay_arm.model_copy(update={"client_id": "admin-client"})) is False
 
     def test_entra_obo_without_scopes_is_unresolved(self):
         """entra_obo token exchange fails closed without a scope, and scopes can come from resource
@@ -8960,9 +8962,9 @@ class TestMCPServerTimestamps:
             token_url="https://idp.example.com/token",
             scopes=None,
         )
-        assert _oauth_endpoints_unresolved(entra) is True
-        assert _oauth_endpoints_unresolved(entra.model_copy(update={"scopes": ["api://app/.default"]})) is False
-        assert _oauth_endpoints_unresolved(entra.model_copy(update={"token_exchange_profile": "rfc8693"})) is False
+        assert oauth_endpoints_unresolved(entra) is True
+        assert oauth_endpoints_unresolved(entra.model_copy(update={"scopes": ["api://app/.default"]})) is False
+        assert oauth_endpoints_unresolved(entra.model_copy(update={"token_exchange_profile": "rfc8693"})) is False
 
     @pytest.mark.asyncio
     async def test_reload_fast_path_retries_unresolved_oauth_servers(self):
@@ -9007,7 +9009,7 @@ class TestMCPServerTimestamps:
             build_mock = AsyncMock(return_value=previous_entry)
             with (
                 patch(
-                    "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                    "litellm.proxy._experimental.mcp_server.db.MCPServerRepository",
                     return_value=repo_instance,
                 ),
                 patch(
@@ -9100,7 +9102,7 @@ class TestMCPServerTimestamps:
     def test_carry_forward_skips_when_url_or_auth_type_changed(self):
         """Stale endpoints from a different upstream or auth mode must not carry forward."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            _carry_forward_resolved_oauth_endpoints,
+            carry_forward_resolved_oauth_endpoints,
         )
 
         def make_server(url: str, auth_type: MCPAuth, authorization_url: Optional[str]) -> MCPServer:
@@ -9116,19 +9118,19 @@ class TestMCPServerTimestamps:
         previous = make_server("https://old.example.com/mcp", MCPAuth.oauth2, "https://idp.example.com/authorize")
 
         url_changed = make_server("https://new.example.com/mcp", MCPAuth.oauth2, None)
-        _carry_forward_resolved_oauth_endpoints(new_server=url_changed, previous_server=previous)
+        carry_forward_resolved_oauth_endpoints(new_server=url_changed, previous_server=previous)
         assert url_changed.authorization_url is None
 
         auth_changed = make_server("https://old.example.com/mcp", MCPAuth.true_passthrough, None)
-        _carry_forward_resolved_oauth_endpoints(new_server=auth_changed, previous_server=previous)
+        carry_forward_resolved_oauth_endpoints(new_server=auth_changed, previous_server=previous)
         assert auth_changed.authorization_url is None
 
         same = make_server("https://old.example.com/mcp", MCPAuth.oauth2, None)
-        _carry_forward_resolved_oauth_endpoints(new_server=same, previous_server=previous)
+        carry_forward_resolved_oauth_endpoints(new_server=same, previous_server=previous)
         assert same.authorization_url == "https://idp.example.com/authorize"
 
         explicit = make_server("https://old.example.com/mcp", MCPAuth.oauth2, "https://configured.example.com/auth")
-        _carry_forward_resolved_oauth_endpoints(new_server=explicit, previous_server=previous)
+        carry_forward_resolved_oauth_endpoints(new_server=explicit, previous_server=previous)
         assert explicit.authorization_url == "https://configured.example.com/auth"
 
     def test_carry_forward_does_not_revive_token_url_across_authorization_url_change(self):
@@ -9139,7 +9141,7 @@ class TestMCPServerTimestamps:
         endpoint recreates the RFC 9700 mix-up, durably, and the discovery gate alone cannot catch
         it because the stale endpoint comes from the registry, not from discovery."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            _carry_forward_resolved_oauth_endpoints,
+            carry_forward_resolved_oauth_endpoints,
         )
 
         previous = MCPServer(
@@ -9161,7 +9163,7 @@ class TestMCPServerTimestamps:
             authorization_url="https://idp-b.example.com/authorize",
         )
 
-        _carry_forward_resolved_oauth_endpoints(new_server=repointed, previous_server=previous)
+        carry_forward_resolved_oauth_endpoints(new_server=repointed, previous_server=previous)
 
         assert repointed.authorization_url == "https://idp-b.example.com/authorize"
         assert repointed.token_url is None
@@ -9173,7 +9175,7 @@ class TestMCPServerTimestamps:
         consistent group, and a rebuild that re-pins the same authorize endpoint (formatting aside)
         keeps carrying the corroborated token endpoint."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            _carry_forward_resolved_oauth_endpoints,
+            carry_forward_resolved_oauth_endpoints,
         )
 
         def previous() -> MCPServer:
@@ -9198,7 +9200,7 @@ class TestMCPServerTimestamps:
             auth_type=MCPAuth.oauth2,
             authorization_url=None,
         )
-        _carry_forward_resolved_oauth_endpoints(new_server=blipped, previous_server=previous())
+        carry_forward_resolved_oauth_endpoints(new_server=blipped, previous_server=previous())
         assert blipped.authorization_url == "https://idp.example.com/authorize"
         assert blipped.token_url == "https://idp.example.com/token"
         assert blipped.registration_url == "https://idp.example.com/register"
@@ -9221,7 +9223,7 @@ class TestMCPServerTimestamps:
             auth_type=MCPAuth.oauth2,
             authorization_url="https://IDP.example.com:443/authorize/",
         )
-        _carry_forward_resolved_oauth_endpoints(new_server=same_authorize, previous_server=previous())
+        carry_forward_resolved_oauth_endpoints(new_server=same_authorize, previous_server=previous())
         assert same_authorize.token_url == "https://idp.example.com/token"
         assert same_authorize.registration_url == "https://idp.example.com/register"
 
@@ -9233,7 +9235,7 @@ class TestMCPServerTimestamps:
         scopes still carry as last-known-good. Anchoring is keyed on the explicit issuer_is_anchored
         flag, not on issuer truthiness, so a discovered issuer does not trip this fail-closed branch."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            _carry_forward_resolved_oauth_endpoints,
+            carry_forward_resolved_oauth_endpoints,
         )
 
         previous = MCPServer(
@@ -9259,7 +9261,7 @@ class TestMCPServerTimestamps:
             issuer_is_anchored=True,
         )
 
-        _carry_forward_resolved_oauth_endpoints(new_server=failed_rebuild, previous_server=previous)
+        carry_forward_resolved_oauth_endpoints(new_server=failed_rebuild, previous_server=previous)
 
         assert failed_rebuild.authorization_url is None
         assert failed_rebuild.token_url is None
@@ -9273,7 +9275,7 @@ class TestMCPServerTimestamps:
         regression the explicit issuer_is_anchored flag prevents: keying fail-closed on issuer truthiness
         alone would drop the working endpoints the moment the server learned its issuer."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            _carry_forward_resolved_oauth_endpoints,
+            carry_forward_resolved_oauth_endpoints,
         )
 
         previous = MCPServer(
@@ -9300,7 +9302,7 @@ class TestMCPServerTimestamps:
             authorization_url=None,
         )
 
-        _carry_forward_resolved_oauth_endpoints(new_server=blipped_rebuild, previous_server=previous)
+        carry_forward_resolved_oauth_endpoints(new_server=blipped_rebuild, previous_server=previous)
 
         assert blipped_rebuild.authorization_url == "https://idp.example.com/authorize"
         assert blipped_rebuild.token_url == "https://idp.example.com/token"
@@ -13589,7 +13591,7 @@ class TestClientForwardedDiscoveryFailureIsNotFatal:
         assert resolved is manager.config_mcp_servers[server.server_id]
         assert resolved.authorization_url is None
         assert resolved.token_url is None
-        assert manager._oauth_discovery_slot(server.server_id) is not None
+        assert manager.oauth_discovery_slot(server.server_id) is not None
 
     @pytest.mark.parametrize(
         "auth_type, serves_the_listing",
@@ -13651,7 +13653,7 @@ class TestClientForwardedDiscoveryFailureIsNotFatal:
         assert resolved.token_url == "https://idp.example.com/token"
         assert resolved.registration_url == "https://idp.example.com/register"
         assert manager.config_mcp_servers[server.server_id].authorization_url == "https://idp.example.com/authorize"
-        assert manager._oauth_discovery_slot(server.server_id) is None
+        assert manager.oauth_discovery_slot(server.server_id) is None
 
 
 class TestResolveOpenapiToolAuth:
@@ -14041,7 +14043,7 @@ class TestConfigServerIdPinning:
         )
         with (
             patch(  # test-quality-ok: the db reload path has no seam but its own repository
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                "litellm.proxy._experimental.mcp_server.db.MCPServerRepository",
                 return_value=repository,
             ),
             patch(  # test-quality-ok: same, the prisma client is fetched inside the reload
@@ -14994,7 +14996,7 @@ def test_stale_discovery_cannot_overwrite_new_registered_server() -> None:
         auth_type=MCPAuth.oauth2,
     )
     manager._set_oauth_discovery_deferred(original.server_id, True)
-    original_slot: Final = manager._oauth_discovery_slot(original.server_id)
+    original_slot: Final = manager.oauth_discovery_slot(original.server_id)
     assert original_slot is not None
     replacement: Final = original.model_copy(update={"url": "https://new.example.com/mcp"})
     manager.registry[original.server_id] = replacement
@@ -15017,30 +15019,30 @@ async def test_temporary_oauth_discovery_expires_without_more_requests() -> None
     )
     manager._set_oauth_discovery_deferred(server.server_id, True)
     resolved: Final = await manager.ensure_oauth_metadata_discovered(server)
-    assert manager._oauth_discovery_slot(server.server_id) is not None
+    assert manager.oauth_discovery_slot(server.server_id) is not None
     loop: Final = asyncio.get_running_loop()
     expired: Final = loop.create_future()
     with patch.object(loop, "time", return_value=loop.time() + 301):
         loop.call_later(0, expired.set_result, None)
         await expired
     assert resolved.authorization_url == server.authorization_url
-    assert manager._oauth_discovery_slot(server.server_id) is None
+    assert manager.oauth_discovery_slot(server.server_id) is None
 
 
 def test_old_temporary_discovery_expiry_preserves_replacement() -> None:
     manager: Final = MCPServerManager()
     manager._set_oauth_discovery_deferred("reused-session", True)
-    old_slot: Final = manager._oauth_discovery_slot("reused-session")
+    old_slot: Final = manager.oauth_discovery_slot("reused-session")
     assert old_slot is not None
     manager._set_oauth_discovery_deferred("reused-session", True)
-    replacement: Final = manager._oauth_discovery_slot("reused-session")
+    replacement: Final = manager.oauth_discovery_slot("reused-session")
     manager._expire_temporary_oauth_discovery("reused-session", old_slot.generation)
-    assert manager._oauth_discovery_slot("reused-session") is replacement
+    assert manager.oauth_discovery_slot("reused-session") is replacement
     assert replacement is not None
     manager._expire_temporary_oauth_discovery("reused-session", replacement.generation)
-    assert manager._oauth_discovery_slot("reused-session") is None
+    assert manager.oauth_discovery_slot("reused-session") is None
     manager._expire_temporary_oauth_discovery("reused-session", replacement.generation)
-    assert manager._oauth_discovery_slot("reused-session") is None
+    assert manager.oauth_discovery_slot("reused-session") is None
 
 
 @pytest.mark.asyncio
@@ -15408,12 +15410,12 @@ async def test_discovery_cache_invalidation_during_fetch_does_not_repopulate_old
     with _mcp_upstream(upstream.respond):
         task: Final = asyncio.create_task(manager.get_prompts_from_server(_discovery_server(), None))
         await asyncio.wait_for(upstream.entered.wait(), timeout=5)
-        manager._invalidate_discovery_lists("discovery")
+        manager.invalidate_discovery_lists("discovery")
         upstream.release.set()
         assert (await task)[0].name == "discovery-example"
         assert len(await manager.get_prompts_from_server(_discovery_server(), None)) == 1
         assert upstream.initializes == 2
-        manager._invalidate_discovery_lists("discovery")
+        manager.invalidate_discovery_lists("discovery")
         assert len(await manager.get_prompts_from_server(_discovery_server(), None)) == 1
         assert upstream.initializes == 3
 
@@ -15769,6 +15771,7 @@ class TestProtectedCredentialPreparation:
         credential: str | None,
         dispatch: str,
     ) -> None:
+        from litellm.proxy._experimental.mcp_server import operations
         from litellm.proxy._experimental.mcp_server.server import _handle_local_mcp_tool
         from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_name, get_server_prefix
 
@@ -15791,6 +15794,8 @@ class TestProtectedCredentialPreparation:
             authentication_token=credential,
         )
         manager: Final = MCPServerManager()
+        manager.config_mcp_servers = {server.server_id: server}
+        monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
         await manager._register_openapi_tools(str(spec_path), server, server.url)
         monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
         destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="unexpected success")
@@ -16475,6 +16480,1170 @@ async def test_client_sampling_does_not_fill_explicit_context_from_another_ambie
         auth_context_var.reset(token)
 
 
+def _catalog_row(name="initial"):
+    return LiteLLM_MCPServerTable(
+        server_id="catalog-server",
+        server_name=name,
+        transport="http",
+        url="https://upstream.example/mcp",
+        created_at=datetime(2026, 1, 1),
+        updated_at=datetime(2026, 1, 1 if name == "initial" else 2),
+    )
+
+
+def _catalog_database(monkeypatch, read_rows, read_revision=None):
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+
+    if read_revision is None:
+        read_revision = AsyncMock(return_value=None)
+    client = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_mcpservertable=SimpleNamespace(find_many=read_rows),
+            litellm_config=SimpleNamespace(find_unique=read_revision),
+        )
+    )
+    client.writer_db = client.db
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+
+
+@pytest.mark.asyncio
+async def test_catalog_pins_one_snapshot_and_next_operation_reads_current_rows(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    async with manager.catalog.operation():
+        initial = manager.get_mcp_server_by_id("catalog-server")
+        read_rows.return_value = [_catalog_row("updated")]
+        async with manager.catalog.operation():
+            assert await manager.catalog.resolve("initial") is initial
+            assert tuple((await manager.catalog.list()).values()) == (initial,)
+        read_rows.assert_awaited_once()
+    async with manager.catalog.operation():
+        assert manager.get_mcp_server_by_id("catalog-server").name == "updated"
+        assert await manager.catalog.resolve("initial") is None
+    assert manager.catalog.current() is None
+    assert read_rows.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_database_failure_keeps_registry_but_rejects_operation(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    snapshot = await manager.catalog.list()
+    read_rows.side_effect = RuntimeError("private connection detail")
+    with pytest.raises(HTTPException) as exc:
+        async with manager.catalog.operation():
+            pytest.fail("An unverified database snapshot must not execute")
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "MCP server configuration could not be refreshed"
+    assert manager.registry == dict(snapshot)
+    assert manager.catalog.current() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", [False, True])
+async def test_catalog_coalesces_waiters_only_behind_a_read_started_after_their_arrival(monkeypatch, failed):
+    started = asyncio.Event()
+    release = asyncio.Event()
+    old_row = _catalog_row()
+    new_row = _catalog_row("updated")
+    read_rows = AsyncMock(return_value=[old_row])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    previous = await manager.catalog.list()
+    read_rows.reset_mock()
+
+    async def read_current_rows(**kwargs):
+        first = not started.is_set()
+        if first:
+            started.set()
+            await release.wait()
+        if failed:
+            raise RuntimeError("unavailable database")
+        return [old_row if first else new_row]
+
+    read_rows.side_effect = read_current_rows
+    first = asyncio.create_task(manager.catalog.list())
+    await started.wait()
+    followers = [asyncio.create_task(manager.catalog.list()) for _ in range(8)]
+    await asyncio.sleep(0)
+    release.set()
+    results = await asyncio.gather(first, *followers, return_exceptions=True)
+    if failed:
+        assert all(isinstance(result, HTTPException) and result.status_code == 503 for result in results)
+        assert manager.registry == dict(previous)
+    else:
+        assert results[0]["catalog-server"].name == "initial"
+        assert all(result["catalog-server"].name == "updated" for result in results[1:])
+    assert read_rows.await_count == 2
+
+    read_rows.side_effect = None
+    read_rows.return_value = [new_row]
+    assert (await manager.catalog.list())["catalog-server"].name == "updated"
+    assert read_rows.await_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interruption", ["background", "cancel_reader", "cancel_waiter"])
+async def test_catalog_queued_refresh_preserves_freshness_through_cancellation(monkeypatch, interruption):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def read_current_rows(**kwargs):
+        first = not started.is_set()
+        if first:
+            started.set()
+            await release.wait()
+        return [_catalog_row("initial" if first else "updated")]
+
+    read_rows = AsyncMock(side_effect=read_current_rows)
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    first = asyncio.create_task(manager.catalog.list())
+    await started.wait()
+    background = asyncio.create_task(manager.reload_servers_from_database()) if interruption == "background" else None
+    waiter = asyncio.create_task(manager.catalog.list())
+    survivors = [asyncio.create_task(manager.catalog.list()) for _ in range(4)]
+    await asyncio.sleep(0)
+    if interruption == "cancel_reader":
+        first.cancel()
+    elif interruption == "cancel_waiter":
+        waiter.cancel()
+    release.set()
+    first_result, waiter_result, *results = await asyncio.gather(first, waiter, *survivors, return_exceptions=True)
+    if background is not None:
+        await background
+    if interruption == "cancel_reader":
+        assert isinstance(first_result, asyncio.CancelledError)
+    else:
+        assert first_result["catalog-server"].name == "initial"
+    if interruption == "cancel_waiter":
+        assert isinstance(waiter_result, asyncio.CancelledError)
+    else:
+        assert waiter_result["catalog-server"].name == "updated"
+    assert all(result["catalog-server"].name == "updated" for result in results)
+    assert read_rows.await_count == 2
+    assert manager.catalog.current() is None
+
+
+@pytest.mark.asyncio
+async def test_catalog_serializes_background_and_operation_refreshes(monkeypatch):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def first_read(**kwargs):
+        entered.set()
+        await release.wait()
+        return [_catalog_row()]
+
+    read_rows = AsyncMock(side_effect=first_read)
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    first = asyncio.create_task(manager.reload_servers_from_database())
+    await entered.wait()
+    read_rows.side_effect = None
+    read_rows.return_value = [_catalog_row("updated")]
+    second = asyncio.create_task(manager.catalog.list())
+    await asyncio.sleep(0)
+    assert read_rows.await_count == 1
+    release.set()
+    await first
+    latest = await second
+    assert latest["catalog-server"].name == "updated"
+    assert manager.registry["catalog-server"].name == "updated"
+
+
+@pytest.mark.asyncio
+async def test_catalog_cancellation_releases_refresh_lock(monkeypatch):
+    entered = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def blocked_read(**kwargs):
+        entered.set()
+        await blocked.wait()
+        return []
+
+    read_rows = AsyncMock(side_effect=blocked_read)
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    task = asyncio.create_task(manager.catalog.list())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    read_rows.side_effect = None
+    read_rows.return_value = [_catalog_row()]
+    snapshot = await asyncio.wait_for(manager.catalog.list(), timeout=1)
+    assert tuple(snapshot) == ("catalog-server",)
+    assert manager.catalog.current() is None
+
+
+@pytest.mark.asyncio
+async def test_catalog_child_operation_does_not_inherit_stale_session_snapshot(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    release = asyncio.Event()
+
+    async def child_operation():
+        await release.wait()
+        async with manager.catalog.operation():
+            return manager.get_mcp_server_by_id("catalog-server")
+
+    async with manager.catalog.operation():
+        child = asyncio.create_task(child_operation())
+    read_rows.return_value = [_catalog_row("updated")]
+    release.set()
+    assert (await child).name == "updated"
+    assert read_rows.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_config_only_snapshot_cleans_up_after_error(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    manager = MCPServerManager()
+    configured = MCPServer(server_id="configured", name="configured", transport="stdio", command="echo")
+    manager.config_mcp_servers = {configured.server_id: configured}
+    async def fail_operation():
+        async with manager.catalog.operation():
+            assert await manager.catalog.resolve("configured") == configured
+            raise ValueError("stop operation")
+
+    with pytest.raises(ValueError, match="stop operation"):
+        await fail_operation()
+    assert manager.catalog.current() is None
+    assert dict(await manager.catalog.list()) == {"configured": configured}
+
+
+@pytest.mark.asyncio
+async def test_catalog_delete_drops_derived_tool_mapping(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    await manager.catalog.list()
+    manager.tool_name_to_mcp_server_name_mapping = {"initial-echo": "initial"}
+    read_rows.return_value = []
+    assert not await manager.catalog.list()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rediscover", [False, True])
+async def test_catalog_publishes_rediscovered_routes_despite_concurrent_owner_change(monkeypatch, rediscover):
+    from mcp.types import Tool
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    manager = MCPServerManager()
+    selected = MCPServer(server_id="selected", name="selected", transport=MCPTransport.http)
+    competing = MCPServer(server_id="competing", name="competing", transport=MCPTransport.http)
+    manager.config_mcp_servers = {server.server_id: server for server in (selected, competing)}
+    manager.published_tool_routes = {"shared_tool": selected.name}
+    async with manager.catalog.operation():
+        manager.published_tool_routes["shared_tool"] = competing.name
+        if rediscover:
+            manager._create_prefixed_tools([Tool(name="shared_tool", input_schema={})], selected)
+        assert manager._get_mcp_server_from_tool_name("shared_tool").server_id == selected.server_id
+    async with manager.catalog.operation():
+        expected = selected if rediscover else competing
+        assert manager._get_mcp_server_from_tool_name("shared_tool").server_id == expected.server_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("anchored", [False, True])
+async def test_catalog_reload_preserves_concurrent_config_discovery_and_routes(anchored):
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="config-race", name="config_race", transport=MCPTransport.http,
+        url="https://upstream.example/mcp", auth_type=MCPAuth.oauth2,
+        issuer="https://issuer.example" if anchored else None, issuer_is_anchored=anchored)
+    manager.config_mcp_servers = {server.server_id: server}
+    manager._set_oauth_discovery_deferred(server.server_id, True)
+    generation: Final = manager.oauth_discovery_slot(server.server_id).generation
+    resolved: Final = server.model_copy(update={"authorization_url": "https://issuer.example/authorize",
+        "token_url": "https://issuer.example/token", "scopes": ["read"], "issuer": "https://issuer.example"})
+
+    async def hydrate(target: MCPServer) -> bool:
+        target.client_id = "persisted-client"
+        return True
+
+    async def read_rows(**_kwargs):
+        assert manager._publish_resolved_oauth_server(resolved, generation) is resolved
+        manager.published_tool_routes["config_race-search"] = "config_race"
+        return []
+
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=read_rows)
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.hydrate_config_server_dcr_client", side_effect=hydrate),
+    ):
+        await manager.reload_servers_from_database()
+    current: Final = manager.get_mcp_server_by_id(server.server_id)
+    assert current.authorization_url == resolved.authorization_url
+    assert current.token_url == resolved.token_url
+    assert current.scopes == ["read"]
+    assert current.issuer == "https://issuer.example"
+    assert current.client_id == "persisted-client"
+    assert manager.oauth_discovery_slot(server.server_id) is None
+    assert manager.published_tool_routes["config_race-search"] == "config_race"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["credentials", "delete"])
+async def test_catalog_reload_does_not_restore_replaced_config_credentials_or_routes(change):
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="config-replaced", name="config_replaced", transport=MCPTransport.http,
+        client_id="previous-client")
+    manager.config_mcp_servers = {server.server_id: server}
+    manager.published_tool_routes["config_replaced-search"] = "config_replaced"
+
+    async def read_rows(**_kwargs):
+        manager.config_mcp_servers = {} if change == "delete" else {
+            server.server_id: server.model_copy(update={"client_id": "new-client"})}
+        return []
+
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=read_rows)
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await manager.reload_servers_from_database()
+    current: Final = manager.get_mcp_server_by_id(server.server_id)
+    if change == "delete":
+        assert current is None
+    else:
+        assert current.client_id == "new-client"
+    assert "config_replaced-search" not in manager.published_tool_routes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["discovery", "update", "delete"])
+async def test_catalog_operation_retains_routes_only_for_same_configured_target(change):
+    from mcp.types import Tool
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="route-race", name="route_race", transport=MCPTransport.http,
+        url="https://upstream.example/mcp", auth_type=MCPAuth.oauth2)
+    manager.registry = {server.server_id: server}
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        async with manager.catalog.operation():
+            tools: Final = manager._create_prefixed_tools([Tool(name="search", inputSchema={})], server)
+            if change == "delete":
+                manager.registry = {}
+            else:
+                manager.registry[server.server_id] = server.model_copy(update=(
+                    {"authorization_url": "https://issuer.example/authorize", "token_url": "https://issuer.example/token"}
+                    if change == "discovery" else {"url": "https://changed.example/mcp"}))
+    assert (tools[0].name in manager.published_tool_routes) is (change == "discovery")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["concurrent", "staged", "deleted", "staged_after_delete", "staged_with_concurrent"])
+@pytest.mark.parametrize("mapped", [False, True])
+async def test_catalog_reload_keeps_new_route_owner_over_earlier_route(change, mapped, monkeypatch):
+    from litellm.proxy._experimental.mcp_server import tool_registry
+
+    manager: Final = MCPServerManager()
+    registry: Final = tool_registry.MCPToolRegistry()
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    servers: Final = {name: MCPServer(server_id=name, name=name, transport=MCPTransport.http,
+        client_id="configured-client") for name in ("old_owner", "new_owner", "concurrent_owner")}
+    manager.config_mcp_servers = servers
+    manager.published_tool_routes = {"shared-search": "old_owner"} if mapped else {}
+
+    async def original_handler():
+        return "original response"
+
+    async def new_handler():
+        return "new response"
+
+    async def concurrent_handler():
+        return "concurrent response"
+
+    registry.register_tool("shared-search", "Search", {}, original_handler)
+    original_tool: Final = registry.get_tool("shared-search")
+
+    async def read_rows(**_kwargs):
+        if change == "concurrent":
+            manager.published_tool_routes["shared-search"] = "new_owner"
+            registry.published_tools["shared-search"] = original_tool.model_copy(update={"handler": new_handler})
+        elif change in ("staged", "staged_after_delete", "staged_with_concurrent"):
+            if change == "staged_after_delete":
+                manager.published_tool_routes.clear()
+                registry.published_tools.clear()
+            elif change == "staged_with_concurrent":
+                manager.published_tool_routes["shared-search"] = "concurrent_owner"
+                registry.published_tools["shared-search"] = original_tool.model_copy(update={"handler": concurrent_handler})
+            manager.tool_name_to_mcp_server_name_mapping["shared-search"] = "new_owner"
+            registry.register_tool("shared-search", "Search", {}, new_handler)
+        else:
+            manager.published_tool_routes.clear()
+            registry.published_tools.clear()
+        if not mapped:
+            manager.published_tool_routes.clear()
+            manager.tool_name_to_mcp_server_name_mapping.clear()
+        return []
+
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=read_rows)
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await manager.reload_servers_from_database()
+    if change == "deleted" or not mapped:
+        assert "shared-search" not in manager.published_tool_routes
+    else:
+        assert manager.published_tool_routes["shared-search"] == "new_owner"
+    if change == "deleted":
+        assert registry.get_tool("shared-search") is None
+    else:
+        assert await registry.get_tool("shared-search").handler() == "new response"
+
+
+@pytest.mark.asyncio
+async def test_catalog_observes_committed_update_and_delete_without_background_reload():
+    from datetime import timedelta
+
+    timestamp: Final = datetime.now()
+    row: Final = LiteLLM_MCPServerTable(
+        server_id="catalog-server", server_name="catalog_server", alias="catalog_server",
+        transport=MCPTransport.http, url="https://first.example.com/mcp", updated_at=timestamp,
+    )
+    updated: Final = row.model_copy(update={"url": "https://second.example.com/mcp", "updated_at": timestamp + timedelta(seconds=1)})
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=([row], [updated], []))
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    manager: Final = MCPServerManager()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        first = await manager.catalog.resolve(row.server_id)
+        manager.registry[row.server_id].short_prefix = "a12"
+        second = await manager.catalog.resolve(row.server_id)
+        deleted = await manager.catalog.resolve(row.server_id)
+
+    assert first is not None and first.url == row.url
+    assert second is not None and second.url == updated.url
+    assert second.short_prefix == "a12"
+    assert deleted is None
+    assert prisma.db.litellm_mcpservertable.find_many.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_catalog_rebuilt_unchanged_server_keeps_discovered_tool_routes():
+    from mcp.types import Tool
+
+    row: Final = LiteLLM_MCPServerTable(server_id="unchanged-routes", alias="unchanged_routes",
+        url="https://upstream.example/mcp", transport=MCPTransport.http)
+    manager: Final = MCPServerManager()
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await manager.reload_servers_from_database()
+        server: Final = manager.get_mcp_server_by_id(row.server_id)
+        tools: Final = manager._create_prefixed_tools([Tool(name="search", inputSchema={})], server)
+        await manager.reload_servers_from_database()
+    assert manager.server_exposes_tool(manager.get_mcp_server_by_id(row.server_id), tools[0].name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["same", "changed", "deleted"])
+@pytest.mark.parametrize("openapi", [False, True])
+async def test_catalog_reload_retains_routes_discovered_for_a_late_server(change, openapi, monkeypatch):
+    from datetime import timedelta
+
+    from mcp.types import Tool
+    from litellm.proxy._experimental.mcp_server import tool_registry
+
+    row: Final = LiteLLM_MCPServerTable(server_id="late-routes", alias="late_routes",
+        url="https://upstream.example/mcp", transport=MCPTransport.http, updated_at=datetime.now(),
+        spec_path="late-openapi.json" if openapi else None)
+    manager: Final = MCPServerManager()
+    registry: Final = tool_registry.MCPToolRegistry()
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    server: Final = await manager.build_mcp_server_from_table(row)
+    start: Final = asyncio.Event()
+    published: Final = asyncio.Event()
+
+    async def handler():
+        return "late server response"
+
+    async def publish():
+        await start.wait()
+        manager.registry[server.server_id] = server
+        manager._create_prefixed_tools([Tool(name="search", inputSchema={})], server)
+        if openapi:
+            registry.register_tool("late_routes-search", "Search", {}, handler)
+        published.set()
+
+    async def read_rows(**_kwargs):
+        start.set()
+        await published.wait()
+        if change == "deleted":
+            return []
+        return [row if change == "same" else row.model_copy(update={
+            "url": "https://updated.example/mcp", "spec_path": None,
+            "updated_at": row.updated_at + timedelta(seconds=1)})]
+
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=read_rows)
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    task: Final = asyncio.create_task(publish())
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            await manager.catalog.list()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    if change == "deleted":
+        assert manager.get_mcp_server_by_id(row.server_id) is None
+        assert "late_routes-search" not in manager.published_tool_routes
+    else:
+        assert manager.server_exposes_tool(manager.get_mcp_server_by_id(row.server_id), "late_routes-search") is (change == "same")
+    tool: Final = registry.get_tool("late_routes-search")
+    if openapi and change == "same":
+        assert tool is not None
+        assert await tool.handler() == "late server response"
+    else:
+        assert tool is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retain_operation", [False, True])
+async def test_catalog_openapi_refresh_does_not_restore_removed_operations(tmp_path, monkeypatch, respx_mock, retain_operation):
+    from litellm.proxy._experimental.mcp_server import tool_registry
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager: Final = MCPServerManager()
+    registry: Final = tool_registry.MCPToolRegistry()
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    spec_path: Final = tmp_path / "openapi.json"
+    paths: Final = {"/removed": {"get": {"operationId": "removed"}}, "/retained": {"get": {"operationId": "retained"}}}
+    spec: Final = {"openapi": "3.0.0", "info": {"title": "Refresh", "version": "1"}, "paths": paths}
+    spec_path.write_text(json.dumps(spec))
+    row: Final = LiteLLM_MCPServerTable(server_id="spec-refresh", alias="spec_refresh",
+        url="https://upstream.example", transport=MCPTransport.http, spec_path=str(spec_path))
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    upstream: Final = respx_mock.get("https://upstream.example/retained").respond(200, json={"value": "retained"})
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await manager.reload_servers_from_database()
+        assert manager.server_exposes_tool(manager.registry[row.server_id], "spec_refresh-removed")
+        assert registry.get_tool("spec_refresh-removed") is not None
+        paths.pop("/removed")
+        if not retain_operation:
+            paths.clear()
+        spec_path.write_text(json.dumps(spec))
+        for _ in range(2):
+            await manager.reload_servers_from_database()
+            for name in ("removed", "spec_refresh-removed"):
+                assert name not in manager.published_tool_routes
+                assert not manager.server_exposes_tool(manager.registry[row.server_id], name)
+            assert registry.get_tool("spec_refresh-removed") is None
+            retained = registry.get_tool("spec_refresh-retained")
+            if retain_operation:
+                assert manager.server_exposes_tool(manager.registry[row.server_id], "spec_refresh-retained")
+                assert retained is not None
+                from litellm.proxy._experimental.mcp_server.tool_outcome import JsonResult
+
+                retained_result = await retained.handler()
+                assert isinstance(retained_result, JsonResult)
+                assert retained_result.value == {"value": "retained"}
+            else:
+                assert retained is None
+                assert manager.published_tool_routes == {}
+    assert upstream.call_count == (2 if retain_operation else 0)
+
+
+@pytest.mark.asyncio
+async def test_catalog_lookup_uses_one_snapshot_until_operation_finishes():
+    from datetime import timedelta
+
+    row: Final = LiteLLM_MCPServerTable(
+        server_id="snapshot-server", alias="snapshot_server", transport=MCPTransport.http,
+        url="https://first.example.com/mcp", updated_at=datetime.now(),
+    )
+    updated: Final = row.model_copy(update={"url": "https://second.example.com/mcp", "updated_at": row.updated_at + timedelta(seconds=1)})
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=([row], [updated], [updated]))
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    manager: Final = MCPServerManager()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        async with manager.catalog.operation() as before:
+            await manager.reload_servers_from_database()
+            during = await manager.catalog.resolve(row.server_id)
+            assert during is not None and during.url == row.url
+            assert manager.registry[row.server_id].url == updated.url
+        async with manager.catalog.operation() as after:
+            current = manager.get_mcp_server_by_id(row.server_id)
+            assert current is not None and current.url == updated.url
+    assert before.identity != after.identity
+    assert prisma.db.litellm_mcpservertable.find_many.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_catalog_failed_reload_preserves_published_discovery_state():
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="healthy", name="healthy", transport=MCPTransport.http)
+    manager.registry = {server.server_id: server}
+    manager._upstream_initialize_instructions_by_server_id[server.server_id] = "healthy instructions"
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            await manager.reload_servers_from_database()
+    assert manager.get_mcp_server_by_id(server.server_id) is server
+    assert manager._upstream_initialize_instructions_by_server_id == {server.server_id: "healthy instructions"}
+
+
+@pytest.mark.asyncio
+async def test_catalog_cancellation_retains_state_and_releases_refresh_lock():
+    entered: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    async def blocked_read(**kwargs: object) -> list[LiteLLM_MCPServerTable]:
+        entered.set()
+        await release.wait()
+        return []
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="healthy", name="healthy", transport=MCPTransport.http)
+    manager.registry = {server.server_id: server}
+    manager._upstream_initialize_instructions_by_server_id[server.server_id] = "healthy instructions"
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=blocked_read)
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        pending = asyncio.create_task(manager.reload_servers_from_database())
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        assert manager.registry == {server.server_id: server}
+        assert manager._upstream_initialize_instructions_by_server_id == {server.server_id: "healthy instructions"}
+        release.set()
+        await asyncio.wait_for(manager.reload_servers_from_database(), timeout=2)
+    assert manager.registry == {}
+
+
+@pytest.mark.asyncio
+async def test_catalog_background_lookup_after_operation_exit_observes_deletion():
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="expired-snapshot", name="expired_snapshot", transport=MCPTransport.http)
+    manager.registry = {server.server_id: server}
+    release: Final = asyncio.Event()
+
+    async def lookup_after_exit() -> MCPServer | None:
+        await release.wait()
+        return await manager.catalog.resolve(server.server_id)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        async with manager.catalog.operation():
+            pending: Final = asyncio.create_task(lookup_after_exit())
+        manager.registry = {}
+        release.set()
+        assert await pending is None
+
+
+@pytest.mark.asyncio
+async def test_catalog_cancelled_openapi_refresh_retains_tools_and_discovery(monkeypatch):
+    from datetime import timedelta
+    from litellm.proxy._experimental.mcp_server import tool_registry
+
+    manager: Final = MCPServerManager()
+    stamp: Final = datetime.now()
+    server: Final = MCPServer(server_id="staged", name="staged", transport=MCPTransport.http,
+        url="https://before.example/mcp", spec_path="before.json", updated_at=stamp, auth_type=MCPAuth.oauth2)
+    manager.registry = {server.server_id: server}
+    manager._set_oauth_discovery_deferred(server.server_id, True)
+    original_slot: Final = manager.oauth_discovery_slot(server.server_id)
+    manager._upstream_initialize_instructions_by_server_id[server.server_id] = "keep instructions"
+    manager.tool_name_to_mcp_server_name_mapping = {"staged-existing": "staged"}
+    registry: Final = tool_registry.MCPToolRegistry()
+    registry.register_tool("staged-existing", "existing", {}, lambda: "existing")
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    row: Final = LiteLLM_MCPServerTable(server_id=server.server_id, alias="staged", transport=MCPTransport.http,
+        url="https://after.example/mcp", spec_path="after.json", updated_at=stamp + timedelta(seconds=1), auth_type=MCPAuth.oauth2)
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+    async def cancelled_registration(*args: object, **kwargs: object) -> None:
+        registry.register_tool("staged-new", "new", {}, lambda: "new")
+        raise asyncio.CancelledError()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch.object(manager, "maybe_register_openapi_tools", side_effect=cancelled_registration),
+        patch.object(manager, "invalidate_discovery_lists") as invalidate,
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await manager.reload_servers_from_database()
+        invalidate.assert_not_called()
+    assert manager.registry == {server.server_id: server}
+    assert [tool.name for tool in registry.list_tools()] == ["staged-existing"]
+    assert manager.tool_name_to_mcp_server_name_mapping == {"staged-existing": "staged"}
+    assert manager._upstream_initialize_instructions_by_server_id == {server.server_id: "keep instructions"}
+
+    assert manager.oauth_discovery_slot(server.server_id) is original_slot
+
+
+@pytest.mark.asyncio
+async def test_catalog_snapshot_identity_is_independent_of_worker_oauth_discovery():
+    row: Final = LiteLLM_MCPServerTable(server_id="identity-server", alias="identity_server", transport=MCPTransport.http,
+        url="https://upstream.example/mcp", auth_type=MCPAuth.oauth2, updated_at=datetime.now())
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    manager: Final = MCPServerManager()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch.object(manager, "prime_oauth_metadata_discovery_for_servers"),
+    ):
+        async with manager.catalog.operation() as unresolved:
+            assert manager.get_mcp_server_by_id(row.server_id).authorization_url is None
+        resolved: Final = manager.registry[row.server_id].model_copy(update={
+            "authorization_url": "https://idp.example/authorize", "token_url": "https://idp.example/token"})
+        manager.registry[row.server_id] = resolved
+        async with manager.catalog.operation() as discovered:
+            assert manager.get_mcp_server_by_id(row.server_id).authorization_url == resolved.authorization_url
+    assert unresolved.identity == discovered.identity
+
+
+@pytest.mark.asyncio
+async def test_catalog_failed_openapi_row_does_not_publish_partial_handlers(monkeypatch):
+    from litellm.proxy._experimental.mcp_server import tool_registry
+
+    manager: Final = MCPServerManager()
+    registry: Final = tool_registry.MCPToolRegistry()
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    row: Final = LiteLLM_MCPServerTable(server_id="broken", alias="broken", transport=MCPTransport.http,
+        url="https://upstream.example/mcp", spec_path="broken.json")
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+    async def broken_registration(server: MCPServer, **kwargs: object) -> None:
+        registry.register_tool("broken-partial", "partial", {}, lambda: "must not run")
+        manager.tool_name_to_mcp_server_name_mapping["broken-partial"] = "broken"
+        raise ValueError("invalid remaining operation")
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch.object(manager, "maybe_register_openapi_tools", side_effect=broken_registration),
+    ):
+        await manager.reload_servers_from_database()
+    assert manager.registry == {}
+    assert registry.list_tools() == []
+    assert manager.tool_name_to_mcp_server_name_mapping == {}
+
+
+@pytest.mark.asyncio
+async def test_catalog_unchanged_read_preserves_derived_initialize_instructions(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    await manager.catalog.list()
+    manager._upstream_initialize_instructions_by_server_id = {"catalog-server": "cached instructions"}
+    manager._upstream_initialize_instructions_probed_at = {"catalog-server": 123.0}
+    await manager.catalog.list()
+    assert manager._upstream_initialize_instructions_by_server_id == {"catalog-server": "cached instructions"}
+    assert manager._upstream_initialize_instructions_probed_at == {"catalog-server": 123.0}
+
+
+@pytest.mark.asyncio
+async def test_catalog_reuses_openapi_tools_until_configuration_or_background_refresh(monkeypatch, tmp_path):
+    from litellm.proxy._experimental.mcp_server import openapi_to_mcp_generator, tool_registry
+
+    registry = tool_registry.MCPToolRegistry()
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    spec_path = tmp_path / "catalog.json"
+    spec_path.write_text(json.dumps({
+        "openapi": "3.0.0", "info": {"title": "Catalog", "version": "1"},
+        "paths": {"/echo": {"get": {"operationId": "echo"}}},
+    }))
+    row = _catalog_row().model_copy(update={"spec_path": str(spec_path)})
+    read_rows = AsyncMock(return_value=[row])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    with patch.object(
+        openapi_to_mcp_generator, "load_openapi_spec_async",
+        wraps=openapi_to_mcp_generator.load_openapi_spec_async,
+    ) as load_spec:
+        await manager.catalog.list()
+        first_tools = tuple(registry.list_tools())
+        assert len(first_tools) == 1
+        await manager.catalog.list()
+        assert load_spec.await_count == 1
+        assert [tool.name for tool in registry.list_tools()] == [tool.name for tool in first_tools]
+        await manager.reload_servers_from_database()
+        assert load_spec.await_count == 2
+        read_rows.return_value = [row.model_copy(update={"updated_at": datetime(2026, 1, 2)})]
+        await manager.catalog.list()
+        assert load_spec.await_count == 3
+        read_rows.return_value = []
+        await manager.catalog.list()
+        assert registry.list_tools() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["edit", "delete"])
+async def test_catalog_rejects_configuration_switch_before_client_creation(monkeypatch, change):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    async with manager.catalog.operation():
+        admitted = manager.get_mcp_server_by_id("catalog-server")
+        read_rows.return_value = [_catalog_row("updated")] if change == "edit" else []
+        await asyncio.create_task(manager.reload_servers_from_database())
+        with patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient") as factory:
+            with pytest.raises(HTTPException) as exc:
+                await manager._create_mcp_client(admitted)
+            assert exc.value.status_code == 503
+            assert exc.value.detail == "MCP server configuration changed; retry the operation"
+            factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dispatch", ["managed", "local"])
+async def test_catalog_changed_openapi_handler_never_dispatches(monkeypatch, tmp_path, respx_mock, dispatch):
+    from litellm.proxy._experimental.mcp_server import operations, tool_registry
+    from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_name, get_server_prefix
+
+    registry = tool_registry.MCPToolRegistry()
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    monkeypatch.setattr(operations, "global_mcp_tool_registry", registry)
+    spec_path = tmp_path / "catalog-race.json"
+    spec_path.write_text(json.dumps({
+        "openapi": "3.0.0", "info": {"title": "Catalog", "version": "1"},
+        "paths": {"/echo": {"get": {"operationId": "echo"}}},
+    }))
+    row = _catalog_row().model_copy(update={"spec_path": str(spec_path)})
+    read_rows = AsyncMock(return_value=[row])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    destination = respx_mock.get("https://changed.example/echo").respond(200, text="must not execute")
+    async with manager.catalog.operation():
+        admitted = manager.get_mcp_server_by_id("catalog-server")
+        read_rows.return_value = [row.model_copy(update={
+            "url": "https://changed.example", "updated_at": datetime(2026, 1, 2),
+        })]
+        await asyncio.create_task(manager.reload_servers_from_database())
+        with pytest.raises(HTTPException) as exc:
+            if dispatch == "managed":
+                await manager._call_openapi_tool_handler(admitted, "echo", {})
+            else:
+                await operations._handle_local_mcp_tool(
+                    add_server_prefix_to_name("echo", get_server_prefix(admitted)), {}
+                )
+        assert exc.value.status_code == 503
+        assert destination.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_catalog_rejects_old_admission_in_a_new_operation(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    original = (await manager.catalog.list())["catalog-server"]
+    read_rows.return_value = [_catalog_row("updated")]
+    async with manager.catalog.operation():
+        with pytest.raises(HTTPException) as exc:
+            await manager._create_mcp_client(original)
+        assert exc.value.detail == "MCP server configuration changed; retry the operation"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", [False, True])
+async def test_catalog_deferred_discovery_preserves_admitted_configuration(monkeypatch, change):
+    row = _catalog_row().model_copy(update={"auth_type": MCPAuth.true_passthrough})
+    read_rows = AsyncMock(return_value=[row])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    metadata = MCPOAuthMetadata(
+        authorization_url="https://issuer.example/authorize", token_url="https://issuer.example/token",
+    )
+
+    async def discover(server):
+        entered.set()
+        await release.wait()
+        return metadata
+
+    with patch.object(manager, "_discover_oauth_metadata_for_server", side_effect=discover):
+        async with manager.catalog.operation():
+            admitted = manager.get_mcp_server_by_id("catalog-server")
+            resolving = asyncio.create_task(manager.ensure_oauth_metadata_discovered(admitted))
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            if change:
+                read_rows.return_value = [row.model_copy(update={"updated_at": datetime(2026, 1, 2)})]
+                await manager.reload_servers_from_database()
+            release.set()
+            if change:
+                with pytest.raises(HTTPException) as exc:
+                    await asyncio.wait_for(resolving, timeout=1)
+                assert exc.value.detail == "MCP server configuration changed; retry the operation"
+            else:
+                resolved = await asyncio.wait_for(resolving, timeout=1)
+                assert resolved.authorization_url == metadata.authorization_url
+                assert resolved.token_url == metadata.token_url
+                assert resolved.updated_at == admitted.updated_at
+
+
+async def test_catalog_cancelled_config_hydration_preserves_published_credentials():
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="config-hydration", name="config_hydration", transport=MCPTransport.http,
+        client_id="previous-client")
+    manager.config_mcp_servers = {server.server_id: server}
+
+    async def cancelled_hydration(target: MCPServer) -> bool:
+        target.client_id = "unpublished-client"
+        raise asyncio.CancelledError()
+
+    with patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.hydrate_config_server_dcr_client", side_effect=cancelled_hydration):
+        with pytest.raises(asyncio.CancelledError):
+            await manager.reload_servers_from_database()
+    assert manager.get_mcp_server_by_id(server.server_id).client_id == "previous-client"
+
+
+@pytest.mark.asyncio
+async def test_catalog_oauth_resolution_cannot_replace_an_operation_target_after_update():
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="pinned-oauth", name="pinned_oauth", transport=MCPTransport.http,
+        url="https://before.example/mcp", auth_type=MCPAuth.oauth2,
+        authorization_url="https://before.example/authorize", token_url="https://before.example/token")
+    manager.registry = {server.server_id: server}
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        async with manager.catalog.operation():
+            selected: Final = manager.get_mcp_server_by_id(server.server_id)
+            manager.registry[server.server_id] = server.model_copy(update={
+                "url": "https://after.example/mcp", "authorization_url": "https://after.example/authorize"})
+            resolved: Final = await manager.ensure_oauth_metadata_discovered(selected)
+    assert resolved.url == "https://before.example/mcp"
+    assert resolved.authorization_url == "https://before.example/authorize"
+    assert manager.registry[server.server_id].url == "https://after.example/mcp"
+
+
+@pytest.mark.asyncio
+async def test_catalog_unresolved_oauth_snapshot_fails_closed_if_target_was_replaced():
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="replaced-oauth", name="replaced_oauth", transport=MCPTransport.http,
+        url="https://before.example/mcp", auth_type=MCPAuth.oauth2)
+    manager.registry = {server.server_id: server}
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch.object(manager, "_discover_oauth_metadata_for_server", new_callable=AsyncMock) as discovery,
+    ):
+        async with manager.catalog.operation():
+            selected: Final = manager.get_mcp_server_by_id(server.server_id)
+            manager.registry[server.server_id] = server.model_copy(update={
+                "url": "https://after.example/mcp", "authorization_url": "https://after.example/authorize",
+                "token_url": "https://after.example/token"})
+            with pytest.raises(HTTPException) as exc:
+                await manager.ensure_oauth_metadata_discovered(selected)
+    assert exc.value.status_code == 503
+    discovery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_catalog_unresolved_oauth_snapshot_accepts_discovery_for_the_same_target():
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="same-oauth", name="same_oauth", transport=MCPTransport.http,
+        url="https://upstream.example/mcp", auth_type=MCPAuth.oauth2)
+    manager.registry = {server.server_id: server}
+    discovered: Final = server.model_copy(update={"authorization_url": "https://issuer.example/authorize",
+        "token_url": "https://issuer.example/token", "scopes": ["read"]})
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch.object(manager, "_ensure_oauth_metadata_discovered", return_value=discovered) as discovery,
+    ):
+        async with manager.catalog.operation():
+            resolved: Final = await manager.ensure_oauth_metadata_discovered(server)
+    assert resolved.authorization_url == "https://issuer.example/authorize"
+    assert resolved.token_url == "https://issuer.example/token"
+    assert resolved.scopes == ["read"]
+    discovery.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_catalog_fresh_lookup_does_not_fall_back_to_stale_grants_when_database_fails():
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="stale-grant", name="stale_grant", transport=MCPTransport.http,
+        allow_all_keys=True)
+    manager.registry = {server.server_id: server}
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=RuntimeError("unavailable"))
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        with pytest.raises(HTTPException) as error:
+            await manager.catalog.resolve(server.server_id)
+        assert error.value.status_code == 503
+        assert "unavailable" not in error.value.detail
+    assert manager.registry == {server.server_id: server}
+
+
+@pytest.mark.asyncio
+async def test_catalog_cancelled_registration_does_not_publish_partial_handlers(monkeypatch):
+    from litellm.proxy._experimental.mcp_server import tool_registry
+
+    manager = MCPServerManager()
+    registry = tool_registry.MCPToolRegistry()
+    registry.register_tool("existing", "existing", {}, lambda: "existing")
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    _catalog_database(monkeypatch, AsyncMock(return_value=[_catalog_row()]))
+
+    async def cancel_after_registration(*args, **kwargs):
+        registry.register_tool("partial", "partial", {}, lambda: "partial")
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(manager, "maybe_register_openapi_tools", cancel_after_registration)
+    with pytest.raises(asyncio.CancelledError):
+        await manager.reload_servers_from_database()
+    assert [tool.name for tool in registry.list_tools()] == ["existing"]
+    assert manager.registry == {}
+
+
+
+def _revision_row(revision):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(reload_revision=revision)
+
+
+@pytest.mark.asyncio
+async def test_catalog_unchanged_revision_skips_table_reload(monkeypatch):
+    read_rows = AsyncMock(side_effect=([_catalog_row()], [_catalog_row("updated")]))
+    read_revision = AsyncMock(return_value=_revision_row(7))
+    _catalog_database(monkeypatch, read_rows, read_revision)
+    manager = MCPServerManager()
+    assert (await manager.catalog.list())["catalog-server"].name == "initial"
+    assert (await manager.catalog.list())["catalog-server"].name == "initial"
+    read_rows.assert_awaited_once()
+    assert read_revision.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_changed_revision_reloads_table(monkeypatch):
+    read_rows = AsyncMock(side_effect=([_catalog_row()], [_catalog_row("updated")]))
+    read_revision = AsyncMock(side_effect=[_revision_row(7), _revision_row(8)])
+    _catalog_database(monkeypatch, read_rows, read_revision)
+    manager = MCPServerManager()
+    assert (await manager.catalog.list())["catalog-server"].name == "initial"
+    assert (await manager.catalog.list())["catalog-server"].name == "updated"
+    assert read_rows.await_count == 2
+    assert read_revision.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_absent_revision_row_reloads_table_every_operation(monkeypatch):
+    read_rows = AsyncMock(side_effect=([_catalog_row()], [_catalog_row("updated")]))
+    read_revision = AsyncMock(return_value=None)
+    _catalog_database(monkeypatch, read_rows, read_revision)
+    manager = MCPServerManager()
+    assert (await manager.catalog.list())["catalog-server"].name == "initial"
+    assert (await manager.catalog.list())["catalog-server"].name == "updated"
+    assert read_rows.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_failed_refresh_does_not_apply_the_read_revision(monkeypatch):
+    read_rows = AsyncMock(side_effect=([_catalog_row()], RuntimeError("unavailable"), [_catalog_row("updated")]))
+    read_revision = AsyncMock(side_effect=[_revision_row(7), _revision_row(8), _revision_row(8)])
+    _catalog_database(monkeypatch, read_rows, read_revision)
+    manager = MCPServerManager()
+    assert (await manager.catalog.list())["catalog-server"].name == "initial"
+    with pytest.raises(HTTPException) as error:
+        await manager.catalog.list()
+    assert error.value.status_code == 503
+    assert (await manager.catalog.list())["catalog-server"].name == "updated"
+    assert read_rows.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_catalog_reload_applies_revision_so_next_operation_skips_read(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    read_revision = AsyncMock(return_value=_revision_row(7))
+    _catalog_database(monkeypatch, read_rows, read_revision)
+    manager = MCPServerManager()
+    await manager.reload_servers_from_database()
+    assert (await manager.catalog.list())["catalog-server"].name == "initial"
+    read_rows.assert_awaited_once()
+    assert read_revision.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_waiter_that_observed_newer_revision_refreshes(monkeypatch):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    waiter_saw_new_revision = asyncio.Event()
+    current_revision = [5]
+    reads = [0]
+
+    async def read_rows(**_kwargs):
+        reads[0] += 1
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+            return [_catalog_row()]
+        if reads[0] == 2:
+            return [_catalog_row()]
+        return [
+            _catalog_row(),
+            _catalog_row("added").model_copy(update={"server_id": "added-server"}),
+        ]
+
+    async def read_current_revision(**_kwargs):
+        if current_revision[0] == 6:
+            waiter_saw_new_revision.set()
+        return _revision_row(current_revision[0])
+
+    read_rows_mock = AsyncMock(side_effect=read_rows)
+    read_revision = AsyncMock(side_effect=read_current_revision)
+    _catalog_database(monkeypatch, read_rows_mock, read_revision)
+    manager = MCPServerManager()
+    first = asyncio.create_task(manager.catalog.list())
+    await entered.wait()
+    middle = asyncio.create_task(manager.catalog.list())
+    await asyncio.sleep(0)
+    current_revision[0] = 6
+    last = asyncio.create_task(manager.catalog.list())
+    await waiter_saw_new_revision.wait()
+    release.set()
+    _, _, servers = await asyncio.gather(first, middle, last)
+    assert "added-server" in servers
+    assert reads[0] == 3
+
+
 class TestSharedIdentifierPrefixWarning:
     """Two stored rows sharing lowercased alias-or-server_name publish one tool
     prefix; reload must surface them once so the ambiguity is visible."""
@@ -16508,8 +17677,11 @@ class TestSharedIdentifierPrefixWarning:
                 updated_at=datetime.now(),
             ),
         ]
-        raw_rows = [MagicMock(model_dump=lambda row=row: row.model_dump()) for row in rows]
+        raw_rows = [MagicMock(model_dump=lambda row=row, **kwargs: row.model_dump(**kwargs)) for row in rows]
         repository = MagicMock()
+        prisma = MagicMock()
+        prisma.writer_db = prisma.db
+        prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         repository.table.find_many = AsyncMock(return_value=raw_rows)
 
         async def build_from_table(table, **_kwargs):
@@ -16523,17 +17695,18 @@ class TestSharedIdentifierPrefixWarning:
             )
 
         with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
             patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                "litellm.proxy._experimental.mcp_server.db.MCPServerRepository",
                 return_value=repository,
             ),
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-                return_value=MagicMock(),
+                return_value=prisma,
             ),
             patch.object(manager, "build_mcp_server_from_table", new=build_from_table),
-            patch.object(manager, "_maybe_register_openapi_tools", new=AsyncMock()),
-            patch.object(manager, "_prime_oauth_metadata_discovery_for_servers"),
+            patch.object(manager, "maybe_register_openapi_tools", new=AsyncMock()),
+            patch.object(manager, "prime_oauth_metadata_discovery_for_servers"),
             caplog.at_level(logging.WARNING, logger="LiteLLM"),
         ):
             await manager.reload_servers_from_database()
@@ -16564,22 +17737,26 @@ async def test_reload_warns_once_about_a_blocked_stdio_row_that_is_rebuilt_every
         monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", flag)
     manager = MCPServerManager()
     repository = MagicMock()
+    prisma = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
     async def build_from_table(table, **_kwargs):
         return MCPServer(server_id=table.server_id, name=table.server_name, transport=table.transport)
 
     with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+            "litellm.proxy._experimental.mcp_server.db.MCPServerRepository",
             return_value=repository,
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=MagicMock(),
+            return_value=prisma,
         ),
         patch.object(manager, "build_mcp_server_from_table", new=build_from_table),
-        patch.object(manager, "_maybe_register_openapi_tools", new=AsyncMock()),
-        patch.object(manager, "_prime_oauth_metadata_discovery_for_servers"),
+        patch.object(manager, "maybe_register_openapi_tools", new=AsyncMock()),
+        patch.object(manager, "prime_oauth_metadata_discovery_for_servers"),
         caplog.at_level(logging.WARNING, logger="LiteLLM"),
     ):
         for transport in transports:
@@ -17250,3 +18427,566 @@ async def test_upstream_preparation_honors_case_sensitive_extra_command(monkeypa
     client: Final = await MCPServerManager()._create_mcp_client(server)
     assert client.stdio_config is not None
     assert client.stdio_config["command"] == "/opt/tools/CustomRunner"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("overlap", [False, True])
+async def test_catalog_cached_revision_retains_newly_discovered_tool_routes(monkeypatch, overlap):
+    from mcp.types import Tool
+
+    read_rows = AsyncMock(return_value=[])
+    _catalog_database(monkeypatch, read_rows, AsyncMock(return_value=_revision_row(7)))
+    manager = MCPServerManager()
+    first = MCPServer(server_id="first", name="first", transport=MCPTransport.http)
+    second = MCPServer(server_id="second", name="second", transport=MCPTransport.http)
+    manager.config_mcp_servers = {server.server_id: server for server in (first, second)}
+    manager.published_tool_routes = {"search": "first"}
+    ready = asyncio.Event()
+    release = asyncio.Event()
+
+    async def read_catalog():
+        async with manager.catalog.operation():
+            assert manager._get_mcp_server_from_tool_name("search").server_id == "first"
+            ready.set()
+            await release.wait()
+
+    reader = asyncio.create_task(read_catalog()) if overlap else None
+    try:
+        if reader is not None:
+            await asyncio.wait_for(ready.wait(), 2)
+        async with manager.catalog.operation():
+            manager._create_prefixed_tools([Tool(name="search", input_schema={})], second)
+        assert manager.published_tool_routes["search"] == "second"
+        release.set()
+        if reader is not None:
+            await asyncio.wait_for(reader, 2)
+        async with manager.catalog.operation():
+            assert manager._get_mcp_server_from_tool_name("search").server_id == "second"
+        assert manager.published_tool_routes["search"] == "second"
+        read_rows.assert_awaited_once()
+    finally:
+        if reader is not None:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("poisoned_route", [False, True])
+async def test_cached_discovery_cannot_authorize_another_servers_local_handler(monkeypatch, poisoned_route):
+    from datetime import datetime
+
+    from fastapi import HTTPException
+    from mcp.types import Tool
+
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+    _catalog_database(monkeypatch, AsyncMock(return_value=[]), AsyncMock(return_value=_revision_row(7)))
+    manager = MCPServerManager()
+    allowed = MCPServer(server_id="allowed", name="allowed", transport=MCPTransport.http)
+    private = MCPServer(server_id="private", name="private", transport=MCPTransport.http)
+    manager.config_mcp_servers = {server.server_id: server for server in (allowed, private)}
+    manager.published_tool_routes = {"getsecret": "private", "private-getsecret": "private"}
+    handler = AsyncMock(return_value="private result")
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    global_mcp_tool_registry.register_tool("private-getsecret", "Private tool", {}, handler)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    check = AsyncMock(return_value={})
+    monkeypatch.setattr(manager, "pre_call_tool_check", check)
+    async with manager.catalog.operation():
+        manager._create_prefixed_tools([Tool(name="private-getsecret", input_schema={})], allowed)
+    if poisoned_route:
+        manager.published_tool_routes["private-getsecret"] = "allowed"
+    async with manager.catalog.operation():
+        with pytest.raises(HTTPException) as denied:
+            await operations._execute_mcp_tool(
+                name="private-getsecret", arguments={}, allowed_mcp_servers=[allowed], start_time=datetime.now()
+            )
+        assert denied.value.status_code == 403
+        handler.assert_not_awaited()
+        check.assert_not_awaited()
+        result = await operations._execute_mcp_tool(
+            name="private-getsecret", arguments={}, allowed_mcp_servers=[private], start_time=datetime.now()
+        )
+        assert result.is_error is False
+        handler.assert_awaited_once_with()
+        assert check.await_args.kwargs["server"].server_id == private.server_id
+        assert manager._get_mcp_server_from_tool_name("allowed-private-getsecret").server_id == allowed.server_id
+
+
+@pytest.mark.parametrize("local_handler", [False, True])
+def test_discovery_preserves_registered_tool_namespaces(monkeypatch, local_handler):
+    from mcp.types import Tool
+
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+    manager = MCPServerManager()
+    allowed = MCPServer(server_id="allowed", name="allowed", transport=MCPTransport.http)
+    private = MCPServer(server_id="private", name="private", alias="private-alias", transport=MCPTransport.http)
+    manager.registry = {server.server_id: server for server in (allowed, private)}
+    manager.published_tool_routes = {"private-getsecret": "private", "private-alias-getsecret": "private"}
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    if local_handler:
+        global_mcp_tool_registry.register_tool("orphan", "Orphan local tool", {}, AsyncMock())
+    tools = [Tool(name=name, input_schema={}) for name in ("private-getsecret", "private-alias-getsecret", "orphan")]
+    listed = manager._create_prefixed_tools(tools, allowed)
+    assert [tool.name for tool in listed] == ["allowed-" + tool.name for tool in tools]
+    assert manager.published_tool_routes["private-getsecret"] == "private"
+    assert manager.published_tool_routes["private-alias-getsecret"] == "private"
+    assert manager._get_mcp_server_from_tool_name("allowed-private-getsecret").server_id == "allowed"
+    assert ("orphan" in manager.published_tool_routes) is not local_handler
+
+
+@pytest.mark.asyncio
+async def test_cached_catalog_excludes_routes_for_servers_outside_its_snapshot(monkeypatch):
+    read_rows = AsyncMock(return_value=[])
+    _catalog_database(monkeypatch, read_rows, AsyncMock(return_value=_revision_row(7)))
+    manager = MCPServerManager()
+    pinned = MCPServer(server_id="pinned", name="pinned", transport=MCPTransport.http)
+    manager.config_mcp_servers = {pinned.server_id: pinned}
+    async with manager.catalog.operation():
+        assert manager.get_mcp_server_by_id("pinned") is not None
+    published = MCPServer(server_id="published", name="published", transport=MCPTransport.http)
+    manager.registry[published.server_id] = published
+    manager.published_tool_routes = {"search": "published", "known": "pinned"}
+    async with manager.catalog.operation():
+        assert manager.get_mcp_server_by_id("published") is None
+        assert "search" not in manager.tool_name_to_mcp_server_name_mapping
+        assert manager._get_mcp_server_from_tool_name("known").server_id == "pinned"
+    read_rows.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_overlapping_server_prefix_cannot_authorize_registered_openapi_handler(monkeypatch, tmp_path):
+    from datetime import datetime
+
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+    manager = MCPServerManager()
+    private = MCPServer(server_id="private", name="billing", alias="billing", transport=MCPTransport.http)
+    allowed = MCPServer(server_id="allowed", name="billing_admin", alias="billing-admin", transport=MCPTransport.http)
+    manager.config_mcp_servers = {server.server_id: server for server in (private, allowed)}
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({"openapi": "3.0.0", "paths": {"/export": {"get": {"operationId": "admin-export"}}}}))
+    await manager._register_openapi_tools(str(spec), private, "https://example.com")
+    tool = global_mcp_tool_registry.get_tool("billing-admin-export")
+    assert tool is not None
+    handler = AsyncMock(return_value="private result")
+    tool.handler = handler
+    check = AsyncMock(return_value={})
+    monkeypatch.setattr(manager, "pre_call_tool_check", check)
+
+    with pytest.raises(HTTPException) as denied:
+        await operations._execute_mcp_tool(
+            name="billing-admin-export", arguments={}, allowed_mcp_servers=[allowed], start_time=datetime.now()
+        )
+    assert denied.value.status_code == 403
+    handler.assert_not_awaited()
+    check.assert_not_awaited()
+    result = await operations._execute_mcp_tool(
+        name="billing-admin-export", arguments={}, allowed_mcp_servers=[private], start_time=datetime.now()
+    )
+    assert result.is_error is False
+    handler.assert_awaited_once_with()
+    assert check.await_args.kwargs["server"].server_id == private.server_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["update", "delete"])
+async def test_catalog_observes_writer_changes_while_read_replica_lags(monkeypatch, change):
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.routing_prisma_wrapper import _RoutedActions
+
+    original: Final = _catalog_row()
+    changed: Final = _catalog_row("updated")
+    reader: Final = SimpleNamespace(
+        litellm_mcpservertable=SimpleNamespace(find_many=AsyncMock(return_value=[original])),
+        litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=_revision_row(7))),
+    )
+    writer: Final = SimpleNamespace(
+        litellm_mcpservertable=SimpleNamespace(find_many=AsyncMock(return_value=[original])),
+        litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=_revision_row(7))),
+    )
+    routed: Final = SimpleNamespace(**{
+        name: _RoutedActions(getattr(writer, name), getattr(reader, name), lambda: True)
+        for name in ("litellm_mcpservertable", "litellm_config")
+    })
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=routed, writer_db=writer))
+    manager: Final = MCPServerManager()
+    assert (await manager.catalog.resolve(original.server_id)).name == "initial"
+    writer.litellm_mcpservertable.find_many.return_value = [changed] if change == "update" else []
+    writer.litellm_config.find_unique.return_value = _revision_row(8)
+    selected: Final = await manager.catalog.resolve(original.server_id)
+    assert (selected.name if selected is not None else None) == ("updated" if change == "update" else None)
+    writer.litellm_config.find_unique.side_effect = RuntimeError("writer unavailable")
+    with pytest.raises(HTTPException) as unavailable:
+        await manager.catalog.resolve(original.server_id)
+    assert unavailable.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_catalog_revision_failure_preserves_state_and_recovers(monkeypatch):
+    reader: Final = AsyncMock(side_effect=([_catalog_row()], [_catalog_row("updated")]))
+    revisions: Final = AsyncMock(side_effect=[_revision_row(7), RuntimeError("private database detail"), _revision_row(8)])
+    _catalog_database(monkeypatch, reader, revisions)
+    manager: Final = MCPServerManager()
+    assert (await manager.catalog.resolve("catalog-server")).name == "initial"
+    with pytest.raises(HTTPException) as unavailable:
+        await manager.catalog.resolve("catalog-server")
+    assert unavailable.value.status_code == 503
+    assert unavailable.value.detail == "MCP server configuration could not be refreshed"
+    assert manager.registry["catalog-server"].name == "initial"
+    assert (await manager.catalog.resolve("catalog-server")).name == "updated"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("groups", [[], ["catalog-group"]])
+async def test_access_group_resolution_uses_the_operation_catalog(monkeypatch, groups):
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    row = _catalog_row().model_copy(update={"mcp_access_groups": groups})
+    _catalog_database(monkeypatch, AsyncMock(return_value=[row]))
+    manager = MCPServerManager()
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    stale = AsyncMock(return_value=set() if groups else {row.server_id})
+    monkeypatch.setattr(MCPRequestHandler, "_get_db_server_ids_for_access_groups", stale)
+    async with manager.catalog.operation():
+        allowed = await MCPRequestHandler._get_mcp_servers_from_access_groups(["catalog-group"])
+        assert set(allowed) == ({row.server_id} if groups else set())
+    stale.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "level,inheritance",
+    [
+        ("key", True),
+        ("team", True),
+        ("user", True),
+        ("org", True),
+        ("end_user", True),
+        ("agent", True),
+        ("key", False),
+        ("team", False),
+    ],
+)
+@pytest.mark.parametrize("additive", [False, True])
+@pytest.mark.parametrize("declared,direct", [(False, False), (True, False), (True, True)])
+async def test_empty_access_group_scope_cannot_inherit_unrelated_server(
+    monkeypatch, level, inheritance, declared, direct, additive
+):
+    from types import SimpleNamespace
+
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+    row = _catalog_row()
+    _catalog_database(monkeypatch, AsyncMock(return_value=[row]))
+    manager = MCPServerManager()
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="group-scope",
+        mcp_access_groups=["missing-group"] if declared else [],
+        mcp_servers=[row.server_id] if direct else [],
+    )
+    auth = UserAPIKeyAuth(api_key="test", team_id="team", org_id="org", end_user_id="end", agent_id="agent")
+    methods = {
+        "key": "_get_allowed_mcp_servers_for_key",
+        "team": "_get_allowed_mcp_servers_for_team",
+        "user": "_get_allowed_mcp_servers_for_user",
+        "org": "_get_allowed_mcp_servers_for_org",
+        "end_user": "_get_allowed_mcp_servers_for_end_user",
+        "agent": "get_allowed_mcp_servers_for_agent",
+    }
+    selected = getattr(MCPRequestHandler, methods[level])
+    for name, method in methods.items():
+        monkeypatch.setattr(
+            MCPRequestHandler,
+            method,
+            AsyncMock(return_value=[row.server_id] if inheritance and name in ("key", "team") else []),
+        )
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_key_access_group_mcp_server_extras",
+        AsyncMock(return_value=[row.server_id] if additive else []),
+    )
+    monkeypatch.setattr(MCPRequestHandler, "_get_agent_access_group_server_ceiling", AsyncMock(return_value=None))
+    monkeypatch.setattr(MCPRequestHandler, "_key_or_team_declares_toolsets", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        MCPRequestHandler, "_get_key_object_permission", lambda auth: permission if level == "key" else None
+    )
+    if level == "team":
+
+        async def team_servers(auth):
+            return list(
+                await MCPRequestHandler._team_granted_servers(SimpleNamespace(object_permission=permission), [])
+            )
+
+        monkeypatch.setattr(MCPRequestHandler, methods[level], team_servers)
+    else:
+        monkeypatch.setattr(MCPRequestHandler, methods[level], selected)
+        if level != "key":
+            monkeypatch.setattr(
+                MCPRequestHandler, f"_get_{level}_object_permission", AsyncMock(return_value=permission)
+            )
+    async with manager.catalog.operation():
+        access = await MCPRequestHandler.get_mcp_server_access(auth)
+    assert set(access.server_ids) == (
+        {row.server_id}
+        if direct or (not declared and inheritance) or (additive and level in ("key", "team"))
+        else set()
+    )
+    if declared:
+        assert access.scope == "scoped"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("issuer_parameter_supported", [False, True])
+@pytest.mark.parametrize("anchored", [False, True])
+async def test_catalog_accepts_discovered_issuer_response_support(
+    monkeypatch: pytest.MonkeyPatch, issuer_parameter_supported: bool, anchored: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="discovered-issuer", name="discovered_issuer", transport=MCPTransport.http,
+        url="https://resource.example/mcp", auth_type=MCPAuth.oauth2,
+        issuer="https://issuer.example" if anchored else None, issuer_is_anchored=anchored,
+    )
+    manager.registry = {server.server_id: server}
+    manager._set_oauth_discovery_deferred(server.server_id, True)
+    metadata: Final = MCPOAuthMetadata(
+        discovered_issuer="https://issuer.example",
+        authorization_url="https://issuer.example/authorize", token_url="https://issuer.example/token",
+        authorization_response_iss_parameter_supported=issuer_parameter_supported,
+    )
+    discovery: Final = AsyncMock(return_value=metadata)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(manager, "_discover_oauth_metadata_for_server", discovery)
+    async with manager.catalog.operation():
+        resolved: Final = await manager.ensure_oauth_metadata_discovered(server)
+        repeated: Final = await manager.ensure_oauth_metadata_discovered(server)
+    assert resolved.issuer == "https://issuer.example"
+    assert resolved.authorization_response_iss_parameter_supported is issuer_parameter_supported
+    assert repeated == resolved
+    assert manager.registry[server.server_id] == resolved
+    discovery.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_catalog_rejects_a_changed_anchored_issuer_during_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="anchored-issuer", name="anchored_issuer", transport=MCPTransport.http,
+        url="https://resource.example/mcp", auth_type=MCPAuth.oauth2,
+        issuer="https://original.example", issuer_is_anchored=True,
+    )
+    manager.registry = {server.server_id: server}
+    discovery: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(manager, "_discover_oauth_metadata_for_server", discovery)
+    async with manager.catalog.operation():
+        manager.registry[server.server_id] = server.model_copy(update={"issuer": "https://replacement.example"})
+        with pytest.raises(HTTPException) as rejected:
+            await manager.ensure_oauth_metadata_discovered(server)
+    assert rejected.value.status_code == 503
+    discovery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_cursor,next_cursor,expected_owner",
+    [(None, None, "notes"), (None, "next", "other"), ("last", None, "other")],
+)
+async def test_catalog_page_registers_bare_routes_only_for_complete_initial_discovery(
+    request_cursor, next_cursor, expected_owner
+):
+    from types import SimpleNamespace
+
+    from mcp.types import ListToolsResult, PaginatedRequestParams
+
+    manager = _catalog_manager(LIST_NOTES)
+    server = _notes_server()
+    other = MCPServer(server_id="other", name="other", transport=MCPTransport.http)
+    manager.registry = {server.server_id: server, other.server_id: other}
+    manager._create_prefixed_tools([LIST_NOTES], other)
+    manager._create_mcp_client.return_value = SimpleNamespace(
+        list_tools_page=AsyncMock(return_value=ListToolsResult(tools=[LIST_NOTES], next_cursor=next_cursor))
+    )
+
+    result = await manager.get_tools_page(server, params=PaginatedRequestParams(cursor=request_cursor))
+
+    assert [tool.name for tool in result.tools] == ["notes-list_notes"]
+    assert result.next_cursor == next_cursor
+    assert manager._get_mcp_server_from_tool_name("notes-list_notes").server_id == "notes"
+    assert manager._get_mcp_server_from_tool_name("list_notes").server_id == expected_owner
+
+
+@pytest.mark.asyncio
+async def test_paginated_listing_keeps_earlier_tool_metadata_and_caller_isolation(monkeypatch):
+    from mcp.types import ListToolsResult, PaginatedRequestParams
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import catalog, operations
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "listed-tools-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    first = MCPTool(name="first", description="First page", input_schema={"type": "object"})
+    second = MCPTool(name="second", description="Second page", input_schema={"type": "object"})
+    server = MCPServer(server_id="pages", name="pages", transport=MCPTransport.http)
+    manager = MCPServerManager()
+    manager.registry = {server.server_id: server}
+    client = AsyncMock()
+    client._last_initialize_instructions = None
+    client.list_tools_page.side_effect = [
+        ListToolsResult(tools=[first], next_cursor="next"),
+        ListToolsResult(tools=[second]),
+        ListToolsResult(tools=[second]),
+    ]
+    manager._create_mcp_client = AsyncMock(return_value=client)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    caller = UserAPIKeyAuth(api_key="owned-caller", user_id="alice")
+    context = operations.prepare_context(caller)
+    first_page = await catalog.aggregate_gateway_tools(
+        context, PaginatedRequestParams(), [server], {}, record_listing=True
+    )
+    assert first_page.next_cursor
+    await catalog.aggregate_gateway_tools(
+        context, PaginatedRequestParams(cursor=first_page.next_cursor), [server], {}, record_listing=True
+    )
+    identity = ListedToolsCaller(user_api_key_auth=caller)
+    assert manager.get_listed_tool(server, "first", identity) == first
+    assert manager.get_listed_tool(server, "second", identity) == second
+    other = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(api_key="other-caller", user_id="bob"))
+    assert manager.get_listed_tool(server, "first", other) is None
+    await catalog.aggregate_gateway_tools(context, PaginatedRequestParams(), [server], {}, record_listing=True)
+    assert manager.get_listed_tool(server, "first", identity) is None
+    assert manager.get_listed_tool(server, "second", identity) == second
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_name,result_field", [("ListPromptsRequest", "prompts"), ("ListResourcesRequest", "resources"), ("ListResourceTemplatesRequest", "resource_templates")])
+@pytest.mark.parametrize("cursor", [None, "next"])
+async def test_disabled_stdio_catalog_is_empty_initially_and_rejects_continuation(monkeypatch, request_name, result_field, cursor):
+    from mcp import types
+
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    server = MCPServer(server_id="disabled", name="disabled", transport=MCPTransport.stdio, command="blocked-executable", args=[])
+    request = getattr(types, request_name)(params=types.PaginatedRequestParams(cursor=cursor))
+    manager = MCPServerManager()
+    if cursor is not None:
+        with pytest.raises(RuntimeError, match="Upstream catalog is unavailable"):
+            await manager.get_optional_catalog_page(server, request, None)
+    else:
+        page = await manager.get_optional_catalog_page(server, request, None)
+        assert getattr(page, result_field) == []
+        assert page.next_cursor is None
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", [None, "next"])
+async def test_disabled_stdio_tools_are_empty_initially_and_reject_continuation(monkeypatch, cursor):
+    from mcp.types import PaginatedRequestParams
+
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    server = MCPServer(server_id="disabled", name="disabled", transport=MCPTransport.stdio, command="blocked", args=[])
+    manager = MCPServerManager()
+    if cursor is not None:
+        with pytest.raises(RuntimeError, match="Upstream catalog is unavailable"):
+            await manager.get_tools_page(server, params=PaginatedRequestParams(cursor=cursor))
+    else:
+        page = await manager.get_tools_page(server, params=PaginatedRequestParams())
+        assert page.tools == []
+        assert page.next_cursor is None
+
+
+@pytest.mark.asyncio
+async def test_failed_aggregate_continuation_preserves_only_delivered_tool_metadata(monkeypatch):
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import ListToolsResult, PaginatedRequestParams
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import catalog, operations
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "failed-listing-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    first = MCPTool(name="first", description="Delivered", input_schema={"type": "object"})
+    unseen = MCPTool(name="unseen", description="Never delivered", input_schema={"type": "object"})
+    servers = [MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ("alpha", "beta")]
+    manager = MCPServerManager()
+    manager.registry = {server.server_id: server for server in servers}
+    clients = {server.server_id: AsyncMock() for server in servers}
+    for client in clients.values():
+        client._last_initialize_instructions = None
+        client.list_tools_page.side_effect = [
+            ListToolsResult(tools=[first], next_cursor="next"),
+            ListToolsResult(tools=[unseen], next_cursor="next" if client is clients["beta"] else None),
+        ]
+    async def create_client(server, **kwargs):
+        return clients[server.server_id]
+    manager._create_mcp_client = create_client
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    caller = UserAPIKeyAuth(api_key="owned-caller", user_id="alice")
+    context = operations.prepare_context(caller)
+    initial = await catalog.aggregate_gateway_tools(context, PaginatedRequestParams(), servers, {}, record_listing=True)
+    assert initial.next_cursor
+    with pytest.raises(MCPError, match="repeated a pagination cursor"):
+        await catalog.aggregate_gateway_tools(
+            context, PaginatedRequestParams(cursor=initial.next_cursor), servers, {}, record_listing=True
+        )
+    identity = ListedToolsCaller(user_api_key_auth=caller)
+    for server in servers:
+        assert manager.get_listed_tool(server, "first", identity) == first
+        assert manager.get_listed_tool(server, "unseen", identity) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("can_seal", [False, True])
+async def test_aggregate_publishes_complete_bare_routes_only_after_delivering_a_page(monkeypatch, can_seal):
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import ListToolsResult, PaginatedRequestParams
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import catalog, operations
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    if can_seal:
+        monkeypatch.setenv("LITELLM_SALT_KEY", "delivered-page-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    tool = MCPTool(name="first", input_schema={"type": "object"})
+    servers = [MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ("alpha", "beta")]
+    manager = MCPServerManager()
+    manager.registry = {server.server_id: server for server in servers}
+    clients = {server.server_id: AsyncMock() for server in servers}
+    for name, client in clients.items():
+        client._last_initialize_instructions = None
+        client.list_tools_page.return_value = ListToolsResult(tools=[tool], next_cursor="next" if name == "beta" else None)
+
+    async def create_client(server, **kwargs):
+        return clients[server.server_id]
+
+    manager._create_mcp_client = create_client
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    context = operations.prepare_context(UserAPIKeyAuth(api_key="owned-caller", user_id="alice"))
+    listing = catalog.aggregate_gateway_tools(context, PaginatedRequestParams(), servers, {}, record_listing=True)
+    if can_seal:
+        assert (await listing).next_cursor
+        assert manager._get_mcp_server_from_tool_name("first").server_id == "alpha"
+    else:
+        with pytest.raises(MCPError, match="LITELLM_SALT_KEY"):
+            await listing
+        assert manager._get_mcp_server_from_tool_name("first") is None

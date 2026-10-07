@@ -10,7 +10,7 @@ import { TabsContent } from "@/components/ui/tabs";
 
 import type { RunSelection } from "../../routing";
 import type { Trace } from "../../types";
-import { TraceConversation } from "../conversation/TraceConversation";
+import { TraceThread, type ConversationTracePaging } from "../conversation/TraceThread";
 import { DetailPane } from "../span/DetailPane";
 import { SpanTree } from "../tree/SpanTree";
 import type { TreeLayout } from "../tree/TreeRows";
@@ -25,10 +25,11 @@ interface RunBodyProps {
   selection: RunSelection;
   embedded: boolean;
   stale: boolean;
+  conversationPaging: ConversationTracePaging;
 }
 
 /** Tree + detail pane for one loaded run. Arrows move and fold steps; J/K also move unless the drawer owns them. */
-export function RunBody({ trace, accessToken, selection, embedded, stale }: RunBodyProps) {
+export function RunBody({ trace, accessToken, selection, embedded, stale, conversationPaging }: RunBodyProps) {
   const { view, setView, stepQuery, setStepQuery, errorsOnly, setErrorsOnly } = selection;
   const tree = useRunTree(trace, selection);
   const [detailOpen, setDetailOpen] = useState(true);
@@ -52,17 +53,15 @@ export function RunBody({ trace, accessToken, selection, embedded, stale }: RunB
   useShortcut("right", () => tree.fold(true), { ...pane, description: "fold" });
   useShortcut("escape", () => setDetailOpen(false), { ...pane, enabled: active && detailOpen, description: "close" });
 
-  if (view === "conversation")
+  const openStep = (id: string) => {
+    select(id);
+    setView("steps");
+  };
+
+  if (view === "thread")
     return (
-      <TabsContent value="conversation" className="flex min-h-0 flex-1">
-        <TraceConversation
-          trace={trace}
-          accessToken={accessToken}
-          onOpenStep={(id) => {
-            select(id);
-            setView("steps");
-          }}
-        />
+      <TabsContent value="thread" className="flex min-h-0 flex-1">
+        <TraceThread trace={trace} accessToken={accessToken} paging={conversationPaging} onOpenStep={openStep} />
       </TabsContent>
     );
 

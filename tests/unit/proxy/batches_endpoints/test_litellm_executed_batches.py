@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 from openai.types.batch_request_counts import BatchRequestCounts
 
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
@@ -181,7 +181,7 @@ class FakeManagedBatchStore:
         return self.objects[unified_batch_id].batch()
 
 
-REAL_HOOK: Final = _PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock())
+REAL_HOOK: Final = PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock())
 
 
 class RealIdManagedBatchStore(FakeManagedBatchStore):

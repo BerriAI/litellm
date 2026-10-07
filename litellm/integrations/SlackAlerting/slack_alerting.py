@@ -31,7 +31,7 @@ from litellm.integrations.SlackAlerting.hanging_request_check import (
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
-    _add_key_name_and_team_to_alert,
+    add_key_name_and_team_to_alert,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -293,7 +293,7 @@ class SlackAlerting(CustomBatchLogger):
             # add deployment latencies to alert
             if kwargs is not None and "litellm_params" in kwargs and "metadata" in kwargs["litellm_params"]:
                 _metadata: Final[dict] = kwargs["litellm_params"]["metadata"]
-                request_info = _add_key_name_and_team_to_alert(request_info=request_info, metadata=_metadata)
+                request_info = add_key_name_and_team_to_alert(request_info=request_info, metadata=_metadata)
 
                 _deployment_latency_map: Final = self._get_deployment_latencies_to_alert(metadata=_metadata)
                 if _deployment_latency_map is not None:
@@ -1807,7 +1807,7 @@ Model Info:
 
     async def _run_scheduled_daily_report(
         self,
-        llm_router: Any | None = None,
+        llm_router: object | None = None,
         pod_lock_manager: "PodLockManager | None" = None,
     ):
         """

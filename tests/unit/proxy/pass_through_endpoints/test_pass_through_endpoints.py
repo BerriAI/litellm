@@ -57,6 +57,8 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
+from tests._master_key import MASTER_KEY
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
 
@@ -287,7 +289,7 @@ async def test_make_multipart_http_request_removes_content_type_header():
     original_headers = {
         "content-type": "multipart/form-data; boundary=--------------------------416423083260054165225918",
         "user-agent": "PostmanRuntime/7.49.0",
-        "Authorization": "bearer sk-1234",
+        "Authorization": "bearer sk-9876",
     }
 
     # Test the function
@@ -311,7 +313,7 @@ async def test_make_multipart_http_request_removes_content_type_header():
 
     # Other headers should be preserved
     assert call_args["headers"]["user-agent"] == "PostmanRuntime/7.49.0"
-    assert call_args["headers"]["Authorization"] == "bearer sk-1234"
+    assert call_args["headers"]["Authorization"] == "bearer sk-9876"
 
     # Verify other parameters are correct
     assert call_args["method"] == "POST"
@@ -2519,7 +2521,7 @@ async def test_pass_through_request_query_params_forwarding():
 
                         # Create mock user API key dict
                         mock_user_api_key_dict = MagicMock()
-                        mock_user_api_key_dict.api_key = "sk-1234"
+                        mock_user_api_key_dict.api_key = MASTER_KEY
 
                         # Call pass_through_request
                         await pass_through_request(
@@ -3832,7 +3834,7 @@ from litellm.exceptions import (
     BlockedPiiEntityError,
     GuardrailRaisedException,
 )
-
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 _PT_MODULE = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
 
 
@@ -8350,3 +8352,153 @@ def test_a_pass_through_added_after_a_lazy_feature_loaded_takes_over_its_path(mo
         assert client.post("/v1/decider").json() == {"served_by": "pass-through"}
         assert not SafeRouteAdder.add_api_route_if_not_exists(app, "/v1/decider", pass_through, ["POST"])
         assert client.post("/v1/decider").json() == {"served_by": "pass-through"}
+
+
+@pytest.fixture()
+async def _drain_logging_worker():
+    """
+    The logging queue is bound to the running loop, so anything left queued when a test's loop
+    goes away is carried onto the next loop and fires against that test's callbacks.
+    """
+    GLOBAL_LOGGING_WORKER.start()
+    try:
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    except asyncio.TimeoutError:
+        pass
+    await GLOBAL_LOGGING_WORKER.stop()
+    yield
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
+def test_update_pass_through_route_updates_registry():
+    """
+    REGRESSION TEST: Verify that calling add_exact_path_route (or add_subpath_route)
+    on an EXISTING route correctly updates the in-memory registry.
+    """
+
+    async def _async_test():
+        # Setup - Unique IDs to avoid collision with other tests
+        endpoint_id = "regression-test-endpoint"
+        path = "/regression-test-path"
+        # Default methods are sorted: DELETE,GET,PATCH,POST,PUT
+        methods_str = "DELETE,GET,PATCH,POST,PUT"
+        route_key = f"{endpoint_id}:exact:{path}:{methods_str}"
+        target = "http://example.com"
+
+        # Cleanup: Ensure clean state before test
+        if route_key in _registered_pass_through_routes:
+            del _registered_pass_through_routes[route_key]
+
+        try:
+            # 1. First Registration (Initial State)
+            InitPassThroughEndpointHelpers.add_exact_path_route(
+                app=MagicMock(),
+                path=path,
+                target=target,
+                custom_headers={"Authorization": "Bearer INITIAL_TOKEN"},
+                forward_headers=False,
+                merge_query_params=False,
+                dependencies=[],
+                cost_per_request=0,
+                endpoint_id=endpoint_id,
+            )
+
+            # Verify Initial State
+            assert route_key in _registered_pass_through_routes
+            initial_headers = _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"]
+            assert initial_headers["Authorization"] == "Bearer INITIAL_TOKEN"
+
+            # 2. Perform Update (Simulate API Update)
+            # This call should overwrite the existing entry
+            InitPassThroughEndpointHelpers.add_exact_path_route(
+                app=MagicMock(),
+                path=path,
+                target=target,
+                custom_headers={"Authorization": "Bearer NEW_UPDATED_TOKEN"},  # Changed Header
+                forward_headers=False,
+                merge_query_params=False,
+                dependencies=[],
+                cost_per_request=0,
+                endpoint_id=endpoint_id,
+            )
+
+            # 3. Verify Update Occurred
+            updated_headers = _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"]
+
+            # This assertion protects against the regression
+            assert updated_headers["Authorization"] == "Bearer NEW_UPDATED_TOKEN", (
+                "Registry failed to update! Old headers persisted despite update call."
+            )
+
+        finally:
+            # Cleanup: Remove test entry
+            if route_key in _registered_pass_through_routes:
+                del _registered_pass_through_routes[route_key]
+
+    asyncio.run(_async_test())
+
+@pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
+def test_update_subpath_route_updates_registry():
+    """
+    REGRESSION TEST: Verify that calling add_subpath_route
+    on an EXISTING route correctly updates the in-memory registry.
+    """
+
+    async def _async_test():
+        # Setup
+        endpoint_id = "regression-test-subpath"
+        path = "/regression-test-wildcard"
+        # Default methods are sorted: DELETE,GET,PATCH,POST,PUT
+        methods_str = "DELETE,GET,PATCH,POST,PUT"
+        route_key = f"{endpoint_id}:subpath:{path}:{methods_str}"
+        target = "http://example.com"
+
+        if route_key in _registered_pass_through_routes:
+            del _registered_pass_through_routes[route_key]
+
+        try:
+            # 1. First Registration
+            InitPassThroughEndpointHelpers.add_subpath_route(
+                app=MagicMock(),
+                path=path,
+                target=target,
+                custom_headers={"Authorization": "Bearer INITIAL_SUBPATH_TOKEN"},
+                forward_headers=False,
+                merge_query_params=False,
+                dependencies=[],
+                cost_per_request=0,
+                endpoint_id=endpoint_id,
+            )
+
+            assert (
+                _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"]["Authorization"]
+                == "Bearer INITIAL_SUBPATH_TOKEN"
+            )
+
+            # 2. Update
+            InitPassThroughEndpointHelpers.add_subpath_route(
+                app=MagicMock(),
+                path=path,
+                target=target,
+                custom_headers={"Authorization": "Bearer NEW_SUBPATH_TOKEN"},
+                forward_headers=False,
+                merge_query_params=False,
+                dependencies=[],
+                cost_per_request=0,
+                endpoint_id=endpoint_id,
+            )
+
+            # 3. Verify
+            updated_headers = _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"]
+            assert updated_headers["Authorization"] == "Bearer NEW_SUBPATH_TOKEN", "Subpath registry failed to update!"
+
+        finally:
+            if route_key in _registered_pass_through_routes:
+                del _registered_pass_through_routes[route_key]
+
+    asyncio.run(_async_test())

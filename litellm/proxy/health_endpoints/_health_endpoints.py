@@ -298,7 +298,7 @@ async def health_services_endpoint(
     Example:
     ```
     curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog' \
-    -H 'Authorization: Bearer sk-1234'
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     try:
@@ -998,7 +998,7 @@ def _caller_may_probe_deployment(
     caller_is_admin: bool,
 ) -> bool:
     """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
-    if not caller_is_admin and not Router._deployment_usable_by_team(deployment, team_id):
+    if not caller_is_admin and not Router.deployment_usable_by_team(deployment, team_id):
         return False
     if allowed_models is None:
         return True
@@ -2086,7 +2086,7 @@ async def test_model_connection(
     ```bash
     # If model is configured in proxy_config.yaml, you only need to specify the model name:
     curl -X POST 'http://localhost:4000/health/test_connection' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "litellm_params": {
@@ -2099,7 +2099,7 @@ async def test_model_connection(
     
     # You can also override specific params or test with custom credentials:
     curl -X POST 'http://localhost:4000/health/test_connection' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "litellm_params": {
