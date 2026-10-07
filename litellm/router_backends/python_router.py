@@ -237,6 +237,7 @@ from litellm.router_utils.handle_error import (
     send_llm_exception_alert,
 )
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
+from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
     warn_on_unknown_model_group_affinity_flags,
@@ -350,8 +351,6 @@ from litellm.utils import (
     provider_rejectable_params,
     set_live_deployment_replay,
 )
-
-from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
