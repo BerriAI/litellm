@@ -203,7 +203,7 @@ def test_router_model_group_encrypted_content_affinity_callback_registration():
         ]
         assert len(encrypted_content_callbacks) == 1
         assert encrypted_content_callbacks[0].enable_global_affinity is True
-        assert encrypted_content_callbacks[0].router is router
+        assert encrypted_content_callbacks[0].router is router.backend
     finally:
         if router is not None:
             router.discard()
@@ -2466,11 +2466,11 @@ def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selecto
         },
     )
     assert router.routing_strategy == "lar1"
-    assert "async_get_available_deployment" in router.__dict__
+    assert "async_get_available_deployment" in router.backend.__dict__
 
     router._switch_routing_strategy("usage-based-routing-v2", {})
     assert router.lowesttpm_logger_v2 is not None
-    assert "async_get_available_deployment" not in router.__dict__
+    assert "async_get_available_deployment" not in router.backend.__dict__
 
 
 @pytest.mark.parametrize(
@@ -10955,7 +10955,7 @@ async def test_avector_store_search_injects_router():
 
     assert search_response is expected_response
     mock_asearch.assert_awaited_once()
-    assert mock_asearch.await_args.kwargs["router"] is router
+    assert mock_asearch.await_args.kwargs["router"] is router.backend
 
 
 @pytest.mark.asyncio
@@ -11011,7 +11011,7 @@ def test_vector_store_search_injects_router():
 
     assert search_response is expected_response
     mock_search.assert_called_once()
-    assert mock_search.call_args.kwargs["router"] is router
+    assert mock_search.call_args.kwargs["router"] is router.backend
     assert mock_search.call_args.kwargs["custom_llm_provider"] == "s3_vectors"
 
 
@@ -20195,7 +20195,7 @@ def _pick(model_group: str, reason: str, attempt: int) -> tuple[str, dict[str, s
 def test_deployment_pick_attributes_derive_attempt_and_reason(
     request_kwargs: dict[str, object] | None, expected_reason: str, expected_attempt: int
 ):
-    attributes: Final = litellm.router._deployment_pick_attributes("gpt-4o", request_kwargs)
+    attributes: Final = litellm.router_backends.python_router._deployment_pick_attributes("gpt-4o", request_kwargs)
 
     assert dict(attributes) == {
         "litellm.deployment.attempt": expected_attempt,

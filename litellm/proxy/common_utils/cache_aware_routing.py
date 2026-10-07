@@ -247,8 +247,10 @@ async def _choose_cached_model(
     )
     from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 
+    proxy_router: Final = proxy_server.llm_router
     if (
-        proxy_server.llm_router is not router
+        proxy_router is None
+        or router not in (proxy_router, proxy_router.backend)
         or router.routing_plugins
         or has_request_transforms()
         or compaction_pending(request_kwargs)
