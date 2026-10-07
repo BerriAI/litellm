@@ -3145,10 +3145,10 @@ jobs:
           name: Test provider capture and replay harness
           command: |
             mkdir -p test-results/provider-replay-harness
-            uv run --no-sync pytest --tb=short -q --noconftest -o addopts= -o pythonpath=tests/e2e -p no:rerunfailures \
+            uv run --no-sync pytest --tb=short -q --noconftest -o addopts= -o "pythonpath=tests/e2e tests/e2e_harness" -p no:rerunfailures \
               --junitxml=test-results/provider-replay-harness/junit.xml \
-              tests/e2e/test_provider_edge.py tests/e2e/test_fixture_bundle.py \
-              tests/e2e/test_fixture_canonical.py tests/e2e/test_fixture_mode.py \
+              tests/e2e_harness/test_provider_edge.py tests/e2e_harness/test_fixture_bundle.py \
+              tests/e2e_harness/test_fixture_canonical.py tests/e2e_harness/test_fixture_mode.py \
               tests/code_coverage_tests/test_provider_replay_harness.py \
               tests/code_coverage_tests/test_provider_cache.py
       - store_test_results:

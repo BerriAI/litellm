@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import _is_api_route_allowed
 from litellm.proxy.auth.auth_checks_organization import user_is_org_admin
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
@@ -2945,7 +2946,7 @@ def test_available_roles_accessible_to_non_admin_users(user_role):
     )
 
 
-# ── _user_is_org_admin tests ──────────────────────────────────────────────────
+# ── user_is_org_admin tests ──────────────────────────────────────────────────
 
 
 def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:
@@ -3741,7 +3742,7 @@ def test_organization_daily_activity_not_granted_by_org_admin_request_data_branc
     self_managed_routes entry is load-bearing rather than redundant.
 
     Query params do reach request_data, so the reason is not body-vs-query: it
-    is the key name. _user_is_org_admin reads ``organization_id`` (singular) and
+    is the key name. user_is_org_admin reads ``organization_id`` (singular) and
     ``organizations``, while this endpoint's filter is ``organization_ids``
     (plural), and the dashboard's first page load sends no organization filter
     at all. Both shapes are pinned below because renaming the query param would
@@ -4462,6 +4463,210 @@ def test_non_admin_trace_reads_reach_endpoint_visibility_checks(route: str) -> N
     RouteChecks.non_proxy_admin_allowed_routes_check(
         user_obj=user, _user_role=user_role.value, route=route, request=request, valid_token=auth, request_data={}
     )
+
+
+_DENY_TEST_REGISTERED_ROUTES: Final = {
+    "test-uuid-1:subpath:/svc:GET,POST": {
+        "endpoint_id": "test-uuid-1",
+        "path": "/svc",
+        "type": "subpath",
+        "auth": True,
+    },
+}
+
+
+def _check_route_with_registered_routes(
+    route: str, valid_token: UserAPIKeyAuth, user_role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER
+) -> None:
+    request: Final = MagicMock(spec=Request)
+    request.method = "POST"
+    with (
+        pytest.MonkeyPatch.context() as env,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            _DENY_TEST_REGISTERED_ROUTES,
+        ),
+    ):
+        env.delenv("SERVER_ROOT_PATH", raising=False)
+        _is_api_route_allowed(
+            route=route,
+            request=request,
+            request_data={},
+            valid_token=valid_token,
+            user_obj=LiteLLM_UserTable(user_id="test_user", user_role=user_role.value),
+        )
+
+
+@pytest.mark.parametrize(
+    "metadata, team_metadata, denied_route",
+    [
+        ({"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]}, {}, "/svc/admin"),
+        ({"denied_passthrough_routes": ["/svc/admin"]}, {"allowed_passthrough_routes": ["/svc"]}, "/svc/admin"),
+        ({"allowed_passthrough_routes": ["/svc"]}, {"denied_passthrough_routes": ["/svc/admin"]}, "/svc/admin"),
+        ({"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/adm*"]}, {}, "/svc/adm*"),
+    ],
+    ids=["key-deny-beats-key-allow", "key-deny-beats-team-allow", "team-deny-beats-key-allow", "wildcard-deny"],
+)
+def test_denied_passthrough_routes_win_over_allow(
+    metadata: dict[str, list[str]], team_metadata: dict[str, list[str]], denied_route: str
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata=metadata,
+        team_metadata=team_metadata,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_route_with_registered_routes(route="/svc/admin/users", valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert f"Matched `{denied_route}` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/svc/public", "/svc/administrator", "/anthropic/v1/messages", "/chat/completions"],
+    ids=["allowed-sibling", "no-false-prefix-match", "built-in-provider-route", "llm-api-route"],
+)
+def test_denied_passthrough_routes_leave_other_routes_untouched(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={
+            "allowed_passthrough_routes": ["/svc"],
+            "denied_passthrough_routes": ["/svc/admin", "/anthropic", "/chat/completions"],
+        },
+    )
+
+    _check_route_with_registered_routes(route=route, valid_token=valid_token)
+
+
+def test_denied_passthrough_routes_do_not_restrict_proxy_admins() -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        metadata={"denied_passthrough_routes": ["/svc"]},
+        team_metadata={"denied_passthrough_routes": ["/svc"]},
+    )
+
+    _check_route_with_registered_routes(
+        route="/svc/admin/users", valid_token=valid_token, user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/svc/public/../admin/users",
+        "/svc/public/../../admin/users",
+        "/svc//admin/users",
+        "/svc/./admin",
+        "/svc/admin?",
+        "/svc/admin?/users",
+        "/svc/admin#",
+        "/svc/admin#/users",
+        "/svc/public/../admin?x",
+        "/svc/public?x/../admin?",
+        "/svc/public#x/../admin#",
+    ],
+    ids=[
+        "dot-dot-segment",
+        "dot-dot-past-endpoint-root",
+        "empty-segment",
+        "dot-segment",
+        "query-mark",
+        "query-mark-then-subpath",
+        "fragment-mark",
+        "fragment-mark-then-subpath",
+        "dot-dot-then-query-mark",
+        "query-mark-then-dot-dot",
+        "fragment-mark-then-dot-dot",
+    ],
+)
+def test_dot_and_empty_segments_cannot_reach_a_denied_route(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_route_with_registered_routes(route=route, valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert "Matched `/svc/admin` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+def test_dot_dot_out_of_a_denied_route_is_checked_as_the_route_it_forwards_to() -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
+    )
+
+    _check_route_with_registered_routes(route="/svc/admin/../public", valid_token=valid_token)
+
+
+@pytest.mark.parametrize("denied_route", ["/", "//"])
+@pytest.mark.parametrize("route", ["/svc", "/svc/public", "/svc/admin/users"])
+def test_root_deny_entry_blocks_every_route(route: str, denied_route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": [denied_route]},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_route_with_registered_routes(route=route, valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert f"Matched `{denied_route}` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+@pytest.mark.parametrize("route", ["/svc/admin", "/svc/admin/", "/svc/admin/users"])
+def test_trailing_slash_deny_entry_blocks_the_route_and_everything_under_it(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin/"]},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_route_with_registered_routes(route=route, valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert "Matched `/svc/admin/` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+def test_trailing_slash_deny_entry_does_not_match_a_longer_segment() -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin/"]},
+    )
+
+    _check_route_with_registered_routes(route="/svc/administrator", valid_token=valid_token)
+
+
+def test_dot_segments_resolving_outside_a_denied_route_still_pass() -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
+    )
+
+    _check_route_with_registered_routes(route="/svc/public/./docs", valid_token=valid_token)
+
+
+def test_query_text_naming_a_denied_route_still_passes() -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
+    )
+
+    _check_route_with_registered_routes(route="/svc/public?next=/svc/admin", valid_token=valid_token)
 
 
 def test_is_llm_api_route():

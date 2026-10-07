@@ -584,6 +584,8 @@ from litellm.proxy.lens.endpoints import router as lens_router
 from litellm.proxy.lens.repository import WriterDatabase
 from litellm.proxy.lens.signal_repository import SignalRepository
 from litellm.proxy.lens.signals import (
+    SIGNAL_BACKLOG_SWEEP,
+    SIGNAL_LIVE_SWEEP,
     DecisionQuestions,
     DecisionsCall,
     DecisionState,
@@ -1684,17 +1686,21 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         from litellm.proxy.admin_mcp import admin_mcp_lifespan
 
         signal_completion: Final[DecisionsCall] = _call_current_lens_signal_router
-        signal_task: Final = (
-            asyncio.create_task(
-                run_signal_loop(
-                    receiver.storage,
-                    SignalRepository(WriterDatabase(writer_wrapper(prisma_client.db))),
-                    signal_completion,
-                    router_ready=lambda: llm_router is not None,
+        signal_tasks: Final = (
+            tuple(
+                asyncio.create_task(
+                    run_signal_loop(
+                        receiver.storage,
+                        SignalRepository(WriterDatabase(writer_wrapper(prisma_client.db))),
+                        signal_completion,
+                        router_ready=lambda: llm_router is not None,
+                        sweep=sweep,
+                    )
                 )
+                for sweep in (SIGNAL_LIVE_SWEEP, SIGNAL_BACKLOG_SWEEP)
             )
             if receiver is not None and prisma_client is not None
-            else None
+            else ()
         )
 
         try:
@@ -1703,9 +1709,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
                     yield state
                 finally:
-                    if signal_task is not None:
+                    for signal_task in signal_tasks:
                         signal_task.cancel()
-                        await asyncio.gather(signal_task, return_exceptions=True)
+                    await asyncio.gather(*signal_tasks, return_exceptions=True)
 
                     if model_info_scheduler is not None and model_info_scheduler.running:
                         model_info_scheduler.remove_job("refresh_model_info")

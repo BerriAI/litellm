@@ -89,6 +89,8 @@ from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_
 from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_utils import (
+    check_allowed_passthrough_routes_caller_permission,
+    check_denied_passthrough_routes_caller_permission,
     check_disable_global_guardrails_caller_permission,
     check_passthrough_routes_caller_permission,
     set_object_metadata_field,
@@ -2021,6 +2023,7 @@ async def generate_key_fn(
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
+    - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
@@ -2783,6 +2786,11 @@ async def _process_single_key_update(
             existing_key_row=existing_key_row,
             user_api_key_cache=user_api_key_cache,
         )
+    check_denied_passthrough_routes_caller_permission(
+        update_key_request,
+        user_api_key_dict,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+    )
 
     # Custom key update hook
     if user_custom_key_update is not None:
@@ -3100,10 +3108,7 @@ async def _validate_update_key_data(
         existing_key_row=existing_key_row,
         user_api_key_dict=user_api_key_dict,
     )
-    check_passthrough_routes_caller_permission(
-        data=data,
-        user_api_key_dict=user_api_key_dict,
-    )
+    check_allowed_passthrough_routes_caller_permission(data, user_api_key_dict)
     check_permissions_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
@@ -3249,6 +3254,11 @@ async def _validate_update_key_data(
             user_api_key_cache=user_api_key_cache,
             route=("/key/update (max_budget/spend)" if _is_budget_change else "/key/update"),
         )
+    check_denied_passthrough_routes_caller_permission(
+        data,
+        user_api_key_dict,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+    )
 
     # Check team limits if key has a team_id (from request or existing key)
     team_obj: LiteLLM_TeamTableCachedObj | None = None
@@ -3437,6 +3447,7 @@ async def update_key_fn(
     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - allowed_passthrough_routes: Optional[list] - List of allowed pass through routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through routes the key can access, without specifying the routes. If allowed_routes is specified, allowed_passthrough_routes is ignored.
+    - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
@@ -3953,7 +3964,7 @@ async def bulk_update_team_keys(
 
     # Block metadata.allowed_passthrough_routes for non-admins — the runtime
     # route checker reads it from key/team metadata to grant passthrough.
-    check_passthrough_routes_caller_permission(data=data.update_fields, user_api_key_dict=user_api_key_dict)
+    check_allowed_passthrough_routes_caller_permission(data.update_fields, user_api_key_dict)
 
     if not requested_tokens:
         raise HTTPException(
@@ -5839,10 +5850,7 @@ async def regenerate_key_fn(
                 user_api_key_dict=user_api_key_dict,
                 allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
             )
-            check_passthrough_routes_caller_permission(
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-            )
+            check_allowed_passthrough_routes_caller_permission(data, user_api_key_dict)
             check_permissions_caller_permission(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
@@ -5960,6 +5968,11 @@ async def regenerate_key_fn(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "You are not authorized to regenerate this key"},
             )
+        check_denied_passthrough_routes_caller_permission(
+            data,
+            user_api_key_dict,
+            existing_metadata=_key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        )
 
         if data is not None and (data.access_group_ids or data.object_permission is not None):
             regenerate_team_table: LiteLLM_TeamTableCachedObj | None = None
