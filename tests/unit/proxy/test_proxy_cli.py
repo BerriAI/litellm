@@ -97,12 +97,14 @@ class TestProxyInitializationHelpers:
         )
         mock_client.chat.completions.create.assert_called()
 
-    def test_run_test_chat_completion_flag_uses_host_and_port(self):
+    @pytest.mark.parametrize("host", ["127.0.0.1", "::1"])
+    def test_run_test_chat_completion_flag_uses_host_and_port(self, host: str) -> None:
         import json
+        import socket
         import threading
         from http.server import BaseHTTPRequestHandler, HTTPServer
 
-        seen = []
+        seen: Final[list[tuple[str, dict[str, object]]]] = []
 
         class Stub(BaseHTTPRequestHandler):
             def do_POST(self):
@@ -153,18 +155,24 @@ class TestProxyInitializationHelpers:
             def log_message(self, *args):
                 pass
 
-        server = HTTPServer(("127.0.0.1", 0), Stub)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        class StubServer(HTTPServer):
+            address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+        try:
+            server: Final = StubServer((host, 0), Stub)
+        except OSError:
+            pytest.skip(f"cannot bind {host} on this machine")
+        thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
             ProxyInitializationHelpers._run_test_chat_completion(
-                "127.0.0.1", server.server_port, "my-model", True
+                host, server.server_port, "my-model", True
             )
         finally:
             server.shutdown()
             server.server_close()
 
-        chat = [body for path, body in seen if path.endswith("/chat/completions")]
+        chat: Final = [body for path, body in seen if path.endswith("/chat/completions")]
         assert [b.get("stream", False) for b in chat] == [False, True]
         assert all(b["model"] == "my-model" for b in chat)
 
