@@ -547,7 +547,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         for _tool_call, is_allowed, _rule_id, message in checked:
             if not is_allowed and message is not None:
-                verbose_proxy_logger.warning("Tool Permission Guardrail: %s", message)
+                verbose_proxy_logger.info("Tool Permission Guardrail: %s", message)
                 if self.on_disallowed_action == "block":
                     raise GuardrailRaisedException(
                         guardrail_name=self.guardrail_name, message=message, blocked_content=True
@@ -579,9 +579,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_tools))
 
-        error_by_tool_use_id: Final[
-            Mapping[object, str]
-        ] = {  # mutable-ok: read-only lookup, never mutated after construction
+        error_by_tool_use_id: Final[Mapping[object, str]] = {
             tool_call.id: self._create_permission_error_result(tool_call, error).content
             for tool_call, error in denied_tools
         }
@@ -596,9 +594,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
             message for message in (_denied_message(block) for block in content) if message is not None
         )
         kept_blocks: Final = tuple(block for block in content if _denied_message(block) is None)
-        new_content: Final = [  # mutable-ok: response content is a JSON array on the wire
+        new_content: Final = [
             *kept_blocks,
-            {"type": "text", "text": "\n".join(error_messages)},  # mutable-ok: content block is a JSON object
+            {"type": "text", "text": "\n".join(error_messages)},
         ]
 
         response["content"] = new_content  # rebind-ok: the guardrail rewrites the provider response in place
@@ -809,7 +807,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         new_tools: Final = self._collect_request_tools(data)
         if not new_tools:
-            verbose_proxy_logger.warning(
+            verbose_proxy_logger.debug(
                 "Tool Permission Guardrail: not running guardrail. No tools or functions in data"
             )
             return data
@@ -820,7 +818,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             is_allowed, _, message = self._check_tool_permission(tool_name, tool_type)
 
             if not is_allowed and message is not None:
-                verbose_proxy_logger.warning("Tool Permission Guardrail: %s", message)
+                verbose_proxy_logger.info("Tool Permission Guardrail: %s", message)
                 if self.on_disallowed_action == "block":
                     raise HTTPException(
                         status_code=400,

@@ -5,7 +5,7 @@ import os
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Final, Literal, NamedTuple, cast
+from typing import Final, Literal, NamedTuple, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -14,6 +14,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.common_utils import BaseOpenAILLM
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -21,7 +22,7 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import _add_path_to_api_base
+from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
 
@@ -93,6 +94,11 @@ def _cached_entra_id_token_provider(
     from azure.identity import ClientSecretCredential, get_bearer_token_provider
 
     return get_bearer_token_provider(ClientSecretCredential(tenant_id, client_id, client_secret), scope)
+
+
+@lru_cache(maxsize=128)
+def _cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
+    return get_azure_ad_token_provider(azure_scope=scope)
 
 
 def get_azure_ad_token_from_entra_id(
@@ -405,6 +411,41 @@ def get_azure_ad_token(
     return azure_ad_token
 
 
+_AZURE_AUTH_HEADER_NAMES: Final = frozenset(("api-key", "authorization"))
+_REDACTED_AZURE_HEADER_VALUE: Final = "***REDACTED***"
+
+
+def _resolve_azure_ad_token(azure_client_params: Mapping[str, object]) -> str | None:
+    azure_ad_token: Final = azure_client_params.get("azure_ad_token")
+    if isinstance(azure_ad_token, str) and azure_ad_token:
+        return azure_ad_token
+    token_provider: Final = azure_client_params.get("azure_ad_token_provider")
+    provided_token: Final = token_provider() if callable(token_provider) else None
+    return provided_token if isinstance(provided_token, str) and provided_token else None
+
+
+def get_azure_request_auth_headers(
+    headers: Mapping[str, str],
+    azure_client_params: Mapping[str, object],
+) -> Mapping[str, str]:
+    if any(name.lower() in _AZURE_AUTH_HEADER_NAMES for name in headers):
+        return headers
+    azure_ad_token: Final = _resolve_azure_ad_token(azure_client_params)
+    if azure_ad_token is not None:
+        return MappingProxyType({**headers, "Authorization": f"Bearer {azure_ad_token}"})
+    api_key: Final = azure_client_params.get("api_key")
+    if isinstance(api_key, str) and api_key:
+        return MappingProxyType({**headers, "api-key": api_key})
+    return headers
+
+
+def redact_azure_auth_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return {
+        name: (_REDACTED_AZURE_HEADER_VALUE if name.lower() in _AZURE_AUTH_HEADER_NAMES else value)
+        for name, value in headers.items()
+    }
+
+
 class BaseAzureLLM(BaseOpenAILLM):
     @staticmethod
     def _try_get_default_azure_credential_provider(
@@ -508,7 +549,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             # on every request (via `_refresh_api_key`), so passing
             # `azure_ad_token_provider` directly preserves Azure AD token refresh
             # behavior that the regular AzureOpenAI client provides.
-            v1_api_key: str | Callable[[], Any] | None = (
+            v1_api_key: str | Callable[[], object] | None = (
                 azure_client_params.get("api_key")
                 or azure_client_params.get("azure_ad_token_provider")
                 or azure_client_params.get("azure_ad_token")
@@ -582,7 +623,8 @@ class BaseAzureLLM(BaseOpenAILLM):
         if scope is None:
             scope = "https://cognitiveservices.azure.com/.default"
 
-        max_retries: Final = litellm_params.get("max_retries")
+        configured_max_retries: Final = litellm_params.get("max_retries")
+        max_retries: Final = DEFAULT_MAX_RETRIES if configured_max_retries is None else configured_max_retries
         timeout: Final = litellm_params.get("timeout")
         if not api_key and azure_ad_token_provider is None and tenant_id and client_id and client_secret:
             verbose_logger.debug("Using Azure AD Token Provider from Entra ID for Azure Auth")
@@ -614,9 +656,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
             )
             try:
-                azure_ad_token_provider = get_azure_ad_token_provider(
-                    azure_scope=scope,
-                )
+                azure_ad_token_provider = _cached_azure_ad_token_refresh_provider(scope)
             except ValueError:
                 verbose_logger.debug("Azure AD Token Provider could not be used.")
         if api_version is None:
@@ -642,8 +682,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         else:
             azure_client_params["http_client"] = self._get_sync_http_client()
 
-        if max_retries is not None:
-            azure_client_params["max_retries"] = max_retries
+        azure_client_params["max_retries"] = max_retries
         if timeout is not None:
             azure_client_params["timeout"] = timeout
 
@@ -775,7 +814,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         # Add the path to the base URL
         if route not in api_base:
-            new_url = _add_path_to_api_base(api_base=api_base, ending_path=route)
+            new_url = add_path_to_api_base(api_base=api_base, ending_path=route)
         else:
             new_url = api_base
 

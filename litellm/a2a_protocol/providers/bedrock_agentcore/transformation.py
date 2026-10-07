@@ -85,7 +85,7 @@ def _filter_reserved_headers(
 
 
 def _request_scoped_runtime_session_id(
-    params: Mapping[str, Any],
+    params: Mapping[str, object],
     litellm_params: Mapping[str, Any],
 ) -> str | None:
     context_id: Final = get_session_id_from_a2a_params(params)
@@ -219,7 +219,7 @@ class BedrockAgentCoreA2ATransformation:
         return url, signed_headers, signed_body
 
     @staticmethod
-    async def parse_sse_events(response: _SSELineSource) -> AsyncIterator[dict[str, Any]]:
+    async def parse_sse_events(response: _SSELineSource) -> AsyncIterator[dict[str, object]]:
         """
         Parse SSE events from an httpx streaming response.
 

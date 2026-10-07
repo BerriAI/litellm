@@ -1,6 +1,7 @@
 import json
 import os
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -31,6 +32,14 @@ class GithubCopilotConfig(OpenAIConfig):
         super().__init__()
         self.authenticator = Authenticator()
 
+    def api_base_without_login(self, api_base: str | None = None) -> str:
+        return (
+            api_base
+            or self.authenticator.get_api_base()
+            or os.getenv("GITHUB_COPILOT_API_BASE")
+            or DEFAULT_GITHUB_COPILOT_API_BASE
+        )
+
     def _get_openai_compatible_provider_info(
         self,
         model: str,
@@ -38,12 +47,7 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: str | None,
         custom_llm_provider: str,
     ) -> tuple[str | None, str | None, str]:
-        dynamic_api_base: Final = (
-            api_base
-            or self.authenticator.get_api_base()
-            or os.getenv("GITHUB_COPILOT_API_BASE")
-            or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
+        dynamic_api_base: Final = self.api_base_without_login(api_base)
         try:
             dynamic_api_key: Final = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
@@ -174,8 +178,8 @@ class GithubCopilotConfig(OpenAIConfig):
 
     @staticmethod
     def _parse_anthropic_native_content(
-        content_blocks: list[Any],
-    ) -> tuple[str, list[ChatCompletionToolCallChunk], list[Any] | None]:
+        content_blocks: list[object],
+    ) -> tuple[str, list[ChatCompletionToolCallChunk], Sequence[object] | None]:
         """
         Parse Anthropic-native content blocks into OpenAI-compatible fields.
 
@@ -222,7 +226,7 @@ class GithubCopilotConfig(OpenAIConfig):
 
         content = ""
         tool_calls: list[ChatCompletionToolCallChunk] = []
-        thinking_blocks: list[Any] | None = None
+        thinking_blocks: Sequence[object] | None = None
         raw_content: Final = response_json.get("content")
         if isinstance(raw_content, list):
             content, tool_calls, thinking_blocks = cls._parse_anthropic_native_content(raw_content)

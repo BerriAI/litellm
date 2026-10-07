@@ -4,7 +4,7 @@ from httpx import Response
 
 from litellm import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _parse_content_for_reasoning,
+    parse_content_for_reasoning,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
@@ -25,7 +25,7 @@ from litellm.types.utils import (
 from .amazon_llama_transformation import AmazonLlamaConfig
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AmazonDeepSeekR1Config(AmazonLlamaConfig):
@@ -39,7 +39,7 @@ class AmazonDeepSeekR1Config(AmazonLlamaConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -63,7 +63,7 @@ class AmazonDeepSeekR1Config(AmazonLlamaConfig):
         message_content: Final = cast(str | None, cast(Choices, response.choices[0]).message.get("content"))
         if prompt and prompt.strip().endswith("<think>") and message_content:
             message_content_with_reasoning_token: Final = "<think>" + message_content
-            reasoning, content = _parse_content_for_reasoning(message_content_with_reasoning_token)
+            reasoning, content = parse_content_for_reasoning(message_content_with_reasoning_token)
             provider_specific_fields: Final = cast(Choices, response.choices[0]).message.provider_specific_fields or {}
             if reasoning:
                 provider_specific_fields["reasoning_content"] = reasoning

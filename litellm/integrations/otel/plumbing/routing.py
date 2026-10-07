@@ -25,6 +25,7 @@ from opentelemetry.trace import Tracer
 from litellm._logging import verbose_logger
 from litellm.constants import OTEL_SERVICE_NAME_METADATA_KEYS
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.plumbing.context import destination_backends
 from litellm.integrations.otel.plumbing.providers import (
     build_tracer_provider,
     exporter_transport,
@@ -170,9 +171,7 @@ class TenantTracerCache:
         # thread-pool workers concurrently with the event loop, so cache
         # updates, span counts, and retirement must be atomic.
         self._lock: Final = threading.Lock()
-        self._providers: OrderedDict[_RouteKey, TracerProvider] = (
-            OrderedDict()  # mutable-ok: bounded LRU; eviction needs in-place ordered mutation
-        )
+        self._providers: OrderedDict[_RouteKey, TracerProvider] = OrderedDict()
         self._open_span_counts: dict[TracerProvider, int] = {}  # mutable-ok: live refcount state
         # Oldest-first so an overflow of draining providers sheds the stalest.
         self._retired: OrderedDict[TracerProvider, None] = OrderedDict()  # mutable-ok: draining evicted providers
@@ -231,10 +230,21 @@ class TenantTracerCache:
         concurrent overflow eviction can't shut it down between selection and
         the caller's span start. The caller must ``release`` it exactly once.
         """
+        # A backend with a destination is delivered by the fan-out processor, which
+        # carries the whole trace and already carries this tenant's credentials and
+        # service name. Routing here too would detach this span onto a second provider,
+        # so the tenant would get the request tree plus a stray one-span trace.
+        if self._callback_name is not None and self._callback_name in destination_backends():
+            return TenantRoute(tracer=default, detached=False)
         credential_headers: Final = self._credential_headers(dynamic_params)
         project_headers: Final = self._project_headers(auth_metadata)
         service_name: Final = tenant_service_name(auth_metadata)
-        if not credential_headers and not project_headers and service_name is None:
+        tenant_account: Final = bool(credential_headers) or bool(project_headers)
+        # A service name on its own only relabels the operator's own backend, so moving
+        # the span to a second provider for it while some other backend has a
+        # destination would drop the model call out of the trace the fan-out delivers.
+        # The destination stamps the same service name itself.
+        if not tenant_account and (service_name is None or destination_backends()):
             return TenantRoute(tracer=default, detached=False)
         # A fixed per-integration region endpoint (New Relic us/eu), never a
         # caller-supplied host; ``None`` keeps the preset's own endpoint.
@@ -255,7 +265,7 @@ class TenantTracerCache:
             _shutdown_provider(evicted)
         return TenantRoute(
             tracer=get_tracer(provider, self._tracer_name),
-            detached=bool(project_headers) or bool(credential_headers),
+            detached=tenant_account,
             provider=provider,
         )
 
@@ -362,10 +372,8 @@ class TenantTracerCache:
             self._routed_exporter(spec, credential_headers, project_headers, endpoint)
             for spec in self._config.exporters
         ]
-        update: Final = (
-            {"exporters": exporters} if service_name is None else {"exporters": exporters, "service_name": service_name}
-        )
-        return self._config.model_copy(update=update)
+        routed: Final = self._config.model_copy(update={"exporters": exporters, "langfuse_span_scope": "full"})
+        return routed if service_name is None else routed.model_copy(update={"service_name": service_name})
 
     def _routed_exporter(
         self,
@@ -383,7 +391,7 @@ class TenantTracerCache:
             if project_headers and kind not in _GRPC_KINDS
             else base
         )
-        update: Final = {  # mutable-ok: model_copy(update=...) requires a plain dict
+        update: Final = {
             field: value
             for field, value in (("headers", routed), ("endpoint", endpoint))
             if (field == "headers" and routed != spec.headers)

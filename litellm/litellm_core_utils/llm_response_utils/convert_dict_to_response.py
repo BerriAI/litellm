@@ -3,14 +3,14 @@ import json
 import re
 import time
 import traceback
-from collections.abc import Iterable, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final, Literal, cast
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _extract_reasoning_content,
+    extract_reasoning_content,
 )
 from litellm.types.llms.databricks import DatabricksTool
 from litellm.types.llms.openai import (
@@ -71,7 +71,7 @@ def _normalize_images_for_message(
     return normalized
 
 
-def _safe_convert_created_field(created_value) -> int:
+def safe_convert_created_field(created_value: object) -> int:
     """
     Safely convert a 'created' field value to an integer.
 
@@ -91,19 +91,20 @@ def _safe_convert_created_field(created_value) -> int:
     elif isinstance(created_value, float):
         return int(created_value)
     else:
-        # for strings, etc
         try:
-            return int(float(created_value))
+            return int(float(cast(float | str, created_value)))
         except (ValueError, TypeError):
-            # Fallback to current time if conversion fails
             return int(time.time())
+
+
+_safe_convert_created_field = safe_convert_created_field
 
 
 def convert_tool_call_to_json_mode(
     tool_calls: list[ChatCompletionMessageToolCall],
     convert_tool_call_to_json_mode: bool,
 ) -> tuple[Message | None, str | None]:
-    if _should_convert_tool_call_to_json_mode(
+    if should_convert_tool_call_to_json_mode(
         tool_calls=tool_calls,
         convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
     ):
@@ -151,6 +152,16 @@ def _clear_later_replay_slice_metadata(choice: StreamingChoices) -> None:
         del choice.enhancements
 
 
+def _invalid_choices_message(response_object: Mapping[str, object]) -> str:
+    raw_keys: Final = list(response_object.keys())
+    if "choices" not in response_object:
+        return f"LiteLLM: provider returned a response with no 'choices'. Raw keys: {raw_keys}"
+    return (
+        f"LiteLLM: provider returned 'choices' that is not a list ({type(response_object['choices']).__name__}). "
+        f"Raw keys: {raw_keys}"
+    )
+
+
 async def convert_to_streaming_response_async(
     response_object: dict | None = None,
 ):
@@ -179,14 +190,12 @@ async def convert_to_streaming_response_async(
 
     choice_list: Final[list[StreamingChoices]] = []
 
-    if not response_object.get("choices"):
+    if not isinstance(response_object.get("choices"), list):
         from litellm.exceptions import APIError
 
         raise APIError(
             status_code=500,
-            message=(
-                f"LiteLLM: provider returned a response with no 'choices'. Raw keys: {list(response_object.keys())}"
-            ),
+            message=_invalid_choices_message(response_object),
             llm_provider="",
             model="",
         )
@@ -237,7 +246,7 @@ async def convert_to_streaming_response_async(
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = _safe_convert_created_field(response_object["created"])
+        model_response_object.created = safe_convert_created_field(response_object["created"])
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -287,14 +296,12 @@ def convert_to_streaming_response(
     model_response_object: Final = ModelResponseStream()
     choice_list: Final[list[StreamingChoices]] = []
 
-    if not response_object.get("choices"):
+    if not isinstance(response_object.get("choices"), list):
         from litellm.exceptions import APIError
 
         raise APIError(
             status_code=500,
-            message=(
-                f"LiteLLM: provider returned a response with no 'choices'. Raw keys: {list(response_object.keys())}"
-            ),
+            message=_invalid_choices_message(response_object),
             llm_provider="",
             model="",
         )
@@ -328,7 +335,7 @@ def convert_to_streaming_response(
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = _safe_convert_created_field(response_object["created"])
+        model_response_object.created = safe_convert_created_field(response_object["created"])
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -365,11 +372,9 @@ def convert_to_streaming_response(
 from collections import defaultdict
 
 
-def _handle_invalid_parallel_tool_calls(
-    tool_calls: list[
-        ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
-    ],  # mutable-ok: patched in place via slice assignment
-):
+def handle_invalid_parallel_tool_calls(
+    tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall],
+) -> list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None:
     """
     Handle hallucinated parallel tool call from openai - https://community.openai.com/t/model-tries-to-call-unknown-function-multi-tool-use-parallel/490653
 
@@ -408,6 +413,9 @@ def _handle_invalid_parallel_tool_calls(
     except json.JSONDecodeError:
         # if there is a JSONDecodeError, return the original tool_calls
         return tool_calls
+
+
+_handle_invalid_parallel_tool_calls = handle_invalid_parallel_tool_calls
 
 
 class LiteLLMResponseObjectHandler:
@@ -526,7 +534,7 @@ class LiteLLMResponseObjectHandler:
         return transformed_logprobs
 
 
-def _should_convert_tool_call_to_json_mode(
+def should_convert_tool_call_to_json_mode(
     tool_calls: (
         Sequence[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | Sequence[DatabricksTool] | None
     ) = None,
@@ -539,6 +547,9 @@ def _should_convert_tool_call_to_json_mode(
         function: Final = tool_calls[0].get("function")
         return function is not None and function["name"] == RESPONSE_FORMAT_TOOL_NAME
     return False
+
+
+_should_convert_tool_call_to_json_mode = should_convert_tool_call_to_json_mode
 
 
 def convert_to_model_response_object(
@@ -623,15 +634,12 @@ def convert_to_model_response_object(
                 return convert_to_streaming_response(response_object=response_object)
             choice_list: Final[list[Choices]] = []
 
-            if not response_object.get("choices") or not isinstance(response_object["choices"], Iterable):
+            if not isinstance(response_object.get("choices"), list):
                 from litellm.exceptions import APIError
 
                 raise APIError(
                     status_code=500,
-                    message=(
-                        "LiteLLM: provider returned a response with no 'choices'. "
-                        f"Raw keys: {list(response_object.keys())}"
-                    ),
+                    message=_invalid_choices_message(response_object),
                     llm_provider="",
                     model="",
                 )
@@ -644,14 +652,14 @@ def convert_to_model_response_object(
                     for _tc in tool_calls:
                         _openai_tc = chat_completion_tool_call_from_dict(_tc)
                         _openai_tool_calls.append(_openai_tc)
-                    fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
+                    fixed_tool_calls = handle_invalid_parallel_tool_calls(_openai_tool_calls)
 
                     if fixed_tool_calls is not None:
                         tool_calls = fixed_tool_calls
 
                 message: Message | None = None
                 finish_reason: str | None = None
-                if tool_calls is not None and _should_convert_tool_call_to_json_mode(
+                if tool_calls is not None and should_convert_tool_call_to_json_mode(
                     tool_calls=tool_calls,
                     convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
                 ):
@@ -668,7 +676,7 @@ def convert_to_model_response_object(
                         provider_specific_fields[f] = choice["message"][f]
 
                     # Handle reasoning models that display `reasoning_content` within `content`
-                    reasoning_content, content = _extract_reasoning_content(choice["message"])
+                    reasoning_content, content = extract_reasoning_content(choice["message"])
 
                     # Handle thinking models that display `thinking_blocks` within `content`
                     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = (
@@ -717,7 +725,7 @@ def convert_to_model_response_object(
                 usage_object: Final = litellm.Usage(**response_object["usage"])
                 setattr(model_response_object, "usage", usage_object)
             if "created" in response_object:
-                model_response_object.created = _safe_convert_created_field(response_object["created"])
+                model_response_object.created = safe_convert_created_field(response_object["created"])
 
             if "id" in response_object:
                 # Preserve the auto-generated id from ModelResponse.__init__
