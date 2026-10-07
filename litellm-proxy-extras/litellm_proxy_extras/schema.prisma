@@ -1974,3 +1974,8 @@ model LiteLLM_LensDataset {
 
   @@id([id, revision])
 }
+
+model LiteLLM_LensIngestionKey {
+  id   String @id
+  data Json
+}

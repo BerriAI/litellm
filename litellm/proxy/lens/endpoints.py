@@ -18,6 +18,14 @@ from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.lens.billing import validate_key
+from litellm.proxy.lens.ingestion import (
+    IngestionCredential,
+    IngestionKey,
+    IngestionKeyCreated,
+    IngestionKeyRequest,
+    IngestionSnapshot,
+    new_key,
+)
 from litellm.proxy.lens.inference import Deployment, deployment_prices
 from litellm.proxy.lens.models import (
     ActivitySelection,
@@ -88,7 +96,7 @@ def source_reader(storage: Storage | None) -> SourceReader:
     if storage is None:
         raise HTTPException(
             status_code=501,
-            detail="Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL.",
+            detail="Agent tracing is not enabled. Configure the Lens service and LITELLM_LENS_URL.",
         )
     return SourceReader(storage)
 
@@ -116,6 +124,47 @@ async def worker_auth(credentials: Annotated[HTTPAuthorizationCredentials, Depen
 
 
 WorkerAuth: TypeAlias = Annotated[Worker, Depends(worker_auth)]
+
+
+@router.post("/tracing/keys", response_model=IngestionKeyCreated)
+async def create_ingestion_key(body: IngestionKeyRequest, auth: Auth) -> IngestionKeyCreated:
+    user_scope(auth, write=True)
+    try:
+        created: Final = new_key(body, auth.user_id or "")
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    await repository().save_ingestion_key(created.record)
+    return created
+
+
+@router.get("/tracing/keys", response_model=tuple[IngestionKey, ...])
+async def list_ingestion_keys(auth: Auth) -> tuple[IngestionKey, ...]:
+    user_scope(auth)
+    return await repository().ingestion_keys()
+
+
+@router.delete("/tracing/keys/{key_id}")
+async def revoke_ingestion_key(key_id: str, auth: Auth) -> bool:
+    user_scope(auth, write=True)
+    await repository().revoke_ingestion_key(key_id)
+    return True
+
+
+@router.get("/worker/ingestion-credentials", response_model=IngestionSnapshot)
+async def ingestion_credentials(worker: WorkerAuth, response: Response) -> IngestionSnapshot:
+    if not worker.scope.all_teams:
+        raise HTTPException(403, "Ingestion requires an administrator-managed Lens service")
+    response.headers["Cache-Control"] = "no-store"
+    keys: Final = await repository().ingestion_keys()
+    now: Final = int(datetime.now(timezone.utc).timestamp())
+    return IngestionSnapshot(
+        issued_at=now,
+        keys=tuple(
+            IngestionCredential(token_hash=key.tenant.api_key_hash, tenant=key.tenant, expires_at=key.expires_at)
+            for key in keys
+            if key.expires_at is None or key.expires_at > now
+        ),
+    )
 
 
 async def assigned(lens_id: str, job_id: str, worker: Worker) -> tuple[Lens, Job]:
@@ -502,7 +551,7 @@ async def claim(worker: WorkerAuth, protocol_version: int = 1, worker_release: s
         raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
     now: Final = datetime.now(timezone.utc)
     await repository().heartbeat(worker.id, now.isoformat())
-    for candidate in await repository().lenses():
+    async for candidate in repository().claim_candidates(worker.scope, now):
         if not can_access(worker.scope, candidate.scope):
             continue
         if claimed := await claim_candidate(candidate, worker, now):
