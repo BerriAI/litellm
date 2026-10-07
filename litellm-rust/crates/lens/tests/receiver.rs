@@ -316,3 +316,45 @@ async fn replacing_credentials_revokes_previous_keys() {
         .unwrap();
     assert_eq!(response.status(), 401);
 }
+
+#[rstest]
+#[tokio::test]
+async fn newly_created_key_is_retryable_until_this_replica_has_refreshed() {
+    let server = serve("http://127.0.0.1:1", true).await;
+    let now = unix_seconds();
+    let token = format!("lens-trace-{now}-new-key");
+    let client = http_client().unwrap();
+    let pending = client
+        .post(format!("{}/v1/traces", server.url))
+        .bearer_auth(&token)
+        .json(&export())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(pending.status(), 429);
+    assert_eq!(pending.headers()["retry-after"], "5");
+    let older = format!("lens-trace-{}-invalid-key", now - 100);
+    let denied = client
+        .post(format!("{}/v1/traces", server.url))
+        .bearer_auth(&older)
+        .json(&export())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+    assert!(
+        server
+            .state
+            .credentials
+            .replace(Snapshot {
+                issued_at: now - 1,
+                keys: vec![],
+            })
+            .is_err()
+    );
+    let headers = http::HeaderMap::from_iter([(
+        http::header::AUTHORIZATION,
+        http::HeaderValue::from_str(&format!("Bearer {KEY}")).unwrap(),
+    )]);
+    assert!(server.state.credentials.tenant(&headers).is_ok());
+}

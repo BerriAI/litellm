@@ -165,8 +165,8 @@ async def service_connection(auth: Auth) -> ServiceConnection:
 
 
 async def credential_snapshot() -> IngestionSnapshot:
-    keys: Final = await repository().ingestion_keys()
     now: Final = int(datetime.now(timezone.utc).timestamp())
+    keys: Final = await repository().ingestion_keys()
     return IngestionSnapshot(
         issued_at=now,
         keys=tuple(

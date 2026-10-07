@@ -32,6 +32,7 @@ pub struct Snapshot {
 
 struct ActiveSnapshot {
     received: Instant,
+    issued_at: u64,
     expires_at: u64,
     keys: HashMap<String, Credential>,
 }
@@ -91,8 +92,16 @@ impl Credentials {
         if keys.len() != count {
             return Err(Error::Unavailable);
         }
-        *self.0.write().map_err(|_| Error::Unavailable)? = Some(ActiveSnapshot {
+        let mut current = self.0.write().map_err(|_| Error::Unavailable)?;
+        if current
+            .as_ref()
+            .is_some_and(|active| active.issued_at > snapshot.issued_at)
+        {
+            return Err(Error::Unavailable);
+        }
+        *current = Some(ActiveSnapshot {
             received: Instant::now(),
+            issued_at: snapshot.issued_at,
             expires_at: snapshot.issued_at + SNAPSHOT_TTL.as_secs(),
             keys,
         });
@@ -114,14 +123,24 @@ impl Credentials {
     }
 
     pub fn tenant(&self, headers: &HeaderMap) -> Result<Tenant, Error> {
-        let hash = format!("{:x}", Sha256::digest(bearer(headers)?.as_bytes()));
+        let token = bearer(headers)?;
+        let hash = format!("{:x}", Sha256::digest(token.as_bytes()));
         let guard = self.0.read().map_err(|_| Error::Unavailable)?;
         let snapshot = guard.as_ref().ok_or(Error::Unavailable)?;
         let now = unix_seconds();
         if snapshot.received.elapsed() >= SNAPSHOT_TTL || snapshot.expires_at <= now {
             return Err(Error::Unavailable);
         }
-        let key = snapshot.keys.get(&hash).ok_or(Error::Unauthorized)?;
+        let pending = token
+            .strip_prefix("lens-trace-")
+            .and_then(|value| value.split_once('-'))
+            .and_then(|(issued, _)| issued.parse::<u64>().ok())
+            .is_some_and(|issued| issued >= snapshot.issued_at && issued <= now.saturating_add(5));
+        let key = snapshot.keys.get(&hash).ok_or(if pending {
+            Error::CredentialsPending
+        } else {
+            Error::Unauthorized
+        })?;
         if key.expires_at.is_some_and(|expiry| expiry <= now) {
             return Err(Error::Unauthorized);
         }

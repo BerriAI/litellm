@@ -64,7 +64,7 @@ def new_key(request: IngestionKeyRequest, user_id: str) -> IngestionKeyCreated:
     now: Final = datetime.now(timezone.utc)
     if request.expires_at is not None and request.expires_at <= now:
         raise ValueError("Choose an expiry in the future")
-    token: Final = "lens-trace-" + secrets.token_urlsafe(40)
+    token: Final = f"lens-trace-{int(now.timestamp())}-" + secrets.token_urlsafe(40)
     digest: Final = hashlib.sha256(token.encode()).hexdigest()
     return IngestionKeyCreated(
         key=token,

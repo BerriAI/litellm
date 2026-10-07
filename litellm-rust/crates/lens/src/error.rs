@@ -33,6 +33,8 @@ pub enum Error {
     Configuration(&'static str),
     #[error("credential is invalid or expired")]
     Unauthorized,
+    #[error("tracing credentials have not propagated yet")]
+    CredentialsPending,
     #[error("Lens is temporarily unavailable")]
     Unavailable,
     #[error("request exceeds the size limit")]
@@ -69,6 +71,7 @@ impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::CredentialsPending => StatusCode::TOO_MANY_REQUESTS,
             Self::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidRequest => StatusCode::BAD_REQUEST,
             Self::TraceChanged => StatusCode::CONFLICT,
@@ -117,10 +120,14 @@ impl IntoResponse for Error {
             StatusCode::CONFLICT => "trace_changed",
             StatusCode::PAYLOAD_TOO_LARGE => "too_large",
             StatusCode::UNAUTHORIZED => "unauthorized",
+            StatusCode::TOO_MANY_REQUESTS => "pending_credentials",
             _ => "unavailable",
         };
         let mut response = (status, Json(serde_json::json!({"code": code}))).into_response();
-        if status == StatusCode::SERVICE_UNAVAILABLE {
+        if matches!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE | StatusCode::TOO_MANY_REQUESTS
+        ) {
             response
                 .headers_mut()
                 .insert("retry-after", http::HeaderValue::from_static("5"));
