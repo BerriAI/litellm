@@ -1,123 +1,17 @@
 use serde_json::{Map, Value};
 use strum::IntoStaticStr;
 
-use crate::formats::chat_completions::ReasoningEffort;
+use crate::formats::chat::ReasoningEffort;
 use crate::recognized::Recognized;
 
-#[macro_rules_attribute::apply(wire_type)]
-#[serde(untagged)]
-pub enum SystemPrompt {
-    Text(String),
-    Blocks(Vec<ContentBlock>),
-}
-
-#[macro_rules_attribute::apply(wire_type)]
-#[serde(untagged)]
-pub enum MessageContent {
-    Text(String),
-    Blocks(Vec<ContentBlock>),
-}
-
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    strum::Display,
-    strum::EnumString,
-    serde_with::DeserializeFromStr,
-    serde_with::SerializeDisplay,
-)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "schema", schemars(from = "String", into = "String"))]
-#[strum(serialize_all = "snake_case")]
-pub enum ContentBlockType {
-    Text,
-    Thinking,
-    RedactedThinking,
-    ToolUse,
-    ServerToolUse,
-    ToolResult,
-    Compaction,
-    AdvisorToolResult,
-    WebSearchToolResult,
-    #[strum(default, transparent)]
-    Other(String),
-}
-
-impl From<String> for ContentBlockType {
-    fn from(value: String) -> Self {
-        value.parse().unwrap_or_else(|never| match never {})
-    }
-}
-
-impl From<ContentBlockType> for String {
-    fn from(value: ContentBlockType) -> Self {
-        value.to_string()
-    }
-}
-
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Default)]
-pub struct ContentBlock {
-    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub block_type: Option<ContentBlockType>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub signature: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_use_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_specific_fields: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_control: Option<CacheControl>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-impl ContentBlock {
-    pub fn text(text: impl Into<String>) -> Self {
-        Self {
-            block_type: Some(ContentBlockType::Text),
-            text: Some(text.into()),
-            ..Self::default()
-        }
-    }
-
-    pub fn is_type(&self, block_type: ContentBlockType) -> bool {
-        self.block_type.as_ref() == Some(&block_type)
-    }
-}
-
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Default)]
-pub struct CacheControl {
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub cache_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ttl: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope: Option<String>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
+use super::{
+    CacheControl, ContainerReference, ContentBlock, McpServer, MessageContent, MessagesCompaction,
+    MessagesMetadata, OutputFormat, Safeguard, SystemPrompt, ToolChoice, ToolDefinition,
+};
 
 #[macro_rules_attribute::apply(wire_type)]
 pub struct Message {
-    pub role: String,
+    pub role: super::MessageRole,
     pub content: MessageContent,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -168,23 +62,203 @@ impl Speed {
     }
 }
 
-/// The tools whose presence changes how the request is sent. Every other tool, custom or
-/// server, deserializes as `Recognized::Unrecognized` and passes through verbatim.
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(untagged)]
+pub enum MessagesTool {
+    Builtin(BuiltinMessagesTool),
+    Custom(CustomTool),
+}
+
+impl MessagesTool {
+    pub fn definition(&self) -> &ToolDefinition {
+        match self {
+            Self::Builtin(tool) => tool.definition(),
+            Self::Custom(tool) => &tool.definition,
+        }
+    }
+
+    pub fn map_definition(self, f: impl FnOnce(ToolDefinition) -> ToolDefinition) -> Self {
+        match self {
+            Self::Builtin(tool) => Self::Builtin(tool.map_definition(f)),
+            Self::Custom(tool) => Self::Custom(CustomTool {
+                definition: f(tool.definition),
+            }),
+        }
+    }
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(try_from = "ToolDefinition")]
+pub struct CustomTool {
+    #[serde(flatten)]
+    pub definition: ToolDefinition,
+}
+
+impl TryFrom<ToolDefinition> for CustomTool {
+    type Error = serde::de::value::Error;
+
+    fn try_from(definition: ToolDefinition) -> Result<Self, Self::Error> {
+        if definition.extra.contains_key("type")
+            || !matches!(definition.name, Some(Recognized::Known(_)))
+        {
+            return Err(serde::de::Error::custom(
+                "expected a custom tool with a string name and no type",
+            ));
+        }
+        Ok(Self { definition })
+    }
+}
+
 #[macro_rules_attribute::apply(wire_type)]
 #[serde(tag = "type")]
-pub enum MessagesTool {
+pub enum BuiltinMessagesTool {
     #[serde(rename = "advisor_20260301")]
-    Advisor {
-        #[serde(flatten)]
-        extra: Map<String, Value>,
-    },
+    Advisor(ToolDefinition),
     #[serde(rename = "tool_search_tool_regex_20251119")]
-    ToolSearchRegex {
-        #[serde(flatten)]
-        extra: Map<String, Value>,
-    },
+    ToolSearchRegex(ToolDefinition),
     #[serde(rename = "tool_search_tool_bm25_20251119")]
-    ToolSearchBm25 {
+    ToolSearchBm25(ToolDefinition),
+    #[serde(rename = "custom")]
+    Custom(ToolDefinition),
+    #[serde(rename = "web_search_20250305")]
+    WebSearch(ToolDefinition),
+    #[serde(rename = "computer_20250124")]
+    Computer(ToolDefinition),
+    #[serde(rename = "bash_20250124")]
+    Bash(ToolDefinition),
+    #[serde(rename = "text_editor_20250728")]
+    TextEditor(ToolDefinition),
+    #[serde(rename = "code_execution_20250825")]
+    CodeExecution(ToolDefinition),
+    #[serde(rename = "web_search_20260209")]
+    WebSearch20260209(ToolDefinition),
+    #[serde(rename = "computer_20241022")]
+    Computer20241022(ToolDefinition),
+    #[serde(rename = "bash_20241022")]
+    Bash20241022(ToolDefinition),
+    #[serde(rename = "text_editor_20241022")]
+    TextEditor20241022(ToolDefinition),
+    #[serde(rename = "text_editor_20250124")]
+    TextEditor20250124(ToolDefinition),
+    #[serde(rename = "code_execution_20250522")]
+    CodeExecution20250522(ToolDefinition),
+    #[serde(rename = "memory_20250818")]
+    Memory(ToolDefinition),
+    #[serde(rename = "web_fetch_20250910")]
+    WebFetch(ToolDefinition),
+    #[serde(rename = "web_fetch_20260209")]
+    WebFetch20260209(ToolDefinition),
+    #[serde(rename = "web_fetch_20260309")]
+    WebFetch20260309(ToolDefinition),
+    #[serde(rename = "web_fetch_20260318")]
+    WebFetch20260318(ToolDefinition),
+    #[serde(rename = "web_search_20260318")]
+    WebSearch20260318(ToolDefinition),
+    #[serde(rename = "code_execution_20260120")]
+    CodeExecution20260120(ToolDefinition),
+    #[serde(rename = "code_execution_20260521")]
+    CodeExecution20260521(ToolDefinition),
+    #[serde(rename = "computer_20251124")]
+    Computer20251124(ToolDefinition),
+    #[serde(rename = "text_editor_20250429")]
+    TextEditor20250429(ToolDefinition),
+}
+
+impl BuiltinMessagesTool {
+    pub fn definition(&self) -> &ToolDefinition {
+        match self {
+            Self::Advisor(definition)
+            | Self::ToolSearchRegex(definition)
+            | Self::ToolSearchBm25(definition)
+            | Self::Custom(definition)
+            | Self::WebSearch(definition)
+            | Self::Computer(definition)
+            | Self::Bash(definition)
+            | Self::TextEditor(definition)
+            | Self::CodeExecution(definition)
+            | Self::WebSearch20260209(definition)
+            | Self::Computer20241022(definition)
+            | Self::Bash20241022(definition)
+            | Self::TextEditor20241022(definition)
+            | Self::TextEditor20250124(definition)
+            | Self::CodeExecution20250522(definition)
+            | Self::Memory(definition)
+            | Self::WebFetch(definition)
+            | Self::WebFetch20260209(definition)
+            | Self::WebFetch20260309(definition)
+            | Self::WebFetch20260318(definition)
+            | Self::WebSearch20260318(definition)
+            | Self::CodeExecution20260120(definition)
+            | Self::CodeExecution20260521(definition)
+            | Self::Computer20251124(definition)
+            | Self::TextEditor20250429(definition) => definition,
+        }
+    }
+
+    pub fn map_definition(self, f: impl FnOnce(ToolDefinition) -> ToolDefinition) -> Self {
+        match self {
+            Self::Advisor(definition) => Self::Advisor(f(definition)),
+            Self::ToolSearchRegex(definition) => Self::ToolSearchRegex(f(definition)),
+            Self::ToolSearchBm25(definition) => Self::ToolSearchBm25(f(definition)),
+            Self::Custom(definition) => Self::Custom(f(definition)),
+            Self::WebSearch(definition) => Self::WebSearch(f(definition)),
+            Self::Computer(definition) => Self::Computer(f(definition)),
+            Self::Bash(definition) => Self::Bash(f(definition)),
+            Self::TextEditor(definition) => Self::TextEditor(f(definition)),
+            Self::CodeExecution(definition) => Self::CodeExecution(f(definition)),
+            Self::WebSearch20260209(definition) => Self::WebSearch20260209(f(definition)),
+            Self::Computer20241022(definition) => Self::Computer20241022(f(definition)),
+            Self::Bash20241022(definition) => Self::Bash20241022(f(definition)),
+            Self::TextEditor20241022(definition) => Self::TextEditor20241022(f(definition)),
+            Self::TextEditor20250124(definition) => Self::TextEditor20250124(f(definition)),
+            Self::CodeExecution20250522(definition) => Self::CodeExecution20250522(f(definition)),
+            Self::Memory(definition) => Self::Memory(f(definition)),
+            Self::WebFetch(definition) => Self::WebFetch(f(definition)),
+            Self::WebFetch20260209(definition) => Self::WebFetch20260209(f(definition)),
+            Self::WebFetch20260309(definition) => Self::WebFetch20260309(f(definition)),
+            Self::WebFetch20260318(definition) => Self::WebFetch20260318(f(definition)),
+            Self::WebSearch20260318(definition) => Self::WebSearch20260318(f(definition)),
+            Self::CodeExecution20260120(definition) => Self::CodeExecution20260120(f(definition)),
+            Self::CodeExecution20260521(definition) => Self::CodeExecution20260521(f(definition)),
+            Self::Computer20251124(definition) => Self::Computer20251124(f(definition)),
+            Self::TextEditor20250429(definition) => Self::TextEditor20250429(f(definition)),
+        }
+    }
+
+    pub fn is_web_search(&self) -> bool {
+        match self {
+            Self::WebSearch(_) | Self::WebSearch20260209(_) | Self::WebSearch20260318(_) => true,
+            Self::Advisor(_)
+            | Self::ToolSearchRegex(_)
+            | Self::ToolSearchBm25(_)
+            | Self::Custom(_)
+            | Self::Computer(_)
+            | Self::Bash(_)
+            | Self::TextEditor(_)
+            | Self::CodeExecution(_)
+            | Self::Computer20241022(_)
+            | Self::Bash20241022(_)
+            | Self::TextEditor20241022(_)
+            | Self::TextEditor20250124(_)
+            | Self::CodeExecution20250522(_)
+            | Self::Memory(_)
+            | Self::WebFetch(_)
+            | Self::WebFetch20260209(_)
+            | Self::WebFetch20260309(_)
+            | Self::WebFetch20260318(_)
+            | Self::CodeExecution20260120(_)
+            | Self::CodeExecution20260521(_)
+            | Self::Computer20251124(_)
+            | Self::TextEditor20250429(_) => false,
+        }
+    }
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContextTrigger {
+    InputTokens {
+        value: Recognized<i64>,
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
@@ -195,6 +269,12 @@ pub enum MessagesTool {
 pub enum ContextEdit {
     #[serde(rename = "compact_20260112")]
     Compact {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::serde_compat::deserialize_present"
+        )]
+        trigger: Option<Recognized<ContextTrigger>>,
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
@@ -224,8 +304,12 @@ pub struct ContextManagement {
 pub struct OutputConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<Recognized<EffortLevel>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub format: Option<Value>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub format: Option<Recognized<OutputFormat>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -311,8 +395,12 @@ pub struct MessagesOptionalParams {
     pub max_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<SystemPrompt>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Value>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub metadata: Option<Recognized<MessagesMetadata>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -325,20 +413,36 @@ pub struct MessagesOptionalParams {
     pub top_k: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Recognized<MessagesTool>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<Value>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub tool_choice: Option<Recognized<ToolChoice>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<Recognized<ThinkingConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub container: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mcp_servers: Option<Vec<Value>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub container: Option<Recognized<ContainerReference>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub mcp_servers: Option<Vec<Recognized<McpServer>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_management: Option<Recognized<ContextManagement>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_format: Option<Value>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub output_format: Option<Recognized<OutputFormat>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_config: Option<Recognized<OutputConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -347,8 +451,24 @@ pub struct MessagesOptionalParams {
     pub inference_geo: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<Recognized<ReasoningEffort>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compaction: Option<Value>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub compaction: Option<Recognized<MessagesCompaction>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub cache_control: Option<Recognized<CacheControl>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_compat::deserialize_present"
+    )]
+    pub safeguards: Option<Recognized<Vec<Recognized<Safeguard>>>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -417,18 +537,14 @@ mod tests {
         });
         let request: MessagesRequest = serde_json::from_value(body.clone()).unwrap();
 
+        assert_eq!(request.params.max_tokens, Some(16));
+        assert_eq!(request.params.stream, Some(true));
         assert_eq!(
-            (
-                request.params.max_tokens,
-                request.params.stream,
-                request
-                    .params
-                    .extra
-                    .keys()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>(),
-            ),
-            (Some(16_u64), Some(true), vec!["safeguards"])
+            request.params.safeguards.as_ref().unwrap().known().unwrap()[0]
+                .known()
+                .unwrap()
+                .safeguard_type,
+            "dangerous_tool_use"
         );
         assert_eq!(serde_json::to_value(request).unwrap(), body);
     }
@@ -573,41 +689,51 @@ mod tests {
 
     #[rstest]
     #[case::advisor(
-        json!({"type": "advisor_20260301", "name": "advisor"}),
-        Recognized::Known(MessagesTool::Advisor { extra: Map::from_iter([("name".to_string(), json!("advisor"))]) })
+        json!({"type": "advisor_20260301", "name": "advisor", "model": "model"}),
+        MessagesTool::Builtin(BuiltinMessagesTool::Advisor(ToolDefinition {
+            name: Some(Recognized::Known("advisor".into())),
+            model: Some(Recognized::Known("model".into())),
+            ..ToolDefinition::default()
+        }))
     )]
     #[case::regex_tool_search(
         json!({"type": "tool_search_tool_regex_20251119"}),
-        Recognized::Known(MessagesTool::ToolSearchRegex { extra: Map::new() })
+        MessagesTool::Builtin(BuiltinMessagesTool::ToolSearchRegex(ToolDefinition::default()))
     )]
     #[case::bm25_tool_search(
         json!({"type": "tool_search_tool_bm25_20251119"}),
-        Recognized::Known(MessagesTool::ToolSearchBm25 { extra: Map::new() })
+        MessagesTool::Builtin(BuiltinMessagesTool::ToolSearchBm25(ToolDefinition::default()))
     )]
     #[case::custom_tool_without_a_type(
-        json!({"name": "advisor", "input_schema": {}}),
-        Recognized::Unrecognized(json!({"name": "advisor", "input_schema": {}}))
+        json!({"name": "f", "input_schema": {}}),
+        MessagesTool::Custom(CustomTool { definition: ToolDefinition {
+            name: Some(Recognized::Known("f".into())),
+            input_schema: Some(Recognized::Known(crate::json_schema::JsonSchema::Object(Box::default()))),
+            ..ToolDefinition::default()
+        } })
     )]
-    #[case::other_server_tool(
+    #[case::web_search(
         json!({"type": "web_search_20250305", "name": "web_search"}),
-        Recognized::Unrecognized(json!({"type": "web_search_20250305", "name": "web_search"}))
+        MessagesTool::Builtin(BuiltinMessagesTool::WebSearch(ToolDefinition {
+            name: Some(Recognized::Known("web_search".into())),
+            ..ToolDefinition::default()
+        }))
     )]
-    #[case::not_an_object(json!("advisor_20260301"), Recognized::Unrecognized(json!("advisor_20260301")))]
-    fn tools_are_recognized_by_their_exact_type(
-        #[case] tool: Value,
-        #[case] expected: Recognized<MessagesTool>,
-    ) {
-        assert_eq!(
-            serde_json::from_value::<Recognized<MessagesTool>>(tool).unwrap(),
-            expected
-        );
+    fn tools_expose_their_definitions(#[case] wire: Value, #[case] expected: MessagesTool) {
+        let parsed: Recognized<MessagesTool> = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(parsed, Recognized::Known(expected));
+        assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
     }
 
     #[rstest]
     #[case::compact(
         json!({"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 1}}),
         Recognized::Known(ContextEdit::Compact {
-            extra: Map::from_iter([("trigger".to_string(), json!({"type": "input_tokens", "value": 1}))]),
+            trigger: Some(Recognized::Known(ContextTrigger::InputTokens {
+                value: Recognized::Known(1),
+                extra: Map::new(),
+            })),
+            extra: Map::new(),
         })
     )]
     #[case::clear_tool_uses(
@@ -634,7 +760,7 @@ mod tests {
     #[case::edits(
         json!({"edits": [{"type": "compact_20260112"}]}),
         Recognized::Known(ContextManagement {
-            edits: Some(vec![Recognized::Known(ContextEdit::Compact { extra: Map::new() })]),
+            edits: Some(vec![Recognized::Known(ContextEdit::Compact { trigger: None, extra: Map::new() })]),
             extra: Map::new(),
         })
     )]
@@ -695,5 +821,98 @@ mod tests {
             serde_json::to_value(ReasoningEffort::from(level)).unwrap(),
             json!(level.as_str())
         );
+    }
+
+    #[rstest]
+    #[case::omitted(None, json!({}))]
+    #[case::null(Some(json!(null)), json!({"output_config":null}))]
+    #[case::empty(Some(json!({})), json!({"output_config":{}}))]
+    #[case::effort(Some(json!({"effort":"high"})), json!({"output_config":{"effort":"high"}}))]
+    #[case::opaque(Some(json!({"format":{"type":"future","schema":null}})), json!({"output_config":{"format":{"type":"future","schema":null}}}))]
+    fn per_turn_output_config_preserves_extension_presence(
+        #[case] config: Option<Value>,
+        #[case] extension: Value,
+    ) {
+        let message = Message {
+            role: super::super::MessageRole::System,
+            content: MessageContent::Blocks(vec![ContentBlock::text("# Environment")]),
+            extra: config
+                .map(|value| Map::from_iter([("output_config".into(), value)]))
+                .unwrap_or_default(),
+        };
+        let wire = Value::Object(
+            Map::from_iter([
+                ("role".into(), json!("system")),
+                (
+                    "content".into(),
+                    json!([{"type":"text","text":"# Environment"}]),
+                ),
+            ])
+            .into_iter()
+            .chain(extension.as_object().unwrap().clone())
+            .collect(),
+        );
+        assert_eq!(serde_json::to_value(&message).unwrap(), wire);
+        assert_eq!(serde_json::from_value::<Message>(wire).unwrap(), message);
+    }
+
+    #[rstest]
+    fn structured_output_config_keeps_format_and_effort_together() {
+        let config = OutputConfig {
+            effort: Some(Recognized::Known(EffortLevel::Xhigh)),
+            format: Some(Recognized::Known(OutputFormat {
+                format_type: super::super::OutputFormatType::JsonSchema,
+                schema: Some(Recognized::Known(crate::json_schema::JsonSchema::Object(
+                    Box::default(),
+                ))),
+                strict: None,
+                extra: Map::new(),
+            })),
+            extra: Map::from_iter([("task_budget".into(), json!({"type":"tokens","total":4096}))]),
+        };
+        let wire = json!({"effort":"xhigh","format":{"type":"json_schema","schema":{}},"task_budget":{"type":"tokens","total":4096}});
+        assert_eq!(serde_json::to_value(&config).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<OutputConfig>(wire).unwrap(),
+            config
+        );
+    }
+
+    #[rstest]
+    #[case::omitted(None, json!({"type":"adaptive"}))]
+    #[case::summarized(Some(ThinkingDisplay::Summarized), json!({"type":"adaptive","display":"summarized"}))]
+    #[case::omitted_display(Some(ThinkingDisplay::Omitted), json!({"type":"adaptive","display":"omitted"}))]
+    #[case::updates(Some(ThinkingDisplay::Updates), json!({"type":"adaptive","display":"updates"}))]
+    fn native_messages_thinking_display_contract(
+        #[case] display: Option<ThinkingDisplay>,
+        #[case] wire: Value,
+    ) {
+        let thinking = ThinkingConfig::adaptive(display);
+        assert_eq!(serde_json::to_value(&thinking).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<ThinkingConfig>(wire).unwrap(),
+            thinking
+        );
+    }
+
+    #[rstest]
+    #[case::string(json!("hi"))]
+    #[case::scalar(json!(123))]
+    #[case::list(json!([{"role":"user","content":"hello"}]))]
+    #[case::null_content(json!({"role":"user","content":null}))]
+    #[case::scalar_block(json!({"role":"user","content":["not a block"]}))]
+    #[case::system_string_block(json!({"role":"system","content":["tool_addition"]}))]
+    fn malformed_message_entry_is_rejected(#[case] entry: Value) {
+        let wire = json!({"model":"model","messages":[entry,{"role":"user","content":"hello"}]});
+        assert!(serde_json::from_value::<MessagesRequest>(wire).is_err());
+    }
+
+    #[rstest]
+    fn non_string_text_is_rejected_at_request_boundary() {
+        let wire = json!({"model":"model","messages":[{"role":"user","content":[
+            {"type":"text","text":123},
+            {"type":"tool_result","tool_use_id":"x","content":"y"}
+        ]}]});
+        assert!(serde_json::from_value::<MessagesRequest>(wire).is_err());
     }
 }

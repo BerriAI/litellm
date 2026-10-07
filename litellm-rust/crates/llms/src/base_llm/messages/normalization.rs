@@ -20,14 +20,18 @@ fn system_into_blocks(system: Option<SystemPrompt>) -> Vec<ContentBlock> {
 }
 
 pub fn fold_system_role_messages(request: MessagesRequest) -> MessagesRequest {
-    if !request.messages.iter().any(|msg| msg.role == SYSTEM_ROLE) {
+    if !request
+        .messages
+        .iter()
+        .any(|msg| msg.role.as_str() == SYSTEM_ROLE)
+    {
         return request;
     }
 
     let (system_messages, chat_messages): (Vec<Message>, Vec<Message>) = request
         .messages
         .into_iter()
-        .partition(|msg| msg.role == SYSTEM_ROLE);
+        .partition(|msg| msg.role.as_str() == SYSTEM_ROLE);
 
     let folded_system: Vec<ContentBlock> = system_into_blocks(request.params.system)
         .into_iter()

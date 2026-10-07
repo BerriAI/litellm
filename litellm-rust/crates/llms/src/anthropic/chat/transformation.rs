@@ -1,9 +1,9 @@
 use litellm_auth::SecretValue;
 use litellm_core_utils::{
-    core_helpers::{finish_reason_for, unix_now, usage_from_parts},
+    core_helpers::unix_now,
     prompt_templates::factory::{Conversation, build_conversation},
 };
-use litellm_llms_types::formats::chat_completions::{
+use litellm_llms_types::formats::chat::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatMessage,
 };
 use serde::Deserialize;
@@ -14,13 +14,14 @@ use crate::{
     anthropic::{
         chat::handler::ModelResponseIterator,
         common_utils::{
-            API_KEY_PLACEMENT, complete_anthropic_url, forwarded_oauth_bearer,
-            resolve_anthropic_api_key,
+            API_KEY_PLACEMENT, DEFAULT_ANTHROPIC_HEADERS, complete_anthropic_url,
+            forwarded_oauth_bearer, resolve_anthropic_api_key,
         },
     },
     base_llm::{
         auth::AuthScheme,
         chat::{
+            normalization::{finish_reason_for, usage_from_parts},
             streaming::{ChatStream, StreamShape},
             transformation::{
                 BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
@@ -199,10 +200,7 @@ impl BaseConfig for AnthropicConfig {
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        &[
-            ("anthropic-version", "2023-06-01"),
-            ("content-type", "application/json"),
-        ]
+        DEFAULT_ANTHROPIC_HEADERS
     }
 
     /// An OAuth bearer is the whole credential: Python's `validate_environment`

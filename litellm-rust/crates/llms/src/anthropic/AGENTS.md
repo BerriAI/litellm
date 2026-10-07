@@ -1,8 +1,23 @@
+# structure
+
 - This directory owns Anthropic provider behavior: credentials, OAuth policy, endpoints, beta requirements, model capabilities, and transformations
+
 - `common_utils.rs` means shared across Anthropic operations, not shared across providers
+
 - Put behavior specific to the Messages API in `messages/`
+
+# boundaries
+
 - Keep generic HTTP mechanics in `litellm-http`, configuration lookup in the existing settings utilities, and credential application in the shared auth layer
-- Choose authentication policy and required headers here, then let shared infrastructure apply those decisions
+
 - Consume shared API contracts from `litellm-llms-types`. Do not define public Messages protocol types under this provider
+
+# invariants
+
+- Choose authentication policy and required headers here, then let shared infrastructure apply those decisions
+
 - Preserve Python's concepts and observable behavior where useful, without mechanically reproducing its class hierarchy, helpers, or file structure
+
+# gotchas
+
 - `ReplayedWebSearchResult` and `ReplayedWebSearchContent` are private partial models for replay flattening, not complete public protocol contracts. Keep them private while they serve that transformation

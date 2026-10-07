@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
+use crate::recognized::Recognized;
+use crate::serde_compat::deserialize_present;
 use crate::serde_compat::{FiniteF64, LaxI64};
 
 #[macro_rules_attribute::apply(wire_type)]
@@ -74,7 +76,7 @@ pub struct OcrPageDimensions {
 #[derive(Default)]
 pub struct OcrPageImage {
     pub image_base64: Option<String>,
-    pub bbox: Option<Map<String, Value>>,
+    pub bbox: Option<OcrBoundingBox>,
     #[serde(flatten)]
     pub extra_fields: Map<String, Value>,
 }
@@ -115,9 +117,9 @@ pub struct LiteLLMOcrResponse {
     pub document_annotation: Option<Value>,
     pub usage_info: Option<OcrUsageInfo>,
     pub content: Option<String>,
-    pub tables: Option<Vec<Map<String, Value>>>,
+    pub tables: Option<Vec<OcrTable>>,
     #[serde(rename = "keyValuePairs")]
-    pub key_value_pairs: Option<Vec<Map<String, Value>>>,
+    pub key_value_pairs: Option<Vec<OcrKeyValuePair>>,
     #[serde(default = "ocr_object")]
     pub object: String,
     #[serde(flatten)]
@@ -149,4 +151,134 @@ impl LiteLLMOcrResponse {
 
 fn ocr_object() -> String {
     "ocr".into()
+}
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct OcrBoundingBox {
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub x: Option<Recognized<serde_json::Number>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub y: Option<Recognized<serde_json::Number>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub width: Option<Recognized<serde_json::Number>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub height: Option<Recognized<serde_json::Number>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub top_left_x: Option<Recognized<serde_json::Number>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub top_left_y: Option<Recognized<serde_json::Number>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub bottom_right_x: Option<Recognized<serde_json::Number>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub bottom_right_y: Option<Recognized<serde_json::Number>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct OcrTable {
+    #[serde(default, deserialize_with = "deserialize_present")]
+    #[serde(rename = "rowCount")]
+    pub row_count: Option<Recognized<u64>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    #[serde(rename = "columnCount")]
+    pub column_count: Option<Recognized<u64>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub cells: Option<Recognized<Vec<Recognized<OcrTableCell>>>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    #[serde(rename = "boundingRegions")]
+    pub bounding_regions: Option<Recognized<Vec<Recognized<OcrBoundingRegion>>>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub spans: Option<Recognized<Vec<Recognized<OcrTextSpan>>>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub content: Option<Recognized<String>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct OcrTableCell {
+    #[serde(default, deserialize_with = "deserialize_present")]
+    #[serde(rename = "rowIndex")]
+    pub row_index: Option<Recognized<u64>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    #[serde(rename = "columnIndex")]
+    pub column_index: Option<Recognized<u64>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    #[serde(rename = "rowSpan")]
+    pub row_span: Option<Recognized<u64>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    #[serde(rename = "columnSpan")]
+    pub column_span: Option<Recognized<u64>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub kind: Option<Recognized<String>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub content: Option<Recognized<String>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    #[serde(rename = "boundingRegions")]
+    pub bounding_regions: Option<Recognized<Vec<Recognized<OcrBoundingRegion>>>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub spans: Option<Recognized<Vec<Recognized<OcrTextSpan>>>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct OcrKeyValuePair {
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub key: Option<Recognized<OcrKeyValueElement>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub value: Option<Recognized<OcrKeyValueElement>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub confidence: Option<Recognized<serde_json::Number>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct OcrKeyValueElement {
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub content: Option<Recognized<String>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    #[serde(rename = "boundingRegions")]
+    pub bounding_regions: Option<Recognized<Vec<Recognized<OcrBoundingRegion>>>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub spans: Option<Recognized<Vec<Recognized<OcrTextSpan>>>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct OcrBoundingRegion {
+    #[serde(default, deserialize_with = "deserialize_present")]
+    #[serde(rename = "pageNumber")]
+    pub page_number: Option<Recognized<u64>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub polygon: Option<Recognized<Vec<serde_json::Number>>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct OcrTextSpan {
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub offset: Option<Recognized<u64>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub length: Option<Recognized<u64>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }

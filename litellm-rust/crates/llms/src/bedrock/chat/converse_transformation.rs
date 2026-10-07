@@ -5,10 +5,10 @@ use litellm_auth_aws::{
     resolve_bedrock_region,
 };
 use litellm_core_utils::{
-    core_helpers::{finish_reason_for, unix_now, usage_from_parts},
+    core_helpers::unix_now,
     prompt_templates::factory::{Conversation, TurnRole, build_conversation},
 };
-use litellm_llms_types::formats::chat_completions::{
+use litellm_llms_types::formats::chat::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
     ChatCompletionsUsage, ChatMessage, ChatMessageContent,
 };
@@ -20,6 +20,7 @@ use crate::{
     base_llm::{
         auth::AuthScheme,
         chat::{
+            normalization::{finish_reason_for, usage_from_parts},
             streaming::StreamShape,
             transformation::{
                 BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
@@ -420,10 +421,8 @@ fn has_blank_text(message: &ChatMessage) -> bool {
     match &message.content {
         None => false,
         Some(ChatMessageContent::Text(text)) => text.trim().is_empty(),
-        Some(ChatMessageContent::Parts(parts)) => parts.iter().any(|part| {
-            part.get("text")
-                .and_then(Value::as_str)
-                .is_none_or(|text| text.trim().is_empty())
-        }),
+        Some(ChatMessageContent::Parts(parts)) => parts
+            .iter()
+            .any(|part| part.text().is_none_or(|text| text.trim().is_empty())),
     }
 }

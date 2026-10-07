@@ -1,4 +1,5 @@
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_llms_types::recognized::Recognized;
 use serde_json::{Map, Value};
 
 pub fn get_provider_specific_headers(
@@ -19,6 +20,15 @@ pub fn get_provider_specific_headers(
                 .any(|scoped| scoped.trim() == custom_llm_provider)
         })
         .flat_map(|entry| entry.extra_headers.clone())
+        .map(|(key, value)| {
+            (
+                key,
+                match value {
+                    Recognized::Known(value) => Value::String(value),
+                    Recognized::Unrecognized(value) => value,
+                },
+            )
+        })
         .collect()
 }
 
@@ -72,6 +82,10 @@ mod tests {
     #[case::empty_list(json!([]), json!({}))]
     #[case::entry_without_scope(json!({"extra_headers": {"x-scoped": "yes"}}), json!({}))]
     #[case::entry_without_headers(json!({"custom_llm_provider": "anthropic"}), json!({}))]
+    #[case::non_string_values_are_not_dropped(
+        json!({"custom_llm_provider":"anthropic","extra_headers":{"x-header":17,"x-null":null}}),
+        json!({"x-header":17,"x-null":null}),
+    )]
     fn provider_specific_headers_match_the_scoped_provider(
         #[case] configured: Value,
         #[case] expected: Value,

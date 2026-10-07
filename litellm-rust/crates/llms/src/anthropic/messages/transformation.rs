@@ -1,7 +1,8 @@
 use litellm_auth::CredentialPlacement;
 use litellm_llms_types::{
     formats::messages::{
-        ContextEdit, ContextManagement, Message, MessagesOptionalParams, MessagesRequest, Speed,
+        ContextEdit, ContextManagement, ContextTrigger, Message, MessagesOptionalParams,
+        MessagesRequest, Speed,
     },
     providers::anthropic::{AnthropicBeta, BetaSet},
     recognized::Recognized,
@@ -14,21 +15,16 @@ use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
-        has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
-        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
-        strip_encrypted_reasoning_blocks,
+        ANTHROPIC_BASE_URL_ENV, DEFAULT_ANTHROPIC_HEADERS, OauthHandling, complete_anthropic_url,
+        get_auth_header, has_advisor_tool, has_anthropic_credential, is_tool_search_used,
+        merge_beta_headers, optionally_handle_anthropic_oauth, requires_native_compaction_beta,
+        strip_advisor_blocks, strip_encrypted_reasoning_blocks,
     },
     base_llm::{
         auth::AuthScheme,
         messages::transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
     },
 };
-
-pub(crate) const DEFAULT_HEADERS: &[(&str, &str)] = &[
-    ("anthropic-version", "2023-06-01"),
-    ("content-type", "application/json"),
-];
 
 pub struct AnthropicMessagesConfig;
 
@@ -106,7 +102,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
+        DEFAULT_ANTHROPIC_HEADERS
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
@@ -190,12 +186,20 @@ fn context_management_betas(
 }
 
 fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
-    params.output_format.is_some()
+    params
+        .output_format
+        .as_ref()
+        .is_some_and(|value| !matches!(value, Recognized::Unrecognized(Value::Null)))
         || params
             .output_config
             .as_ref()
             .and_then(Recognized::known)
-            .is_some_and(|config| config.format.is_some())
+            .is_some_and(|config| {
+                config
+                    .format
+                    .as_ref()
+                    .is_some_and(|value| !matches!(value, Recognized::Unrecognized(Value::Null)))
+            })
 }
 
 fn messages_carry_output_config(messages: &[Message]) -> bool {
@@ -283,17 +287,26 @@ fn compact_edit_from_openai(entry: &Map<String, Value>) -> Option<ContextEdit> {
     let trigger = entry
         .get("compact_threshold")
         .and_then(Value::as_f64)
-        .map(|threshold| json!({"type": "input_tokens", "value": threshold as i64}));
+        .map(|threshold| {
+            Recognized::Known(ContextTrigger::InputTokens {
+                value: Recognized::Known(threshold as i64),
+                extra: Map::new(),
+            })
+        });
     let passthrough = entry
         .iter()
-        .filter(|(key, _)| !matches!(key.as_str(), "type" | "compact_threshold"))
+        .filter(|(key, _)| !matches!(key.as_str(), "type" | "compact_threshold" | "trigger"))
         .map(|(key, value)| (key.clone(), value.clone()));
     Some(ContextEdit::Compact {
-        extra: trigger
-            .map(|trigger| ("trigger".to_string(), trigger))
-            .into_iter()
-            .chain(passthrough)
-            .collect(),
+        trigger: entry
+            .get("trigger")
+            .map(|value| {
+                serde_json::from_value::<ContextTrigger>(value.clone())
+                    .map(Recognized::Known)
+                    .unwrap_or_else(|_| Recognized::Unrecognized(value.clone()))
+            })
+            .or(trigger),
+        extra: passthrough.collect(),
     })
 }
 
@@ -1090,15 +1103,44 @@ mod tests {
         );
     }
 
-    #[test]
-    fn default_headers_match_anthropic() {
-        assert_eq!(
-            ANTHROPIC_MESSAGES_CONFIG.default_headers(),
-            &[
-                ("anthropic-version", "2023-06-01"),
-                ("content-type", "application/json"),
-            ]
+    #[rstest]
+    #[case::api_key("sk-ant-api-test")]
+    #[case::oauth("sk-ant-oat-test")]
+    fn default_headers_agree_across_anthropic_adapters(#[case] api_key: &str) {
+        use crate::{
+            anthropic::{
+                chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
+                count_tokens::transformation::{
+                    ANTHROPIC_COUNT_TOKENS_TRANSFORMATION, AnthropicCountTokensConfig,
+                },
+            },
+            azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
+            base_llm::chat::transformation::BaseConfig,
+        };
+
+        let defaults = ANTHROPIC_MESSAGES_CONFIG.default_headers();
+        assert_eq!(defaults.len(), 2);
+        assert!(defaults.contains(&("content-type", "application/json")));
+        assert!(
+            defaults
+                .iter()
+                .any(|(name, value)| { *name == "anthropic-version" && !value.is_empty() })
         );
+        assert_eq!(
+            ANTHROPIC_CHAT_COMPLETIONS_CONFIG.default_headers(),
+            defaults
+        );
+        assert_eq!(AZURE_ANTHROPIC_MESSAGES_CONFIG.default_headers(), defaults);
+
+        let count_headers = ANTHROPIC_COUNT_TOKENS_TRANSFORMATION.required_headers(api_key);
+        for (name, value) in defaults {
+            let matching: Vec<_> = count_headers
+                .iter()
+                .filter(|(header_name, _)| header_name == name)
+                .map(|(_, header_value)| header_value.as_str())
+                .collect();
+            assert_eq!(matching, [*value]);
+        }
     }
 
     #[test]

@@ -1,7 +1,10 @@
+use std::collections::BTreeMap;
+
 use litellm_llms::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
 use litellm_llms_types::{
     headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
     providers::anthropic::{AnthropicBeta, BetaSet},
+    recognized::Recognized,
 };
 use rstest::rstest;
 
@@ -170,7 +173,7 @@ async fn caller_headers_and_provider_scoped_headers_are_forwarded(call: Messages
     let upstream = upstream([message_response()]).await;
     let scoped = |provider: &str, value: &str| ProviderSpecificHeader {
         custom_llm_provider: provider.into(),
-        extra_headers: object(json!({"x-scoped": value})),
+        extra_headers: BTreeMap::from([("x-scoped".into(), Recognized::Known(value.into()))]),
     };
 
     run_message(MessagesCall {

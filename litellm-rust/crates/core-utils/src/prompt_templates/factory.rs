@@ -10,7 +10,7 @@
 //! `_bedrock_converse_messages_pt` for the text-only surface this route
 //! accepts; anything richer is declined upstream by the capability gate.
 
-use litellm_llms_types::formats::chat_completions::{ChatMessage, ChatMessageContent};
+use litellm_llms_types::formats::chat::{ChatMessage, ChatMessageContent};
 use strum::IntoStaticStr;
 
 pub const EMPTY_TEXT_PLACEHOLDER: &str =
@@ -59,7 +59,7 @@ fn message_texts(content: &ChatMessageContent) -> Vec<String> {
         ChatMessageContent::Text(text) => vec![text.clone()],
         ChatMessageContent::Parts(parts) => parts
             .iter()
-            .filter_map(|part| part.get("text").and_then(|text| text.as_str()))
+            .filter_map(|part| part.text())
             .map(str::to_string)
             .collect(),
     }
