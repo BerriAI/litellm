@@ -8275,6 +8275,7 @@ export interface paths {
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
          *     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
+         *     - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
          *     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
@@ -8741,6 +8742,7 @@ export interface paths {
          *     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
          *     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
          *     - allowed_passthrough_routes: Optional[list] - List of allowed pass through routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through routes the key can access, without specifying the routes. If allowed_routes is specified, allowed_passthrough_routes is ignored.
+         *     - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
          *     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
@@ -17220,6 +17222,7 @@ export interface paths {
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+         *     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
          *     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
          *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
@@ -17447,6 +17450,7 @@ export interface paths {
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+         *     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
          *     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
@@ -32879,6 +32883,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -33045,6 +33051,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -39478,6 +39486,8 @@ export interface components {
             } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Enforced Batch Output Expires After */
@@ -39772,6 +39782,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -40590,6 +40602,8 @@ export interface components {
             } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Enforced Batch Output Expires After */
@@ -42171,6 +42185,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -48341,6 +48357,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -48835,6 +48853,8 @@ export interface components {
             } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Enforced Batch Output Expires After */

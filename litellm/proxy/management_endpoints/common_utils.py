@@ -4,7 +4,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 
 # Defined above the `litellm.proxy.*` imports so the name is bound even when
@@ -150,31 +150,89 @@ def require_caller_user_id_for_non_admin(
     return user_api_key_dict.user_id
 
 
+_ROUTE_LIST: Final = TypeAdapter(list[str] | None)
+
+
+def _passthrough_routes_permission_error(field: str, entity: str) -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail={"error": f"Only proxy admins can set `{field}` on a {entity}."},
+    )
+
+
 def _check_passthrough_routes_caller_permission(
-    data: BaseModel,
+    data: BaseModel | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    """
+    Only proxy admins may set `allowed_passthrough_routes` or `denied_passthrough_routes`
+    (top-level or under `metadata`), since the runtime route checker reads both from key and
+    team metadata.
+    """
+    check_allowed_passthrough_routes_caller_permission(data, user_api_key_dict, entity=entity)
+    check_denied_passthrough_routes_caller_permission(
+        data, user_api_key_dict, entity=entity, existing_metadata=existing_metadata
+    )
+
+
+def check_allowed_passthrough_routes_caller_permission(
+    data: BaseModel | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
     entity: str = "key",
 ) -> None:
-    """
-    Only proxy admins may set `allowed_passthrough_routes` (top-level or under
-    `metadata`) — it short-circuits the role-based route gate, so keys and teams
-    must be gated identically.
-    """
+    if data is None:
+        return
+    metadata: Final = getattr(data, "metadata", None)
+    if isinstance(metadata, dict):
+        try:
+            _ROUTE_LIST.validate_python(metadata.get("denied_passthrough_routes"))
+        except ValidationError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "`metadata.denied_passthrough_routes` must be a list of route strings."},
+            ) from e
     # view-only admins excluded by design; blocked upstream from writes anyway
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     if getattr(data, "allowed_passthrough_routes", None):
-        raise HTTPException(
-            status_code=403,
-            detail={"error": f"Only proxy admins can set `allowed_passthrough_routes` on a {entity}."},
-        )
-    metadata: Final = getattr(data, "metadata", None)
+        raise _passthrough_routes_permission_error("allowed_passthrough_routes", entity)
     if isinstance(metadata, dict) and metadata.get("allowed_passthrough_routes"):
-        raise HTTPException(
-            status_code=403,
-            detail={"error": f"Only proxy admins can set `metadata.allowed_passthrough_routes` on a {entity}."},
-        )
+        raise _passthrough_routes_permission_error("metadata.allowed_passthrough_routes", entity)
+
+
+def check_denied_passthrough_routes_caller_permission(
+    data: BaseModel | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    """
+    A non-admin request must leave an existing deny list as it is: clearing it, or replacing
+    `metadata` without it, would widen access. The outcome depends on the stored deny list, so
+    run this only after the caller is known to be allowed to edit the object.
+    """
+    if data is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    metadata: Final = getattr(data, "metadata", None)
+    existing_denied: Final = (existing_metadata or {}).get("denied_passthrough_routes") or None
+    if (
+        "denied_passthrough_routes" in data.model_fields_set
+        and (getattr(data, "denied_passthrough_routes", None) or None) != existing_denied
+    ):
+        raise _passthrough_routes_permission_error("denied_passthrough_routes", entity)
+    if _metadata_changes_denied_routes(data, metadata, existing_denied):
+        raise _passthrough_routes_permission_error("metadata.denied_passthrough_routes", entity)
+
+
+def _metadata_changes_denied_routes(data: BaseModel, metadata: object, existing_denied: object) -> bool:
+    if isinstance(metadata, dict):
+        return (metadata.get("denied_passthrough_routes") or None) != existing_denied
+    return metadata is None and "metadata" in data.model_fields_set and existing_denied is not None
 
 
 def _check_disable_global_guardrails_caller_permission(
