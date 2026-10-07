@@ -1536,9 +1536,7 @@ def _is_logged_metadata_value(key: str, value: object, *, include_guardrail_info
     return key != "standard_logging_guardrail_information" or include_guardrail_information
 
 
-def _proxy_only_error_log_metadata(
-    value: object, *, include_guardrail_information: bool
-) -> dict[str, object] | None:
+def _proxy_only_error_log_metadata(value: object, *, include_guardrail_information: bool) -> dict[str, object] | None:
     if not isinstance(value, Mapping):
         return None
     metadata: Final = _as_str_mapping(value)

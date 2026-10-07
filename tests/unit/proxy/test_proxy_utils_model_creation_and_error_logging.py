@@ -223,6 +223,38 @@ async def test_proxy_only_error_log_drops_malformed_metadata_tags(metadata_field
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+async def test_proxy_only_error_log_builds_payload_when_logging_object_has_malformed_tags(
+    metadata_field: str,
+) -> None:
+    request_data: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_call_id": "malformed-tags-call",
+        metadata_field: {"tags": 123},
+    }
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=real_datetime.datetime.now(),
+        **request_data,
+    )
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data={**request_data, "litellm_logging_obj": logging_obj},
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-blocked", team_id="team-a", request_route="/v1/chat/completions"),
+        route="/v1/chat/completions",
+        original_exception=HTTPException(status_code=400, detail="Content blocked"),
+    )
+
+    standard_logging_object: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert standard_logging_object is not None
+    assert standard_logging_object["model"] == request_data["model"]
+    assert standard_logging_object["metadata"]["user_api_key_team_id"] == "team-a"
+    assert 123 not in standard_logging_object["request_tags"]
+
+
+@pytest.mark.asyncio
 async def test_proxy_only_error_log_keeps_the_request_litellm_call_id(monkeypatch: pytest.MonkeyPatch):
     """LIT-7836: a route that already stamped the caller's litellm_call_id must
     keep it when the failure is a proxy-only error, so the spend-log row and the
