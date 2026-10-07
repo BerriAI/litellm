@@ -710,7 +710,7 @@ class TestCheckPassthroughRoutesCallerPermission:
             ({"metadata": {"denied_passthrough_routes": ["/v1/foo"]}}, "metadata.denied_passthrough_routes"),
         ],
     )
-    def test_denied_routes_rejected_for_non_admin(self, kwargs, field):
+    def test_denied_routes_rejected_for_non_admin(self, kwargs: dict[str, object], field: str) -> None:
         from fastapi import HTTPException
         from pydantic import BaseModel
 
@@ -719,18 +719,20 @@ class TestCheckPassthroughRoutesCallerPermission:
         )
 
         class _RouteData(BaseModel):
-            denied_passthrough_routes: list | None = None
-            metadata: dict | None = None
+            denied_passthrough_routes: list[str] | None = None
+            metadata: dict[str, object] | None = None
 
         with pytest.raises(HTTPException) as exc_info:
-            _check_passthrough_routes_caller_permission(_RouteData(**kwargs), self._non_admin(), entity="team")
+            _check_passthrough_routes_caller_permission(
+                _RouteData.model_validate(kwargs), self._non_admin(), entity="team"
+            )
 
         assert exc_info.value.detail == {"error": f"Only proxy admins can set `{field}` on a team."}
 
 
 class _DenyRouteData(BaseModel):
     denied_passthrough_routes: list[str] | None = None
-    metadata: dict | None = None
+    metadata: dict[str, object] | None = None
     max_budget: float | None = None
 
 
@@ -748,12 +750,12 @@ class TestDeniedPassthroughRoutesCallerPermission:
         ],
         ids=["cleared", "replaced", "dropped-by-metadata-replace", "dropped-by-null-metadata"],
     )
-    def test_non_admin_cannot_change_an_existing_deny_list(self, kwargs, field):
+    def test_non_admin_cannot_change_an_existing_deny_list(self, kwargs: dict[str, object], field: str) -> None:
         from litellm.proxy.management_endpoints.common_utils import _check_passthrough_routes_caller_permission
 
         with pytest.raises(HTTPException) as exc_info:
             _check_passthrough_routes_caller_permission(
-                _DenyRouteData(**kwargs),
+                _DenyRouteData.model_validate(kwargs),
                 UserAPIKeyAuth(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER),
                 existing_metadata=_EXISTING_DENY,
             )
@@ -770,16 +772,16 @@ class TestDeniedPassthroughRoutesCallerPermission:
         ],
         ids=["resent-top-level", "resent-in-metadata", "unrelated-field"],
     )
-    def test_non_admin_may_leave_an_existing_deny_list_unchanged(self, kwargs):
+    def test_non_admin_may_leave_an_existing_deny_list_unchanged(self, kwargs: dict[str, object]) -> None:
         from litellm.proxy.management_endpoints.common_utils import _check_passthrough_routes_caller_permission
 
         _check_passthrough_routes_caller_permission(
-            _DenyRouteData(**kwargs),
+            _DenyRouteData.model_validate(kwargs),
             UserAPIKeyAuth(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER),
             existing_metadata=_EXISTING_DENY,
         )
 
-    def test_non_admin_may_send_null_metadata_when_no_deny_list_exists(self):
+    def test_non_admin_may_send_null_metadata_when_no_deny_list_exists(self) -> None:
         from litellm.proxy.management_endpoints.common_utils import _check_passthrough_routes_caller_permission
 
         _check_passthrough_routes_caller_permission(
@@ -788,7 +790,7 @@ class TestDeniedPassthroughRoutesCallerPermission:
             existing_metadata={"team": "core"},
         )
 
-    def test_malformed_metadata_deny_entries_are_rejected_even_for_proxy_admins(self):
+    def test_malformed_metadata_deny_entries_are_rejected_even_for_proxy_admins(self) -> None:
         from litellm.proxy.management_endpoints.common_utils import _check_passthrough_routes_caller_permission
 
         with pytest.raises(HTTPException) as exc_info:

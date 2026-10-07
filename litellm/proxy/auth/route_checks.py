@@ -696,10 +696,13 @@ class RouteChecks:
 
     @staticmethod
     def _route_matches_denied_route(route: str, denied_route: str) -> bool:
+        """A `/` entry denies every route, since every route sits under the root."""
         normalized_denied_route: Final = denied_route.rstrip("/") or "/"
-        return RouteChecks._route_matches_allowed_route(
-            route=route, allowed_route=normalized_denied_route
-        ) or RouteChecks.route_matches_wildcard_pattern(route=route, pattern=denied_route)
+        return (
+            normalized_denied_route == "/"
+            or RouteChecks._route_matches_allowed_route(route=route, allowed_route=normalized_denied_route)
+            or RouteChecks.route_matches_wildcard_pattern(route=route, pattern=denied_route)
+        )
 
     @staticmethod
     def matching_denied_passthrough_route(

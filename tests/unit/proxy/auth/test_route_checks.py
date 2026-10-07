@@ -4482,12 +4482,13 @@ def _check_route_with_registered_routes(
     request: Final = MagicMock(spec=Request)
     request.method = "POST"
     with (
+        pytest.MonkeyPatch.context() as env,
         patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
             _DENY_TEST_REGISTERED_ROUTES,
         ),
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
     ):
+        env.delenv("SERVER_ROOT_PATH", raising=False)
         _is_api_route_allowed(
             route=route,
             request=request,
@@ -4507,8 +4508,10 @@ def _check_route_with_registered_routes(
     ],
     ids=["key-deny-beats-key-allow", "key-deny-beats-team-allow", "team-deny-beats-key-allow", "wildcard-deny"],
 )
-def test_denied_passthrough_routes_win_over_allow(metadata, team_metadata, denied_route):
-    valid_token = UserAPIKeyAuth(
+def test_denied_passthrough_routes_win_over_allow(
+    metadata: dict[str, list[str]], team_metadata: dict[str, list[str]], denied_route: str
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(
         user_id="test_user",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         metadata=metadata,
@@ -4527,8 +4530,8 @@ def test_denied_passthrough_routes_win_over_allow(metadata, team_metadata, denie
     ["/svc/public", "/svc/administrator", "/anthropic/v1/messages", "/chat/completions"],
     ids=["allowed-sibling", "no-false-prefix-match", "built-in-provider-route", "llm-api-route"],
 )
-def test_denied_passthrough_routes_leave_other_routes_untouched(route):
-    valid_token = UserAPIKeyAuth(
+def test_denied_passthrough_routes_leave_other_routes_untouched(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
         user_id="test_user",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         metadata={
@@ -4540,8 +4543,8 @@ def test_denied_passthrough_routes_leave_other_routes_untouched(route):
     _check_route_with_registered_routes(route=route, valid_token=valid_token)
 
 
-def test_denied_passthrough_routes_do_not_restrict_proxy_admins():
-    valid_token = UserAPIKeyAuth(
+def test_denied_passthrough_routes_do_not_restrict_proxy_admins() -> None:
+    valid_token: Final = UserAPIKeyAuth(
         user_id="test_user",
         user_role=LitellmUserRoles.PROXY_ADMIN.value,
         metadata={"denied_passthrough_routes": ["/svc"]},
@@ -4582,8 +4585,8 @@ def test_denied_passthrough_routes_do_not_restrict_proxy_admins():
         "fragment-mark-then-dot-dot",
     ],
 )
-def test_dot_and_empty_segments_cannot_reach_a_denied_route(route):
-    valid_token = UserAPIKeyAuth(
+def test_dot_and_empty_segments_cannot_reach_a_denied_route(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
         user_id="test_user",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
@@ -4596,8 +4599,8 @@ def test_dot_and_empty_segments_cannot_reach_a_denied_route(route):
     assert "Matched `/svc/admin` in `denied_passthrough_routes`" in exc_info.value.detail
 
 
-def test_dot_dot_out_of_a_denied_route_is_checked_as_the_route_it_forwards_to():
-    valid_token = UserAPIKeyAuth(
+def test_dot_dot_out_of_a_denied_route_is_checked_as_the_route_it_forwards_to() -> None:
+    valid_token: Final = UserAPIKeyAuth(
         user_id="test_user",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
@@ -4606,9 +4609,25 @@ def test_dot_dot_out_of_a_denied_route_is_checked_as_the_route_it_forwards_to():
     _check_route_with_registered_routes(route="/svc/admin/../public", valid_token=valid_token)
 
 
+@pytest.mark.parametrize("denied_route", ["/", "//"])
+@pytest.mark.parametrize("route", ["/svc", "/svc/public", "/svc/admin/users"])
+def test_root_deny_entry_blocks_every_route(route: str, denied_route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": [denied_route]},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_route_with_registered_routes(route=route, valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert f"Matched `{denied_route}` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
 @pytest.mark.parametrize("route", ["/svc/admin", "/svc/admin/", "/svc/admin/users"])
-def test_trailing_slash_deny_entry_blocks_the_route_and_everything_under_it(route):
-    valid_token = UserAPIKeyAuth(
+def test_trailing_slash_deny_entry_blocks_the_route_and_everything_under_it(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
         user_id="test_user",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin/"]},
@@ -4621,8 +4640,8 @@ def test_trailing_slash_deny_entry_blocks_the_route_and_everything_under_it(rout
     assert "Matched `/svc/admin/` in `denied_passthrough_routes`" in exc_info.value.detail
 
 
-def test_trailing_slash_deny_entry_does_not_match_a_longer_segment():
-    valid_token = UserAPIKeyAuth(
+def test_trailing_slash_deny_entry_does_not_match_a_longer_segment() -> None:
+    valid_token: Final = UserAPIKeyAuth(
         user_id="test_user",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin/"]},
@@ -4631,8 +4650,8 @@ def test_trailing_slash_deny_entry_does_not_match_a_longer_segment():
     _check_route_with_registered_routes(route="/svc/administrator", valid_token=valid_token)
 
 
-def test_dot_segments_resolving_outside_a_denied_route_still_pass():
-    valid_token = UserAPIKeyAuth(
+def test_dot_segments_resolving_outside_a_denied_route_still_pass() -> None:
+    valid_token: Final = UserAPIKeyAuth(
         user_id="test_user",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
@@ -4641,8 +4660,8 @@ def test_dot_segments_resolving_outside_a_denied_route_still_pass():
     _check_route_with_registered_routes(route="/svc/public/./docs", valid_token=valid_token)
 
 
-def test_query_text_naming_a_denied_route_still_passes():
-    valid_token = UserAPIKeyAuth(
+def test_query_text_naming_a_denied_route_still_passes() -> None:
+    valid_token: Final = UserAPIKeyAuth(
         user_id="test_user",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
