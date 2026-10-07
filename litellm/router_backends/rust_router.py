@@ -8,11 +8,12 @@ from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias, TypeVar, cast
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm import constants
 from litellm._logging import verbose_router_logger
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import RUNTIME_UPDATABLE_ROUTER_SETTINGS
 from litellm.router_backends.python_router import PythonRouter
 from litellm.router_backends.rust_call import (
@@ -25,6 +26,7 @@ from litellm.router_backends.rust_call import (
     metadata_key_for,
 )
 from litellm.router_backends.rust_support import unsupported_reason
+from litellm.router_backends.rust_surface import ASSIGNABLE, VIEWS
 from litellm.router_utils import clientside_credential_handler
 from litellm.router_utils.cooldown_handlers import (
     _is_allowed_fails_set_on_router,  # pyright: ignore[reportPrivateUsage]  # the rule PythonRouter's cooldowns apply
@@ -68,6 +70,8 @@ _UNSUPPORTED_REQUEST_KWARGS: Final = (
     "model_group_retry_policy",
     "include_fallback_errors",
     "_router_weights",
+    "routing_strategy",
+    "enable_tag_filtering",
 )
 _MOCK_FAILURES: Final = (
     ("mock_testing_fallbacks", "fallbacks"),
@@ -124,9 +128,35 @@ class NormalizerView(AttemptRouter, Protocol):
 
     def get_settings(self) -> Mapping[str, object]: ...
 
+    def _update_redis_cache(self, cache: RedisCache) -> None: ...
+
     def _update_kwargs_before_fallbacks(
         self, model: str, kwargs: Kwargs, metadata_variable_name: str = "metadata"
     ) -> None: ...
+
+
+class PythonServing(Protocol):
+    """The `PythonRouter` methods a request the Rust router does not serve is forwarded to, typed."""
+
+    async def acompletion(
+        self, model: str, messages: Sequence[Mapping[str, object]], **kwargs: object
+    ) -> object: ...  # kwargs-ok: forwards Router.acompletion's kwargs
+
+    def completion(
+        self, model: str, messages: Sequence[Mapping[str, object]], **kwargs: object
+    ) -> object: ...  # kwargs-ok: forwards Router.completion's kwargs
+
+    async def aresponses(
+        self, custom_llm_provider: str | None = None, client: object = None, **kwargs: object
+    ) -> object: ...  # kwargs-ok: forwards Router.aresponses' kwargs
+
+    async def aanthropic_messages(
+        self, custom_llm_provider: str | None = None, client: object = None, **kwargs: object
+    ) -> object: ...  # kwargs-ok: forwards Router.aanthropic_messages' kwargs
+
+
+def _serving(python: PythonRouter) -> PythonServing:
+    return cast(PythonServing, python)  # cast-ok: PythonRouter's methods take untyped kwargs
 
 
 def _raw(deployment: Deployment) -> Mapping[str, object]:
@@ -213,24 +243,61 @@ def _providers() -> tuple[str, ...]:
 
 def redis_url(arguments: Mapping[str, object]) -> str | None:
     """The URL `PythonRouter` would connect its router cache to, if any."""
-    url: Final = arguments.get("redis_url")
+    return _url(
+        arguments.get("redis_url"),
+        arguments.get("redis_host"),
+        arguments.get("redis_port"),
+        arguments.get("redis_password"),
+        arguments.get("redis_db"),
+    )
+
+
+_PLAIN_REDIS_KWARGS: Final = frozenset({"url", "host", "port", "username", "password", "db"})
+_CLIENT_TUNING_REDIS_KWARGS: Final = frozenset(
+    {"socket_timeout", "socket_connect_timeout", "health_check_interval", "retry_on_timeout", "max_connections"}
+)
+_REDIS_KWARGS: Final = TypeAdapter(Mapping[str, object])
+
+
+def adopted_redis_url(cache: RedisCache) -> str | None:
+    """The URL of a `RedisCache` the proxy hands the router, or None when it connects some other
+    way (cluster, sentinel, TLS) that the native store does not open. Client tuning (timeouts,
+    pool size) is left to the native store's own defaults."""
+    configured: Final = _REDIS_KWARGS.validate_python(
+        cast(object, cache.redis_kwargs)
+    )  # cast-ok: RedisCache leaves it untyped
+    kwargs: Final = {key: value for key, value in configured.items() if value is not None}
+    if not kwargs.keys() <= _PLAIN_REDIS_KWARGS | _CLIENT_TUNING_REDIS_KWARGS:
+        return None
+    return _url(
+        kwargs.get("url"),
+        kwargs.get("host"),
+        kwargs.get("port"),
+        kwargs.get("password"),
+        kwargs.get("db"),
+        kwargs.get("username"),
+    )
+
+
+def _url(url: object, host: object, port: object, password: object, db: object, username: object = None) -> str | None:
     if isinstance(url, str):
         return url
-    host: Final = arguments.get("redis_host")
-    port: Final = arguments.get("redis_port")
     if host is None or port is None:
         return None
-    password: Final = arguments.get("redis_password")
-    credentials: Final = f":{quote(str(password), safe='')}@" if password else ""
-    return f"redis://{credentials}{host}:{port}/{arguments.get('redis_db') or 0}"
+    user: Final = quote(str(username), safe="") if username else ""
+    credentials: Final = f"{user}:{quote(str(password), safe='')}@" if password else (f"{user}@" if user else "")
+    return f"redis://{credentials}{host}:{port}/{db or 0}"
 
 
 class RustRouter:
-    """The Rust-backed router. Members it does not emulate yet raise `NotImplementedError` naming them.
+    """The Rust-backed router.
 
     Deployments are normalized by a `PythonRouter` built from the same arguments with its router
-    callbacks removed (`discard`), which also builds each attempt's kwargs. Routing decisions,
-    cooldowns and usage counters belong to the native router.
+    callbacks removed (`discard`), which also builds each attempt's kwargs and answers the reads
+    in `rust_surface.VIEWS`. Routing decisions, cooldowns and usage counters belong to the native
+    router. Anything else it is asked for, a member, a request option or a runtime change it does
+    not serve, hands the instance over to a `PythonRouter` for good (`on_fall_back`), or raises
+    `RustRouterUnsupportedError` when Rust is required.
     """
 
     def __init__(
@@ -249,59 +316,126 @@ class RustRouter:
         object.__setattr__(self, "_updates", MappingProxyType({}))
         object.__setattr__(self, "_required", required)
         object.__setattr__(self, "_fall_back", None)
-        object.__setattr__(
-            self,
-            "_native",
-            native(
-                [_project(deployment) for deployment in normalizer.model_list],
-                _settings(normalizer),
-                list(_providers()),
-                redis_url(arguments),
-                seed,
-            ),
-        )
+        object.__setattr__(self, "_handed_to", None)
+        object.__setattr__(self, "_assigned", MappingProxyType({}))
+        object.__setattr__(self, "_redis_cache", None)
+        object.__setattr__(self, "_native_type", native)
+        object.__setattr__(self, "_seed", seed)
+        object.__setattr__(self, "_native", self._build_native(redis_url(arguments)))
 
     _normalizer: NormalizerView
     _native: NativeRouter
+    _native_type: NativeRouterType
+    _seed: int | None
     _arguments: Mapping[str, object]
     _updates: Mapping[str, object]
+    _assigned: Mapping[str, object]
+    _redis_cache: RedisCache | None
     _required: bool
     _fall_back: FallBack | None
+    _handed_to: PythonRouter | None
 
     def __getattr__(self, name: str) -> object:
         normalizer: Final[object] = self.__dict__.get("_normalizer")
+        handed_to: Final[object] = self.__dict__.get("_handed_to")
+        if handed_to is not None:
+            return _attribute(handed_to, name)
         if normalizer is None or not hasattr(normalizer, name):
             raise AttributeError(name)
-        raise NotImplementedError(f"the Rust router backend does not emulate Router.{name} yet")
+        if name in VIEWS:
+            return _attribute(normalizer, name)
+        return _attribute(self._python(f"Router.{name} is not served by the Rust router"), name)
 
     def __setattr__(self, name: str, value: object) -> None:
-        raise NotImplementedError(f"the Rust router backend does not emulate setting Router.{name} yet")
+        if self._handed_to is None and name in ASSIGNABLE:
+            setattr(self._normalizer, name, value)
+            object.__setattr__(self, "_assigned", MappingProxyType({**self._assigned, name: value}))
+            return
+        setattr(self._python(f"setting Router.{name} is not served by the Rust router"), name, value)
+
+    def _build_native(self, url: str | None) -> NativeRouter:
+        return self._native_type(
+            [_project(deployment) for deployment in self._normalizer.model_list],
+            _settings(self._normalizer),
+            list(_providers()),
+            url,
+            self._seed,
+        )
+
+    def _python(self, reason: str) -> PythonRouter:
+        """The `PythonRouter` this instance has handed over to, built from its current model list,
+        settings, assigned attributes and Redis on the first request for one. In-memory state is
+        not carried over; Redis state is."""
+        if self._handed_to is not None:
+            return self._handed_to
+        if self._required or self._fall_back is None:
+            raise RustRouterUnsupportedError(f"the Rust router cannot serve this: {reason}")
+        python: Final = _PYTHON_ROUTER(**{**self._arguments, "model_list": copy.deepcopy(self._normalizer.model_list)})
+        view: Final = cast(NormalizerView, python)  # cast-ok: PythonRouter's untyped update_settings
+        if self._updates:
+            view.update_settings(**self._updates)
+        if self._redis_cache is not None:
+            view._update_redis_cache(cache=self._redis_cache)  # pyright: ignore[reportPrivateUsage]  # the proxy's own hand-off
+        for name, value in self._assigned.items():
+            setattr(python, name, value)
+        verbose_router_logger.info("Rust router handing over to the Python router for good: %s", reason)
+        object.__setattr__(self, "_handed_to", python)
+        self._fall_back(python)
+        return python
 
     @property
     def model_list(self) -> list[dict[str, object]]:  # mutable-ok: PythonRouter's read surface
-        return self._normalizer.model_list
+        return self._reader.model_list
 
     @property
     def model_names(self) -> set[str]:  # mutable-ok: PythonRouter's read surface
-        return self._normalizer.model_names
+        return self._reader.model_names
 
     @property
     def total_calls(self) -> Mapping[str, int]:
-        return self._normalizer.total_calls
+        return self._reader.total_calls
 
     @property
     def success_calls(self) -> Mapping[str, int]:
-        return self._normalizer.success_calls
+        return self._reader.success_calls
 
     @property
     def fail_calls(self) -> Mapping[str, int]:
-        return self._normalizer.fail_calls
+        return self._reader.fail_calls
 
     def get_model_names(self) -> list[str]:  # mutable-ok: PythonRouter's read surface
-        return self._normalizer.get_model_names()
+        return self._reader.get_model_names()
+
+    @property
+    def _reader(self) -> NormalizerView:
+        return (
+            cast(NormalizerView, self._handed_to) if self._handed_to is not None else self._normalizer
+        )  # cast-ok: a PythonRouter
 
     def discard(self) -> None:
-        return None
+        if self._handed_to is not None:
+            self._handed_to.discard()
+
+    def arm_routing_read_prefetch(self, model: str, request_kwargs: Mapping[str, object] | None = None) -> None:
+        """Python's routing reads batch their Redis lookups through this; the native router reads its own."""
+        if self._handed_to is not None:
+            self._handed_to.arm_routing_read_prefetch(model, dict(request_kwargs or {}))
+
+    def _update_redis_cache(self, cache: RedisCache) -> None:
+        """The proxy's Redis, attached after construction: the native router reconnects to it, which
+        drops its in-memory state (the proxy attaches it at startup), and the Python side attaches it
+        too, so its cooldown reads see what the native router writes."""
+        if self._handed_to is not None:
+            self._handed_to._update_redis_cache(cache)  # pyright: ignore[reportPrivateUsage]  # the proxy's own hand-off
+            return
+        url: Final = adopted_redis_url(cache)
+        if url is None:
+            python: Final = self._python("the Rust router cannot open this Redis connection")
+            python._update_redis_cache(cache)  # pyright: ignore[reportPrivateUsage]  # the proxy's own hand-off
+            return
+        self._normalizer._update_redis_cache(cache)  # pyright: ignore[reportPrivateUsage]  # the proxy's own hand-off
+        object.__setattr__(self, "_redis_cache", cache)
+        object.__setattr__(self, "_native", self._build_native(url))
 
     def on_fall_back(self, fall_back: FallBack) -> None:
         """Where this instance hands over to a `PythonRouter` when a runtime change asks for something
@@ -309,34 +443,36 @@ class RustRouter:
         object.__setattr__(self, "_fall_back", fall_back)
 
     def upsert_deployment(self, deployment: Deployment) -> Deployment | None:
-        return self._change(lambda: self._normalizer.upsert_deployment(deployment), deployments=(deployment,))
+        return self._change(lambda router: router.upsert_deployment(deployment), deployments=(deployment,))
 
     def add_deployment(self, deployment: Deployment) -> Deployment | None:
-        return self._change(lambda: self._normalizer.add_deployment(deployment), deployments=(deployment,))
+        return self._change(lambda router: router.add_deployment(deployment), deployments=(deployment,))
 
     def delete_deployment(self, id: str) -> Deployment | None:
-        return self._change(lambda: self._normalizer.delete_deployment(id))
+        return self._change(lambda router: router.delete_deployment(id))
 
     def update_settings(self, **kwargs: object) -> None:  # kwargs-ok: PythonRouter.update_settings' surface
         updatable: Final = {name: value for name, value in kwargs.items() if name in RUNTIME_UPDATABLE_ROUTER_SETTINGS}
-        self._change(lambda: self._normalizer.update_settings(**kwargs), updates=updatable)
+        self._change(lambda router: router.update_settings(**kwargs), updates=updatable)
 
     @property
     def retry_policy(self) -> object:
-        return self._normalizer.retry_policy
+        return self._reader.retry_policy
 
     def get_settings(self) -> Mapping[str, object]:
-        return self._normalizer.get_settings()
+        return self._reader.get_settings()
 
     def _change(
         self,
-        apply: Callable[[], _T],
+        apply: Callable[[NormalizerView], _T],
         deployments: Sequence[Deployment] = (),
         updates: Mapping[str, object] = MappingProxyType({}),
     ) -> _T:
         """Applies a runtime change on the Python side, which normalizes deployments and resolves
-        settings, then swaps the native snapshot. A change the Rust backend cannot serve falls back
-        to `PythonRouter` for good, or raises when Rust is required."""
+        settings, then swaps the native snapshot. A change the Rust backend cannot serve is applied
+        to the `PythonRouter` this instance hands over to."""
+        if self._handed_to is not None:
+            return apply(self._reader)
         merged: Final = MappingProxyType({**self._updates, **updates})
         prospective: Final = {
             **self._arguments,
@@ -345,24 +481,13 @@ class RustRouter:
         }
         reason: Final = unsupported_reason(prospective)
         if reason is not None:
-            return self._hand_over(reason, apply, merged)
-        result: Final = apply()
+            self._python(f"a runtime change asks for {reason}")
+            return apply(self._reader)
+        result: Final = apply(self._normalizer)
         object.__setattr__(self, "_updates", merged)
         self._native.replace(
             [_project(deployment) for deployment in self._normalizer.model_list], _settings(self._normalizer)
         )
-        return result
-
-    def _hand_over(self, reason: str, apply: Callable[[], _T], updates: Mapping[str, object]) -> _T:
-        if self._required or self._fall_back is None:
-            raise RustRouterUnsupportedError(f"the Rust router cannot serve this change: {reason}")
-        result: Final = apply()
-        python: Final = _PYTHON_ROUTER(**{**self._arguments, "model_list": copy.deepcopy(self._normalizer.model_list)})
-        if updates:
-            settings_view: Final = cast(NormalizerView, python)  # cast-ok: PythonRouter's untyped update_settings
-            settings_view.update_settings(**updates)
-        verbose_router_logger.info("Rust router handing over to the Python router for good: %s", reason)
-        self._fall_back(python)
         return result
 
     async def acompletion(
@@ -371,6 +496,9 @@ class RustRouter:
         messages: Sequence[Mapping[str, object]],
         **kwargs: object,  # kwargs-ok: forwards litellm.acompletion's kwargs
     ) -> object:
+        python: Final = self._python_for(kwargs)
+        if python is not None:
+            return await _serving(python).acompletion(model, messages, **kwargs)
         call: Final = self._call("completion", model, {**kwargs, "messages": messages})
         return await self._route(call, True)
 
@@ -380,6 +508,9 @@ class RustRouter:
         messages: Sequence[Mapping[str, object]],
         **kwargs: object,  # kwargs-ok: forwards litellm.completion's kwargs
     ) -> object:
+        python: Final = self._python_for(kwargs)
+        if python is not None:
+            return _serving(python).completion(model, messages, **kwargs)
         call: Final = self._call("completion", model, {**kwargs, "messages": messages})
         return self._native.route(call.spec, call.driver, False)
 
@@ -390,7 +521,9 @@ class RustRouter:
         **kwargs: object,  # kwargs-ok: forwards litellm.aresponses' kwargs
     ) -> object:
         """`factory_function`'s wrapper drops its own `custom_llm_provider` and `client`."""
-        del custom_llm_provider, client
+        python: Final = self._python_for(kwargs)
+        if python is not None:
+            return await _serving(python).aresponses(custom_llm_provider=custom_llm_provider, client=client, **kwargs)
         return await self._route(self._call("responses", _model(kwargs), kwargs), True)
 
     async def aanthropic_messages(
@@ -400,8 +533,24 @@ class RustRouter:
         **kwargs: object,  # kwargs-ok: forwards litellm.anthropic_messages' kwargs
     ) -> object:
         """`factory_function`'s wrapper drops its own `custom_llm_provider` and `client`."""
-        del custom_llm_provider, client
+        python: Final = self._python_for(kwargs)
+        if python is not None:
+            return await _serving(python).aanthropic_messages(
+                custom_llm_provider=custom_llm_provider, client=client, **kwargs
+            )
         return await self._route(self._call("anthropic_messages", _model(kwargs), kwargs), True)
+
+    def _python_for(self, kwargs: Kwargs) -> PythonRouter | None:
+        """The `PythonRouter` to serve this request instead: the one this instance handed over to,
+        or a new one when the request asks for something the Rust router does not serve."""
+        if self._handed_to is not None:
+            return self._handed_to
+        unsupported: Final = next((name for name in _UNSUPPORTED_REQUEST_KWARGS if name in kwargs), None)
+        if unsupported is not None:
+            return self._python(f"request option {unsupported!r} is not served by the Rust router")
+        if _IS_CLIENTSIDE_CREDENTIAL(kwargs):
+            return self._python("client-side credentials are not served by the Rust router")
+        return None
 
     async def _route(self, call: _Call, asynchronous: bool) -> object:
         native_route: Final = self._native.route(call.spec, call.driver, asynchronous)
@@ -409,12 +558,6 @@ class RustRouter:
         return await routed
 
     def _call(self, operation: Operation, model: str, kwargs: Kwargs) -> _Call:
-        unsupported: Final = [name for name in _UNSUPPORTED_REQUEST_KWARGS if name in kwargs]
-        if unsupported:
-            raise NotImplementedError(f"the Rust router backend does not support request option {unsupported[0]!r} yet")
-        clientside: Final = _IS_CLIENTSIDE_CREDENTIAL(kwargs)
-        if clientside:
-            raise NotImplementedError("the Rust router backend does not support client-side credentials yet")
         kwargs["model"] = model  # rebind-ok: PythonRouter stamps the caller's kwargs the same way
         if operation == "completion":
             kwargs.setdefault("stream", False)

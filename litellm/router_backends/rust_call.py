@@ -14,14 +14,16 @@ import copy
 import time
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
-from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.asyncify import (
+    run_async_function,  # pyright: ignore[reportUnknownVariableType]  # untyped helper, wrapped in _run_sync
+)
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,  # pyright: ignore[reportPrivateUsage]  # the header reader the cooldown callback uses
 )
@@ -71,6 +73,9 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import (
     _get_retry_after_from_exception_header,  # pyright: ignore[reportPrivateUsage]  # the Retry-After parser retries and cooldowns use
 )
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 Bucket: TypeAlias = MutableMapping[str, object]
 Kwargs: TypeAlias = dict[str, object]
@@ -382,15 +387,14 @@ class RoutedCall:
             "model": parsed.model,
             self._metadata_key: self._buckets[parsed.bucket],
         }
-        router: Final = self._normalizer
+        router: Final = cast("Router", self._normalizer)  # cast-ok: the PythonRouter the helpers read checks off
         return await _is_fallback_target_authorized(
             router, parsed.target, parsed.model_group, kwargs
         ) and await _is_fallback_target_within_budget(router, parsed.target, parsed.model_group, kwargs)
 
     def allow_fallback_sync(self, check: Mapping[str, object]) -> bool:
         """Python's sync calls run the async fallback loop, checks included, through `run_async_function`."""
-        allowed: Final[object] = run_async_function(self.allow_fallback, check)
-        return allowed is True
+        return _run_sync(lambda: self.allow_fallback(check)) is True
 
     def success(self, response: object, outcome: Mapping[str, object], ops: Sequence[Mapping[str, object]]) -> object:
         self._apply(ops)
@@ -839,6 +843,13 @@ class RoutedCall:
         if not litellm.expose_router_debug_in_errors or (require_message and not hasattr(error, "message")):
             return
         error.message = f"{message}{text}"  # pyright: ignore[reportAttributeAccessIssue]  # litellm exceptions carry a message
+
+
+def _run_sync(start: Callable[[], Awaitable[object]]) -> object:
+    run: Final = cast(
+        Callable[[Callable[[], Awaitable[object]]], object], run_async_function
+    )  # cast-ok: untyped helper
+    return run(start)
 
 
 def _handler(operation: Operation) -> Callable[..., Awaitable[object]]:

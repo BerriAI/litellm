@@ -15,6 +15,7 @@ import pytest
 import redis
 
 import litellm
+from litellm.caching.redis_cache import RedisCache
 from litellm.router_backends.python_router import PythonRouter
 from litellm.router_backends.rust_router import NATIVE_ROUTER, RustRouter
 from litellm.types.router import RouterRateLimitError
@@ -147,3 +148,30 @@ async def test_a_rust_router_honors_cooldowns_a_python_router_wrote(store: redis
     rust_outcomes: Final = await _run(RustRouter(_arguments(redis_port, responses, {}), native, 0), 1)
 
     assert rust_outcomes == ["rejected"]
+
+
+async def test_a_redis_attached_after_construction_carries_the_rust_routers_cooldowns(
+    store: redis.Redis, redis_port: int
+) -> None:
+    """The proxy builds its router without Redis and attaches its own (`_update_redis_cache`) at startup."""
+    responses: Final = ("litellm.RateLimitError", "litellm.RateLimitError")
+    native: Final = NATIVE_ROUTER.load()
+    assert native is not None
+    without_redis: Final = {
+        key: value for key, value in _arguments(redis_port, responses, {}).items() if not key.startswith("redis_")
+    }
+    rust_router: Final = RustRouter(without_redis, native, 0)
+
+    rust_router._update_redis_cache(RedisCache(host="127.0.0.1", port=redis_port))  # pyright: ignore[reportPrivateUsage]  # the proxy's own hand-off
+    rust_outcomes: Final = await _run(rust_router, 2)
+    python_router: Final = PythonRouter(**_arguments(redis_port, responses, {}))
+    python_outcomes: Final = await _run(python_router, 1)
+    python_router.discard()
+
+    assert rust_outcomes == ["rate_limited", "rate_limited"]
+    assert sorted(key for key in store.keys("deployment:*:cooldown")) == [
+        "deployment:d0:cooldown",
+        "deployment:d1:cooldown",
+    ]
+    assert python_outcomes == ["rejected"]
+    assert rust_router.cache.redis_cache is not None  # pyright: ignore[reportAttributeAccessIssue]  # a Router view

@@ -140,15 +140,15 @@ def _fallbacks_reason(arguments: Mapping[str, object]) -> str | None:
 
 def _group_names(model_list: object) -> frozenset[str]:
     return frozenset(
-        deployment.model_name for deployment in map(_readable, _entries(model_list)) if deployment is not None
+        deployment.model_name for deployment in map(_readable, _entries(model_list) or ()) if deployment is not None
     )
 
 
-def _entries(model_list: object) -> tuple[object, ...]:
+def _entries(model_list: object) -> tuple[object, ...] | None:
     try:
         return _MODEL_LIST.validate_python(model_list or ())
     except ValidationError:
-        return ()
+        return None
 
 
 def _readable(entry: object) -> _RawDeployment | None:
@@ -181,11 +181,10 @@ def _plain_chain_of(key: str, targets: object, groups: frozenset[str]) -> bool:
 def _model_list_reason(model_list: object, ignore_invalid: bool) -> str | None:
     """With `ignore_invalid_deployments`, Python drops an entry it cannot read instead of failing,
     so the Rust router only serves the ones it can."""
-    if model_list is None:
-        return None
-    if not isinstance(model_list, (list, tuple)):
+    entries: Final = _entries(model_list)
+    if entries is None:
         return "a model_list the Rust router cannot read"
-    deployments: Final = tuple(map(_readable, _entries(model_list)))
+    deployments: Final = tuple(map(_readable, entries))
     if None in deployments and not ignore_invalid:
         return "model_list entries the Rust router cannot read"
     return next(
