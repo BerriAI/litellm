@@ -74,3 +74,20 @@ fn checked_in_catalog_and_backup_match() {
         "invalid registry aliases"
     );
 }
+
+#[rstest]
+#[case::input("input_cost_per_token_above_100k_tokens")]
+#[case::input_batches("input_cost_per_token_above_100k_tokens_batches")]
+#[case::output("output_cost_per_token_above_100k_tokens")]
+#[case::output_batches("output_cost_per_token_above_100k_tokens_batches")]
+#[case::cache_creation("cache_creation_input_token_cost_above_100k_tokens")]
+#[case::cache_creation_batches("cache_creation_input_token_cost_above_100k_tokens_batches")]
+#[case::cache_creation_1hr("cache_creation_input_token_cost_above_1hr_above_100k_tokens")]
+#[case::cache_read("cache_read_input_token_cost_above_100k_tokens")]
+#[case::cache_read_batches("cache_read_input_token_cost_above_100k_tokens_batches")]
+fn registry_validation_keeps_above_100k_tier_rates(#[case] field: &str) {
+    let mut entry = Map::new();
+    entry.insert("litellm_provider".into(), "anthropic".into());
+    entry.insert(field.into(), 5e-7.into());
+    validate_model_entry("test", &Value::Object(entry)).unwrap();
+}
