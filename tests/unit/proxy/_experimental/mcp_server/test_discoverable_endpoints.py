@@ -13302,3 +13302,118 @@ async def test_registration_losing_conditional_write_reuses_only_a_matching_winn
     assert result == ("reused" if winner_available else "failed")
     assert update.await_args.kwargs["expected_updated_at"] == row.updated_at
     assert server.client_id == ("winner-client" if winner_available else None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type", (MCPAuth.true_passthrough, MCPAuth.oauth_delegate, MCPAuth.oauth2))
+@pytest.mark.parametrize(
+    "metadata", ({"application_type": "native"}, {"application_type": "web"}, {}, {"application_type": None})
+)
+async def test_register_preserves_client_application_type_only_for_bridge_relay(
+    auth_type: MCPAuth, metadata: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+    import respx
+    from fastapi import FastAPI
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server: Final = _bridge_server(auth_type=auth_type, server_id="application-client", alias="application-client")
+    app: Final = FastAPI()
+    app.include_router(router)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+    client_redirect: Final = "http://127.0.0.1:53682/callback"
+    with respx.mock as upstream:
+        registration: Final = upstream.post(server.registration_url).respond(
+            201, json={"client_id": "registered-client"}
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://gateway.example"
+        ) as client:
+            response: Final = await client.post(
+                f"/{server.server_id}/register",
+                json={"client_name": "Test client", "redirect_uris": [client_redirect], **metadata},
+            )
+    assert response.status_code == 200
+    assert response.json()["client_id"] == "registered-client"
+    assert registration.call_count == 1
+    posted: Final = json.loads(registration.calls[0].request.content)
+    expected_type: Final = metadata.get("application_type") if auth_type != MCPAuth.oauth2 else None
+    if expected_type is None:
+        assert "application_type" not in posted
+    else:
+        assert posted["application_type"] == expected_type
+    assert posted["redirect_uris"] == (
+        ["https://gateway.example/callback"] if auth_type == MCPAuth.oauth2 else [client_redirect]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("application_type", ("desktop", "", 1, ["native"], {"value": "native"}))
+async def test_register_rejects_invalid_application_type_before_upstream(
+    application_type: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+    import respx
+    from fastapi import FastAPI
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server: Final = _bridge_server(server_id="invalid-application-client", alias="invalid-application-client")
+    app: Final = FastAPI()
+    app.include_router(router)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+    with respx.mock(assert_all_called=False) as upstream:
+        registration: Final = upstream.post(server.registration_url).respond(
+            201, json={"client_id": "must-not-register"}
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://gateway.example"
+        ) as client:
+            response: Final = await client.post(
+                f"/{server.server_id}/register",
+                json={"redirect_uris": ["http://127.0.0.1:53682/callback"], "application_type": application_type},
+            )
+    assert response.status_code == 400
+    assert "application_type" in response.json()["detail"]
+    assert registration.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_id", (None, "preconfigured-client"))
+async def test_register_application_type_keeps_no_registration_endpoint_fallback(
+    client_id: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+    import respx
+    from fastapi import FastAPI
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server: Final = _bridge_server(
+        auth_type=MCPAuth.oauth2,
+        server_id="static-client",
+        alias="static-client",
+        registration_url=None,
+        client_id=client_id,
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+    with respx.mock as upstream:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://gateway.example"
+        ) as client:
+            response: Final = await client.post(f"/{server.server_id}/register", json={"application_type": "native"})
+    assert response.status_code == 200
+    assert response.json() == {
+        "client_id": server.server_id,
+        "client_secret": "dummy",
+        "redirect_uris": ["https://gateway.example/callback"],
+    }
+    assert len(upstream.calls) == 0

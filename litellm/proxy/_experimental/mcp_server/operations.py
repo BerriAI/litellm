@@ -5,6 +5,8 @@ import traceback
 import types
 import uuid
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from typing import Any, Final, NoReturn, TypeAlias, overload
@@ -78,6 +80,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     AggregateToolListing,
     ServerListOk,
     ServerOutcome,
+    classify_list_exception,
     outcome_wire_value,
 )
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -128,6 +131,7 @@ from litellm.proxy._types import (
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidation,
 )
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
@@ -222,6 +226,65 @@ class ListMCPToolsRestAPIResponseObject(MCPTool):
 
     mcp_info: MCPInfo | None = Field(default=None, alias="mcp_info")
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+@dataclass(frozen=True, slots=True)
+class _MCPServerRateLimitAdmission:
+    admitted_servers: tuple[MCPServer, ...]
+    rejected_servers: tuple[tuple[MCPServer, ProxyRateLimitError], ...]
+
+
+_mcp_server_admission_memo: Final[ContextVar[dict[str, asyncio.Task[ProxyRateLimitError | None]] | None]] = ContextVar(
+    "mcp_server_admission_memo", default=None
+)
+
+
+async def _enforce_mcp_server_rate_limit(
+    user_api_key_auth: UserAPIKeyAuth | None,
+    server: MCPServer,
+) -> None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    if proxy_logging_obj is not None:
+        await proxy_logging_obj.enforce_mcp_server_rate_limits(user_api_key_auth, server)
+
+
+async def _admit_mcp_servers(
+    servers: Sequence[MCPServer],
+    user_api_key_auth: UserAPIKeyAuth | None,
+) -> _MCPServerRateLimitAdmission:
+    memo: Final = _mcp_server_admission_memo.get()
+
+    async def _server_rate_limit_error(server: MCPServer) -> ProxyRateLimitError | None:
+        try:
+            await _enforce_mcp_server_rate_limit(user_api_key_auth, server)
+        except ProxyRateLimitError as error:
+            return error
+        return None
+
+    async def _admit_server(server: MCPServer) -> tuple[MCPServer, ProxyRateLimitError | None]:
+        if memo is None:
+            return server, await _server_rate_limit_error(server)
+        admission_task: Final = memo.get(server.server_id)
+        if admission_task is not None:
+            return server, await admission_task
+        created_task: Final = asyncio.create_task(_server_rate_limit_error(server))
+        memo[server.server_id] = created_task
+        return server, await created_task
+
+    results: Final = await asyncio.gather(*(_admit_server(server) for server in servers))
+    return _MCPServerRateLimitAdmission(
+        admitted_servers=tuple(server for server, error in results if error is None),
+        rejected_servers=tuple((server, error) for server, error in results if error is not None),
+    )
+
+
+async def _mcp_server_rate_limit_rejection(
+    server: MCPServer,
+    user_api_key_auth: UserAPIKeyAuth | None,
+) -> ProxyRateLimitError | None:
+    admission: Final = await _admit_mcp_servers((server,), user_api_key_auth)
+    return admission.rejected_servers[0][1] if admission.rejected_servers else None
 
 
 async def _build_virtual_call_logging_obj(
@@ -986,6 +1049,7 @@ async def _get_tools_from_mcp_servers(
     protocol_version: str | None = None,
     *,
     record_listing: bool = False,
+    enforce_rate_limits: bool = True,
 ) -> AggregateToolListing:
     """
     Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -1118,20 +1182,37 @@ async def _get_tools_from_mcp_servers(
             return page.tools, outcome
 
         if params is None:
+            server_admission: Final = (
+                await _admit_mcp_servers(allowed_mcp_servers, user_api_key_auth)
+                if enforce_rate_limits
+                else _MCPServerRateLimitAdmission(tuple(allowed_mcp_servers), ())
+            )
+            if not server_admission.admitted_servers and server_admission.rejected_servers:
+                raise server_admission.rejected_servers[0][1]
+            admitted_servers: Final = server_admission.admitted_servers
             results: Final = await asyncio.gather(
-                *(_fetch_and_filter_server_tools(server) for server in allowed_mcp_servers)
+                *(_fetch_and_filter_server_tools(server) for server in admitted_servers)
             )
             aggregated = AggregateToolListing(
                 tools=[tool for tools, _ in results for tool in tools],
                 outcomes={
-                    _aggregate_server_key(server): outcome for server, (_, outcome) in zip(allowed_mcp_servers, results)
+                    _aggregate_server_key(server): outcome for server, (_, outcome) in zip(admitted_servers, results)
+                }
+                | {
+                    _aggregate_server_key(server): classify_list_exception(error)
+                    for server, error in server_admission.rejected_servers
                 },
             )
         else:
             from litellm.proxy._experimental.mcp_server.catalog import aggregate_gateway_tools
 
             aggregated = await aggregate_gateway_tools(
-                context, params, allowed_mcp_servers, _prefetched_oauth_creds, record_listing=record_listing
+                context,
+                params,
+                allowed_mcp_servers,
+                _prefetched_oauth_creds,
+                record_listing=record_listing,
+                enforce_rate_limits=enforce_rate_limits,
             )
         all_tools: Final = aggregated.tools
         server_outcomes: Final = aggregated.outcomes
@@ -1776,6 +1857,7 @@ async def _list_tools_before_first_call(
             raw_headers=raw_headers,
             client_ip=client_ip,
             record_listing=False,
+            enforce_rate_limits=False,
         )
     except Exception as e:  # noqa: BLE001  # best effort: resolution below answers as it did before
         verbose_logger.debug("MCP tools/call: listing %s before its first call failed: %s", server.name, e)
@@ -2489,6 +2571,7 @@ async def mcp_get_prompt(
         user_api_key_auth=user_api_key_auth,
     )
 
+    await _enforce_mcp_server_rate_limit(user_api_key_auth, server)
     return await global_mcp_server_manager.get_prompt_from_server(
         server=server,
         user_api_key_auth=user_api_key_auth,
@@ -2542,6 +2625,7 @@ async def mcp_read_resource(
         user_api_key_auth=user_api_key_auth,
     )
 
+    await _enforce_mcp_server_rate_limit(user_api_key_auth, server)
     return await global_mcp_server_manager.read_resource_from_server(
         server=server,
         user_api_key_auth=user_api_key_auth,
@@ -3150,6 +3234,7 @@ class GatewayOperations:
                     if context.mcp_proxy_mode
                     else (ListPromptsRequest(), ListResourcesRequest(), ListResourceTemplatesRequest())
                 )
+                memo_token: Final = _mcp_server_admission_memo.set({})
                 tasks: Final = (
                     asyncio.create_task(
                         _execute_handle_list_tools(
@@ -3164,9 +3249,12 @@ class GatewayOperations:
                 try:
                     results: Final = await asyncio.gather(*tasks)
                 finally:
-                    for task in tasks:
-                        task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    try:
+                        for task in tasks:
+                            task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                    finally:
+                        _mcp_server_admission_memo.reset(memo_token)
                 return build_discovery(
                     configured=configured_versions(),
                     revision=context.protocol_version or "2025-11-25",
