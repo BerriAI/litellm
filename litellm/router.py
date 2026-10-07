@@ -2918,7 +2918,7 @@ class Router:
             request_priority: Final = resolve_request_priority(
                 requested=kwargs.get("priority"),
                 default_priority=self.default_priority,
-                drop_params=request_drops_params(kwargs),
+                drop_params=request_drops_params(kwargs, self.default_litellm_params),
             )
             if isinstance(request_priority, InvalidPriority):
                 raise litellm.BadRequestError(
@@ -2933,22 +2933,19 @@ class Router:
                     },
                 )
             start_time: Final = time.time()
-            _is_prompt_management_model: Final = self._is_prompt_management_model(model)
-
-            if _is_prompt_management_model:
-                return await self._prompt_management_factory(
-                    model=model,
-                    messages=messages,
-                    kwargs=kwargs,
-                )
             request_kwargs: Final = {key: value for key, value in kwargs.items() if key != "priority"}
+            original_function: Final = (
+                self._prompt_management_acompletion
+                if self._is_prompt_management_model(model)
+                else self.async_function_with_fallbacks
+            )
             if request_priority is None:
-                response = await self.async_function_with_fallbacks(**request_kwargs)
+                response = await original_function(**request_kwargs)
             else:
                 response = await self._schedule_factory(
                     model=model,
                     priority=request_priority,
-                    original_function=self.async_function_with_fallbacks,
+                    original_function=original_function,
                     args=(),
                     kwargs=request_kwargs,
                 )
@@ -4633,6 +4630,11 @@ class Router:
 
         split_litellm_model: Final = litellm_model.split("/")[0]
         return split_litellm_model in litellm._known_custom_logger_compatible_callbacks
+
+    async def _prompt_management_acompletion(self, model: str, messages: list[AllMessageValues], **kwargs: object):
+        return await self._prompt_management_factory(
+            model=model, messages=messages, kwargs={"model": model, "messages": messages, **kwargs}
+        )
 
     async def _prompt_management_factory(
         self,

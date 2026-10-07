@@ -27,8 +27,11 @@ def resolve_request_priority(
     return InvalidPriority(value=requested)
 
 
-def request_drops_params(kwargs: Mapping[str, object]) -> bool:
+def request_drops_params(kwargs: Mapping[str, object], router_defaults: Mapping[str, object]) -> bool:
     requested: Final = normalize_drop_params(kwargs.get("drop_params"))
-    if requested is None:
-        return litellm.drop_params is True
-    return requested
+    if requested is not None:
+        return requested
+    router_default: Final = normalize_drop_params(router_defaults.get("drop_params"))
+    if router_default is not None:
+        return router_default
+    return litellm.drop_params is True

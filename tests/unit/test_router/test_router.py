@@ -23153,6 +23153,67 @@ async def test_schedule_acompletion_under_a_default_priority_queues_the_explicit
     assert add_request.await_count == 1
     assert add_request.await_args.kwargs["request"].priority == 1
     assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+
+
+async def test_acompletion_drops_a_non_integer_priority_under_the_router_default_drop_params() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "qa-chat",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-priority-wire"},
+            }
+        ],
+        default_priority=3,
+        default_litellm_params={"drop_params": True},
+    )
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        response: Final = await router.acompletion(
+            model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong", priority="1"
+        )
+    assert add_request.await_args.kwargs["request"].priority == 3
+    assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+
+
+async def test_schedule_acompletion_queues_a_prompt_management_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "cached-chat",
+                "litellm_params": {
+                    "model": "anthropic_cache_control_hook/openai/gpt-5.4-nano",
+                    "api_key": "sk-priority-wire",
+                    "prompt_id": "cache-points",
+                },
+            }
+        ]
+    )
+    provider_calls: Final[list[dict[str, object]]] = []
+
+    async def _provider(**kwargs: object) -> litellm.ModelResponse:
+        provider_calls.append(kwargs)
+        return litellm.ModelResponse()
+
+    monkeypatch.setattr(litellm, "acompletion", _provider)
+    logging_obj: Final = LiteLLMLogging(
+        model="cached-chat",
+        messages=_PRIORITY_MESSAGES,
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="prompt-management-priority",
+        function_id="f",
+    )
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        response: Final = await router.schedule_acompletion(
+            model="cached-chat", messages=_PRIORITY_MESSAGES, priority=1, litellm_logging_obj=logging_obj
+        )
+    assert add_request.await_count == 1
+    assert add_request.await_args.kwargs["request"].priority == 1
+    assert len(provider_calls) == 1
+    assert "priority" not in provider_calls[0]
+    assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+
+
 def test_router_multi_org_list() -> None:
     """
     Pass list of orgs in 1 model definition,
