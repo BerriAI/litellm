@@ -27,9 +27,9 @@ NEWRELIC_METRIC_ENDPOINT_BY_REGION: Final[Mapping[str, str]] = MappingProxyType(
 NEWRELIC_DEFAULT_REGION: Final = "us"
 
 #: Metric API caps a payload at 2000 data points / 1MB compressed; each queued
-#: record expands to at most 6 metrics, so cap the per-flush record count well
-#: below that.
-NEWRELIC_METRICS_MAX_BATCH_SIZE: Final = 250
+#: record expands to at most 6 bucket metrics plus 2 team budget gauges (8), so cap
+#: the per-flush record count well below 2000 / 8.
+NEWRELIC_METRICS_MAX_BATCH_SIZE: Final = 200
 
 #: Hard cap on records retained across failed flushes (5xx/network requeue).
 #: Beyond this the oldest records are dropped.
@@ -48,6 +48,8 @@ NEWRELIC_METRIC_PROMPT_TOKENS: Final = "litellm.tokens.prompt"
 NEWRELIC_METRIC_COMPLETION_TOKENS: Final = "litellm.tokens.completion"
 NEWRELIC_METRIC_TOTAL_TOKENS: Final = "litellm.tokens.total"
 NEWRELIC_METRIC_REQUEST_DURATION_MS: Final = "litellm.request.duration_ms"
+NEWRELIC_METRIC_TEAM_MAX_BUDGET: Final = "litellm.team.max_budget"
+NEWRELIC_METRIC_TEAM_REMAINING_BUDGET: Final = "litellm.team.remaining_budget"
 
 
 class NewRelicSummaryValue(TypedDict):
@@ -66,6 +68,13 @@ class NewRelicCountMetric(TypedDict):
     attributes: ReadOnly[Mapping[str, str]]
 
 
+class NewRelicGaugeMetric(TypedDict):
+    name: ReadOnly[str]
+    type: ReadOnly[Literal["gauge"]]
+    value: ReadOnly[float]
+    attributes: ReadOnly[Mapping[str, str]]
+
+
 class NewRelicSummaryMetric(TypedDict):
     name: ReadOnly[str]
     type: ReadOnly[Literal["summary"]]
@@ -73,7 +82,7 @@ class NewRelicSummaryMetric(TypedDict):
     attributes: ReadOnly[Mapping[str, str]]
 
 
-NewRelicMetric = NewRelicCountMetric | NewRelicSummaryMetric
+NewRelicMetric = NewRelicCountMetric | NewRelicGaugeMetric | NewRelicSummaryMetric
 
 
 #: ``interval.ms`` has a dot in it, so the functional TypedDict form is required.
@@ -108,6 +117,8 @@ class NewRelicMetricRecord:
     completion_tokens: int
     total_tokens: int
     duration_ms: float
+    team_max_budget: float | None = None
+    team_spend: float | None = None
 
     @property
     def bucket_key(self) -> tuple[str, str, str, str, str, str]:

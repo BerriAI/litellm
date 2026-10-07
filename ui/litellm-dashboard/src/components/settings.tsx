@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -59,52 +60,94 @@ interface DynamicParamsFieldsProps {
 }
 
 const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callbackConfigs, selectedCallback }) => {
-  const { register, formState } = useFormContext<CallbackFormValues>();
+  const { register, control, formState } = useFormContext<CallbackFormValues>();
   const fieldIdPrefix = React.useId();
 
   if (!params || params.length === 0) {
     return null;
   }
 
+  const callbackConfig = findCallbackConfig(callbackConfigs, selectedCallback);
   return (
     <div className="space-y-4 mt-6 p-4 bg-muted rounded-lg border">
       {params.map((param) => {
-        const callbackConfig = callbackConfigs.find((config) => config.id === selectedCallback);
         const paramConfig = callbackConfig?.dynamic_params?.[param] || {};
         const paramType = paramConfig.type || "text";
         const fieldLabel = paramConfig.ui_name || param.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
         const isRequired = paramConfig.required || false;
+        const selectOptions: string[] = Array.isArray(paramConfig.options) ? paramConfig.options : [];
+        const isSelect = paramType === "select" && selectOptions.length > 0;
+        const isBoolean = paramType === "boolean";
         const fieldId = `${fieldIdPrefix}-${param}`;
-        const registration = register(
-          param,
-          isRequired ? { required: `Please enter the ${fieldLabel.toLowerCase()}` } : undefined,
-        );
+        const validationRules = isRequired ? { required: `Please enter the ${fieldLabel.toLowerCase()}` } : undefined;
+        const registration = isSelect || isBoolean ? undefined : register(param, validationRules);
 
         return (
           <Field key={param} className="mb-4">
             <FieldLabel htmlFor={fieldId}>
               <span className="text-sm font-medium text-foreground">{fieldLabel} </span>
             </FieldLabel>
-            {paramType === "password" ? (
-              <Input
-                id={fieldId}
-                type="password"
-                placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                {...registration}
+            {isSelect && (
+              <Controller
+                control={control}
+                name={param}
+                rules={validationRules}
+                render={({ field }) => (
+                  <Select
+                    items={selectOptions.map((option) => ({ label: option, value: option }))}
+                    value={field.value || null}
+                    onValueChange={(selected: string | null) => field.onChange(selected ?? "")}
+                  >
+                    <SelectTrigger id={fieldId} className="w-full" onBlur={field.onBlur}>
+                      <SelectValue placeholder={`Select ${fieldLabel.toLowerCase()}`} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {selectOptions.map((option) => (
+                        <SelectItem key={option} value={option}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               />
-            ) : paramType === "number" ? (
-              <Input
-                id={fieldId}
-                type="number"
-                placeholder={`Enter ${fieldLabel.toLowerCase()}`}
-                min={0}
-                max={1}
-                step={0.1}
-                {...registration}
-              />
-            ) : (
-              <Input id={fieldId} placeholder={`Enter your ${fieldLabel.toLowerCase()}`} {...registration} />
             )}
+            {isBoolean && (
+              <Controller
+                control={control}
+                name={param}
+                render={({ field }) => (
+                  <Switch
+                    id={fieldId}
+                    checked={/^(true|1)$/i.test(String(field.value ?? ""))}
+                    onCheckedChange={(checked: boolean) => field.onChange(checked ? "true" : "false")}
+                    onBlur={field.onBlur}
+                  />
+                )}
+              />
+            )}
+            {!isSelect &&
+              !isBoolean &&
+              (paramType === "password" ? (
+                <Input
+                  id={fieldId}
+                  type="password"
+                  placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
+                  {...registration}
+                />
+              ) : paramType === "number" ? (
+                <Input
+                  id={fieldId}
+                  type="number"
+                  placeholder={`Enter ${fieldLabel.toLowerCase()}`}
+                  min={0}
+                  max={1}
+                  step={0.1}
+                  {...registration}
+                />
+              ) : (
+                <Input id={fieldId} placeholder={`Enter your ${fieldLabel.toLowerCase()}`} {...registration} />
+              ))}
             <FieldError errors={[formState.errors[param]]} />
           </Field>
         );
@@ -135,7 +178,7 @@ export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
 }) => {
   const { control } = useFormContext<CallbackFormValues>();
   const inputId = React.useId();
-  const selectedConfig = callbackConfigs.find((config) => config.id === selectedCallback) ?? null;
+  const selectedConfig = findCallbackConfig(callbackConfigs, selectedCallback) ?? null;
 
   return (
     <Controller
@@ -194,6 +237,31 @@ export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
   );
 };
 
+const CALLBACK_CONFIG_ALIASES: Record<string, string> = { s3_v2: "s3" };
+
+interface DynamicParamConfig {
+  type?: string;
+  ui_name?: string;
+  required?: boolean;
+  options?: string[];
+}
+
+interface CallbackConfigWithParams {
+  id: string;
+  dynamic_params?: Record<string, DynamicParamConfig>;
+}
+
+const findCallbackConfig = <T extends { id: string }>(
+  callbackConfigs: readonly T[],
+  callbackName: string | null,
+): T | undefined => {
+  if (!callbackName) {
+    return undefined;
+  }
+  const configId = CALLBACK_CONFIG_ALIASES[callbackName] ?? callbackName;
+  return callbackConfigs.find((config) => config.id === configId);
+};
+
 // Shared helper function to get dynamic params for a callback
 const getDynamicParamsForCallback = (
   callbackName: string | null,
@@ -204,7 +272,7 @@ const getDynamicParamsForCallback = (
     return fallbackVariables ? Object.keys(fallbackVariables) : [];
   }
 
-  const callbackConfig = callbackConfigs.find((config) => config.id === callbackName);
+  const callbackConfig = findCallbackConfig(callbackConfigs, callbackName);
   if (callbackConfig?.dynamic_params) {
     return Object.keys(callbackConfig.dynamic_params);
   }
@@ -271,15 +339,22 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
 
   useEffect(() => {
     if (showEditCallback && selectedEditCallback) {
+      const params = getDynamicParamsForCallback(
+        selectedEditCallback.name,
+        callbackConfigs,
+        selectedEditCallback.variables,
+      );
+      const fieldNameFor = (variable: string) =>
+        params.find((param) => param.toUpperCase() === variable.toUpperCase()) ?? variable;
       const normalized = Object.fromEntries(
-        Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [k, v ?? ""]),
+        Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [fieldNameFor(k), v ?? ""]),
       );
       editForm.reset({
         ...normalized,
         callback: selectedEditCallback.name,
       });
     }
-  }, [showEditCallback, selectedEditCallback, editForm]);
+  }, [showEditCallback, selectedEditCallback, editForm, callbackConfigs]);
 
   const handleSwitchChange = (alertName: string) => {
     if (activeAlerts.includes(alertName)) {
@@ -293,6 +368,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     llm_too_slow: "LLM Responses Too Slow",
     llm_requests_hanging: "LLM Requests Hanging",
     budget_alerts: "Budget Alerts (API Keys, Users)",
+    user_spend_thresholds: "User Spend Thresholds (Daily/Monthly)",
+    user_spend_anomalies: "User Spend Anomaly Detection",
     db_exceptions: "Database Exceptions (Read/Write)",
     daily_reports: "Weekly/Monthly Spend Reports",
     outage_alerts: "Outage Alerts",
@@ -522,7 +599,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           <TabsContent value="alerting-types" keepMounted>
             <Card className="p-6">
               <p className="my-2">
-                Alerts are only supported for Slack Webhook URLs. Get your webhook urls from{" "}
+                Alerts are sent to any Slack-compatible incoming webhook URL (Slack, Rocket.Chat, Mattermost, etc.). Get
+                Slack webhook urls from{" "}
                 <a href="https://api.slack.com/messaging/webhooks" target="_blank" style={{ color: "blue" }}>
                   here
                 </a>
@@ -532,7 +610,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                   <TableRow>
                     <TableHead></TableHead>
                     <TableHead></TableHead>
-                    <TableHead>Slack Webhook URL</TableHead>
+                    <TableHead>Webhook URL (Slack-compatible)</TableHead>
                   </TableRow>
                 </TableHeader>
 

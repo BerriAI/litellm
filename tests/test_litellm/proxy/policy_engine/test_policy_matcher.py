@@ -8,8 +8,11 @@ Tests:
 
 import pytest
 
+import litellm.proxy.policy_engine.attachment_registry as attachment_registry_module
+import litellm.proxy.policy_engine.policy_registry as policy_registry_module
 from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
 from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
+from litellm.proxy.policy_engine.policy_registry import PolicyRegistry
 from litellm.types.proxy.policy_engine import (
     PolicyMatchContext,
     PolicyScope,
@@ -196,3 +199,48 @@ class TestPolicyMatcherWithAttachments:
         attached = registry.get_attached_policies(context)
 
         assert "healthcare-policy" not in attached
+
+
+def _global_registries(monkeypatch):
+    policies = PolicyRegistry()
+    policies.load_policies(
+        {
+            "guardrail-y": {"guardrails": {"add": ["y"]}},
+            "guardrail-x": {"guardrails": {"add": ["x"]}, "condition": {"model": "claude.*"}},
+        }
+    )
+    attachments = AttachmentRegistry()
+    attachments.load_attachments(
+        [
+            {"policy": "guardrail-x", "tags": ["opt-in"]},
+            {"policy": "guardrail-y", "scope": "*", "default": True},
+        ]
+    )
+    monkeypatch.setattr(policy_registry_module, "get_policy_registry", lambda: policies)
+    monkeypatch.setattr(attachment_registry_module, "get_attachment_registry", lambda: attachments)
+    return policies
+
+
+class TestGetMatchingPoliciesFallback:
+    def test_condition_failing_opt_in_falls_back_to_default(self, monkeypatch):
+        _global_registries(monkeypatch)
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5", tags=["opt-in"])
+
+        assert PolicyMatcher.get_matching_policies(context=context) == ["guardrail-y"]
+
+    def test_condition_passing_opt_in_suppresses_default(self, monkeypatch):
+        _global_registries(monkeypatch)
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="claude-haiku", tags=["opt-in"])
+
+        assert PolicyMatcher.get_matching_policies(context=context) == ["guardrail-x"]
+
+    def test_policy_applies_reads_registry_once(self, monkeypatch):
+        policies = _global_registries(monkeypatch)
+        calls = []
+        original = policies.get_all_policies
+        monkeypatch.setattr(policies, "get_all_policies", lambda: calls.append(1) or original())
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5", tags=["opt-in"])
+
+        PolicyMatcher.get_matching_policies(context=context)
+
+        assert len(calls) == 1

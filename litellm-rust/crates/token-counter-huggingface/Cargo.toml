@@ -1,0 +1,11 @@
+[package]
+name = "litellm-token-counter-huggingface"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+thiserror.workspace = true
+tokenizers.workspace = true

@@ -8,6 +8,8 @@ Without the fix, the AnthropicStreamWrapper silently dropped these
 arguments, causing tool_use blocks to arrive with empty input {}.
 """
 
+import json
+
 from typing import List
 from unittest.mock import MagicMock
 
@@ -139,9 +141,7 @@ async def test_async_stream_emits_input_json_delta_for_bundled_tool_args():
 
     # Verify the delta carries the tool arguments
     delta_event = events[input_json_delta_idx]
-    assert delta_event["delta"][
-        "partial_json"
-    ], "input_json_delta should have non-empty partial_json"
+    assert json.loads(delta_event["delta"]["partial_json"]) == {"location": "Boston"}
 
 
 @pytest.mark.asyncio
@@ -300,7 +300,7 @@ def test_sync_stream_emits_input_json_delta_for_bundled_tool_args():
     assert (
         input_json_delta_idx == tool_start_idx + 1
     ), "input_json_delta should immediately follow the tool_use content_block_start"
-    assert events[input_json_delta_idx]["delta"]["partial_json"]
+    assert json.loads(events[input_json_delta_idx]["delta"]["partial_json"]) == {"location": "Boston"}
 
 
 def test_sync_stream_no_extra_delta_when_tool_args_empty():

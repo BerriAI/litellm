@@ -1,8 +1,12 @@
 
-import pytest
+from types import MappingProxyType
+from typing import Final
 
+import pytest
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    inherit_message_logging_privacy,
     initialize_standard_callback_dynamic_params,
     iter_client_callback_metadata_dicts,
 )
@@ -187,6 +191,20 @@ def test_empty_kwargs_returns_empty_params():
 
     params = initialize_standard_callback_dynamic_params({})
     assert dict(params) == {}
+
+
+@pytest.mark.parametrize("child_privacy", (False, True))
+def test_inherited_privacy_only_strengthens_child_and_resets(child_privacy: bool) -> None:
+    kwargs: Final = TypeAdapter(dict[str, object]).validate_python(
+        MappingProxyType({"turn_off_message_logging": child_privacy})
+    )
+    with inherit_message_logging_privacy(False):
+        assert initialize_standard_callback_dynamic_params(kwargs)["turn_off_message_logging"] is child_privacy
+        with inherit_message_logging_privacy(True), inherit_message_logging_privacy(False):
+            params: Final = initialize_standard_callback_dynamic_params(kwargs)
+        assert initialize_standard_callback_dynamic_params(kwargs)["turn_off_message_logging"] is child_privacy
+    assert params["turn_off_message_logging"] is True
+    assert initialize_standard_callback_dynamic_params().get("turn_off_message_logging") is None
 
 
 def test_newrelic_callback_params_are_not_extracted_from_request_kwargs():

@@ -1096,10 +1096,13 @@ def test_natively_signed_parallel_turn_never_carries_a_placeholder(model):
         "gemini-3.5-flash",
         "gemini-3.6-flash",
         "gemini-3.7-flash",
+        "gemini-3.8-flash",
         "vertex_ai/gemini-3.5-flash",
         "vertex_ai/gemini-3.7-flash",
+        "vertex_ai/gemini-3.8-flash",
         "gemini/gemini-3.5-flash",
         "gemini/gemini-3.7-flash",
+        "gemini/gemini-3.8-flash",
     ],
 )
 def test_placeholder_scoped_to_first_call_across_gemini_3_variants(model):

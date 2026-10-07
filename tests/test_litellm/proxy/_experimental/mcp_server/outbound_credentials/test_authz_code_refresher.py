@@ -22,6 +22,7 @@ class _Server:
         server_id="srv",
         configured_token_url=None,
     ):
+        self.oauth_identity_binding = None
         self.token_url = token_url
         self.configured_token_url = configured_token_url
         self.client_id = client_id
@@ -287,3 +288,40 @@ async def test_refresh_uses_admin_entered_token_url_when_issuer_yield_empties_re
     assert token is not None
     assert token.access_token == "new-at"
     assert posted[0][0] == "https://idp.example.com/token"
+
+
+@pytest.mark.asyncio
+async def test_identity_rejection_never_persists_or_returns_refreshed_token():
+    from unittest.mock import AsyncMock
+
+    from fastapi import HTTPException
+
+    validator = AsyncMock(side_effect=HTTPException(status_code=403, detail="oauth_principal_mismatch"))
+    persist = AsyncMock()
+    refresher = AuthorizationCodeRefresher(
+        _lookup(_Server()),
+        _endpoint({"access_token": "foreign-token", "id_token": "foreign-identity"}),
+        persist,
+        identity_validator=validator,
+    )
+    assert await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt")) is None
+    persist.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_verified_refresh_preserves_binding_proof_in_storage():
+    from unittest.mock import AsyncMock
+
+    validator = AsyncMock(return_value="verified-binding")
+    persist = AsyncMock()
+    refresher = AuthorizationCodeRefresher(
+        _lookup(_Server()),
+        _endpoint({"access_token": "new", "refresh_token": "rotated"}),
+        persist,
+        identity_validator=validator,
+    )
+    token = await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt"))
+    assert token.access_token == "new"
+    assert token.refresh_token == "rotated"
+    assert token.identity_binding_proof == "verified-binding"
+    assert persist.await_args.kwargs["identity_binding_proof"] == "verified-binding"

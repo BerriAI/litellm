@@ -185,18 +185,19 @@ class DummyCredentials:
     ],
 )
 @pytest.mark.parametrize(
-    "param_name, param_value",
+    "param_name, param_value, expected_credentials_value",
     [
-        ("aws_session_token", "dummy_session_token"),
-        ("aws_session_name", "dummy_session_name"),
-        ("aws_profile_name", "dummy_profile_name"),
-        ("aws_role_name", "dummy_role_name"),
-        ("aws_web_identity_token", "dummy_web_identity_token"),
-        ("aws_sts_endpoint", "dummy_sts_endpoint"),
-        ("aws_external_id", "dummy_external_id"),
+        ("aws_session_token", "dummy_session_token", "dummy_session_token"),
+        ("aws_session_name", "dummy_session_name", "dummy_session_name"),
+        ("aws_profile_name", "dummy_profile_name", "dummy_profile_name"),
+        ("aws_role_name", "dummy_role_name", "dummy_role_name"),
+        ("aws_web_identity_token", "dummy_web_identity_token", "dummy_web_identity_token"),
+        ("aws_sts_endpoint", "dummy_sts_endpoint", "dummy_sts_endpoint"),
+        ("aws_external_id", "dummy_external_id", "dummy_external_id"),
+        ("aws_session_tags", [{"Key": "team", "Value": "genai"}], ({"Key": "team", "Value": "genai"},)),
     ],
 )
-def test_dynamic_aws_params_propagation(model, param_name, param_value):
+def test_dynamic_aws_params_propagation(model, param_name, param_value, expected_credentials_value):
     """
     When passed to litellm.completion, each dynamic AWS authentication parameter
     should propagate down to the get_credentials() call in BaseAWSLLM.
@@ -281,6 +282,4 @@ def test_dynamic_aws_params_propagation(model, param_name, param_value):
                 )
 
                 # We now assert that get_credentials() was called with the dynamic param.
-                assert (
-                    dummy_get_credentials.called_kwargs.get(param_name) == param_value
-                )
+                assert dummy_get_credentials.called_kwargs.get(param_name) == expected_credentials_value

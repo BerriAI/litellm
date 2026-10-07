@@ -155,3 +155,23 @@ def test_acount_tokens_no_api_key_falls_back(monkeypatch):
     # Should fall back to local tokenizer since no API key
     assert result.total_tokens > 0
     assert result.tokenizer_type == "local_tokenizer"
+
+
+async def test_acount_tokens_local_fallback_counts_off_the_event_loop():
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    model = "together_ai/meta-llama/Llama-3-8b-chat-hf"
+    warm_tokenizer(model)
+
+    result, took, lags = await timed_with_loop_lags(
+        lambda: litellm.acount_tokens(model=model, messages=[{"role": "user", "content": text * 100}])
+    )
+
+    assert result.tokenizer_type == "local_tokenizer"
+    assert result.total_tokens > 100_000
+    assert_loop_stayed_free(took, lags)

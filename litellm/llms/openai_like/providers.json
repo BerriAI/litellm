@@ -173,7 +173,7 @@
     "api_key_env": "META_API_KEY",
     "api_base_env": "META_API_BASE",
     "base_class": "openai_gpt",
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/realtime"]
   },
   "cognition": {
     "base_url": "https://api.cognition.ai/v1",

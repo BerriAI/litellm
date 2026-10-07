@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -6,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 
@@ -213,6 +215,22 @@ async def test_redis_error_handling(pod_lock_manager, mock_redis):
     await pod_lock_manager.release_lock(
         cronjob_id="test_job",
     )
+
+
+@pytest.mark.asyncio
+async def test_lock_refused_by_the_open_circuit_breaker_is_not_logged_as_an_error(pod_lock_manager, mock_redis, caplog):
+    """Every cron job retries its lock on a timer, so an open breaker must not add an error line per cycle."""
+    refused = RedisCircuitBreakerOpenError("Redis circuit breaker is open - skipping async_set_cache")
+    mock_redis.async_set_cache.side_effect = refused
+    mock_redis.async_get_cache.return_value = pod_lock_manager.pod_id
+    mock_redis.async_delete_cache.side_effect = refused
+
+    with caplog.at_level(logging.ERROR):
+        acquired = await pod_lock_manager.acquire_lock(cronjob_id="test_job")
+        await pod_lock_manager.release_lock(cronjob_id="test_job")
+
+    assert acquired is False
+    assert caplog.records == []
 
 
 @pytest.mark.asyncio

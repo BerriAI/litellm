@@ -2,17 +2,38 @@ import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.integrations.SlackAlerting.batching_handler import send_to_webhook
 from litellm.integrations.SlackAlerting.ms_teams import (
     MS_TEAMS_ALERTING_DESTINATION,
     MS_TEAMS_WEBHOOK_URL_ENV,
+    MSTeamsMessage,
     build_ms_teams_payload,
     get_ms_teams_webhook_url,
 )
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import AlertType
+
+_MS_TEAMS_MESSAGE: Final = TypeAdapter(MSTeamsMessage)
+
+
+def _webhook_accepting_posts() -> AsyncMock:
+    response: Final = MagicMock(spec=httpx.Response)
+    response.status_code = 200
+    http_handler: Final = AsyncMock(spec=AsyncHTTPHandler)
+    http_handler.post.return_value = response
+    return http_handler
+
+
+def _posted_card_texts(http_handler: AsyncMock) -> tuple[str, ...]:
+    return tuple(
+        _MS_TEAMS_MESSAGE.validate_json(call.kwargs["data"])["attachments"][0]["content"]["body"][0]["text"]
+        for call in http_handler.post.call_args_list
+    )
 
 
 def test_build_ms_teams_payload_wraps_text_in_adaptive_card():
@@ -80,11 +101,8 @@ async def test_send_alert_slack_and_ms_teams_enqueue_both(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_send_to_webhook_posts_adaptive_card_for_ms_teams_items():
-    slack_alerting: Final = SlackAlerting(alerting=["ms_teams"])
-    mock_response: Final = MagicMock()
-    mock_response.status_code = 200
-    slack_alerting.async_http_handler = MagicMock()
-    slack_alerting.async_http_handler.post = AsyncMock(return_value=mock_response)
+    http_handler: Final = _webhook_accepting_posts()
+    slack_alerting: Final = SlackAlerting(alerting=["ms_teams"], async_http_handler=http_handler)
 
     item: Final = {
         "url": "https://teams.example/webhook",
@@ -95,7 +113,7 @@ async def test_send_to_webhook_posts_adaptive_card_for_ms_teams_items():
     }
     await send_to_webhook(slackAlertingInstance=slack_alerting, item=item, count=1)
 
-    call_kwargs: Final = slack_alerting.async_http_handler.post.call_args.kwargs
+    call_kwargs: Final = http_handler.post.call_args.kwargs
     assert call_kwargs["url"] == "https://teams.example/webhook"
     sent_body: Final = json.loads(call_kwargs["data"])
     assert sent_body["type"] == "message"
@@ -104,11 +122,8 @@ async def test_send_to_webhook_posts_adaptive_card_for_ms_teams_items():
 
 @pytest.mark.asyncio
 async def test_send_to_webhook_keeps_slack_payload_shape():
-    slack_alerting: Final = SlackAlerting(alerting=["slack"])
-    mock_response: Final = MagicMock()
-    mock_response.status_code = 200
-    slack_alerting.async_http_handler = MagicMock()
-    slack_alerting.async_http_handler.post = AsyncMock(return_value=mock_response)
+    http_handler: Final = _webhook_accepting_posts()
+    slack_alerting: Final = SlackAlerting(alerting=["slack"], async_http_handler=http_handler)
 
     item: Final = {
         "url": "https://hooks.slack.com/services/test",
@@ -118,5 +133,27 @@ async def test_send_to_webhook_keeps_slack_payload_shape():
     }
     await send_to_webhook(slackAlertingInstance=slack_alerting, item=item, count=1)
 
-    call_kwargs: Final = slack_alerting.async_http_handler.post.call_args.kwargs
+    call_kwargs: Final = http_handler.post.call_args.kwargs
     assert json.loads(call_kwargs["data"]) == {"text": "alert body"}
+
+
+@pytest.mark.asyncio
+async def test_async_send_batch_delivers_every_distinct_ms_teams_alert(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(MS_TEAMS_WEBHOOK_URL_ENV, "https://teams.example/webhook")
+    http_handler: Final = _webhook_accepting_posts()
+    slack_alerting: Final = SlackAlerting(alerting=["ms_teams"], async_http_handler=http_handler)
+    slack_alerting.periodic_started = True
+    for message in ("User Budget: 15% or less of budget remaining", "User Budget: Budget Crossed"):
+        await slack_alerting.send_alert(
+            message=message,
+            level="High",
+            alert_type=AlertType.budget_alerts,
+            alerting_metadata={},
+        )
+
+    await slack_alerting.async_send_batch()
+
+    card_texts: Final = _posted_card_texts(http_handler)
+    assert len(card_texts) == 2
+    assert "User Budget: 15% or less of budget remaining" in card_texts[0]
+    assert "User Budget: Budget Crossed" in card_texts[1]

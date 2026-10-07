@@ -203,7 +203,6 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             if value is not None
         }
 
-        # Build the request body for Vertex AI RAG API
         query_body: Final[Mapping[str, object]] = {
             key: value
             for key, value in (("text", query), ("rag_retrieval_config", rag_retrieval_config or None))
@@ -294,7 +293,6 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         # Add metadata if provided
         metadata: Final = vector_store_create_optional_params.get("metadata")
 
-        # Build the request body for Vertex AI RAG Corpus creation
         request_body: Final[dict[str, object]] = {
             key: value
             for key, value in (

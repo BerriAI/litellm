@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { screen } from "@testing-library/react";
 import { renderWithProviders } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import EntityUsageExportModal from "./EntityUsageExportModal";
@@ -73,13 +74,13 @@ describe("EntityUsageExportModal", () => {
     const user = userEvent.setup();
     const { handleExportCSV } = await import("./utils");
 
-    const { getByRole } = renderWithProviders(<EntityUsageExportModal {...baseProps} />);
+    renderWithProviders(<EntityUsageExportModal {...baseProps} />);
 
     // Default primary action reflects CSV export
-    expect(getByRole("button", { name: /Export CSV/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Export CSV/i })).toBeInTheDocument();
 
     // Click export
-    await user.click(getByRole("button", { name: /Export CSV/i }));
+    await user.click(screen.getByRole("button", { name: /Export CSV/i }));
 
     // Verifies export function was invoked with correct parameters
     expect(handleExportCSV).toHaveBeenCalledWith(baseProps.spendData, "daily", "Tag", "tag", {});
@@ -97,14 +98,14 @@ describe("EntityUsageExportModal", () => {
     const user = userEvent.setup();
     const { handleExportCSV } = await import("./utils");
 
-    const { getByText, getByRole } = renderWithProviders(<EntityUsageExportModal {...baseProps} />);
+    renderWithProviders(<EntityUsageExportModal {...baseProps} />);
 
     // Choose the alternate export type - click the label to trigger radio
-    const dailyModelLabel = getByText(/Day-by-day by tag and model/i);
+    const dailyModelLabel = screen.getByText(/Day-by-day by tag and model/i);
     await user.click(dailyModelLabel);
 
     // Export with default CSV format
-    const exportBtn = getByRole("button", { name: /Export CSV/i });
+    const exportBtn = screen.getByRole("button", { name: /Export CSV/i });
     await user.click(exportBtn);
 
     // Ensure the selected scope flowed through

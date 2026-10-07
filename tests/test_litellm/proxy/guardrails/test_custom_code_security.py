@@ -197,6 +197,141 @@ async def test_custom_code_post_call_block_raises_http_400():
     }
 
 
+FLAG_CODE = (
+    "def apply_guardrail(inputs, request_data, input_type):\n"
+    '    return flag("audit hit", metadata={"category": "topic"})\n'
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_type", ["request", "response"])
+async def test_custom_code_flag_passes_content_through_and_records_flagged_entry(input_type):
+    """LIT-6894: flag() must not raise, must return the content unchanged and must log
+    exactly one guardrail_flagged entry (the decorator must not add a second "success")."""
+    guardrail = CustomCodeGuardrail(custom_code=FLAG_CODE, guardrail_name="t", event_hook=["pre_call", "post_call"])
+    request_data = {"model": "test-model", "litellm_metadata": {}}
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["hello"]},
+        request_data=request_data,
+        input_type=input_type,
+    )
+
+    assert result == {"texts": ["hello"]}
+    entries = request_data["litellm_metadata"]["standard_logging_guardrail_information"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["guardrail_status"] == "guardrail_flagged"
+    assert entry["guardrail_name"] == "t"
+    assert entry["guardrail_mode"] == ["pre_call", "post_call"]
+    assert entry["guardrail_response"] == {
+        "action": "flag",
+        "reason": "audit hit",
+        "input_type": input_type,
+        "metadata": {"category": "topic"},
+    }
+    assert entry["duration"] is not None and entry["duration"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_custom_code_flag_default_reason_and_empty_metadata():
+    code = "def apply_guardrail(inputs, request_data, input_type):\n    return flag('just a note')\n"
+    guardrail = _compile(code)
+    request_data = {"model": "m", "litellm_metadata": {}}
+
+    await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+
+    entry = request_data["litellm_metadata"]["standard_logging_guardrail_information"][0]
+    assert entry["guardrail_response"] == {
+        "action": "flag",
+        "reason": "just a note",
+        "input_type": "request",
+        "metadata": {},
+    }
+
+
+IDENTITY_ECHO_CODE = (
+    "def apply_guardrail(inputs, request_data, input_type):\n"
+    "    return flag('identity', metadata={\n"
+    "        'ids': [request_data['user_id'], request_data['team_id'], request_data['end_user_id']],\n"
+    "        'metadata_keys': sorted(request_data['metadata'].keys()),\n"
+    "    })\n"
+)
+CALLER_IDENTITY = {
+    "user_api_key_user_id": "someone@example.com",
+    "user_api_key_team_id": "team-1",
+    "user_api_key_end_user_id": "end-user-1",
+    "user_api_key_alias": "guardrail-repro-key",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+async def test_custom_code_sandbox_sees_caller_identity_from_proxy_metadata_bucket(metadata_key):
+    """LIT-6609: the proxy writes user_api_key_* into `metadata` (chat) or `litellm_metadata`
+    (/v1/messages, responses, batches, files); the sandbox must resolve ids from either."""
+    guardrail = _compile(IDENTITY_ECHO_CODE)
+    request_data = {"model": "m", metadata_key: dict(CALLER_IDENTITY)}
+
+    await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+
+    entry = request_data[metadata_key]["standard_logging_guardrail_information"][0]
+    assert entry["guardrail_response"]["metadata"] == {
+        "ids": ["someone@example.com", "team-1", "end-user-1"],
+        "metadata_keys": sorted(CALLER_IDENTITY),
+    }
+
+
+@pytest.mark.asyncio
+async def test_custom_code_sandbox_merges_caller_metadata_with_litellm_metadata():
+    """On litellm_metadata routes the caller's own `metadata` field must stay visible next to
+    the proxy identity block, and the proxy block wins on key collisions."""
+    guardrail = _compile(IDENTITY_ECHO_CODE)
+    request_data = {
+        "model": "m",
+        "metadata": {"trace_id": "abc", "user_api_key_user_id": "forged"},
+        "litellm_metadata": dict(CALLER_IDENTITY),
+    }
+
+    await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+
+    entry = request_data["litellm_metadata"]["standard_logging_guardrail_information"][0]
+    assert entry["guardrail_response"]["metadata"] == {
+        "ids": ["someone@example.com", "team-1", "end-user-1"],
+        "metadata_keys": sorted([*CALLER_IDENTITY, "trace_id"]),
+    }
+
+
+@pytest.mark.asyncio
+async def test_custom_code_sandbox_ignores_top_level_identity_fields():
+    """Only the proxy-owned metadata buckets carry identity; user_api_key_* keys at the top level
+    of the request body are caller-controlled on ordinary routes and must never become ids."""
+    code = (
+        "def apply_guardrail(inputs, request_data, input_type):\n"
+        "    ids = [request_data['user_id'], request_data['team_id'], request_data['end_user_id']]\n"
+        "    return flag('identity', metadata={'ids': str(ids)})\n"
+    )
+    guardrail = _compile(code)
+    request_data = {"model": "m", **CALLER_IDENTITY, "metadata": {"headers": {}}}
+
+    await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+
+    entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+    assert entry["guardrail_response"]["metadata"]["ids"] == "[None, None, None]"
+
+
+@pytest.mark.asyncio
+async def test_custom_code_allow_still_records_success_not_flagged():
+    code = "def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n"
+    guardrail = _compile(code)
+    request_data = {"model": "m", "litellm_metadata": {}}
+
+    await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+
+    entries = request_data["litellm_metadata"]["standard_logging_guardrail_information"]
+    assert [e["guardrail_status"] for e in entries] == ["success"]
+
+
 def test_typical_sync_guardrail_still_works():
     code = (
         "def apply_guardrail(inputs, request_data, input_type):\n"

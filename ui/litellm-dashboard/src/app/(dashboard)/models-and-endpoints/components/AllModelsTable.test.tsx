@@ -11,8 +11,8 @@ const makeModel = (overrides: Partial<ModelData> = {}): ModelData =>
     model_name: "gpt-4-public",
     litellm_model_name: "openai/gpt-4",
     provider: "openai",
-    input_cost: 30 as unknown as number,
-    output_cost: 60 as unknown as number,
+    input_cost: "30",
+    output_cost: "60",
     max_tokens: 8192,
     max_input_tokens: 8192,
     litellm_params: { model: "openai/gpt-4" },
@@ -59,6 +59,7 @@ const baseProps = {
   availableModelAccessGroups: ["sales-team"],
   userRole: "Admin",
   userID: "alice",
+  isViewOnly: false,
   onModelIdClick: vi.fn(),
   onTeamIdClick: vi.fn(),
   onDeleteClick: vi.fn(),
@@ -174,13 +175,41 @@ describe("AllModelsTable", () => {
     expect(screen.getByText("$30")).toBeInTheDocument();
     expect(screen.getByText("$60")).toBeInTheDocument();
 
+    rerender(<AllModelsTable {...baseProps} data={[makeModel({ input_cost: null, output_cost: null })]} />);
+    expect(screen.queryByText(/^\$/)).not.toBeInTheDocument();
+  });
+
+  it("renders the per-second rate instead of $0.00 token costs for a video model priced per second", () => {
+    const { rerender } = render(
+      <AllModelsTable
+        {...baseProps}
+        data={[
+          makeModel({
+            input_cost: "0.00",
+            output_cost: "0.00",
+            output_cost_per_second: 0.4,
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("$0.40/s")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+
     rerender(
       <AllModelsTable
         {...baseProps}
-        data={[makeModel({ input_cost: null as unknown as number, output_cost: null as unknown as number })]}
+        data={[
+          makeModel({
+            input_cost: "0.60",
+            output_cost: "0.00",
+            output_cost_per_second: 0.015,
+          }),
+        ]}
       />,
     );
-    expect(screen.queryByText(/^\$/)).not.toBeInTheDocument();
+    expect(screen.getByText("$0.60")).toBeInTheDocument();
+    expect(screen.getByText("$0.015/s")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
 
   it("collapses extra access groups behind a +N more badge", () => {
@@ -254,6 +283,17 @@ describe("AllModelsTable", () => {
       expect(onTogglePauseClick).not.toHaveBeenCalled();
     });
 
+    it("does not let a view-only admin toggle a model", async () => {
+      const user = userEvent.setup();
+      const onTogglePauseClick = vi.fn();
+      render(<AllModelsTable {...baseProps} isViewOnly onTogglePauseClick={onTogglePauseClick} />);
+
+      const toggle = screen.getByTestId("model-pause-toggle-model-1");
+      expect(toggle).toHaveAttribute("data-disabled");
+      await user.click(toggle);
+      expect(onTogglePauseClick).not.toHaveBeenCalled();
+    });
+
     it("does not let anyone toggle a config model", async () => {
       const user = userEvent.setup();
       const onTogglePauseClick = vi.fn();
@@ -302,6 +342,17 @@ describe("AllModelsTable", () => {
       const user = userEvent.setup();
       const onDeleteClick = vi.fn();
       render(<AllModelsTable {...baseProps} userRole="Internal User" userID="bob" onDeleteClick={onDeleteClick} />);
+
+      const deleteButton = screen.getByTestId("model-delete-model-1");
+      expect(deleteButton).toBeDisabled();
+      await user.click(deleteButton);
+      expect(onDeleteClick).not.toHaveBeenCalled();
+    });
+
+    it("blocks a view-only admin from deleting a DB model they created", async () => {
+      const user = userEvent.setup();
+      const onDeleteClick = vi.fn();
+      render(<AllModelsTable {...baseProps} isViewOnly onDeleteClick={onDeleteClick} />);
 
       const deleteButton = screen.getByTestId("model-delete-model-1");
       expect(deleteButton).toBeDisabled();

@@ -285,6 +285,20 @@ class TestNewRelicCallbackConfig:
         assert "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED" not in params
 
 
+class TestLangfuseOtelCallbackConfig:
+    def test_span_scope_is_a_select_over_exactly_the_scopes_the_validator_accepts(self):
+        from litellm.types.utils import OTEL_SPAN_SCOPES
+
+        client = TestClient(app)
+        response = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-1234"})
+        assert response.status_code == 200
+        langfuse_otel = next(config for config in response.json() if config.get("id") == "langfuse_otel")
+        scope = langfuse_otel["dynamic_params"]["langfuse_span_scope"]
+        assert scope["type"] == "select"
+        assert frozenset(scope["options"]) == OTEL_SPAN_SCOPES
+        assert scope["required"] is False
+
+
 class TestNewRelicTeamCallbackValidation:
     def _data(self, callback_vars):
         from litellm.proxy._types import AddTeamCallback

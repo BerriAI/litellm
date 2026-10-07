@@ -128,6 +128,12 @@ def test_mantle_messages_url_construction():
 _VPC_ENDPOINT = "https://vpce-0a1b2c3d.bedrock-mantle.us-gov-west-1.vpce.amazonaws.com"
 
 
+@pytest.fixture(autouse=True)
+def no_ambient_mantle_api_base(monkeypatch):
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+
+
+
 def test_mantle_chat_url_honors_api_base_host():
     config = AmazonMantleConfig()
     url = config.get_complete_url(
@@ -188,6 +194,48 @@ def test_mantle_messages_url_honors_aws_bedrock_runtime_endpoint():
             "aws_region_name": "us-gov-west-1",
             "aws_bedrock_runtime_endpoint": _VPC_ENDPOINT,
         },
+        litellm_params={},
+    )
+    assert url == f"{_VPC_ENDPOINT}/anthropic/v1/messages"
+
+
+_ENV_ENDPOINT = "https://bedrock-mantle.us-east-1.api.aws.internal.example.com"
+
+
+@pytest.mark.parametrize("config_cls", [AmazonMantleConfig, AmazonMantleMessagesConfig])
+@pytest.mark.parametrize(
+    "env_value",
+    [_ENV_ENDPOINT, f"{_ENV_ENDPOINT}/", f"{_ENV_ENDPOINT}/v1", f"{_ENV_ENDPOINT}/openai/v1"],
+)
+def test_mantle_url_honors_bedrock_mantle_api_base_env(monkeypatch, config_cls, env_value):
+    monkeypatch.setenv("BEDROCK_MANTLE_API_BASE", env_value)
+    url = config_cls().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="mantle/anthropic.claude-mythos-preview",
+        optional_params={"aws_region_name": "us-east-1"},
+        litellm_params={},
+    )
+    assert url == f"{_ENV_ENDPOINT}/anthropic/v1/messages"
+
+
+@pytest.mark.parametrize("config_cls", [AmazonMantleConfig, AmazonMantleMessagesConfig])
+@pytest.mark.parametrize(
+    ("api_base", "optional_params"),
+    [
+        (_VPC_ENDPOINT, {"aws_region_name": "us-gov-west-1"}),
+        (None, {"aws_region_name": "us-gov-west-1", "aws_bedrock_runtime_endpoint": _VPC_ENDPOINT}),
+    ],
+)
+def test_mantle_url_explicit_endpoint_beats_bedrock_mantle_api_base_env(
+    monkeypatch, config_cls, api_base, optional_params
+):
+    monkeypatch.setenv("BEDROCK_MANTLE_API_BASE", _ENV_ENDPOINT)
+    url = config_cls().get_complete_url(
+        api_base=api_base,
+        api_key=None,
+        model="mantle/anthropic.claude-mythos-preview",
+        optional_params=optional_params,
         litellm_params={},
     )
     assert url == f"{_VPC_ENDPOINT}/anthropic/v1/messages"
@@ -397,6 +445,63 @@ async def test_mantle_anthropic_messages_sends_workspace_header_and_clean_body()
     assert requests[0]["path"] == "/anthropic/v1/messages"
     assert requests[0]["headers"]["anthropic-workspace"] == "proj_abc123def456"
     assert "aws_bedrock_project_id" not in requests[0]["body"]
+
+
+async def _send_anthropic_messages_with_betas(**request_params: object) -> dict:
+    import litellm
+
+    requests = []
+
+    async def mock_post(self, url, data=None, headers=None, **kwargs):
+        requests.append(_capture_request(url=url, headers=headers or {}, data=data))
+        return _anthropic_response(url)
+
+    try:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new=mock_post,
+        ):
+            await litellm.anthropic_messages(
+                model="bedrock/mantle/anthropic.claude-mythos-preview",
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=10,
+                aws_access_key_id="fake-key",
+                aws_secret_access_key="fake-secret",
+                aws_region_name="us-east-1",
+                **request_params,
+            )
+    finally:
+        await litellm.close_litellm_async_clients()
+
+    assert len(requests) == 1
+    return requests[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_mantle_anthropic_messages_sends_every_beta_in_the_header_not_the_body():
+    sent = await _send_anthropic_messages_with_betas(
+        extra_headers={"anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14"},
+        context_management={"edits": [{"type": "clear_tool_uses_20250919"}]},
+    )
+
+    assert (
+        sent["headers"]["anthropic-beta"]
+        == "context-1m-2025-08-07,context-management-2025-06-27,interleaved-thinking-2025-05-14"
+    )
+    assert sent["headers"]["anthropic-version"] == "2023-06-01"
+    assert sent["body"]["context_management"] == {"edits": [{"type": "clear_tool_uses_20250919"}]}
+    assert "anthropic_beta" not in sent["body"]
+    assert "anthropic_version" not in sent["body"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_mantle_anthropic_messages_drops_the_beta_header_when_mantle_rejects_every_value():
+    sent = await _send_anthropic_messages_with_betas(extra_headers={"anthropic-beta": "code-execution-2025-08-25"})
+
+    assert "anthropic-beta" not in sent["headers"]
+    assert "anthropic_beta" not in sent["body"]
 
 
 def _usageless_anthropic_response(url: str) -> httpx.Response:

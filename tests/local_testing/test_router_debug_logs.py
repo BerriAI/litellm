@@ -86,6 +86,7 @@ def test_async_fallbacks(caplog):
         if "Task exception was never retrieved" not in log
         and "Task was destroyed but it is pending" not in log
         and "get_available_deployment" not in log
+        and "Selected deployment for model" not in log
         and "in the Langfuse queue" not in log
         and "Unclosed client session" not in log
         and "Unclosed connector" not in log

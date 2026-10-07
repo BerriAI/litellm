@@ -5,10 +5,13 @@ Handles agent permission checking for keys and teams using object_permission_id.
 Follows the same pattern as MCP permission handling.
 """
 
+import asyncio
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Final, TypeAlias
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.ui_session_utils import build_effective_auth_contexts
 from litellm.proxy._types import (
     UI_TEAM_ID,
     LiteLLM_ObjectPermissionTable,
@@ -16,6 +19,11 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
+    CeilingResolver,
+    resolve_agent_access_group_ceiling,
+)
+from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
 from litellm.repositories.table_repositories import AgentsRepository
 from litellm.types.agents import AgentResponse
 
@@ -41,6 +49,22 @@ def _to_stable_ids(agent_ids: frozenset[str]) -> frozenset[str]:
     return frozenset(global_agent_registry.stable_agent_id(agent_id) for agent_id in agent_ids)
 
 
+def _restricted_ids(access: AgentAccess) -> frozenset[str] | None:
+    if isinstance(access, UnrestrictedAgentAccess):
+        return None
+    return _to_stable_ids(access.agent_ids)
+
+
+def _intersect_agent_access(key_access: AgentAccess, team_access: AgentAccess) -> AgentAccess:
+    key_ids: Final = _restricted_ids(key_access)
+    team_ids: Final = _restricted_ids(team_access)
+    if key_ids is None:
+        return UnrestrictedAgentAccess() if team_ids is None else RestrictedAgentAccess(team_ids)
+    if team_ids is None:
+        return RestrictedAgentAccess(key_ids)
+    return RestrictedAgentAccess(key_ids & team_ids)
+
+
 class AgentRequestHandler:
     """
     Class to handle agent permission checking, including:
@@ -58,35 +82,56 @@ class AgentRequestHandler:
     @staticmethod
     async def resolve_agent_access(
         user_api_key_auth: UserAPIKeyAuth | None = None,
+        resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
     ) -> AgentAccess:
-        """
-        Resolve the agents the given user/key may reach.
+        """Agents the key may reach: key and team grants, intersected with the agent's access group ceiling
+        and, for an agent key acting on behalf of an invoking user, with that user's team grants."""
+        key_team_access: Final = await AgentRequestHandler._resolve_key_team_agent_access(user_api_key_auth)
+        caller_access: Final = await AgentRequestHandler._agent_caller_access(user_api_key_auth)
+        own_access: Final = _intersect_agent_access(key_team_access, caller_access)
+        agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(user_api_key_auth, resolve_ceiling)
+        if agent_ceiling is None:
+            return own_access
+        if isinstance(own_access, UnrestrictedAgentAccess):
+            return RestrictedAgentAccess(agent_ceiling)
+        return RestrictedAgentAccess(own_access.agent_ids & agent_ceiling)
 
-        ``UnrestrictedAgentAccess`` is only returned when neither the key nor its team
-        carries any grant. Grants that intersect to nothing stay restricted, so
-        narrowing a caller can never widen what it reaches.
-        """
+    @staticmethod
+    async def _agent_caller_access(user_api_key_auth: UserAPIKeyAuth | None) -> AgentAccess:
+        caller_auth: Final = agent_caller_auth(user_api_key_auth) if user_api_key_auth else None
+        if caller_auth is None:
+            return UnrestrictedAgentAccess()
+        return await AgentRequestHandler._get_allowed_agents_for_team(caller_auth)
+
+    @staticmethod
+    async def _resolve_key_team_agent_access(
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> AgentAccess:
         try:
             key_access: Final = await AgentRequestHandler._get_allowed_agents_for_key(user_api_key_auth)
             team_access: Final = await AgentRequestHandler._get_allowed_agents_for_team(user_api_key_auth)
-
-            match (key_access, team_access):
-                case (UnrestrictedAgentAccess(), UnrestrictedAgentAccess()):
-                    return UnrestrictedAgentAccess()
-                case (UnrestrictedAgentAccess(), RestrictedAgentAccess(team_ids)):
-                    return RestrictedAgentAccess(_to_stable_ids(team_ids))
-                case (RestrictedAgentAccess(key_ids), UnrestrictedAgentAccess()):
-                    return RestrictedAgentAccess(_to_stable_ids(key_ids))
-                case (RestrictedAgentAccess(key_ids), RestrictedAgentAccess(team_ids)):
-                    return RestrictedAgentAccess(_to_stable_ids(key_ids) & _to_stable_ids(team_ids))
         except Exception as e:
             verbose_logger.warning("Failed to get allowed agents: %s", e)
             return UnrestrictedAgentAccess()
+        return _intersect_agent_access(key_access, team_access)
+
+    @staticmethod
+    async def _agent_access_group_ceiling(
+        user_api_key_auth: UserAPIKeyAuth | None,
+        resolve_ceiling: CeilingResolver,
+    ) -> frozenset[str] | None:
+        if user_api_key_auth is None or not user_api_key_auth.agent_id:
+            return None
+        ceiling: Final = await resolve_ceiling(user_api_key_auth.agent_id)
+        if ceiling is None:
+            return None
+        return _to_stable_ids(ceiling.agent_ids)
 
     @staticmethod
     async def is_agent_allowed(
         agent_id: str,
         user_api_key_auth: UserAPIKeyAuth | None = None,
+        resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
     ) -> bool:
         """
         Check if a specific agent is allowed for the given user/key.
@@ -100,7 +145,7 @@ class AgentRequestHandler:
         """
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
-        match await AgentRequestHandler.resolve_agent_access(user_api_key_auth):
+        match await AgentRequestHandler.resolve_agent_access(user_api_key_auth, resolve_ceiling):
             case UnrestrictedAgentAccess():
                 return True
             case RestrictedAgentAccess(allowed_agent_ids):
@@ -443,15 +488,47 @@ class AgentRequestHandler:
             return []
 
 
-async def accessible_agents(user_api_key_auth: UserAPIKeyAuth) -> tuple[AgentResponse, ...]:
-    """Every registry agent for proxy admins, else the agents the key's and team's grants reach."""
+def _granted_ids(access: AgentAccess) -> frozenset[str]:
+    match access:
+        case UnrestrictedAgentAccess():
+            return frozenset()
+        case RestrictedAgentAccess(agent_ids):
+            return agent_ids
+
+
+ResolveAgentAccess: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[AgentAccess]]
+EffectiveAuthContexts: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[Sequence[UserAPIKeyAuth]]]
+
+
+async def _granted_agent_ids(
+    user_api_key_auth: UserAPIKeyAuth,
+    resolve_access: ResolveAgentAccess,
+    effective_contexts: EffectiveAuthContexts,
+) -> frozenset[str]:
+    """Union of the explicit grants reachable from the key, its team, or (for a dashboard session)
+    the user's real teams and user row. No grant anywhere yields the empty set, unlike the
+    open-by-default ``resolve_agent_access`` that guards direct access."""
+    accesses: Final = await asyncio.gather(
+        *(resolve_access(auth_context) for auth_context in await effective_contexts(user_api_key_auth))
+    )
+    return frozenset().union(*(_granted_ids(access) for access in accesses))
+
+
+async def accessible_agents(
+    user_api_key_auth: UserAPIKeyAuth,
+    all_agents: tuple[AgentResponse, ...] | None = None,
+    resolve_access: ResolveAgentAccess | None = None,
+    effective_contexts: EffectiveAuthContexts = build_effective_auth_contexts,
+) -> tuple[AgentResponse, ...]:
+    """Every registry agent for proxy admins, else only the agents the caller was granted."""
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
-    all_agents: Final = global_agent_registry.get_agent_list()
+    agents: Final = global_agent_registry.get_agent_list() if all_agents is None else all_agents
     if user_api_key_auth.user_role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN.value):
-        return all_agents
-    match await AgentRequestHandler.resolve_agent_access(user_api_key_auth=user_api_key_auth):
-        case UnrestrictedAgentAccess():
-            return all_agents
-        case RestrictedAgentAccess(allowed_agent_ids):
-            return tuple(agent for agent in all_agents if agent.agent_id in allowed_agent_ids)
+        return agents
+    allowed_agent_ids: Final = await _granted_agent_ids(
+        user_api_key_auth,
+        AgentRequestHandler.resolve_agent_access if resolve_access is None else resolve_access,
+        effective_contexts,
+    )
+    return tuple(agent for agent in agents if agent.agent_id in allowed_agent_ids)

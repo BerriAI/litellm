@@ -18,6 +18,7 @@ import pytest
 import litellm
 from litellm.anthropic_beta_headers_manager import (
     filter_and_transform_beta_headers,
+    update_headers_with_filtered_beta,
     update_request_with_filtered_beta,
 )
 
@@ -82,6 +83,7 @@ class TestAnthropicBetaHeadersFiltering:
         filtered = filter_and_transform_beta_headers(
             beta_headers=all_headers, provider=provider
         )
+        assert ("compact-2026-09-04" in filtered) is (provider == "anthropic")
 
         for header in unsupported_headers:
             assert (
@@ -426,6 +428,36 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert filtered == ["fine-grained-tool-streaming-2025-05-14"]
 
+    @pytest.mark.parametrize(
+        "provider", ["anthropic", "bedrock", "bedrock_converse", "vertex_ai", "databricks"]
+    )
+    def test_thinking_binding_controls_forwarded(self, provider):
+        """`thinking.block_binding` (preserved thinking, Claude Fable 5.1) is only
+        accepted alongside thinking-binding-controls-2026-08-01. The body field is
+        forwarded untouched, so stripping the header (previously unknown, hence
+        dropped) makes Bedrock and Vertex reject the request with
+        "thinking.adaptive.block_binding: Extra inputs are not permitted"."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["thinking-binding-controls-2026-08-01"],
+            provider=provider,
+        )
+
+        assert filtered == ["thinking-binding-controls-2026-08-01"]
+
+    @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "bedrock_mantle", "vertex_ai"])
+    def test_dangerous_tool_use_forwarded(self, provider):
+        """Claude Code's server-side auto-mode classifier sends `safeguards` together with
+        dangerous-tool-use-2026-09-03. Bedrock Invoke, Bedrock Mantle, and Vertex rawPredict
+        all answer "safeguards: Extra inputs are not permitted" when the body field arrives
+        without the beta (probed 2026-09-21), so dropping the header turned every auto-mode
+        turn into a 400 on Vertex and silently disabled the classifier on Bedrock."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["dangerous-tool-use-2026-09-03"],
+            provider=provider,
+        )
+
+        assert filtered == ["dangerous-tool-use-2026-09-03"]
+
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
         for provider in [
@@ -495,3 +527,20 @@ class TestAnthropicBetaHeadersFiltering:
             assert (
                 "unknown-header-123" not in filtered
             ), f"Unknown header should not be in result for {provider}"
+
+    @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "bedrock_mantle", "vertex_ai"])
+    def test_blank_anthropic_beta_header_is_removed(self, provider):
+        headers = {"anthropic-beta": "", "anthropic-version": "2023-06-01"}
+
+        assert update_headers_with_filtered_beta(headers, provider) == {"anthropic-version": "2023-06-01"}
+
+    @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "bedrock_mantle", "vertex_ai"])
+    def test_whitespace_only_anthropic_beta_header_is_removed(self, provider):
+        headers = {"anthropic-beta": " , ", "anthropic-version": "2023-06-01"}
+
+        assert update_headers_with_filtered_beta(headers, provider) == {"anthropic-version": "2023-06-01"}
+
+    def test_absent_anthropic_beta_header_is_left_alone(self):
+        headers = {"anthropic-version": "2023-06-01"}
+
+        assert update_headers_with_filtered_beta(headers, "bedrock_mantle") == {"anthropic-version": "2023-06-01"}

@@ -313,6 +313,41 @@ async def test_anthropic_messages_routes_bedrock_claude_platform_to_messages_api
     assert requests[0]["body"]["model"] == "claude-sonnet-4-6"
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_bedrock_claude_platform_forwards_anthropic_beta_verbatim():
+    import litellm
+
+    requests = []
+
+    async def mock_post(self, url, data=None, headers=None, **kwargs):
+        requests.append(_capture_request(url=url, headers=headers or {}, data=data))
+        return _anthropic_response(url)
+
+    try:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new=mock_post,
+        ):
+            await litellm.anthropic_messages(
+                model="bedrock/claude_platform/claude-sonnet-4-6",
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=10,
+                mcp_servers=[{"type": "url", "url": "https://mcp.example.com/mcp", "name": "example"}],
+                api_base="https://aws-external-anthropic.us-west-2.api.aws",
+                api_key="fake-platform-key",
+                workspace_id="wrkspc_test",
+                extra_headers={"anthropic-beta": "prompt-caching-scope-2026-01-05,mcp-client-2025-11-20"},
+            )
+    finally:
+        await litellm.close_litellm_async_clients()
+
+    assert len(requests) == 1
+    assert requests[0]["headers"]["anthropic-beta"] == "mcp-client-2025-11-20,prompt-caching-scope-2026-01-05"
+    assert requests[0]["body"]["mcp_servers"] == [
+        {"type": "url", "url": "https://mcp.example.com/mcp", "name": "example"}
+    ]
+
+
 def test_sigv4_no_duplicate_content_type_when_caller_sets_lowercase():
     """
     Regression: get_anthropic_headers() supplies "content-type" (lowercase).

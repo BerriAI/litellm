@@ -1,15 +1,17 @@
 import { test, expect, type Page as PlaywrightPage } from "@playwright/test";
 import {
   ADMIN_STORAGE_PATH,
-  E2E_DELETE_KEY_ALIAS,
   E2E_REGENERATE_KEY_ALIAS,
   E2E_UPDATE_LIMITS_KEY_ALIAS,
   E2E_INTERNAL_USER_KEY_ALIAS,
   E2E_TEAM_CRUD_ALIAS,
+  E2E_TEAM_CRUD_ID,
 } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
+import { masterKey } from "../../helpers/traffic";
+import { proxyIsPremium } from "../../helpers/premium";
 
 /**
  * Looks a key up by alias, undefined when none carries it. `return_full_object=true` is what makes
@@ -21,6 +23,17 @@ async function findKeyByAlias(page: PlaywrightPage, alias: string): Promise<Reco
     `/key/list?key_alias=${encodeURIComponent(alias)}&return_full_object=true&size=100`,
   );
   return body.keys.find((row) => row.key_alias === alias);
+}
+
+/** A key this test owns, so deleting it costs the suite nothing on a retry or a second run. */
+async function createDeletableKey(page: PlaywrightPage): Promise<string> {
+  const alias = `e2e-delete-key-${Date.now()}`;
+  const res = await page.request.post("/key/generate", {
+    headers: { Authorization: `Bearer ${masterKey()}` },
+    data: { key_alias: alias, team_id: E2E_TEAM_CRUD_ID },
+  });
+  expect(res.ok(), `POST /key/generate failed (${res.status()}): ${await res.text()}`).toBe(true);
+  return alias;
 }
 
 test.describe("Proxy Admin - Keys", () => {
@@ -43,7 +56,7 @@ test.describe("Proxy Admin - Keys", () => {
     const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
     await page.keyboard.type(E2E_TEAM_CRUD_ALIAS);
-    await page.locator('[data-slot="combobox-content"]:visible').getByText(E2E_TEAM_CRUD_ALIAS).first().click();
+    await page.getByRole("option", { name: E2E_TEAM_CRUD_ALIAS }).first().click();
 
     // Select models — the popup is portaled to the body, so scope options to the page.
     await page.getByRole("combobox", { name: "Select models" }).click();
@@ -67,6 +80,9 @@ test.describe("Proxy Admin - Keys", () => {
   });
 
   test("Regenerate key", async ({ page }) => {
+    // The Regenerate Key button renders disabled when the proxy is unlicensed, so without one this
+    // fails on a product gate rather than on a regression.
+    test.skip(!proxyIsPremium(), "proxy under test is unlicensed — Regenerate Key is premium-gated");
     await navigateToPage(page, Page.ApiKeys);
     await dismissFeedbackPopup(page);
 
@@ -74,10 +90,9 @@ test.describe("Proxy Admin - Keys", () => {
     const before = await findKeyByAlias(page, E2E_REGENERATE_KEY_ALIAS);
     expect(before?.token, `seeded key ${E2E_REGENERATE_KEY_ALIAS} has a token`).toBeTruthy();
 
-    // Key IDs are rendered as buttons in the table
-    const keyRow = page.locator("tr", { hasText: E2E_REGENERATE_KEY_ALIAS });
+    const keyRow = page.getByRole("row").filter({ hasText: E2E_REGENERATE_KEY_ALIAS });
     await expect(keyRow).toBeVisible({ timeout: 10_000 });
-    await keyRow.locator("button").first().click();
+    await keyRow.getByRole("button", { name: E2E_REGENERATE_KEY_ALIAS }).click();
 
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
@@ -109,9 +124,9 @@ test.describe("Proxy Admin - Keys", () => {
     const before = await findKeyByAlias(page, E2E_UPDATE_LIMITS_KEY_ALIAS);
     expect(before, `seeded key ${E2E_UPDATE_LIMITS_KEY_ALIAS} exists`).toBeTruthy();
 
-    const keyRow = page.locator("tr", { hasText: E2E_UPDATE_LIMITS_KEY_ALIAS });
+    const keyRow = page.getByRole("row").filter({ hasText: E2E_UPDATE_LIMITS_KEY_ALIAS });
     await expect(keyRow).toBeVisible({ timeout: 10_000 });
-    await keyRow.locator("button").first().click();
+    await keyRow.getByRole("button", { name: E2E_UPDATE_LIMITS_KEY_ALIAS }).click();
 
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
@@ -144,12 +159,16 @@ test.describe("Proxy Admin - Keys", () => {
   });
 
   test("Delete key", async ({ page }) => {
+    // Deleting the seeded key leaves nothing for the next attempt, so the retries CI runs with are
+    // guaranteed to fail and the suite cannot run twice against one database. Bring our own.
+    const alias = await createDeletableKey(page);
+
     await navigateToPage(page, Page.ApiKeys);
     await dismissFeedbackPopup(page);
 
-    const keyRow = page.locator("tr", { hasText: E2E_DELETE_KEY_ALIAS });
+    const keyRow = page.getByRole("row").filter({ hasText: alias });
     await expect(keyRow).toBeVisible({ timeout: 10_000 });
-    await keyRow.locator("button").first().click();
+    await keyRow.getByRole("button", { name: alias }).click();
 
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
@@ -158,7 +177,7 @@ test.describe("Proxy Admin - Keys", () => {
 
     const modal = page.getByRole("dialog", { name: "Delete Key" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
-    await modal.locator("input").fill(E2E_DELETE_KEY_ALIAS);
+    await modal.locator("input").fill(alias);
 
     const deleteButton = modal.getByRole("button", { name: "Delete", exact: true });
     await expect(deleteButton).toBeEnabled();
@@ -168,8 +187,8 @@ test.describe("Proxy Admin - Keys", () => {
 
     // The key is gone when the management API stops returning it, not when the toast says so.
     await expect
-      .poll(async () => await findKeyByAlias(page, E2E_DELETE_KEY_ALIAS), {
-        message: `key ${E2E_DELETE_KEY_ALIAS} still readable from /key/list after delete`,
+      .poll(async () => await findKeyByAlias(page, alias), {
+        message: `key ${alias} still readable from /key/list after delete`,
         timeout: 15_000,
       })
       .toBeUndefined();
