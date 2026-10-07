@@ -2,7 +2,6 @@ import { CircleMinus, Plus } from "lucide-react";
 import React, { useEffect, useRef } from "react";
 import {
   useFieldArray,
-  useWatch,
   type Control,
   type FieldArrayPath,
   type FieldPath,
@@ -88,10 +87,6 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
   schemaLoading = false,
 }: MetadataKeyValueFieldsProps<TFieldValues>) => {
   const { fields, append, remove } = useFieldArray({ control, name });
-  const watchedPairs = (useWatch({ control, name: name as unknown as FieldPath<TFieldValues> }) ?? []) as readonly (
-    | Partial<MetadataPair>
-    | undefined
-  )[];
   const seededRef = useRef(false);
   const schemaLabelsByKey = new Map(schemaFields.map((field) => [field.key, field.label || field.key]));
 
@@ -119,22 +114,11 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
     );
   }
 
-  const getSchemaLabel = (index: number): string | undefined => {
-    const key = watchedPairs[index]?.key;
-    if (
-      key === undefined ||
-      !schemaLabelsByKey.has(key) ||
-      watchedPairs.findIndex((pair) => pair?.key === key) !== index
-    ) {
-      return undefined;
-    }
-    return schemaLabelsByKey.get(key);
-  };
-
   return (
     <>
       {fields.map((field, index) => {
-        const schemaLabel = getSchemaLabel(index);
+        const schemaLabel =
+          "key" in field && typeof field.key === "string" ? schemaLabelsByKey.get(field.key) : undefined;
         return (
           <div key={field.id} className="mb-2 flex items-start gap-2">
             {schemaLabel === undefined ? (

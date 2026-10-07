@@ -329,6 +329,45 @@ describe("MetadataKeyValueFields with a declared schema", () => {
     expect(onFinish).not.toHaveBeenCalled();
   });
 
+  it("should keep an existing row above a declared row editable while a declared key is typed into it", async () => {
+    const user = userEvent.setup();
+    const onFinish = vi.fn();
+    render(
+      <Harness
+        onFinish={onFinish}
+        initialMetadata={[{ key: "region", value: "us" }]}
+        schemaFields={[
+          { key: "cost", label: "Cost" },
+          { key: "cost_center", label: "Cost Center" },
+        ]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByTestId("metadata-schema-label").map((label) => label.textContent)).toEqual([
+        "Cost",
+        "Cost Center",
+      ]);
+    });
+
+    const keyInput = screen.getByPlaceholderText("Key");
+    await user.clear(keyInput);
+    await user.type(keyInput, "cost_center");
+
+    expect(keyInput).toHaveValue("cost_center");
+    expect(keyInput).toHaveFocus();
+    expect(screen.getAllByTestId("metadata-schema-label").map((label) => label.textContent)).toEqual([
+      "Cost",
+      "Cost Center",
+    ]);
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Duplicate key")).toBeInTheDocument();
+    });
+    expect(onFinish).not.toHaveBeenCalled();
+  });
+
   it("should show a skeleton instead of the editor while the schema is loading", () => {
     render(<Harness onFinish={vi.fn()} schemaLoading />);
 
