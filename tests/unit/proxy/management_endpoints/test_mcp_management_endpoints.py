@@ -3751,6 +3751,7 @@ class TestTemporaryMCPSessionEndpoints:
             fallback_client_id="server-1",
             persist_credentials=True,
             client_redirect_uris=None,
+            client_application_type=None,
         )
 
     @pytest.mark.asyncio
@@ -11434,3 +11435,66 @@ def test_staged_issuer_edit_preserves_replacement_with_same_client_id(monkeypatc
     staged = management._inherit_credentials_from_existing_server(payload)
     assert staged.credentials == submitted
     assert saved.client_secret == "old-secret"
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize("application_type", ("native", "web", None, "desktop"))
+async def test_mcp_register_application_type_reaches_upstream_or_is_rejected(
+    application_type: str | None, monkeypatch: pytest.MonkeyPatch, respx_mock: MockRouter
+) -> None:
+    server: Final = MCPServer(
+        server_id="temporary-application-client",
+        name="temporary-application-client",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.true_passthrough,
+        dcr_bridge=True,
+        authorization_url="https://provider.example/authorize",
+        token_url="https://provider.example/token",
+        registration_url="https://provider.example/register",
+    )
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    mgmt_endpoints._cache_temporary_mcp_server(server, ttl_seconds=60)
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("gateway.example", 443),
+            "path": "/v1/mcp/server/oauth/temporary-application-client/register",
+            "headers": [],
+        },
+        receive=AsyncMock(
+            return_value={
+                "type": "http.request",
+                "body": json.dumps(
+                    {
+                        "redirect_uris": ["http://127.0.0.1:53682/callback"],
+                        "application_type": application_type,
+                    }
+                ).encode(),
+            }
+        ),
+    )
+    registration: Final = respx_mock.post(server.registration_url).respond(201, json={"client_id": "registered-client"})
+    try:
+        if application_type == "desktop":
+            with pytest.raises(HTTPException) as exc:
+                await mgmt_endpoints.mcp_register(request, server.server_id, generate_mock_user_api_key_auth())
+            assert exc.value.status_code == 400
+            assert "application_type" in str(exc.value.detail)
+            assert registration.call_count == 0
+            return
+        response: Final = await mgmt_endpoints.mcp_register(
+            request, server.server_id, generate_mock_user_api_key_auth()
+        )
+        assert response.status_code == 200
+        assert json.loads(response.body)["client_id"] == "registered-client"
+        assert registration.call_count == 1
+        posted: Final = json.loads(registration.calls[0].request.content)
+        if application_type is None:
+            assert "application_type" not in posted
+        else:
+            assert posted["application_type"] == application_type
+    finally:
+        mgmt_endpoints._temporary_mcp_servers.pop(server.server_id, None)
