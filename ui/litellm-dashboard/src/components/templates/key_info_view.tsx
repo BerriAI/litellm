@@ -32,7 +32,12 @@ import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import RouterSettingsSummary from "../common_components/RouterSettingsSummary";
 import { hasRouterSettings } from "../common_components/routerSettingsPayload";
-import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import {
+  extractLoggingSettings,
+  formatMetadataForDisplay,
+  parallelRequestOverflowLabel,
+  stripTagsFromMetadata,
+} from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import { toast } from "@/lib/toast";
@@ -298,6 +303,10 @@ export default function KeyInfoView({
       formValues.rpm_limit = mapEmptyStringToNull(formValues.rpm_limit);
       formValues.tpd_limit = mapEmptyStringToNull(formValues.tpd_limit);
       formValues.max_parallel_requests = mapEmptyStringToNull(formValues.max_parallel_requests);
+      formValues.max_parallel_requests_queue_timeout = mapEmptyStringToNull(
+        formValues.max_parallel_requests_queue_timeout,
+      );
+      formValues.max_parallel_requests_max_queued = mapEmptyStringToNull(formValues.max_parallel_requests_max_queued);
 
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
@@ -741,6 +750,11 @@ export default function KeyInfoView({
                     RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}
                   </p>
                   <p className="text-sm">TPD (batch): {currentKeyData.tpd_limit ?? "Unlimited"}</p>
+                  <p className="text-sm">
+                    Max Parallel Requests: {currentKeyData.max_parallel_requests ?? "Unlimited"}
+                    {currentKeyData.max_parallel_requests !== null &&
+                      ` (${parallelRequestOverflowLabel(currentKeyData.metadata)})`}
+                  </p>
                   {Boolean(currentKeyData.metadata?.throttle_on_budget_exceeded) && (
                     <p className="text-sm">Throttle on budget exceeded: Yes</p>
                   )}
@@ -1129,6 +1143,11 @@ export default function KeyInfoView({
                         ? currentKeyData.max_parallel_requests
                         : "Unlimited"}
                     </p>
+                    {currentKeyData.max_parallel_requests !== null && (
+                      <p className="text-sm">
+                        When Max Parallel Requests Is Reached: {parallelRequestOverflowLabel(currentKeyData.metadata)}
+                      </p>
+                    )}
                     <p className="text-sm">
                       Model TPM Limits:{" "}
                       {currentKeyData.metadata?.model_tpm_limit

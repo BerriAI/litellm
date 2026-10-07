@@ -2100,6 +2100,9 @@ describe("KeyEditView", () => {
     throttle_on_budget_exceeded: false,
     enable_prompt_caching: false,
     max_parallel_requests: 10,
+    max_parallel_requests_mode: null,
+    max_parallel_requests_queue_timeout: null,
+    max_parallel_requests_max_queued: null,
     model_tpm_limit: undefined,
     model_rpm_limit: undefined,
     guardrails: undefined,
@@ -2252,6 +2255,29 @@ describe("KeyEditView", () => {
         model_tpm_limit: '{"gpt-4": 7}',
         model_rpm_limit: '{"gpt-4": 8}',
         metadata: '{"typed": true}',
+      });
+    });
+
+    it("reveals the queue settings only in queue mode and sends what was typed", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      expect(screen.queryByLabelText(/queue timeout/i)).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("combobox", { name: /when max parallel requests is reached/i }));
+      await userEvent.click(await screen.findByRole("option", { name: /queue until a slot frees up/i }));
+      await userEvent.type(screen.getByLabelText(/queue timeout/i), "45");
+      await userEvent.type(screen.getByLabelText(/max queued requests per worker/i), "20");
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toMatchObject({
+        max_parallel_requests_mode: "queue",
+        max_parallel_requests_queue_timeout: "45",
+        max_parallel_requests_max_queued: "20",
       });
     });
 

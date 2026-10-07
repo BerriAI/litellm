@@ -8262,6 +8262,9 @@ export interface paths {
          *     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
          *     - tag_rpm_limit: Optional[dict] - key-specific per-request-tag rpm limit, keyed by request tag. Example - {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; requests whose tag is absent fall back to the key-level rpm limit.
          *     - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
+         *     - max_parallel_requests_mode: Optional[str] - What happens when max_parallel_requests is reached: "reject" (default, return 429 at once) or "queue" (hold the request until a slot frees, up to max_parallel_requests_queue_timeout)
+         *     - max_parallel_requests_queue_timeout: Optional[float] - Seconds a queued request waits for a slot before it gets a 429. Defaults to 60
+         *     - max_parallel_requests_max_queued: Optional[int] - Most requests that can wait for this key on one proxy worker; extra requests get a 429 at once
          *     - rpm_limit_type: Optional[str] - Type of rpm limit. Options: "best_effort_throughput" (no error if we're overallocating rpm), "guaranteed_throughput" (raise an error if we're overallocating rpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
          *     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
          *     - blocked: Optional[bool] - Whether the key is blocked.
@@ -8723,6 +8726,9 @@ export interface paths {
          *     - default_estimated_output_tokens: Optional[int] - Proxy admin only. Expected output tokens reserved for TPM limiting when a request omits max_tokens. Positive integer.
          *     - default_estimated_output_tokens_per_model: Optional[dict] - Proxy admin only. Per-model override of the above {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
+         *     - max_parallel_requests_mode: Optional[str] - What happens when max_parallel_requests is reached: "reject" (default, return 429 at once) or "queue" (hold the request until a slot frees, up to max_parallel_requests_queue_timeout)
+         *     - max_parallel_requests_queue_timeout: Optional[float] - Seconds a queued request waits for a slot before it gets a 429. Defaults to 60
+         *     - max_parallel_requests_max_queued: Optional[int] - Most requests that can wait for this key on one proxy worker; extra requests get a 429 at once
          *     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
          *     - allowed_cache_controls: Optional[list] - List of allowed cache control values
          *     - duration: Optional[str] - Key validity duration ("30d", "1h", etc.), null to never expire, or "-1" to never expire (deprecated, use null)
@@ -32854,6 +32860,12 @@ export interface components {
             max_budget?: number | null;
             /** Max Parallel Requests */
             max_parallel_requests?: number | null;
+            /** Max Parallel Requests Max Queued */
+            max_parallel_requests_max_queued?: number | null;
+            /** Max Parallel Requests Mode */
+            max_parallel_requests_mode?: ("reject" | "queue") | null;
+            /** Max Parallel Requests Queue Timeout */
+            max_parallel_requests_queue_timeout?: number | null;
             /** Mcp Rpm Limit */
             mcp_rpm_limit?: {
                 [key: string]: number;
@@ -33023,6 +33035,12 @@ export interface components {
             max_budget?: number | null;
             /** Max Parallel Requests */
             max_parallel_requests?: number | null;
+            /** Max Parallel Requests Max Queued */
+            max_parallel_requests_max_queued?: number | null;
+            /** Max Parallel Requests Mode */
+            max_parallel_requests_mode?: ("reject" | "queue") | null;
+            /** Max Parallel Requests Queue Timeout */
+            max_parallel_requests_queue_timeout?: number | null;
             /** Mcp Rpm Limit */
             mcp_rpm_limit?: {
                 [key: string]: number;
@@ -39689,6 +39707,12 @@ export interface components {
             max_budget?: number | null;
             /** Max Parallel Requests */
             max_parallel_requests?: number | null;
+            /** Max Parallel Requests Max Queued */
+            max_parallel_requests_max_queued?: number | null;
+            /** Max Parallel Requests Mode */
+            max_parallel_requests_mode?: ("reject" | "queue") | null;
+            /** Max Parallel Requests Queue Timeout */
+            max_parallel_requests_queue_timeout?: number | null;
             /** Mcp Rpm Limit */
             mcp_rpm_limit?: {
                 [key: string]: number;
@@ -42080,6 +42104,12 @@ export interface components {
             max_budget?: number | null;
             /** Max Parallel Requests */
             max_parallel_requests?: number | null;
+            /** Max Parallel Requests Max Queued */
+            max_parallel_requests_max_queued?: number | null;
+            /** Max Parallel Requests Mode */
+            max_parallel_requests_mode?: ("reject" | "queue") | null;
+            /** Max Parallel Requests Queue Timeout */
+            max_parallel_requests_queue_timeout?: number | null;
             /** Mcp Rpm Limit */
             mcp_rpm_limit?: {
                 [key: string]: number;
@@ -48151,6 +48181,12 @@ export interface components {
             max_budget?: number | null;
             /** Max Parallel Requests */
             max_parallel_requests?: number | null;
+            /** Max Parallel Requests Max Queued */
+            max_parallel_requests_max_queued?: number | null;
+            /** Max Parallel Requests Mode */
+            max_parallel_requests_mode?: ("reject" | "queue") | null;
+            /** Max Parallel Requests Queue Timeout */
+            max_parallel_requests_queue_timeout?: number | null;
             /** Mcp Rpm Limit */
             mcp_rpm_limit?: {
                 [key: string]: number;
