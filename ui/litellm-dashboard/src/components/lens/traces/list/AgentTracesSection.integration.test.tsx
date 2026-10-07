@@ -17,6 +17,7 @@ import type { TraceFindingCount, TracePage, TraceSummary } from "../types";
 vi.mock("../../../networking", () => ({
   apiClient: { get: vi.fn(), post: vi.fn() },
   agentTraceListCall: vi.fn(),
+  agentTraceAgentsCall: vi.fn(),
   sendOtlpTraceCall: vi.fn(),
   agentTraceCall: vi.fn(),
   agentTraceSpanCall: vi.fn(),
@@ -32,7 +33,7 @@ vi.mock("../detail/run/RunView", () => ({
   ),
 }));
 
-import { agentTraceListCall, apiClient } from "../../../networking";
+import { agentTraceAgentsCall, agentTraceListCall, apiClient } from "../../../networking";
 
 const runs = (traceList as TracePage).data as TraceSummary[];
 
@@ -77,6 +78,8 @@ describe("AgentTracesSection", () => {
     setupIntersectionMocking(vi.fn);
     testQueryClient.clear();
     vi.mocked(agentTraceListCall).mockReset();
+    vi.mocked(agentTraceAgentsCall).mockReset();
+    vi.mocked(agentTraceAgentsCall).mockResolvedValue({ data: [] });
     vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
     vi.mocked(apiClient.post).mockImplementation(async (_path, options) => {
       const body = options?.body as { traces: { trace_id: string; trace_ref?: string }[] };
@@ -414,6 +417,32 @@ describe("AgentTracesSection", () => {
     expect(row).not.toHaveTextContent("shared-app");
   });
 
+  it("lists agents whose runs are not loaded and asks the server for that agent's runs", async () => {
+    const claudeRun = { ...runs[0], trace_id: "claude-run", agent_names: ["claude-code"], service: "claude-code" };
+    vi.mocked(agentTraceAgentsCall).mockResolvedValue({ data: ["claude-code", "research-agent"] });
+    vi.mocked(agentTraceListCall).mockImplementation(async ({ agent }) => ({
+      data: agent === "claude-code" ? [claudeRun] : runs.slice(1),
+      next_cursor: null,
+    }));
+    const user = userEvent.setup();
+    renderSection();
+    await screen.findAllByTestId("agent-trace-row");
+    expect(vi.mocked(agentTraceAgentsCall).mock.calls[0][0]).toMatchObject({ accessToken: "sk-test" });
+    expect(vi.mocked(agentTraceListCall).mock.calls[0][0]).toMatchObject({ agent: "" });
+
+    await user.click(screen.getByRole("combobox", { name: "Filter traces by agent" }));
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "claude-code",
+      "research-agent",
+    ]);
+    await user.click(screen.getByRole("option", { name: "claude-code" }));
+
+    await waitFor(() => expect(screen.getByTestId("agent-trace-row")).toHaveTextContent("claude-code"));
+    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1);
+    expect(vi.mocked(agentTraceListCall).mock.lastCall?.[0]).toMatchObject({ agent: "claude-code" });
+    expect(screen.getByText("1 run from 1 agent")).toBeVisible();
+  });
+
   it("shows each run's agent name with the logo of the SDK that produced it", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({
       ...(traceList as TracePage),
@@ -433,10 +462,11 @@ describe("AgentTracesSection", () => {
       "src",
       expect.stringContaining("anthropic.svg"),
     );
-    expect(agentCell(cliRun)).toHaveTextContent(/^Claude Code$/);
+    expect(agentCell(cliRun)).toHaveTextContent(new RegExp(`^${runs[1].service}$`));
+    expect(within(agentCell(cliRun)).getByTitle(`${runs[1].service} · Claude Code`)).toBeInTheDocument();
     expect(within(plainRun).queryByRole("img", { hidden: true })).not.toBeInTheDocument();
     expect(within(plainRun).getByTestId("span-icon")).toBeInTheDocument();
-    expect(agentCell(plainRun)).toHaveTextContent((runs[2].agent_names ?? [runs[2].service]).join(", "));
+    expect(agentCell(plainRun)).toHaveTextContent(runs[2].service);
   });
 
   it("opens a run in a side drawer over the list and swaps runs without closing it", async () => {
