@@ -845,6 +845,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,
                 )
             finally:
                 await new_client.aclose()
@@ -985,6 +986,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,
                 )
             finally:
                 await new_client.aclose()
@@ -1051,6 +1053,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,
                 )
             finally:
                 await new_client.aclose()
@@ -1379,10 +1382,12 @@ class HTTPHandler:
         ssl_verify: bool | str | None = None,
         disable_default_headers: bool
         | None = False,  # arize phoenix returns different API responses when user agent header in request
+        follow_redirects: bool = True,
     ):
         self.timeout = timeout
         self.ssl_verify = ssl_verify
         self.disable_default_headers = disable_default_headers
+        self.follow_redirects = follow_redirects
         self._owns_client = client is None
         self._heal_lock = threading.Lock()
         self._client = self.create_client() if client is None else client
@@ -1407,7 +1412,7 @@ class HTTPHandler:
             cert=cert,
             headers=default_headers,
             cookies=blocked_cookie_jar(),
-            follow_redirects=True,
+            follow_redirects=self.follow_redirects,
             http2=http2_enabled(),
         )
 
@@ -1433,7 +1438,7 @@ class HTTPHandler:
         self,
         url: str,
         params: dict | None = None,
-        headers: dict | None = None,
+        headers: Mapping[str, Any] | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
     ):
@@ -1708,7 +1713,7 @@ class HTTPHandler:
 
 
 def get_async_httpx_client(
-    llm_provider: LlmProviders | httpxSpecialProvider,
+    llm_provider: LlmProviders | httpxSpecialProvider | str,
     params: dict | None = None,
     shared_session: Optional["ClientSession"] = None,
 ) -> AsyncHTTPHandler:

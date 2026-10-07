@@ -1,5 +1,9 @@
 #[derive(thiserror::Error, veil::Redact)]
 pub enum Error {
+    #[error(transparent)]
+    Operation(#[from] litellm_secrets_types::Error),
+    #[error("secret manager operation timed out")]
+    Timeout,
     #[error("{0} environment variable is missing")]
     MissingEnvironment(&'static str),
     #[error("AZURE_KEY_VAULT_URI is not a valid https vault URL")]

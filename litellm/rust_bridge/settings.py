@@ -34,6 +34,7 @@ class ProviderDefaults:
 @dataclass(frozen=True, slots=True)
 class SecretManager:
     readable: bool
+    native: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,18 +59,17 @@ class SecretManagerBinding:
     settings_object: object
 
 
-def warn(message: str) -> None:
-    from litellm._logging import verbose_logger
-
-    verbose_logger.warning("%s", message)
-
-
 def secret_manager() -> SecretManager:
+    import litellm
     from litellm.secret_managers.main import (
         _should_read_secret_from_secret_manager,  # pyright: ignore[reportPrivateUsage]  # canonical resolver is private
     )
 
-    return SecretManager(readable=_should_read_secret_from_secret_manager())
+    readable: Final = _should_read_secret_from_secret_manager()
+    system: Final = (
+        litellm._key_management_system  # pyright: ignore[reportPrivateUsage]  # canonical key management globals are private
+    )
+    return SecretManager(readable=readable, native=readable and system is not None)
 
 
 def secret_manager_binding() -> SecretManagerBinding:
