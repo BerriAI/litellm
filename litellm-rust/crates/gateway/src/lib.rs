@@ -26,6 +26,28 @@ use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
 
+pub fn diagnostics_configuration(
+    config: &Config,
+) -> Result<litellm_tracing::DiagnosticsConfig, Error> {
+    let environment = secrets::environment_values(&config.environment_variables)?;
+    let settings = config
+        .general_settings
+        .additional_fields
+        .get("diagnostics")
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(litellm_tracing::Error::from)?;
+    Ok(litellm_tracing::DiagnosticsConfig::from_sources(
+        settings,
+        |name| {
+            environment
+                .get(name)
+                .map(|value| value.expose().to_owned())
+                .or_else(|| std::env::var(name).ok())
+        },
+    )?)
+}
+
 pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let environment = secrets::environment_values(&config.environment_variables)?;

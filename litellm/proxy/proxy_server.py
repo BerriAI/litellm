@@ -1638,10 +1638,18 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         TypeAdapter(dict[str, object] | None).validate_python(general_settings.get("tracing")),
     )
     tracing_enabled: Final = is_clickhouse_tracing_enabled(tracing_settings)
-    async with manage_tracing(
-        enabled=tracing_enabled,
-        settings=tracing_settings,
-    ) as receiver:
+    from litellm.diagnostics import gateway_lifecycle
+
+    diagnostic_settings: Final = TypeAdapter(Mapping[str, object] | None).validate_python(
+        general_settings.get("diagnostics")
+    )
+    async with (
+        gateway_lifecycle(diagnostic_settings),
+        manage_tracing(
+            enabled=tracing_enabled,
+            settings=tracing_settings,
+        ) as receiver,
+    ):
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
         from litellm.proxy.admin_mcp import admin_mcp_lifespan
 

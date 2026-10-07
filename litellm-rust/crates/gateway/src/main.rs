@@ -5,7 +5,7 @@ use std::{
 
 use litellm_config::Config;
 use litellm_gateway_auth::UiBackend;
-use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
+use litellm_tracing::{Diagnostics, Level, Metadata, Record, Sink};
 use serde_json::json;
 
 mod settings;
@@ -43,8 +43,23 @@ impl Sink for StderrSink {
 async fn main() -> Result<(), Box<dyn Error>> {
     let settings: Settings = settings::from_iter(std::env::vars_os())?;
     let level = settings.log_level();
-    Logger::new(StderrSink { level }).install_global()?;
+    let diagnostics = Diagnostics::default();
+    diagnostics.logger(StderrSink { level }).install_global()?;
     let config = Config::load(settings.litellm_config)?;
+    let diagnostic_config = litellm_gateway::diagnostics_configuration(&config)?;
+    let exports = diagnostics.clone();
+    tokio::task::spawn_blocking(move || exports.configure(diagnostic_config)).await??;
+    let result = serve(settings.host, settings.port, level, config).await;
+    tokio::task::spawn_blocking(move || diagnostics.shutdown()).await??;
+    result
+}
+
+async fn serve(
+    host: String,
+    port: u16,
+    level: Level,
+    config: Config,
+) -> Result<(), Box<dyn Error>> {
     let inference = litellm_gateway::build_inference(&config)?;
     let ui = match std::env::var_os("LITELLM_UI_PATH") {
         Some(directory) => {
@@ -95,7 +110,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             },
         )
     });
-    let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
+    let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
 
     tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %level, "gateway listening");
 

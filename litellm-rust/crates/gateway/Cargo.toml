@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["posthog"]
+posthog = ["litellm-tracing/posthog"]
+
 [dependencies]
 axum.workspace = true
 envy = "0.4.2"

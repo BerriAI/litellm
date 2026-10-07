@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Mapping
+from contextlib import asynccontextmanager
 from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -90,3 +92,26 @@ def shutdown() -> bool:
     from litellm.rust_bridge import forwarding
 
     return forwarding.shutdown()
+
+
+@asynccontextmanager
+async def gateway_lifecycle(settings: Mapping[str, object] | None) -> AsyncGenerator[None, None]:
+    if settings is None and "LITELLM_DIAGNOSTICS" not in os.environ:
+        yield
+        return
+    config: Final = DiagnosticsConfig.from_sources(settings)
+    started: Final = await asyncio.to_thread(configure, config)
+    if config.enabled and not started:
+        from litellm._logging import verbose_proxy_logger
+
+        verbose_proxy_logger.warning("Diagnostic export unavailable: the native binding is missing")
+    try:
+        yield
+    finally:
+        if started:
+            try:
+                await asyncio.to_thread(shutdown)
+            except Exception:
+                from litellm._logging import verbose_proxy_logger
+
+                verbose_proxy_logger.exception("Diagnostic exporter shutdown failed")
