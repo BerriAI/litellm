@@ -66,10 +66,26 @@ pub struct AgentNode {
     pub priced_calls: u64,
 }
 
-/// Where the run was started, from the `lens.source.url` and `lens.source.title` span attributes.
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunSourceType {
+    Slack,
+    Teams,
+    Discord,
+    Linear,
+    Github,
+    Jira,
+    #[serde(other)]
+    Custom,
+}
+
+/// The conversation that started the run, from the `agent.source.*` span attributes.
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunSource {
+    #[serde(rename = "type")]
+    pub kind: RunSourceType,
     pub url: String,
     pub title: String,
 }
