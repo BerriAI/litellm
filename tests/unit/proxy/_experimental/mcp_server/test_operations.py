@@ -289,7 +289,7 @@ def _catalog_case(method):
     "method", ["prompts/list", "prompts/get", "resources/list", "resources/templates/list", "resources/read"]
 )
 @pytest.mark.parametrize("state", ["success", "denied", "upstream_failure", "scope_failure"])
-async def test_native_catalog_operations_preserve_context_results_and_failure_policy(method, state):
+async def test_catalog_helpers_preserve_context_results_and_failure_policy(method, state):
     from types import SimpleNamespace
 
     from fastapi import HTTPException
@@ -325,10 +325,15 @@ async def test_native_catalog_operations_preserve_context_results_and_failure_po
             with pytest.raises(expected_error):
                 await getattr(server, handler_name)(ctx, operation.params)
         else:
-            result = await getattr(server, handler_name)(ctx, operation.params or PaginatedRequestParams())
             if collection:
-                assert getattr(result, collection) == (payload if state == "success" else [])
+                helper = getattr(operations, "_list_mcp_" + collection)
+                result = await helper(
+                    user_api_key_auth=caller, mcp_auth_header=None, mcp_servers=["catalog"],
+                    mcp_server_auth_headers=None, oauth2_headers=None, raw_headers=headers, client_ip="192.0.2.41",
+                )
+                assert result == (payload if state == "success" else [])
             else:
+                result = await getattr(server, handler_name)(ctx, operation.params or PaginatedRequestParams())
                 assert result == payload
     assert allowed.await_args.kwargs == {
         "user_api_key_auth": caller,
@@ -622,6 +627,7 @@ async def test_local_tool_json_array_is_converted_once_for_the_caller_revision(c
 
     body = '["a","b"]'
     tool = MagicMock()
+    tool.server_id = None
     tool.handler = AsyncMock(return_value=parse_http_body(body))
     with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
         result = await operations._handle_local_mcp_tool("reports-list_tags", {}, WireCompat(compat))
@@ -778,3 +784,274 @@ async def test_list_mcp_tools_records_the_catalog_only_when_asked(
             manager._drop_listed_tools(server.server_id)
     assert [tool.name for tool in listing.tools] == ["listing-slot-echo"]
     assert (listed is not None) is recorded
+
+
+@pytest.mark.asyncio
+async def test_discovery_keeps_one_catalog_revision_across_concurrent_listings(monkeypatch):
+    from mcp.types import (
+        DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult,
+        ListResourceTemplatesResult,
+    )
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager = MCPServerManager()
+    original = MCPServer(server_id="catalog-server", name="before", transport=MCPTransport.http)
+    updated = original.model_copy(update={"name": "after"})
+    manager.registry = {original.server_id: original}
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    observed = []
+    responses = (ListToolsResult(tools=[]), ListPromptsResult(prompts=[]),
+                 ListResourcesResult(resources=[]), ListResourceTemplatesResult(resource_templates=[]))
+
+    def listing(index):
+        async def run(*args, **kwargs):
+            async with manager.catalog.operation():
+                observed.append(manager.get_mcp_server_by_id(original.server_id).name)
+                manager.registry = {updated.server_id: updated}
+                return responses[index]
+        return run
+
+    with (
+        patch.object(operations, "_execute_handle_list_tools", side_effect=listing(0)),
+        patch.object(operations, "_execute_list_prompts", side_effect=listing(1)),
+        patch.object(operations, "_execute_list_resources", side_effect=listing(2)),
+        patch.object(operations, "_execute_list_resource_templates", side_effect=listing(3)),
+    ):
+        result = await GatewayOperations().execute(DiscoverRequest(), prepare_context(UserAPIKeyAuth(user_id="scoped")))
+    assert result.capabilities.model_dump(exclude_none=True) == {}
+    assert observed == ["before"] * 4
+    async with manager.catalog.operation():
+        assert manager.get_mcp_server_by_id(original.server_id).name == "after"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed_server_id", ["private", "allowed"])
+async def test_local_handler_freshness_tracks_registered_owner_with_overlapping_alias(monkeypatch, changed_server_id):
+    from datetime import datetime, timedelta, timezone
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    manager = MCPServerManager()
+    now = datetime.now(timezone.utc)
+    private = MCPServer(server_id="private", name="billing", alias="billing", transport=MCPTransport.http, updated_at=now)
+    allowed = MCPServer(server_id="allowed", name="billing_admin", alias="billing-admin", transport=MCPTransport.http, updated_at=now)
+    manager.config_mcp_servers = {server.server_id: server for server in (private, allowed)}
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    handler = AsyncMock(return_value="private result")
+    global_mcp_tool_registry.register_tool("billing-admin-export", "export", {}, handler, server_id=private.server_id)
+
+    async with manager.catalog.operation():
+        manager.config_mcp_servers[changed_server_id] = manager.config_mcp_servers[changed_server_id].model_copy(update={"updated_at": now + timedelta(seconds=1)})
+        if changed_server_id == "private":
+            with pytest.raises(HTTPException) as denied:
+                await operations._handle_local_mcp_tool("billing-admin-export", {})
+            assert denied.value.status_code == 503
+            handler.assert_not_awaited()
+        else:
+            result = await operations._handle_local_mcp_tool("billing-admin-export", {})
+            assert result.is_error is False
+            handler.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner_present", [False, True])
+@pytest.mark.parametrize("requested_server", [False, True])
+async def test_local_call_cannot_borrow_another_servers_authority(
+    monkeypatch: pytest.MonkeyPatch, owner_present: bool, requested_server: bool
+) -> None:
+    from datetime import datetime
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager: Final = MCPServerManager()
+    allowed: Final = MCPServer(server_id="allowed", name="allowed", transport=MCPTransport.http)
+    owner: Final = MCPServer(server_id="private", name="private", transport=MCPTransport.http)
+    manager.config_mcp_servers = {
+        server.server_id: server for server in ((allowed, owner) if owner_present else (allowed,))
+    }
+    handler: Final = AsyncMock(return_value="private result")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    tool_name: Final = "export" if requested_server else "private-export"
+    global_mcp_tool_registry.register_tool(tool_name, "export", {}, handler, server_id=owner.server_id)
+
+    async with manager.catalog.operation():
+        with pytest.raises(HTTPException) as denied:
+            await operations._execute_mcp_tool(
+                name=tool_name if requested_server else "allowed-private-export",
+                arguments={},
+                allowed_mcp_servers=[allowed],
+                start_time=datetime.now(),
+                requested_server_id=allowed.server_id if requested_server else None,
+            )
+    assert denied.value.status_code == 403
+    handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server_owned", [False, True])
+@pytest.mark.parametrize("requested_server", [False, True])
+async def test_local_call_preserves_matching_and_legacy_handlers(
+    monkeypatch: pytest.MonkeyPatch, server_owned: bool, requested_server: bool
+) -> None:
+    from datetime import datetime
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="allowed", name="allowed", transport=MCPTransport.http)
+    manager.config_mcp_servers = {server.server_id: server}
+    handler: Final = AsyncMock(return_value="allowed result")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    global_mcp_tool_registry.register_tool(
+        "export", "export", {}, handler, server_id=server.server_id if server_owned else None
+    )
+
+    async with manager.catalog.operation():
+        result: Final = await operations._execute_mcp_tool(
+            name="export" if requested_server else "allowed-export",
+            arguments={},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            requested_server_id=server.server_id if requested_server else None,
+        )
+    assert result.is_error is False
+    handler.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_local_handler_rejects_an_owner_absent_from_the_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager: Final = MCPServerManager()
+    handler: Final = AsyncMock(return_value="private result")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    global_mcp_tool_registry.register_tool("private-export", "export", {}, handler, server_id="private")
+
+    async with manager.catalog.operation():
+        with pytest.raises(HTTPException) as denied:
+            await operations._handle_local_mcp_tool("private-export", {})
+    assert denied.value.status_code == 503
+    handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_gateway_listing_rejects_unrecognized_continuation() -> None:
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import ListToolsRequest, PaginatedRequestParams
+
+    with pytest.raises(MCPError, match=r"cursor|pagination"):
+        await GatewayOperations().execute(
+            ListToolsRequest(params=PaginatedRequestParams(cursor="forged-pagination-state")),
+            prepare_context(mcp_proxy_mode=True),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["prompts/list", "resources/list", "resources/templates/list"])
+async def test_continuation_preserves_current_authority_unavailable_error(monkeypatch, method):
+    from mcp import MCPError
+    from mcp.types import ListPromptsRequest, ListResourcesRequest, ListResourceTemplatesRequest, PaginatedRequestParams
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    caller = UserAPIKeyAuth(api_key="sk-owned-key-without-database")
+    caller.via_virtual_key = True
+    request = {"prompts/list": ListPromptsRequest, "resources/list": ListResourcesRequest, "resources/templates/list": ListResourceTemplatesRequest}[method]
+    with pytest.raises(MCPError, match="Server misconfigured: no database connection"):
+        await GatewayOperations().execute(request(params=PaginatedRequestParams(cursor="existing-state")), prepare_context(caller))
+
+
+@pytest.mark.asyncio
+async def test_virtual_tool_catalog_rejects_a_cursor_and_preserves_its_complete_listing():
+    from mcp import MCPError
+    from mcp.types import ListToolsRequest, PaginatedRequestParams
+
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    caller = UserAPIKeyAuth(object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="search", mcp_tool_search_enabled=True))
+    context = prepare_context(caller)
+    result = await GatewayOperations().execute(ListToolsRequest(), context)
+    assert result.tools
+    assert result.next_cursor is None
+    with pytest.raises(MCPError, match="fresh listing"):
+        await GatewayOperations().execute(ListToolsRequest(params=PaginatedRequestParams(cursor="existing-state")), context)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_name", ["ListPromptsRequest", "ListResourcesRequest", "ListResourceTemplatesRequest"])
+@pytest.mark.parametrize("cursor", [None, "existing-state"])
+async def test_optional_catalog_preserves_revoked_user_error(monkeypatch, request_name, cursor):
+    from types import SimpleNamespace
+
+    from mcp import MCPError, types
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": []})
+    table = SimpleNamespace(find_unique=AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(writer_db=SimpleNamespace(litellm_usertable=table)))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    caller = UserAPIKeyAuth(user_id="revoked-catalog-user")
+    caller.mcp_admitted_user_subject = True
+    request = getattr(types, request_name)(params=types.PaginatedRequestParams(cursor=cursor))
+    with pytest.raises(MCPError, match="Invalid or expired credential"):
+        await GatewayOperations().execute(request, prepare_context(caller))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", ["continuation-state", ""])
+async def test_tool_continuation_failure_requires_a_fresh_listing(monkeypatch: pytest.MonkeyPatch, cursor: str) -> None:
+    from mcp import MCPError
+    from mcp.types import INVALID_PARAMS, ListToolsRequest, PaginatedRequestParams
+
+    failure: Final = RuntimeError("catalog temporarily unavailable")
+    fetch: Final = AsyncMock(side_effect=failure)
+    monkeypatch.setattr(operations, "_get_tools_from_mcp_servers", fetch)
+    with pytest.raises(MCPError, match="start a fresh listing") as raised:
+        await GatewayOperations().execute(
+            ListToolsRequest(params=PaginatedRequestParams(cursor=cursor)), prepare_context()
+        )
+    assert raised.value.error.code == INVALID_PARAMS
+    assert raised.value.__cause__ is failure
+    assert fetch.await_count == 1
+    assert fetch.await_args.kwargs["params"].cursor == cursor
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gateway", [False, True])
+async def test_initial_tool_listing_preserves_legacy_error_fallback(monkeypatch: pytest.MonkeyPatch, gateway: bool) -> None:
+    from mcp.types import ListToolsRequest
+
+    fetch: Final = AsyncMock(side_effect=RuntimeError("catalog temporarily unavailable"))
+    monkeypatch.setattr(operations, "_get_tools_from_mcp_servers", fetch)
+    if gateway:
+        result: Final = await GatewayOperations().execute(ListToolsRequest(), prepare_context())
+        assert result.tools == []
+        assert result.next_cursor is None
+    else:
+        listing: Final = await operations._list_mcp_tools()
+        assert listing.tools == []
+        assert listing.next_cursor is None
+    fetch.assert_awaited_once()
