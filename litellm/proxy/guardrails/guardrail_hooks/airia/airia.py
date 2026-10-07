@@ -144,11 +144,13 @@ class AiriaGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         texts: Final = body.get("texts")
         structured_messages: Final = body.get("structured_messages")
-        if texts is None and structured_messages is None:
-            raise self._blocked()
         if not self._is_applicable_rewrite(texts, inputs.get("texts")):
             raise self._blocked()
         if not self._is_applicable_rewrite(structured_messages, inputs.get("structured_messages")):
+            raise self._blocked()
+        # An intervention that rewrites nothing would hand the original content through under a
+        # verdict that said it must not pass.
+        if texts is None and structured_messages is None:
             raise self._blocked()
 
         rewritten: Final[GenericGuardrailAPIInputs] = {**inputs}  # mutable-ok: fresh copy; caller's object untouched
@@ -163,10 +165,16 @@ class AiriaGuardrail(CustomGuardrail):
         """A rewrite is safe to apply positionally only when it is absent (this field was not
         touched) or a list the same length as what was sent. A different count would misalign
         the positional write-back downstream, dropping content or leaving other fields unchanged.
+
+        A rewrite for a field that was never sent is a mismatch too, not a no-op: post_call sends
+        only `texts`, so `structured_messages: []` would otherwise count as an applied rewrite
+        while the `texts` that carried the content passed through untouched.
         """
         if rewrite is None:
             return True
-        return isinstance(rewrite, list) and len(rewrite) == len(original or ())
+        if not isinstance(original, list) or not isinstance(rewrite, list):
+            return False
+        return len(rewrite) == len(original)
 
     def _blocked(self) -> GuardrailRaisedException:
         return GuardrailRaisedException(
