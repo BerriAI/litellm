@@ -81,9 +81,9 @@ describe("ModelsAndEndpointsPage", () => {
     };
   });
 
-  it("renders the admin tab bar and the All Models panel by default", () => {
+  it("renders the admin tab bar and the Deployed Models panel by default", () => {
     renderPage();
-    expect(screen.getByRole("tab", { name: "All Models" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Deployed Models" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "LLM Credentials" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Health Status" })).toBeInTheDocument();
     expect(screen.getByTestId("panel-all-models")).toBeInTheDocument();
@@ -101,7 +101,7 @@ describe("ModelsAndEndpointsPage", () => {
     detailState.modelId = "abc-123";
     renderPage();
     expect(screen.getByTestId("model-info")).toHaveTextContent("model:abc-123");
-    expect(screen.queryByRole("tab", { name: "All Models" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Deployed Models" })).not.toBeInTheDocument();
   });
 
   it("renders the team detail overlay from the ?team drill-in with admin edit rights", () => {
@@ -138,7 +138,7 @@ describe("ModelsAndEndpointsPage", () => {
   it("keeps the full admin tab order for a real admin", () => {
     renderPage();
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "All Models",
+      "Deployed Models",
       "Add Model",
       "Auto-Routers Beta",
       "LLM Credentials",
@@ -154,7 +154,7 @@ describe("ModelsAndEndpointsPage", () => {
   it("hides the admin write-form tabs from a view-only admin, keeping the read views", () => {
     mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
     renderPage();
-    expect(screen.getByRole("tab", { name: "All Models" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Deployed Models" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Health Status" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Pass-Through Endpoints" })).not.toBeInTheDocument();
@@ -169,7 +169,7 @@ describe("ModelsAndEndpointsPage", () => {
     mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
     renderPage();
     expect(screen.queryByRole("tab", { name: "Add Model" })).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "All Models" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Deployed Models" })).toBeInTheDocument();
   });
 
   // Read parity: the Auto-Routers list stays reachable for a view-only admin; only the
@@ -180,14 +180,14 @@ describe("ModelsAndEndpointsPage", () => {
     expect(screen.getByRole("tab", { name: /Auto-Routers/ })).toBeInTheDocument();
   });
 
-  // Auto-routers are excluded from the All Models table, so this tab is their home: the only
+  // Auto-routers are excluded from the Deployed Models table, so this tab is their home: the only
   // place in the product to list, create, edit or delete one.
   describe("Auto-Routers tab", () => {
-    it("sits third, after All Models and Add Model", () => {
+    it("sits third, after Deployed Models and Add Model", () => {
       renderPage();
 
       const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
-      expect(tabs[0]).toContain("All Models");
+      expect(tabs[0]).toContain("Deployed Models");
       expect(tabs[1]).toBe("Add Model");
       expect(tabs[2]).toContain("Auto-Routers");
       // Badged Beta while the tab settles; BetaBadge renders the label text.

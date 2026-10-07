@@ -11,6 +11,7 @@ import litellm
 from litellm.cost_calculator import default_video_cost_calculator
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
@@ -552,7 +553,7 @@ class TestVideoGeneration:
                     mock_client.post.return_value = mock_response
 
                     with patch(
-                        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                        "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
                         return_value=mock_client,
                     ):
                         result = handler.video_generation_handler(
@@ -988,6 +989,7 @@ class TestVideoLogging:
         """
         custom_logger = self.TestVideoLogger()
         litellm.logging_callback_manager._reset_all_callbacks()
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
         litellm.callbacks = [custom_logger]
 
         # Mock video generation response
@@ -1107,10 +1109,11 @@ def test_video_content_handler_passes_variant_to_url():
     mock_client = MagicMock(spec=HTTPHandler)
     mock_response = MagicMock()
     mock_response.content = b"thumbnail-bytes"
+    mock_response.status_code = 200
     mock_client.get.return_value = mock_response
 
     with patch(
-        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+        "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
         return_value=mock_client,
     ):
         result = handler.video_content_handler(
@@ -1152,13 +1155,12 @@ def test_video_content_handler_uses_get_for_openai():
     mock_client = MagicMock(spec=HTTPHandler)
     mock_response = MagicMock()
     mock_response.content = b"mp4-bytes"
+    mock_response.status_code = 200
     mock_client.get.return_value = mock_response
 
-    # Patch _get_httpx_client to ensure no real HTTP client is created
+    # Patch get_httpx_client to ensure no real HTTP client is created
     # This prevents test isolation issues where isinstance check might fail
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client"
-    ) as mock_get_client:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client") as mock_get_client:
         mock_get_client.return_value = mock_client
 
         result = handler.video_content_handler(
@@ -1597,7 +1599,7 @@ class TestVideoEndpointsProxyLitellmParams:
                 # Make request to video_status endpoint
                 response = client_with_vertex_config.get(
                     f"/v1/videos/{encoded_video_id}",
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": "Bearer sk-9876"},
                 )
 
                 # Verify the endpoint was called
@@ -1666,7 +1668,7 @@ class TestVideoEndpointsProxyLitellmParams:
                 # Make request to video_content endpoint
                 response = client_with_vertex_config.get(
                     f"/v1/videos/{encoded_video_id}/content",
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": "Bearer sk-9876"},
                 )
 
                 # Verify the endpoint was called
@@ -1735,7 +1737,7 @@ class TestVideoEndpointsProxyLitellmParams:
                 # Make request to video_content endpoint
                 response = client_with_vertex_config.get(
                     f"/v1/videos/{encoded_video_id}/content",
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": "Bearer sk-9876"},
                 )
 
                 # Verify the endpoint was called
@@ -1785,7 +1787,7 @@ def test_video_remix_handler_uses_api_key_from_litellm_params():
                 mock_client.post.return_value = MagicMock(status_code=200)
 
                 with patch(
-                    "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                    "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
                     return_value=mock_client,
                 ):
                     handler.video_remix_handler(
@@ -1872,7 +1874,7 @@ def test_video_remix_handler_prefers_explicit_api_key():
                 mock_client.post.return_value = MagicMock(status_code=200)
 
                 with patch(
-                    "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                    "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
                     return_value=mock_client,
                 ):
                     handler.video_remix_handler(
@@ -2264,7 +2266,7 @@ def test_video_create_character_target_model_names_returns_encoded_id(
     ):
         response = video_proxy_test_client.post(
             "/v1/videos/characters",
-            headers={"Authorization": "Bearer sk-1234"},
+            headers={"Authorization": "Bearer sk-9876"},
             files={"video": ("character.mp4", b"fake-video", "video/mp4")},
             data={
                 "name": "hero",
@@ -2317,7 +2319,7 @@ def test_video_get_character_accepts_encoded_character_id(video_proxy_test_clien
         ):
             response = video_proxy_test_client.get(
                 f"/v1/videos/characters/{encoded_character_id}",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
     assert response.status_code == 200, response.text
@@ -2362,7 +2364,7 @@ def test_edit_and_extension_support_custom_provider_from_extra_body(
     ):
         response = video_proxy_test_client.post(
             endpoint,
-            headers={"Authorization": "Bearer sk-1234"},
+            headers={"Authorization": "Bearer sk-9876"},
             json=payload,
         )
 
@@ -2428,7 +2430,7 @@ async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(
         await handler(
             request=request,
             fastapi_response=Response(),
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
         )
 
     message = str(exc_info.value)
@@ -2474,7 +2476,7 @@ def test_edit_and_extension_route_with_encoded_video_ids(
         ):
             response = video_proxy_test_client.post(
                 endpoint,
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
                 json=payload,
             )
 

@@ -4,7 +4,7 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
@@ -146,6 +146,13 @@ class BaseConfig(ABC):
             ]
         return optional_params
 
+    def add_tools_to_optional_params(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        tools: list[ChatCompletionToolParam],  # mutable-ok: mirrors override contract
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
+        return self._add_tools_to_optional_params(optional_params, tools)
+
     def translate_developer_role_to_system_role(
         self,
         messages: list[AllMessageValues],
@@ -254,6 +261,15 @@ class BaseConfig(ABC):
         api_base: str | None = None,
     ) -> dict:
         pass
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return extra_body
 
     def sign_request(
         self,
@@ -384,6 +400,9 @@ class BaseConfig(ABC):
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "CustomStreamWrapper":
         raise NotImplementedError
 
@@ -399,6 +418,9 @@ class BaseConfig(ABC):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "CustomStreamWrapper":
         raise NotImplementedError
 

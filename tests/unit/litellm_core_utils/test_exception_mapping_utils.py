@@ -1,8 +1,10 @@
 import httpx
 import openai
 import pytest
+from fastapi import HTTPException
 
 import litellm
+from litellm.exceptions import GuardrailRaisedException
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
@@ -743,11 +745,12 @@ class _UpstreamHTTPError(Exception):
         self.response = httpx.Response(status_code=status_code, request=self.request, text="upstream failure")
 
 
-UPSTREAM_STATUS_CODES = (400, 401, 403, 404, 408, 422, 429, 500, 503)
+UPSTREAM_STATUS_CODES = (400, 401, 402, 403, 404, 408, 422, 429, 500, 503)
 
 OPENAI_SHAPED = {
     400: (litellm.BadRequestError, 400),
     401: (litellm.AuthenticationError, 401),
+    402: (litellm.PaymentRequiredError, 402),
     403: (litellm.APIError, 403),
     404: (litellm.NotFoundError, 404),
     408: (litellm.Timeout, 408),
@@ -762,8 +765,10 @@ PERMISSION_DENIED = (litellm.PermissionDeniedError, 403)
 STATUS_KEYED = {**OPENAI_SHAPED, 403: PERMISSION_DENIED}
 
 DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
+    "ai21": {402: (litellm.APIError, 402)},
     "anthropic": {403: PERMISSION_DENIED},
-    "azure": {500: (litellm.APIError, 500)},
+    "azure": {402: (litellm.APIError, 402), 500: (litellm.APIError, 500)},
+    "azure_ai": {402: (litellm.APIError, 402)},
     "bedrock": {
         403: PERMISSION_DENIED,
         500: (litellm.ServiceUnavailableError, 503),
@@ -774,13 +779,19 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         403: PERMISSION_DENIED,
         422: (litellm.BadRequestError, 400),
     },
+    "deepseek": {402: (litellm.APIError, 402)},
+    "fireworks_ai": {402: (litellm.APIError, 402)},
     "gemini": {403: PERMISSION_DENIED},
+    "groq": {402: (litellm.APIError, 402)},
     "huggingface": {
+        402: (litellm.APIError, 402),
         404: (litellm.APIError, 404),
         422: (litellm.APIError, 422),
         500: (litellm.APIError, 500),
     },
+    "mistral": {402: (litellm.APIError, 402)},
     "nlp_cloud": {
+        402: (litellm.RateLimitError, 429),
         403: (litellm.AuthenticationError, 403),
         404: (litellm.APIError, 404),
         408: (litellm.APIError, 408),
@@ -788,20 +799,26 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         503: (litellm.APIError, 503),
     },
     "ollama": {403: PERMISSION_DENIED},
-    "openrouter": {500: (litellm.APIError, 500)},
+    "openai": {402: (litellm.APIError, 402)},
+    "openrouter": {402: (litellm.APIError, 402), 500: (litellm.APIError, 500)},
+    "perplexity": {402: (litellm.APIError, 402)},
     "replicate": {
         403: (litellm.APIError, 500),
         404: (litellm.APIError, 500),
+        402: (litellm.APIError, 500),
         422: (litellm.UnprocessableEntityError, 422),
         500: (litellm.ServiceUnavailableError, 503),
         503: (litellm.APIError, 500),
     },
+    "runwayml": {402: (litellm.APIError, 402)},
     "sagemaker": {
         403: PERMISSION_DENIED,
         500: (litellm.ServiceUnavailableError, 503),
     },
+    "together_ai": {402: (litellm.APIError, 402)},
     "vertex_ai": {403: PERMISSION_DENIED},
     "vllm": {403: PERMISSION_DENIED},
+    "xai": {402: (litellm.APIError, 402)},
 }
 
 PROVIDERS_WITH_A_HANDLER = (
@@ -934,6 +951,16 @@ def test_a_provider_without_a_handler_maps_by_the_upstream_status(provider, stat
     assert raised.value.status_code == expected_status
     assert raised.value.llm_provider == provider
     assert raised.value.model == "test-model"
+    if status_code == 402:
+        assert isinstance(raised.value, litellm.BadRequestError)
+        assert raised.value.response.status_code == 402
+        assert str(raised.value).startswith("litellm.PaymentRequiredError: ")
+        assert "litellm.BadRequestError:" not in str(raised.value)
+        assert repr(raised.value) == str(raised.value)
+
+
+def test_payment_required_error_without_response_uses_402_response() -> None:
+    assert litellm.PaymentRequiredError("x", "m", "p").response.status_code == 402
 
 
 def test_a_minimax_bad_key_is_an_authentication_error(quiet_exception_mapping):
@@ -1212,7 +1239,7 @@ def test_handle_error_marks_only_a_status_code_it_never_received():
     handler = BaseLLMHTTPHandler()
 
     with pytest.raises(litellm.llms.base_llm.chat.transformation.BaseLLMException) as transport:
-        raise handler._handle_error(e=httpx.ConnectError("Connection refused"), provider_config=None)
+        raise handler.handle_error(e=httpx.ConnectError("Connection refused"), provider_config=None)
     assert transport.value.status_code == 500
     assert transport.value.status_code_is_synthesized is True
 
@@ -1223,7 +1250,7 @@ def test_handle_error_marks_only_a_status_code_it_never_received():
         response=httpx.Response(status_code=500, request=request, text="upstream exploded"),
     )
     with pytest.raises(litellm.llms.base_llm.chat.transformation.BaseLLMException) as received:
-        raise handler._handle_error(e=upstream, provider_config=None)
+        raise handler.handle_error(e=upstream, provider_config=None)
     assert received.value.status_code == 500
     assert received.value.status_code_is_synthesized is False
 
@@ -1278,7 +1305,7 @@ def test_bedrock_500_preserves_provider_response_headers():
             "bedrock",
             400,
             '{"message":"Could not process image"}',
-            litellm.InternalServerError,
+            litellm.BadRequestError,
         ),
     ],
 )
@@ -1309,6 +1336,41 @@ def test_bedrock_classified_errors_preserve_provider_response_headers(
         )
 
     assert exc_info.value.response.headers["x-amzn-requestid"] == "req-classified"
+
+
+@pytest.mark.parametrize(
+    "status_code, expected_exception",
+    [
+        (400, litellm.BadRequestError),
+        (503, litellm.ServiceUnavailableError),
+        (500, litellm.InternalServerError),
+    ],
+)
+def test_bedrock_unprocessable_image_keeps_provider_status_code(status_code, expected_exception):
+    """An unprocessable image maps to the status Bedrock sent, so the 400 it returns stays a client error."""
+    provider_message = '{"message":"The model returned the following errors: Could not process image"}'
+    provider_response = httpx.Response(
+        status_code=status_code,
+        text=provider_message,
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=status_code,
+        message=provider_message,
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(expected_exception) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.status_code == status_code
 
 
 @pytest.mark.parametrize(
@@ -1500,3 +1562,39 @@ def test_litellm_proxy_repeated_response_header_keeps_each_value():
         )
 
     assert exc_info.value.response.headers.multi_items() == repeated
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        HTTPException(status_code=400, detail={"error": "Violated guardrail policy"}),
+        HTTPException(status_code=422, detail={"error": "Violated guardrail policy"}),
+        GuardrailRaisedException(guardrail_name="prompt-shield", message="Violated guardrail policy"),
+    ],
+    ids=["http_400", "http_422", "guardrail_raised"],
+)
+def test_guardrail_block_raised_inside_an_llm_call_is_returned_unmapped(block: Exception):
+    returned = exception_type(
+        model="gpt-5.6",
+        original_exception=block,
+        custom_llm_provider="openai",
+        completion_kwargs={},
+        extra_kwargs={},
+    )
+
+    assert returned is block
+
+
+def test_guardrail_provider_failure_status_is_still_mapped():
+    upstream_failure = HTTPException(status_code=401, detail={"error": "guardrail provider rejected the key"})
+
+    with pytest.raises(litellm.AuthenticationError) as exc_info:
+        exception_type(
+            model="gpt-5.6",
+            original_exception=upstream_failure,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value is not upstream_failure

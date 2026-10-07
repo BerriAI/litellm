@@ -5,7 +5,7 @@ Docker Model Runner API Reference: https://docs.docker.com/ai/model-runner/api-r
 """
 
 from collections.abc import Coroutine
-from typing import Any, Final, Literal, overload
+from typing import Final, Literal, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -27,7 +27,7 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -39,7 +39,7 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         Docker Model Runner is OpenAI-compatible, so we use standard message transformation.
         """
@@ -64,6 +64,13 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
         # Docker Model Runner may not require authentication for local instances
         dynamic_api_key: Final = api_key or get_secret_str("DOCKER_MODEL_RUNNER_API_KEY") or "dummy-key"
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def get_complete_url(
         self,

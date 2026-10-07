@@ -4,6 +4,7 @@ import base64
 import io
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from itertools import accumulate
 from typing import Final, Literal, cast
 
 import anyio
@@ -14,7 +15,7 @@ from typing_extensions import ParamSpec, TypeVar
 
 import litellm
 from litellm import verbose_logger
-from litellm._lazy_imports import _get_default_encoding
+from litellm._lazy_imports import get_default_encoding
 from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
@@ -31,7 +32,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
 from litellm.litellm_core_utils.url_utils import safe_get
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
@@ -231,7 +232,7 @@ def get_image_dimensions(
     img_data = None
     if data.startswith(("http://", "https://")):
         try:
-            client: Final = _get_httpx_client()
+            client: Final = get_httpx_client()
             response: Final[httpx.Response] = safe_get(client, data)
             max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
             content_length: Final[str | None] = response.headers.get("Content-Length")
@@ -466,6 +467,37 @@ def token_counter(
     return num_tokens
 
 
+def messages_reach_token_count(
+    model: str,
+    messages: Sequence[AllMessageValues | Message],
+    threshold: int,
+    tools: list[ChatCompletionToolParam] | None = None,
+    use_default_image_token_count: bool = False,
+) -> bool:
+    """Whether ``messages`` plus ``tools`` hold at least ``threshold`` prompt tokens for ``model``.
+
+    Same arithmetic as ``token_counter(messages=..., tools=...) >= threshold``, counted one message
+    at a time and stopped at the first message that crosses the threshold, so a prompt far above it
+    costs the tokenizer a few messages rather than the whole conversation.
+    """
+    from litellm.utils import convert_list_message_to_dict
+
+    if litellm.disable_token_counter is True:
+        return threshold <= 0
+    new_messages: Final = cast(  # cast-ok: convert_list_message_to_dict is untyped, same as token_counter
+        list[AllMessageValues], convert_list_message_to_dict(messages)
+    )
+    params: Final = _MessageCountParams(model, None)
+    includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
+    per_message_counts: Final = (
+        _count_messages(params, [message], use_default_image_token_count, None) for message in new_messages
+    )
+    running_totals: Final = accumulate(
+        per_message_counts, initial=_count_extra(params.count_function, tools, None, includes_system_message)
+    )
+    return any(total >= threshold for total in running_totals)
+
+
 def _count_function_call_tokens(
     key: str,
     value: object,
@@ -618,35 +650,34 @@ def _get_exact_count_function(
 ) -> TokenCounterFunction:
     """
     Get the function to count tokens based on the model and custom tokenizer."""
-    from litellm.utils import _select_tokenizer
+    from litellm.utils import select_tokenizer
 
     if model is not None or custom_tokenizer is not None:
-        tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
-        if tokenizer_json["type"] == "huggingface_tokenizer":
-            tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
-
-            def count_tokens(text: str) -> int:
-                if isinstance(tokenizer, HuggingFaceTokenizer):
-                    return tokenizer.count(text)
-                return len(tokenizer.encode_batch_fast([text])[0])
-
-            return count_tokens
-        elif tokenizer_json["type"] == "openai_tokenizer":
-            encoding: Final = openai_tokenizer_encoding(model)
-
-            def encode_length(text: str) -> int:
-                return _encoding_count(encoding, text)
-
-            return _get_tiktoken_count_function(encode_length)
-        else:
-            raise ValueError("Unsupported tokenizer type")
+        tokenizer_json: Final = custom_tokenizer or select_tokenizer(model)
     else:
-        default_encoding: Final = _get_default_encoding()
+        default_encoding: Final = get_default_encoding()
 
         def encode_length(text: str) -> int:
             return _encoding_count(default_encoding, text)
 
         return _get_tiktoken_count_function(encode_length)
+    if tokenizer_json["type"] == "huggingface_tokenizer":
+        tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
+
+        def count_tokens(text: str) -> int:
+            if isinstance(tokenizer, HuggingFaceTokenizer):
+                return tokenizer.count(text)
+            return len(tokenizer.encode_batch_fast([text])[0])
+
+        return count_tokens
+    if tokenizer_json["type"] == "openai_tokenizer":
+        encoding: Final = openai_tokenizer_encoding(model)
+
+        def encode_length(text: str) -> int:
+            return _encoding_count(encoding, text)
+
+        return _get_tiktoken_count_function(encode_length)
+    raise ValueError("Unsupported tokenizer type")
 
 
 def _encoding_count(encoding: Encoding, text: str) -> int:
@@ -951,7 +982,7 @@ def _count_content_list(
         )
 
 
-def _format_function_definitions(tools):
+def _format_function_definitions(tools: Sequence[object]) -> str:
     """Formats tool definitions in the format that OpenAI appears to use.
     Based on https://github.com/forestwanglin/openai-java/blob/main/jtokkit/src/main/java/xyz/felh/openai/jtokkit/utils/TikTokenUtils.java
     """
@@ -959,39 +990,55 @@ def _format_function_definitions(tools):
     lines.append("namespace functions {")
     lines.append("")
     for tool in tools:
-        if not isinstance(tool, dict):
+        if not isinstance(tool, Mapping):
             continue
-        function = tool.get("function")
-        if not isinstance(function, dict):
-            # Anthropic tool shape → OpenAI function dict for token counting.
-            params = tool.get("input_schema") or tool.get("parameters") or {}
-            if not isinstance(params, dict):
-                params = {}
-            function = {
-                "name": tool.get("name"),
-                "description": tool.get("description"),
-                "parameters": params,
-            }
-        function_name = function.get("name")
-        if not function_name:
-            # Skip malformed tools missing a name to avoid emitting
-            # ``type None = ...`` which would produce inaccurate token counts.
-            continue
-        if function_description := function.get("description"):
-            lines.append(f"// {function_description}")
-        parameters = function.get("parameters") or {}
-        if not isinstance(parameters, dict):
-            parameters = {}
-        properties = parameters.get("properties")
-        if properties and properties.keys():
-            lines.append(f"type {function_name} = (_: {{")
-            lines.append(_format_object_parameters(parameters, 0))
-            lines.append("}) => any;")
-        else:
-            lines.append(f"type {function_name} = () => any;")
-        lines.append("")
+        for function in _function_definitions_for_tool(cast(Mapping[str, object], tool)):
+            lines.extend(_format_single_function_definition(function))
     lines.append("} // namespace functions")
     return "\n".join(lines)
+
+
+def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mapping[str, object]]:
+    function: Final = tool.get("function")
+    if isinstance(function, Mapping):
+        yield function
+        return
+    declarations: Final = tool.get("function_declarations") or tool.get("functionDeclarations")
+    if isinstance(declarations, list):
+        for declaration in declarations:
+            if isinstance(declaration, Mapping):
+                yield declaration
+        return
+    parameters: Final = tool.get("input_schema") or tool.get("parameters") or {}
+    normalized_parameters: Final = parameters if isinstance(parameters, Mapping) else {}
+    yield {
+        "name": tool.get("name"),
+        "description": tool.get("description"),
+        "parameters": normalized_parameters,
+    }
+
+
+def _format_single_function_definition(function: Mapping[str, object]) -> tuple[str, ...]:
+    function_name: Final = function.get("name")
+    if not function_name:
+        return ()
+    function_description: Final = function.get("description")
+    parameters_value: Final = function.get("parameters") or {}
+    parameters: Final = parameters_value if isinstance(parameters_value, Mapping) else {}
+    properties: Final = parameters.get("properties")
+    if isinstance(properties, Mapping) and properties:
+        return (
+            *((f"// {function_description}",) if function_description else ()),
+            f"type {function_name} = (_: {{",
+            _format_object_parameters(parameters, 0),
+            "}) => any;",
+            "",
+        )
+    return (
+        *((f"// {function_description}",) if function_description else ()),
+        f"type {function_name} = () => any;",
+        "",
+    )
 
 
 def _format_object_parameters(parameters, indent):

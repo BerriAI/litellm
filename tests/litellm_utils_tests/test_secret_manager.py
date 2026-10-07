@@ -1,27 +1,26 @@
 import base64
+import hashlib
+import json
 import os
-import time
-import traceback
-from litellm._uuid import uuid
 
 from dotenv import load_dotenv
-import json
 
 load_dotenv()
 import tempfile
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
+from typing import Final
 
 import pytest
+
 import litellm
-from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.chat import BedrockConverseLLM
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 from litellm.secret_managers.main import (
-    get_secret,
     _should_read_secret_from_secret_manager,
+    get_secret,
 )
-from unittest.mock import AsyncMock, patch, MagicMock
+
+_AWS_FIXTURE_MASTER_KEY_SHA256: Final = "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
 
 
 def load_vertex_ai_credentials():
@@ -76,7 +75,9 @@ def test_aws_secret_manager():
     # cast json to dict
     secret_val = json.loads(secret_val)
 
-    assert secret_val["litellm_master_key"] == "sk-1234"
+    assert (
+        hashlib.sha256(secret_val["litellm_master_key"].encode()).hexdigest() == _AWS_FIXTURE_MASTER_KEY_SHA256
+    ), "Expected the fixture value stored in the CI AWS account's litellm_master_key secret"
 
 
 def redact_oidc_signature(secret_val):
@@ -130,39 +131,8 @@ def test_oidc_circleci_v2():
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
 
 
-@pytest.mark.skip(
-    reason="Quarantined: Flaky test - fails with 401 Unauthorized from Azure OAuth. TODO: Switch to our own Azure account or fix authentication"
-)
-def test_oidc_circleci_with_azure():
-    # TODO: Switch to our own Azure account, currently using ai.moda's account
-    os.environ["AZURE_TENANT_ID"] = "17c0a27a-1246-4aa1-a3b6-d294e80e783c"
-    os.environ["AZURE_CLIENT_ID"] = "4faf5422-b2bd-45e8-a6d7-46543a38acd0"
-    azure_ad_token = get_azure_ad_token_from_oidc(
-        azure_ad_token="oidc/circleci/",
-        azure_client_id=None,
-        azure_tenant_id=None,
-    )
-
-    print(f"secret_val: {redact_oidc_signature(azure_ad_token)}")
 
 
-@pytest.mark.skip(
-    reason="Quarantined: Flaky test - fails with InvalidIdentityToken, OIDC provider no longer configured in AWS account. TODO: Switch to LiteLLM's own IAM role"
-)
-def test_oidc_circle_v1_with_amazon():
-    # The purpose of this test is to get logs using the older v1 of the CircleCI OIDC token
-
-    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
-    aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
-    aws_web_identity_token = "oidc/circleci/"
-
-    bllm = BaseAWSLLM()
-    creds = bllm.get_credentials(
-        aws_region_name="ca-west-1",
-        aws_web_identity_token=aws_web_identity_token,
-        aws_role_name=aws_role_name,
-        aws_session_name="assume-v1-session",
-    )
 
 
 def test_oidc_env_variable():

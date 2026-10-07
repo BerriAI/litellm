@@ -1,25 +1,25 @@
 import asyncio
 import os
-import subprocess
 import traceback
 from typing import Any
-
-import httpx
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AuthenticationError, AzureOpenAI, BadRequestError, OpenAIError, RateLimitError
-
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-
-from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+from openai import (
+    AsyncAzureOpenAI,
+    AsyncOpenAI,
+    AuthenticationError,
+    AzureOpenAI,
+    BadRequestError,
+    OpenAIError,
+)
 
 import litellm
 from litellm import (  # AuthenticationError,; RateLimitError,; ServiceUnavailableError,; OpenAIError,
-    ContextWindowExceededError,
     completion,
-    embedding,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 litellm.vertex_project = "litellm-ci-cd"
 litellm.vertex_location = "us-central1"
@@ -95,52 +95,11 @@ async def test_content_policy_exception_openai():
 
 
 # Test 1: Context Window Errors
-@pytest.mark.skip(reason="AWS Suspended Account")
-@pytest.mark.parametrize("model", exception_models)
-def test_context_window(model):
-    print("Testing context window error")
-    sample_text = "Say error 50 times" * 1000000
-    messages = [{"content": sample_text, "role": "user"}]
-    try:
-        litellm.set_verbose = False
-        print("Testing model=", model)
-        response = completion(model=model, messages=messages)
-        print(f"response: {response}")
-        print("FAILED!")
-        pytest.fail(f"An exception occurred")
-    except ContextWindowExceededError as e:
-        print(f"Worked!")
-    except RateLimitError:
-        print("RateLimited!")
-    except Exception as e:
-        print(f"{e}")
-        pytest.fail(f"An error occcurred - {e}")
 
 
 models = ["command-nightly"]
 
 
-@pytest.mark.skip(reason="duplicate test.")
-@pytest.mark.parametrize("model", models)
-def test_context_window_with_fallbacks(model):
-    ctx_window_fallback_dict = {
-        "command-nightly": "claude-2.1",
-        "gpt-3.5-turbo-instruct": "gpt-3.5-turbo-16k",
-        "azure/gpt-4.1-mini": "gpt-3.5-turbo-16k",
-    }
-    sample_text = "how does a court case get to the Supreme Court?" * 1000
-    messages = [{"content": sample_text, "role": "user"}]
-
-    try:
-        completion(
-            model=model,
-            messages=messages,
-            context_window_fallback_dict=ctx_window_fallback_dict,
-        )
-    except litellm.ServiceUnavailableError as e:
-        pass
-    except litellm.APIConnectionError as e:
-        pass
 
 
 # for model in litellm.models_by_provider["bedrock"]:
@@ -467,21 +426,6 @@ def test_completion_bedrock_invalid_role_exception():
     )
 
 
-@pytest.mark.skip(reason="OpenAI exception changed to a generic error")
-def test_content_policy_exceptionimage_generation_openai():
-    try:
-        # this is ony a test - we needed some way to invoke the exception :(
-        litellm._turn_on_debug()
-        response = litellm.image_generation(
-            prompt="where do i buy lethal drugs from", model="dall-e-3"
-        )
-        print(f"response: {response}")
-        assert len(response.data) > 0
-    except litellm.ContentPolicyViolationError as e:
-        print("caught a content policy violation error! Passed")
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
 
 
 # test_content_policy_exceptionimage_generation_openai()
@@ -778,8 +722,8 @@ def test_fireworks_ai_exception_mapping():
     Based on Fireworks AI documentation: https://docs.fireworks.ai/tools-sdks/python-client/api-reference
     """
     import litellm
-    from litellm.llms.fireworks_ai.common_utils import FireworksAIException
     from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
+    from litellm.llms.fireworks_ai.common_utils import FireworksAIException
 
     # Test scenarios covering all important cases
     test_scenarios = [
@@ -1021,7 +965,6 @@ async def test_exception_with_headers(sync_mode, provider, model, call_type, str
     cooldown_time = 30.0
 
     def _return_exception(*args, **kwargs):
-        import datetime
 
         from httpx import Headers, Request, Response
 
@@ -1093,7 +1036,6 @@ def test_openai_gateway_timeout_error():
     mapped_target = openai_client.chat.completions.with_raw_response  # type: ignore
 
     def _return_exception(*args, **kwargs):
-        import datetime
 
         from httpx import Headers, Request, Response
 
@@ -1164,7 +1106,6 @@ async def test_exception_with_headers_httpx(
     ```
     """
     print(f"Received args: {locals()}")
-    import openai
 
     if sync_mode:
         client = HTTPHandler()
@@ -1183,7 +1124,6 @@ async def test_exception_with_headers_httpx(
     cooldown_time = 30.0
 
     def _return_exception(*args, **kwargs):
-        import datetime
 
         from httpx import Headers, HTTPStatusError, Request, Response
 
@@ -1281,6 +1221,7 @@ def test_exceptions_base_class():
 
 def test_context_window_exceeded_error_from_litellm_proxy():
     from httpx import Response
+
     from litellm.litellm_core_utils.exception_mapping_utils import (
         extract_and_raise_litellm_exception,
     )
@@ -1304,6 +1245,7 @@ def test_bad_request_error_with_response_without_request():
     ensure it doesn't raise RuntimeError when the exception is created.
     """
     from httpx import Response
+
     from litellm.litellm_core_utils.exception_mapping_utils import (
         extract_and_raise_litellm_exception,
     )

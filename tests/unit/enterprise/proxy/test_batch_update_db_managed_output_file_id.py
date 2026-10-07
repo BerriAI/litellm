@@ -359,8 +359,8 @@ async def test_ensure_batch_response_returns_early_without_auth():
 
 
 def _in_memory_managed_files():
-    """Build a real _PROXY_LiteLLMManagedFiles whose prisma upsert hits an in-memory row."""
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    """Build a real PROXY_LiteLLMManagedFiles whose prisma upsert hits an in-memory row."""
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
     store: dict = {}
 
@@ -381,7 +381,7 @@ def _in_memory_managed_files():
     cache.async_set_cache = AsyncMock()
 
     return (
-        _PROXY_LiteLLMManagedFiles(internal_usage_cache=cache, prisma_client=prisma),
+        PROXY_LiteLLMManagedFiles(internal_usage_cache=cache, prisma_client=prisma),
         store,
     )
 
