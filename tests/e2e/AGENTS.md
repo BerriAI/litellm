@@ -215,7 +215,7 @@ llm.<endpoint>.<route>.<capability>.<streaming>.<assertion>
                | rerank | images_generations | audio_speech | audio_transcriptions | moderations
                | realtime
   route      : openai | azure_openai | anthropic | bedrock_converse | bedrock_invoke | vertex
-               | azure_foundry | cohere | together_ai
+               | azure_foundry | cohere | together_ai | ollama | ollama_chat
                (vocab varies per endpoint; messages is anthropic-format only)
   capability : basic | tool_use | prompt_cache_5m | vision | thinking | structured_output
                | service_tier | mid_conversation_system
