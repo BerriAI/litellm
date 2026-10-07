@@ -1,6 +1,5 @@
 # Derived from tm-v1-ai-guard-litellm-plugin revision 6cafc143f62962a98d4eb5abe9f608c61ff194d4.
 # This file has been modified for integration into LiteLLM.
-# Licensed under the Apache License, Version 2.0. See LICENSE.txt in this directory.
 
 import asyncio
 import os
@@ -48,7 +47,7 @@ GUARDRAIL_NAME: Final = "trendai"
 OPENAI_CHAT_COMPLETION_RESPONSE_V1: Final = "OpenAIChatCompletionResponseV1"
 RESPONSE_CONTENT_CHUNK_SIZE_BYTES: Final = 49_500
 TMV1_CLIENT_NAME: Final = "litellm"
-PLUGIN_VERSION: Final = "0.1.2"
+PLUGIN_VERSION: Final = "v0.1.3"
 PROVIDER_UNAVAILABLE_STATUS: Final = 503
 _APPLY_GUARDRAILS_PATH: Final = "/applyGuardrails"
 _TREND_AI_SECURITY_PATH: Final = "/v3.0/aiSecurity"
