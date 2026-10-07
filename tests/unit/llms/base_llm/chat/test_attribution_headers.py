@@ -96,7 +96,6 @@ def handler_path(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 
 _NOVITA_MODEL: Final = "novita/meta-llama/llama-3.3-70b-instruct"
 
-# (model, attribution header name) for every provider that opts in
 _ATTRIBUTED: Final = [
     pytest.param(_NOVITA_MODEL, "x-novita-source", id="novita"),
     pytest.param("perplexity/sonar", "x-pplx-integration", id="perplexity"),

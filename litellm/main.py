@@ -2627,7 +2627,6 @@ def _complete_custom_openai(
     )
 
     headers = headers or litellm.headers
-    # Here, not in validate_environment: the default OpenAI SDK path below never calls it
     outbound_headers: Final = (
         headers
         if provider_config is None
