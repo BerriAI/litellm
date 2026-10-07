@@ -1,12 +1,12 @@
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import ConfigDict, Field, PrivateAttr, with_config
+from pydantic import ConfigDict, Field, PrivateAttr, StrictBool, StrictStr, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
-ChoiceValue: TypeAlias = str | bool
+ChoiceValue: TypeAlias = StrictStr | StrictBool
 
 
 class DecisionsObjectBase(LiteLLMPydanticObjectBase):
@@ -55,14 +55,14 @@ class PredicateQuestion(DecisionsObjectBase):
 class ChoiceQuestion(DecisionsObjectBase):
     type: Literal["choice"]
     instructions: str
-    choices: Annotated[Sequence[DecisionChoice], Field(min_length=1)]
+    choices: Sequence[DecisionChoice]
     name: str | None = None
 
 
 class ScoreQuestion(DecisionsObjectBase):
     type: Literal["score"]
     instructions: str
-    levels: Annotated[Sequence[DecisionLevel], Field(min_length=1)]
+    levels: Sequence[DecisionLevel]
     name: str | None = None
 
 
@@ -71,7 +71,7 @@ DecisionQuestion: TypeAlias = Annotated[
     Field(discriminator="type"),
 ]
 
-DecisionQuestions: TypeAlias = Annotated[Sequence[DecisionQuestion], Field(min_length=1)]
+DecisionQuestions: TypeAlias = Sequence[DecisionQuestion]
 
 
 class DecisionsRequestBody(DecisionsObjectBase):

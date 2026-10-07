@@ -82,9 +82,8 @@ def test_the_documented_response_keeps_answer_order_refusals_and_token_details()
 
 
 _OFF_SPEC: Final[tuple[tuple[str, object], ...]] = (
-    ("questions", ()),
     ("questions", [{"type": "noul", "name": "q", "instructions": "x"}]),
-    ("questions", [{"type": "choice", "name": "q", "instructions": "x", "choices": ()}]),
+    ("questions", [{"type": "choice", "name": "q", "instructions": "x", "choices": [{"value": 1}]}]),
     ("questions", [{"type": "score", "name": "q", "levels": [{"label": "low"}]}]),
     ("input", {"state": "not an OpenAI input"}),
 )
@@ -94,6 +93,36 @@ _OFF_SPEC: Final[tuple[tuple[str, object], ...]] = (
 def test_requests_off_the_spec_are_rejected(field: str, value: object) -> None:
     with pytest.raises(ValidationError):
         _REQUEST_ADAPTER.validate_python({**_REQUEST, field: value})
+
+
+_EMPTY_COLLECTIONS: Final[tuple[tuple[str, list[object]], ...]] = (
+    ("questions", []),
+    ("questions", [{"type": "choice", "name": "q", "instructions": "x", "choices": []}]),
+    ("questions", [{"type": "score", "name": "q", "instructions": "x", "levels": []}]),
+)
+
+
+@pytest.mark.parametrize(("field", "value"), _EMPTY_COLLECTIONS)
+def test_empty_collections_are_left_for_the_provider_to_judge(field: str, value: list[object]) -> None:
+    request: Final = _REQUEST_ADAPTER.validate_python({**_REQUEST, field: value})
+
+    assert request.model_dump(mode="json", exclude_none=True)[field] == value
+
+
+def test_choice_values_keep_their_type_so_a_string_true_and_a_boolean_true_stay_distinct() -> None:
+    answer: Final = {
+        "type": "choice",
+        "name": "approve",
+        "choice": "true",
+        "probabilities": [{"value": "true", "probability": 0.6}, {"value": True, "probability": 0.4}],
+        "confidence": 0.6,
+    }
+
+    response: Final = _RESPONSE_ADAPTER.validate_python({**_RESPONSE, "answers": [answer]})
+
+    assert response.model_dump(mode="json")["answers"] == [answer]
+    with pytest.raises(ValidationError):
+        _RESPONSE_ADAPTER.validate_python({**_RESPONSE, "answers": [{**answer, "choice": 1}]})
 
 
 _OFF_SPEC_RESPONSE: Final[tuple[str, ...]] = ("model", "usage")
