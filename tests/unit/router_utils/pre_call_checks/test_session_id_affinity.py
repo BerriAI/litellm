@@ -771,3 +771,76 @@ def test_complexity_router_with_deployment_affinity_registers_affinity_callback(
         _cleanup_router_callbacks(enabled)
         _cleanup_router_callbacks(session_only)
         _cleanup_router_callbacks(disabled)
+
+
+@pytest.mark.asyncio
+async def test_stale_session_pin_is_dropped_and_reclaimed():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/45145.
+
+    A session pin naming a deployment that has since gone on cooldown must not
+    survive: the filter drops the stale pin, the post-call hook re-pins to the
+    deployment actually chosen, and subsequent calls stick to it instead of
+    re-shuffling on every request.
+    """
+    cache = DualCache()
+    callback = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+
+    deployments = [
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-a"},
+            "model_info": {"id": "dep-a"},
+        },
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-b"},
+            "model_info": {"id": "dep-b"},
+        },
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-c"},
+            "model_info": {"id": "dep-c"},
+        },
+    ]
+    session_kwargs = {"metadata": {"session_id": "s1"}}
+    session_cache_key = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+
+    # dep-a was pinned, then went on cooldown and left the healthy set.
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-a"})
+
+    filtered = await callback.async_filter_deployments(
+        model="group",
+        healthy_deployments=deployments[1:],
+        messages=[],
+        request_kwargs=session_kwargs,
+    )
+    assert [d["model_info"]["id"] for d in filtered] == ["dep-b", "dep-c"]
+
+    # The stale pin is gone, so the post-call hook can claim a fresh one.
+    assert await cache.async_get_cache(session_cache_key) is None
+
+    # The router chose dep-b; the hook records the winner.
+    await callback.async_pre_call_deployment_hook(
+        kwargs={
+            "model_info": {"id": "dep-b"},
+            "metadata": {"session_id": "s1", "deployment_model_name": "group"},
+        },
+        call_type=None,
+    )
+    assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-b"}
+
+    # Later calls stick to dep-b instead of re-shuffling.
+    filtered = await callback.async_filter_deployments(
+        model="group",
+        healthy_deployments=deployments[1:],
+        messages=[],
+        request_kwargs=session_kwargs,
+    )
+    assert [d["model_info"]["id"] for d in filtered] == ["dep-b"]

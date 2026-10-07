@@ -330,6 +330,21 @@ class DeploymentAffinityCheck(CustomLogger):
     def _set_local_pin(self, cache_key: str, value: object, ttl_seconds: int) -> None:
         set_local_affinity_pin(self.cache, cache_key, value, ttl_seconds)
 
+    async def _drop_stale_pin(self, cache_key: str) -> None:
+        """Best-effort invalidation of a pin whose deployment is no longer healthy.
+
+        The post-call hook re-claims the pin for the deployment actually chosen
+        through an atomic first-writer-wins SET, so concurrent requests still
+        converge on a single winner.
+        """
+        try:
+            await self.cache.async_delete_cache(cache_key)
+        except Exception as e:  # noqa: BLE001  # affinity is best-effort; never break routing
+            verbose_router_logger.debug(
+                "DeploymentAffinityCheck: failed to drop stale session pin. error=%s",
+                e,
+            )
+
     async def _claim_pin(self, cache_key: str, pin_value: DeploymentAffinityCacheValue, ttl_seconds: int) -> str | None:
         winner: Final = await claim_affinity_pin(self.cache, cache_key, pin_value, ttl_seconds)
         return self._pinned_model_id(winner)
@@ -439,6 +454,12 @@ class DeploymentAffinityCheck(CustomLogger):
                         )
                         return [session_deployment]
                     else:
+                        # The pinned deployment is not usable (e.g. on cooldown).
+                        # Drop the stale pin so the post-call hook re-pins to the
+                        # deployment actually chosen. Without this, first-writer-wins
+                        # keeps the dead row for the rest of the TTL and every call
+                        # re-shuffles (see #45145).
+                        await self._drop_stale_pin(cache_key=session_cache_key)
                         verbose_router_logger.debug(
                             "DeploymentAffinityCheck: session-id pinned deployment=%s not found in healthy_deployments",
                             session_model_id,
