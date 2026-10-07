@@ -2,14 +2,11 @@
 #    This tests if get_optional_params works as expected
 import asyncio
 import inspect
-import os
-import sys
 import time
 import traceback
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -161,13 +158,13 @@ def test_allowed_openai_params_does_not_forward_unset_params():
     added ``optional_params["enable_thinking"] = None`` which then
     crashed the openai client.
     """
-    from litellm.utils import _apply_openai_param_overrides
+    from litellm.utils import apply_openai_param_overrides
 
     chat_template_kwargs = {"enable_thinking": False}
     optional_params: dict = {}
     non_default_params = {"chat_template_kwargs": chat_template_kwargs}
 
-    result = _apply_openai_param_overrides(
+    result = apply_openai_param_overrides(
         optional_params=optional_params,
         non_default_params=non_default_params,
         allowed_openai_params=["chat_template_kwargs", "enable_thinking"],
@@ -540,7 +537,7 @@ def test_dynamic_drop_params_e2e():
     ) as mock_response:
         try:
             response = litellm.completion(
-                model="command-r",
+                model="command-r-08-2024",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 response_format={"key": "value"},
                 drop_params=True,
@@ -559,7 +556,7 @@ def test_dynamic_pass_additional_params():
     ) as mock_response:
         try:
             response = litellm.completion(
-                model="command-r",
+                model="command-r-08-2024",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 custom_param="test",
                 api_key="my-custom-key",
@@ -609,7 +606,7 @@ def test_dynamic_drop_params_parallel_tool_calls():
     ) as mock_response:
         try:
             response = litellm.completion(
-                model="command-r",
+                model="command-r-08-2024",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 parallel_tool_calls=True,
                 drop_params=True,
@@ -666,7 +663,7 @@ def test_dynamic_drop_additional_params_e2e():
     ) as mock_response:
         try:
             response = litellm.completion(
-                model="command-r",
+                model="command-r-08-2024",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 response_format={"key": "value"},
                 additional_drop_params=["response_format"],
@@ -1137,7 +1134,7 @@ def test_ollama_pydantic_obj():
     )
 
 
-def test_gemini_frequency_penalty():
+def test_gemini_frequency_penalty_listed_in_vertex_ai_supported_params():
     from litellm.utils import get_supported_openai_params
 
     optional_params = get_supported_openai_params(

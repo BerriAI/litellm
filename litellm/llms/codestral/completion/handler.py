@@ -2,10 +2,12 @@
 ## handler file for TextCompletionCodestral Integration - https://codestral.com/
 
 import json
+from collections.abc import Callable
 from functools import partial
-from typing import Callable, List, Optional, Union
+from typing import Final, Protocol
 
-import httpx  # type: ignore
+import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -22,13 +24,60 @@ from litellm.types.utils import TextChoices
 from litellm.utils import CustomStreamWrapper, TextCompletionResponse
 
 
+class _CodestralChoiceMessage(TypedDict):
+    """`choices[].message` of a Codestral FIM completion."""
+
+    role: ReadOnly[NotRequired[str]]
+    content: ReadOnly[NotRequired[str | None]]
+
+
+class _CodestralChoice(TypedDict):
+    """One entry of `choices` in a Codestral FIM completion."""
+
+    index: ReadOnly[int]
+    message: ReadOnly[NotRequired[_CodestralChoiceMessage]]
+    finish_reason: ReadOnly[NotRequired[str | None]]
+    logprobs: ReadOnly[NotRequired[dict[str, object] | None]]
+
+
+class _CodestralUsage(TypedDict):
+    """Token accounting returned alongside a Codestral FIM completion."""
+
+    prompt_tokens: ReadOnly[NotRequired[int]]
+    completion_tokens: ReadOnly[NotRequired[int]]
+    total_tokens: ReadOnly[NotRequired[int]]
+
+
+class _CodestralCompletionResponse(TypedDict):
+    """Body returned by the Codestral `/v1/fim/completions` endpoint."""
+
+    id: ReadOnly[NotRequired[str]]
+    created: ReadOnly[NotRequired[int]]
+    model: ReadOnly[NotRequired[str]]
+    object: ReadOnly[NotRequired[str]]
+    usage: ReadOnly[NotRequired[_CodestralUsage]]
+    choices: ReadOnly[NotRequired[list[_CodestralChoice]]]
+
+
+class _CodestralHTTPResponse(Protocol):
+    """The Codestral completion response as this handler reads it."""
+
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def text(self) -> str: ...
+
+    def json(self) -> _CodestralCompletionResponse: ...
+
+
 class TextCompletionCodestralError(Exception):
     def __init__(
         self,
         status_code,
         message,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
     ):
         self.status_code = status_code
         self.message = message
@@ -55,12 +104,12 @@ async def make_call(
     messages: list,
     logging_obj,
 ):
-    response = await client.post(api_base, headers=headers, data=data, stream=True)
+    response: Final = await client.post(api_base, headers=headers, data=data, stream=True)
 
     if response.status_code != 200:
         raise TextCompletionCodestralError(status_code=response.status_code, message=response.text)
 
-    completion_stream = response.aiter_lines()
+    completion_stream: Final = response.aiter_lines()
     # LOGGING
     logging_obj.post_call(
         input=messages,
@@ -78,14 +127,14 @@ class CodestralTextCompletion:
 
     def _validate_environment(
         self,
-        api_key: Optional[str],
+        api_key: str | None,
         user_headers: dict,
     ) -> dict:
         if api_key is None:
             raise ValueError("Missing CODESTRAL_API_Key - Please add CODESTRAL_API_Key to your environment variables")
         headers = {
             "content-type": "application/json",
-            "Authorization": "Bearer {}".format(api_key),
+            "Authorization": f"Bearer {api_key}",
         }
         if user_headers is not None and isinstance(user_headers, dict):
             headers = {**headers, **user_headers}
@@ -97,7 +146,7 @@ class CodestralTextCompletion:
 
         Initial issue that prompted this - https://github.com/BerriAI/litellm/issues/763
         """
-        chat_template_tokens = [
+        chat_template_tokens: Final = [
             "<|assistant|>",
             "<|system|>",
             "<|user|>",
@@ -114,13 +163,13 @@ class CodestralTextCompletion:
     def process_text_completion_response(
         self,
         model: str,
-        response: httpx.Response,
+        response: _CodestralHTTPResponse,
         model_response: TextCompletionResponse,
         stream: bool,
         logging_obj: LiteLLMLogging,
         optional_params: dict,
         api_key: str,
-        data: Union[dict, str],
+        data: dict | str,
         messages: list,
         print_verbose,
         encoding,
@@ -140,12 +189,12 @@ class CodestralTextCompletion:
                 status_code=response.status_code,
             )
         try:
-            completion_response = response.json()
+            completion_response: Final = response.json()
         except Exception:
             raise TextCompletionCodestralError(message=response.text, status_code=422)
 
-        _original_choices = completion_response.get("choices", [])
-        _choices: List[TextChoices] = []
+        _original_choices: Final = completion_response.get("choices", [])
+        _choices: Final[list[TextChoices]] = []
         for choice in _original_choices:
             # This is what 1 choice looks like from codestral API
             # {
@@ -173,7 +222,7 @@ class CodestralTextCompletion:
 
             _choices.append(_choice)
 
-        _response = litellm.TextCompletionResponse(
+        _response: Final = litellm.TextCompletionResponse(
             id=completion_response.get("id"),
             choices=_choices,
             created=completion_response.get("created"),
@@ -194,14 +243,14 @@ class CodestralTextCompletion:
         print_verbose: Callable,
         encoding,
         api_key: str,
-        logging_obj,
+        logging_obj: LiteLLMLogging,
         optional_params: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
         headers: dict = {},
-    ) -> Union[TextCompletionResponse, CustomStreamWrapper]:
+    ) -> TextCompletionResponse | CustomStreamWrapper:
         headers = self._validate_environment(api_key, headers)
 
         if optional_params.pop("custom_endpoint", None) is True:
@@ -211,7 +260,7 @@ class CodestralTextCompletion:
 
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
-            model_prompt_details = custom_prompt_dict[model]
+            model_prompt_details: Final = custom_prompt_dict[model]
             prompt = custom_prompt(
                 role_dict=model_prompt_details["roles"],
                 initial_prompt_value=model_prompt_details["initial_prompt_value"],
@@ -222,21 +271,21 @@ class CodestralTextCompletion:
             prompt = prompt_factory(model=model, messages=messages)
 
         ## Load Config
-        config = litellm.CodestralTextCompletionConfig.get_config()
+        config: Final = litellm.CodestralTextCompletionConfig.get_config()
         for k, v in config.items():
             if (
                 k not in optional_params
             ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                 optional_params[k] = v
 
-        stream = optional_params.pop("stream", False)
+        stream: Final = optional_params.pop("stream", False)
 
-        data = {
+        data: Final = {
             "model": model,
             "prompt": prompt,
             **optional_params,
         }
-        input_text = prompt
+        input_text: Final = prompt
         ## LOGGING
         logging_obj.pre_call(
             input=input_text,
@@ -267,7 +316,7 @@ class CodestralTextCompletion:
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
-                )  # type: ignore
+                )
             else:
                 ### ASYNC COMPLETION
                 return self.async_completion(
@@ -286,7 +335,7 @@ class CodestralTextCompletion:
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
-                )  # type: ignore
+                )
 
         ### SYNC STREAMING
         if stream is True:
@@ -296,7 +345,7 @@ class CodestralTextCompletion:
                 data=json.dumps(data),
                 stream=stream,
             )
-            _response = CustomStreamWrapper(
+            _response: Final = CustomStreamWrapper(
                 response.iter_lines(),
                 model,
                 custom_llm_provider="codestral",
@@ -315,7 +364,7 @@ class CodestralTextCompletion:
             response=response,
             model_response=model_response,
             stream=optional_params.get("stream", False),
-            logging_obj=logging_obj,  # type: ignore
+            logging_obj=logging_obj,
             optional_params=optional_params,
             api_key=api_key,
             data=data,
@@ -338,25 +387,25 @@ class CodestralTextCompletion:
         stream,
         data: dict,
         optional_params: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         litellm_params=None,
         logger_fn=None,
         headers={},
     ) -> TextCompletionResponse:
-        async_handler = get_async_httpx_client(
+        async_handler: Final = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.TEXT_COMPLETION_CODESTRAL,
             params={"timeout": timeout},
         )
         try:
-            response = await async_handler.post(api_base, headers=headers, data=json.dumps(data))
+            response: Final = await async_handler.post(api_base, headers=headers, data=json.dumps(data))
         except httpx.HTTPStatusError as e:
             raise TextCompletionCodestralError(
                 status_code=e.response.status_code,
-                message="HTTPStatusError - {}".format(e.response.text),
+                message=f"HTTPStatusError - {e.response.text}",
             )
         except Exception as e:
             raise TextCompletionCodestralError(
-                status_code=500, message="{}".format(str(e))
+                status_code=500, message=f"{e}"
             )  # don't use verbose_logger.exception, if exception is raised
         return self.process_text_completion_response(
             model=model,
@@ -382,9 +431,9 @@ class CodestralTextCompletion:
         print_verbose: Callable,
         encoding,
         api_key,
-        logging_obj,
+        logging_obj: LiteLLMLogging,
         data: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         optional_params=None,
         litellm_params=None,
         logger_fn=None,
@@ -392,7 +441,7 @@ class CodestralTextCompletion:
     ) -> CustomStreamWrapper:
         data["stream"] = True
 
-        streamwrapper = CustomStreamWrapper(
+        streamwrapper: Final = CustomStreamWrapper(
             completion_stream=None,
             make_call=partial(
                 make_call,

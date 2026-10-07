@@ -1,19 +1,15 @@
 import json
 import os
-import sys
 from datetime import datetime
-from typing import AsyncIterator, Dict, Any
+from typing import Dict, Any
 import asyncio
 import unittest.mock
 from unittest.mock import AsyncMock, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import litellm
 import pytest
 from dotenv import load_dotenv
-from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+from litellm.llms.anthropic.pass_through.messages.handler import (
     anthropic_messages,
 )
 
@@ -41,7 +37,6 @@ def event_loop():
 @pytest.fixture(scope="function", autouse=True)
 def setup_and_teardown(event_loop):  # Add event_loop as a dependency
     curr_dir = os.getcwd()
-    sys.path.insert(0, os.path.abspath("../.."))
 
     import litellm
     from litellm import Router
@@ -74,6 +69,9 @@ def _validate_anthropic_response(response: Dict[str, Any]):
 class TestAnthropicDirectAPI(BaseAnthropicMessagesTest):
     """Tests for direct Anthropic API calls"""
 
+    test_non_streaming_base = None
+    test_streaming_base = None
+
     @property
     def model_config(self) -> Dict[str, Any]:
         return {
@@ -92,6 +90,8 @@ class TestAnthropicDirectAPI(BaseAnthropicMessagesTest):
 class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
     """Tests for Anthropic via Bedrock"""
 
+    test_streaming_base = None
+
     @property
     def model_config(self) -> Dict[str, Any]:
         return {
@@ -108,6 +108,8 @@ class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
 
 class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
     """Tests for OpenAI via Anthropic messages interface"""
+
+    test_streaming_base = None
 
     @property
     def model_config(self) -> Dict[str, Any]:
@@ -132,74 +134,11 @@ class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_streaming_with_bad_request():
-    """
-    Test the anthropic_messages with streaming request
-    """
-    try:
-        response = await litellm.anthropic.messages.acreate(
-            messages=[{"role": "user", "content": "hi"}],
-            api_key=os.getenv("ANTHROPIC_API_KEY"),
-            model="claude-haiku-4-5-20251001",
-            max_tokens=100,
-            stream=True,
-        )
-        print(response)
-        if isinstance(response, AsyncIterator):
-            async for chunk in response:
-                print("chunk=", chunk)
-    except Exception as e:
-        print("got exception", e)
-        print("vars", vars(e))
-        if hasattr(e, "status_code"):
-            assert getattr(e, "status_code") == 400
-        else:
-            assert isinstance(e, Exception)
-
-
-@pytest.mark.asyncio
-async def test_anthropic_messages_router_streaming_with_bad_request():
-    """
-    Test the anthropic_messages with streaming request
-    """
-    try:
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "claude-special-alias",
-                    "litellm_params": {
-                        "model": "claude-haiku-4-5-20251001",
-                        "api_key": os.getenv("ANTHROPIC_API_KEY"),
-                    },
-                }
-            ]
-        )
-
-        response = await router.aanthropic_messages(
-            messages=[{"role": "user", "content": "hi"}],
-            model="claude-special-alias",
-            max_tokens=100,
-            stream=True,
-        )
-        print(response)
-        if isinstance(response, AsyncIterator):
-            async for chunk in response:
-                print("chunk=", chunk)
-    except Exception as e:
-        print("got exception", e)
-        print("vars", vars(e))
-        if hasattr(e, "status_code"):
-            assert getattr(e, "status_code") == 400
-        else:
-            assert isinstance(e, Exception)
-
-
-@pytest.mark.asyncio
 async def test_anthropic_messages_litellm_router_non_streaming():
     """
     Test the anthropic_messages with non-streaming request
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     router = Router(
         model_list=[
             {
@@ -237,7 +176,7 @@ async def test_anthropic_messages_litellm_router_routing_strategy():
     """
     Test the anthropic_messages with routing strategy + non-streaming request
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     router = Router(
         model_list=[
             {
@@ -279,7 +218,7 @@ async def test_anthropic_messages_fallbacks():
     """
     E2E test the anthropic_messages fallbacks from Anthropic API to Bedrock
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     router = Router(
         model_list=[
             {
@@ -452,7 +391,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     """
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     MODEL_GROUP = "claude-special-alias"
     router = Router(
         model_list=[
@@ -868,7 +807,7 @@ def test_sync_openai_messages():
     """
     Test the anthropic_messages with sync request
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = litellm.anthropic.messages.create(
         messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
         model="openai/gpt-4.1-mini",

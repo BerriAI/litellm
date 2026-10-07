@@ -3,11 +3,9 @@ Tests for DuckDuckGo Search API integration.
 """
 
 import os
-import sys
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from tests.search_tests.base_search_unit_tests import BaseSearchTest
@@ -31,7 +29,7 @@ class TestDuckDuckGoSearch(BaseSearchTest):
         """
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         search_provider = self.get_search_provider()
         print("Search Provider=", search_provider)
 

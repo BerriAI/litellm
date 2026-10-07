@@ -11,8 +11,9 @@ import socket
 
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 from e2e_http import require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, LiteLLMParamsBody
 from quota_client import QuotaClient
@@ -23,7 +24,7 @@ BACKEND = "anthropic/claude-haiku-4-5-20251001"
 
 
 def _require_redis_reachable() -> None:
-    (host,) = require_env("REDIS_HOST")
+    host = os.environ["REDIS_HOST"]
     port = int((os.environ.get("REDIS_PORT") or "6379").strip() or "6379")
     try:
         with socket.create_connection((host, port), timeout=3):
@@ -39,6 +40,14 @@ class TestRedisBackedRateLimit:
     @pytest.mark.covers(
         "quota_management.ratelimit.redis_backed.blocks_over_limit",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_rpm_limit_one_blocks_second_call(
         self, client: QuotaClient, resources: ResourceManager

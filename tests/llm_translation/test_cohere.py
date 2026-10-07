@@ -1,16 +1,10 @@
-import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import json
 
 import pytest
@@ -18,7 +12,6 @@ import pytest
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from unittest.mock import AsyncMock, patch
-from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 litellm.num_retries = 3
@@ -274,7 +267,7 @@ async def test_cohere_request_body_with_allowed_params():
 
 
 def test_cohere_embedding_outout_dimensions():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = embedding(
         model="cohere/embed-v4.0", input="Hello, world!", dimensions=512
     )

@@ -1,6 +1,8 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageObject, ImageResponse
@@ -9,10 +11,13 @@ from .transformation import FalAIBaseConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class FalAIIdeogramV3Config(FalAIBaseConfig):
@@ -38,7 +43,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         "1024x1536": "portrait_16_9",
     }
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Ideogram v3 accepts the core OpenAI image parameters.
         """
@@ -60,9 +65,9 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         Map OpenAI-style parameters onto Ideogram's request schema.
         """
 
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
-        for k in non_default_params.keys():
+        for k in non_default_params:
             if k in optional_params:
                 continue
 
@@ -87,7 +92,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
 
         return optional_params
 
-    def _map_image_size(self, size: Any) -> Any:
+    def _map_image_size(self, size: Any) -> object:
         if isinstance(size, dict):
             width = size.get("width")
             height = size.get("height")
@@ -98,7 +103,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         if not isinstance(size, str):
             return size
 
-        normalized = size.strip()
+        normalized: Final = size.strip()
         if normalized in self._OPENAI_SIZE_TO_IMAGE_SIZE:
             return self._OPENAI_SIZE_TO_IMAGE_SIZE[normalized]
 
@@ -148,16 +153,16 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Parse Ideogram v3 responses which contain a list of File objects.
         """
 
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -168,7 +173,8 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         if not model_response.data:
             model_response.data = []
 
-        images = response_data.get("images", [])
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        images: Final = response_object.get("images", [])
         if isinstance(images, list):
             for image_entry in images:
                 if isinstance(image_entry, dict):
@@ -183,7 +189,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
                     )
                 )
 
-        if hasattr(model_response, "_hidden_params") and "seed" in response_data:
-            model_response._hidden_params["seed"] = response_data["seed"]
+        if hasattr(model_response, "_hidden_params") and "seed" in response_object:
+            model_response._hidden_params["seed"] = response_object["seed"]
 
         return model_response

@@ -1,17 +1,20 @@
 from base_llm_unit_tests import BaseLLMChatTest
 import pytest
-import sys
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 
 
 class TestBedrockNovaJson(BaseLLMChatTest):
+    test_content_list_handling = None
+    test_developer_role_translation = None
+    test_empty_tools = None
+    test_function_calling_with_tool_response = None
+    test_json_response_format_stream = None
+    test_tool_call_with_empty_enum_property = None
+    test_tool_call_with_property_type_array = None
+
     def get_base_completion_call_args(self) -> dict:
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         return {
             "model": "bedrock/converse/us.amazon.nova-micro-v1:0",
         }

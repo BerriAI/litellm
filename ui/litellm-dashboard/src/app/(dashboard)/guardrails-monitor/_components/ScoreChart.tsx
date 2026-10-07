@@ -33,7 +33,7 @@ export function ScoreChart({ data }: ScoreChartProps) {
               className="h-full"
             />
           ) : (
-            <div className="flex items-center justify-center h-full text-sm text-gray-500">
+            <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
               No chart data for this period
             </div>
           )}

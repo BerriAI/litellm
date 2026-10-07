@@ -7,15 +7,12 @@ Tests:
 """
 
 import json
-import os
-import sys
 import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
@@ -28,6 +25,7 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketp
     register_plugin,
     get_marketplace,
 )
+from tests._master_key import MASTER_KEY
 
 
 class MockPluginRecord:
@@ -143,7 +141,7 @@ def mock_prisma_client():
 async def test_register_plugin(mock_prisma_client):
     """Test registering a plugin in the marketplace."""
     setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
     await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -159,7 +157,7 @@ async def test_register_plugin(mock_prisma_client):
 
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="test-user",
     )
 
@@ -168,11 +166,11 @@ async def test_register_plugin(mock_prisma_client):
         user_api_key_dict=user_api_key_dict,
     )
 
-    assert response["status"] == "success"
-    assert response["action"] == "created"
-    assert response["plugin"]["name"] == plugin_name
-    assert response["plugin"]["version"] == "1.0.0"
-    assert response["plugin"]["enabled"] is True
+    assert response.status == "success"
+    assert response.action == "created"
+    assert response.plugin.name == plugin_name
+    assert response.plugin.version == "1.0.0"
+    assert response.plugin.enabled is True
 
     # Verify the plugin was stored in the mock
     stored_plugin = (
@@ -193,7 +191,7 @@ async def test_register_plugin(mock_prisma_client):
 async def test_get_marketplace(mock_prisma_client):
     """Test getting marketplace.json with registered plugins."""
     setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
     await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -209,7 +207,7 @@ async def test_get_marketplace(mock_prisma_client):
 
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="test-user",
     )
 
@@ -219,7 +217,7 @@ async def test_get_marketplace(mock_prisma_client):
     )
 
     # Now get the marketplace
-    response = await get_marketplace()
+    response = await get_marketplace(request=MagicMock())
 
     # Response is a JSONResponse, get the body
     body = json.loads(response.body.decode())
@@ -246,7 +244,7 @@ async def test_get_marketplace(mock_prisma_client):
 async def test_register_plugin_git_subdir(mock_prisma_client):
     """Test registering a plugin with git-subdir source type."""
     setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
     await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -265,7 +263,7 @@ async def test_register_plugin_git_subdir(mock_prisma_client):
 
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="test-user",
     )
 
@@ -274,16 +272,16 @@ async def test_register_plugin_git_subdir(mock_prisma_client):
         user_api_key_dict=user_api_key_dict,
     )
 
-    assert response["status"] == "success"
-    assert response["action"] == "created"
-    assert response["plugin"]["name"] == plugin_name
-    assert response["plugin"]["source"]["source"] == "git-subdir"
+    assert response.status == "success"
+    assert response.action == "created"
+    assert response.plugin.name == plugin_name
+    assert response.plugin.source["source"] == "git-subdir"
     assert (
-        response["plugin"]["source"]["url"]
+        response.plugin.source["url"]
         == "https://github.com/test-org/monorepo.git"
     )
-    assert response["plugin"]["source"]["path"] == "plugins/my-plugin"
-    assert response["plugin"]["enabled"] is True
+    assert response.plugin.source["path"] == "plugins/my-plugin"
+    assert response.plugin.enabled is True
 
     # Cleanup
     await mock_prisma_client.db.litellm_claudecodeplugintable.delete(

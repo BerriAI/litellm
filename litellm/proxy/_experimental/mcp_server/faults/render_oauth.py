@@ -6,18 +6,22 @@ all derive from the fault tag; exhaustive matches keep a new fault arm from ship
 
 from __future__ import annotations
 
+from typing import Final
+
 from fastapi.responses import JSONResponse
 from typing_extensions import assert_never
 
-from litellm.proxy._experimental.mcp_server.faults.types import UpstreamOAuthFault
+from litellm.proxy._experimental.mcp_server.faults.types import CallerRejected, UpstreamOAuthFault
 from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
 
 
 def _gateway_rejected_description(code: str) -> str:
     if code == "invalid_target":
         return (
-            "the upstream authorization server rejected the request (invalid_target); "
-            "it may require RFC 8707 resource indicators, which the gateway does not send yet"
+            "the upstream authorization server rejected the request (invalid_target); it did not "
+            "accept this server's RFC 8707 resource indicator. Set upstream_resource on the MCP "
+            "server to the resource identifier the authorization server expects, or unset it if "
+            "that authorization server does not support resource indicators"
         )
     return (
         f"the upstream authorization server rejected the gateway's configured client credentials "
@@ -31,6 +35,24 @@ def _upstream_reported_status_and_description(code: str) -> tuple[int, str]:
     return 502, "the upstream authorization server reported an internal error"
 
 
+def _registration_refused_description(status_code: int) -> str:
+    return (
+        f"the upstream authorization server refused dynamic client registration (HTTP {status_code}). "
+        "This provider may require a pre-registered OAuth client. Configure client_id and, if required "
+        "by the provider, client_secret for this MCP server to skip dynamic registration"
+    )
+
+
+def _render_caller_rejected(fault: CallerRejected) -> JSONResponse:
+    content: Final = {
+        "error": fault.code,
+        **({"error_description": fault.description} if fault.description else {}),
+        **({"error_uri": fault.error_uri} if fault.error_uri else {}),
+    }
+    status_code: Final = 401 if fault.code == "invalid_client" else 400
+    return JSONResponse(status_code=status_code, content=content, headers=TOKEN_NO_CACHE_HEADERS)
+
+
 def render_token_fault(fault: UpstreamOAuthFault) -> JSONResponse:
     """RFC 6749 §5.2 response for a token-endpoint fault. Caller-actionable rejections relay the
     upstream's code on the status that code implies (401 for invalid_client per §5.2, else 400);
@@ -38,13 +60,7 @@ def render_token_fault(fault: UpstreamOAuthFault) -> JSONResponse:
     blamed for, or shown the internals of, a failure only the operator can fix."""
     match fault.tag:
         case "caller_rejected":
-            content = {
-                "error": fault.code,
-                **({"error_description": fault.description} if fault.description else {}),
-                **({"error_uri": fault.error_uri} if fault.error_uri else {}),
-            }
-            status_code = 401 if fault.code == "invalid_client" else 400
-            return JSONResponse(status_code=status_code, content=content, headers=TOKEN_NO_CACHE_HEADERS)
+            return _render_caller_rejected(fault)
         case "gateway_rejected":
             return JSONResponse(
                 status_code=502,
@@ -61,6 +77,13 @@ def render_token_fault(fault: UpstreamOAuthFault) -> JSONResponse:
                 content={"error": fault.code, "error_description": description},
                 headers=TOKEN_NO_CACHE_HEADERS,
             )
+        case "upstream_registration_refused":
+            return _render_caller_rejected(
+                CallerRejected(
+                    code="unauthorized_client",
+                    description=_registration_refused_description(fault.status_code),
+                )
+            )
         case "upstream_protocol_fault":
             return JSONResponse(
                 status_code=502,
@@ -74,15 +97,17 @@ def render_token_fault(fault: UpstreamOAuthFault) -> JSONResponse:
 def dcr_fault_detail(fault: UpstreamOAuthFault) -> tuple[int, str]:
     """Status and detail string for a registration fault, raised as HTTPException by the caller.
     RFC 7591 §3.2.2 defines registration errors as 400, so a contract-conformant rejection is 400
-    regardless of the status the upstream chose; everything else is a 502 upstream fault."""
+    regardless of the upstream status; a bare 401/403 is a registration refusal rendered as 403."""
     match fault.tag:
         case "caller_rejected":
-            detail = f"{fault.code}: {fault.description}" if fault.description else fault.code
+            detail: Final = f"{fault.code}: {fault.description}" if fault.description else fault.code
             return 400, detail
         case "gateway_rejected":
             return 502, _gateway_rejected_description(fault.code)
         case "upstream_reported_fault":
             return _upstream_reported_status_and_description(fault.code)
+        case "upstream_registration_refused":
+            return 403, _registration_refused_description(fault.status_code)
         case "upstream_protocol_fault":
             return 502, fault.note
         case _:

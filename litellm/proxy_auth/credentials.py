@@ -7,7 +7,7 @@ It follows the same TokenCredential protocol used by Azure SDK.
 
 import time
 from dataclasses import dataclass
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 
 @dataclass
@@ -50,6 +50,22 @@ class TokenCredential(Protocol):
         ...
 
 
+class _AzureAccessToken(Protocol):
+    """The two attributes :class:`AzureADCredential` reads off an azure-identity token."""
+
+    @property
+    def token(self) -> str: ...
+
+    @property
+    def expires_on(self) -> int: ...
+
+
+class _AzureTokenCredential(Protocol):
+    """The single method :class:`AzureADCredential` calls on the credential it wraps."""
+
+    def get_token(self, *scopes: str) -> _AzureAccessToken: ...
+
+
 class AzureADCredential:
     """
     Wrapper for Azure Identity credentials.
@@ -71,7 +87,7 @@ class AzureADCredential:
         cred = AzureADCredential(credential=azure_cred)
     """
 
-    def __init__(self, credential: Optional[Any] = None):
+    def __init__(self, credential: _AzureTokenCredential | None = None):
         """
         Initialize with an optional Azure credential.
 
@@ -79,7 +95,7 @@ class AzureADCredential:
             credential: An azure-identity credential object. If None,
                        DefaultAzureCredential will be used on first token request.
         """
-        self._credential: Any = credential
+        self._credential: _AzureTokenCredential | None = credential
         self._initialized = credential is not None
 
     def get_token(self, scope: str) -> AccessToken:
@@ -95,19 +111,29 @@ class AzureADCredential:
         Raises:
             ImportError: If azure-identity is not installed.
         """
-        if not self._initialized:
-            try:
-                from azure.identity import DefaultAzureCredential
-
-                self._credential = DefaultAzureCredential()
-                self._initialized = True
-            except ImportError:
-                raise ImportError(
-                    "azure-identity is required for AzureADCredential. Install it with: pip install azure-identity"
-                )
-
-        result = self._credential.get_token(scope)
+        result: Final = self._resolve_credential().get_token(scope)
         return AccessToken(token=result.token, expires_on=result.expires_on)
+
+    def _resolve_credential(self) -> _AzureTokenCredential:
+        """Return the wrapped credential, building the Azure default chain on first use.
+
+        Raises:
+            ImportError: If azure-identity is not installed.
+        """
+        existing: Final = self._credential
+        if existing is not None:
+            return existing
+        try:
+            from azure.identity import DefaultAzureCredential
+
+            created: Final = DefaultAzureCredential()
+        except ImportError:
+            raise ImportError(
+                "azure-identity is required for AzureADCredential. Install it with: pip install azure-identity"
+            )
+        self._credential = created
+        self._initialized = True
+        return created
 
 
 class GenericOAuth2Credential:
@@ -137,7 +163,7 @@ class GenericOAuth2Credential:
         self.client_id = client_id
         self.client_secret = client_secret
         self.token_url = token_url
-        self._cached_token: Optional[AccessToken] = None
+        self._cached_token: AccessToken | None = None
 
     def get_token(self, scope: str) -> AccessToken:
         """
@@ -157,7 +183,7 @@ class GenericOAuth2Credential:
 
         import httpx
 
-        response = httpx.post(
+        response: Final = httpx.post(
             self.token_url,
             data={
                 "grant_type": "client_credentials",
@@ -167,7 +193,7 @@ class GenericOAuth2Credential:
             },
         )
         response.raise_for_status()
-        data = response.json()
+        data: Final = response.json()
 
         self._cached_token = AccessToken(
             token=data["access_token"],
@@ -214,7 +240,7 @@ class ProxyAuthHandler:
         """
         self.credential = credential
         self.scope = scope
-        self._cached_token: Optional[AccessToken] = None
+        self._cached_token: AccessToken | None = None
 
     def get_token(self) -> AccessToken:
         """
@@ -228,12 +254,12 @@ class ProxyAuthHandler:
             self._cached_token = self.credential.get_token(self.scope)
         return self._cached_token
 
-    def get_auth_headers(self) -> dict:
+    def get_auth_headers(self) -> dict[str, str]:
         """
         Get HTTP headers for authentication.
 
         Returns:
             Dict with Authorization header containing Bearer token.
         """
-        token = self.get_token()
+        token: Final = self.get_token()
         return {"Authorization": f"Bearer {token.token}"}

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import OrganizationFilters, { FilterState } from "./OrganizationFilters";
@@ -64,7 +64,7 @@ describe("OrganizationFilters", () => {
     );
 
     const input = screen.getByPlaceholderText("Search by Organization Name");
-    await user.type(input, "test");
+    fireEvent.change(input, { target: { value: "test" } });
 
     await waitFor(
       () => {
@@ -106,7 +106,7 @@ describe("OrganizationFilters", () => {
       org_alias: "test org",
     };
 
-    render(
+    const { container } = render(
       <OrganizationFilters
         filters={filtersWithActive}
         showFilters={false}
@@ -116,8 +116,7 @@ describe("OrganizationFilters", () => {
       />,
     );
 
-    const filtersButton = screen.getByRole("button", { name: /^filters$/i });
-    const badgeWrapper = filtersButton.closest(".ant-badge");
-    expect(badgeWrapper).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^filters$/i })).toBeInTheDocument();
+    expect(container.querySelector("sup")).toBeInTheDocument();
   });
 });

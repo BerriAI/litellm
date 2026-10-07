@@ -3,17 +3,22 @@
 import React, { useCallback, useEffect, useState } from "react";
 
 import { getGeneralSettingsCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
+import { toast } from "@/lib/toast";
 import {
   PromptCachingPanel,
   generalSettingsItem,
 } from "@/app/(dashboard)/router-settings/_components/general_settings";
+import CacheLeakageCard from "./CacheLeakageCard";
+import PromptCachingRequestsTable from "./PromptCachingRequestsTable";
+import { DailyActivityRange } from "./useDailyActivityRange";
 
 interface PromptCachingTabProps {
   accessToken: string | null;
+  activity: DailyActivityRange;
 }
 
-const PromptCachingTab: React.FC<PromptCachingTabProps> = ({ accessToken }) => {
+const PromptCachingTab: React.FC<PromptCachingTabProps> = ({ accessToken, activity }) => {
   const [settings, setSettings] = useState<generalSettingsItem[]>([]);
 
   const loadSettings = useCallback(() => {
@@ -24,7 +29,7 @@ const PromptCachingTab: React.FC<PromptCachingTabProps> = ({ accessToken }) => {
       .then((data: generalSettingsItem[]) => setSettings(data))
       .catch((error) => {
         console.error("Failed to load prompt caching settings:", error);
-        NotificationsManager.fromBackend("Failed to load prompt caching settings");
+        toast.fromError("Failed to load prompt caching settings");
       });
   }, [accessToken]);
 
@@ -43,8 +48,14 @@ const PromptCachingTab: React.FC<PromptCachingTabProps> = ({ accessToken }) => {
   }
 
   return (
-    <div className="w-full">
+    <div className="w-full space-y-6">
       <PromptCachingPanel accessToken={accessToken} settings={settings} onChange={handleChange} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">Date range for requests and cache leakage</p>
+        <AdvancedDatePicker value={activity.dateValue} onValueChange={activity.onDateChange} />
+      </div>
+      <PromptCachingRequestsTable accessToken={accessToken} dateValue={activity.dateValue} />
+      <CacheLeakageCard activity={activity} />
     </div>
   );
 };

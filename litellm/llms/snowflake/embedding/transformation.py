@@ -1,6 +1,8 @@
-from typing import Optional, Union
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -8,7 +10,9 @@ from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
 
-from ..utils import SnowflakeException, SnowflakeBaseConfig
+from ..utils import SnowflakeBaseConfig, SnowflakeException
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class SnowflakeEmbeddingConfig(SnowflakeBaseConfig, BaseEmbeddingConfig):
@@ -18,12 +22,12 @@ class SnowflakeEmbeddingConfig(SnowflakeBaseConfig, BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
 
@@ -44,16 +48,16 @@ class SnowflakeEmbeddingConfig(SnowflakeBaseConfig, BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
     ) -> EmbeddingResponse:
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
         # convert embeddings to 1d array
         for item in response_json["data"]:
             item["embedding"] = item["embedding"][0]
-        returned_response = EmbeddingResponse(**response_json)
+        returned_response: Final = EmbeddingResponse.model_validate(_JSON_OBJECT.validate_python(response_json))
 
         returned_response.model = "snowflake/" + (returned_response.model or "")
 
@@ -61,7 +65,5 @@ class SnowflakeEmbeddingConfig(SnowflakeBaseConfig, BaseEmbeddingConfig):
             returned_response._hidden_params["model"] = model
         return returned_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return SnowflakeException(message=error_message, status_code=status_code, headers=headers)

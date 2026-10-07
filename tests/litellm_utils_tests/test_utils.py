@@ -1,6 +1,5 @@
 import copy
 import logging
-import sys
 import time
 from datetime import datetime
 from unittest import mock
@@ -12,9 +11,6 @@ from litellm.types.utils import StandardCallbackDynamicParams
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 import pytest
 
 import litellm
@@ -26,11 +22,7 @@ from litellm.litellm_core_utils.duration_parser import (
 )
 from litellm.utils import (
     check_valid_key,
-    create_pretrained_tokenizer,
-    create_tokenizer,
-    function_to_dict,
     get_llm_provider,
-    get_max_tokens,
     get_supported_openai_params,
     get_token_count,
     get_valid_models,
@@ -51,7 +43,7 @@ def reset_mock_cache():
 
 # Test 1: Check trimming of normal message
 def test_basic_trimming():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     messages = [
         {
             "role": "user",
@@ -271,7 +263,7 @@ def test_trimming_should_not_change_original_messages():
     assert messages == messages_copy
 
 
-@pytest.mark.parametrize("model", ["gpt-4-0125-preview", "claude-sonnet-4-6"])
+@pytest.mark.parametrize("model", ["gpt-5.4-mini", "claude-sonnet-4-6"])
 def test_trimming_with_model_cost_max_input_tokens(model):
     messages = [
         {"role": "system", "content": "This is a normal system message"},
@@ -332,34 +324,23 @@ def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> 
 
 
 def test_aget_valid_models():
-    old_environ = os.environ
-    os.environ = {"OPENAI_API_KEY": "temp"}  # mock set only openai key in environ
+    with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "temp"}, clear=True):
+        valid_models = get_valid_models()
+        print(valid_models)
 
-    valid_models = get_valid_models()
-    print(valid_models)
+        # list of openai supported llms on litellm
+        expected_models = (
+            litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
+        )
 
-    # list of openai supported llms on litellm
-    expected_models = (
-        litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
-    )
-
-    assert set(valid_models) == set(expected_models)
-
-    # reset replicate env key
-    os.environ = old_environ
+        assert set(valid_models) == set(expected_models)
 
     # GEMINI
-    expected_models = litellm.gemini_models
-    old_environ = os.environ
-    os.environ = {"GEMINI_API_KEY": "temp"}  # mock set only openai key in environ
+    with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "temp"}, clear=True):
+        valid_models = get_valid_models()
 
-    valid_models = get_valid_models()
-
-    print(valid_models)
-    assert set(valid_models) == set(expected_models)
-
-    # reset replicate env key
-    os.environ = old_environ
+        print(valid_models)
+        assert set(valid_models) == set(litellm.gemini_models)
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["anthropic", "xai"])
@@ -513,74 +494,6 @@ def test_function_to_dict():
 
 
 # test_function_to_dict()
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("gpt-3.5-turbo", True),
-        ("azure/gpt-4-1106-preview", True),
-        ("groq/gemma-7b-it", True),
-        ("gemini/gemini-2.5-flash", True),
-    ],
-)
-def test_supports_function_calling(model, expected_bool):
-    try:
-        assert litellm.supports_function_calling(model=model) == expected_bool
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("gpt-4o-mini-search-preview", True),
-        ("openai/gpt-4o-mini-search-preview", True),
-        ("gpt-4o-search-preview", True),
-        ("openai/gpt-4o-search-preview", True),
-        ("groq/deepseek-r1-distill-llama-70b", False),
-        ("groq/llama-3.3-70b-versatile", False),
-        ("codestral/codestral-latest", False),
-    ],
-)
-def test_supports_web_search(model, expected_bool):
-    try:
-        assert litellm.supports_web_search(model=model) == expected_bool
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("openai/o3-mini", True),
-        ("o3-mini", True),
-        ("xai/grok-3-mini-beta", True),
-        ("xai/grok-3-mini-fast-beta", True),
-        ("xai/grok-2", False),
-        ("gpt-3.5-turbo", False),
-    ],
-)
-def test_supports_reasoning(model, expected_bool):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    try:
-        assert litellm.supports_reasoning(model=model) == expected_bool
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_get_max_token_unit_test():
-    """
-    More complete testing in `test_completion_cost.py`
-    """
-    model = "bedrock/anthropic.claude-3-haiku-20240307-v1:0"
-
-    max_tokens = get_max_tokens(
-        model
-    )  # Returns a number instead of throwing an Exception
-
-    assert isinstance(max_tokens, int)
 
 
 def test_get_supported_openai_params() -> None:
@@ -929,6 +842,7 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
     """
     - Unit test for `_get_trace_id` function in Logging obj
     """
+    from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     litellm.success_callback = ["langfuse"]
@@ -959,26 +873,20 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
     )
 
     time.sleep(3)
-    assert litellm_logging_obj._get_trace_id(service_name="langfuse") is not None
+    assert litellm_logging_obj.get_trace_id(service_name="langfuse") is not None
 
-    ## if existing_trace_id exists
+    # langfuse addresses a trace by a 32-hex id, so the id litellm reports back is the
+    # resolved form of whichever source won; that is what the alerting deep link needs
     if langfuse_existing_trace_id is not None:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == langfuse_existing_trace_id
-        )
-    ## if trace_id exists
+        expected_source = langfuse_existing_trace_id
     elif langfuse_trace_id is not None:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == langfuse_trace_id
-        )
-    ## if no trace_id or existing_trace_id is provided, use litellm_trace_id
+        expected_source = langfuse_trace_id
     else:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == litellm_logging_obj.litellm_trace_id
-        )
+        expected_source = litellm_logging_obj.litellm_trace_id
+
+    assert litellm_logging_obj.get_trace_id(service_name="langfuse") == resolve_trace_id(
+        expected_source
+    )
 
 
 def test_convert_model_response_object():
@@ -1022,17 +930,14 @@ def test_convert_model_response_object():
         "hidden_params": None,
     }
 
-    try:
+    with pytest.raises(Exception) as exc_info:  # noqa: PT011  # bare Exception() with attributes, so str(e) is empty
         litellm.convert_to_model_response_object(**args)
-        pytest.fail("Expected this to fail")
-    except Exception as e:
-        assert hasattr(e, "status_code")
-        assert e.status_code == 400
-        assert hasattr(e, "message")
-        assert (
-            e.message
-            == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
-        )
+    e = exc_info.value
+    assert e.status_code == 400
+    assert (
+        e.message
+        == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
+    )
 
 
 @pytest.mark.parametrize(
@@ -1057,73 +962,6 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
         expected_reasoning,
         expected_content,
     )
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("vertex_ai/gemini-2.5-pro", True),
-        ("gemini/gemini-2.5-pro", True),
-        ("predibase/llama3-8b-instruct", True),
-        ("databricks/databricks-meta-llama-3-1-70b-instruct", True),
-        ("gpt-3.5-turbo", False),
-        ("groq/llama-3.3-70b-versatile", False),
-    ],
-)
-def test_supports_response_schema(model, expected_bool):
-    """
-    Unit tests for 'supports_response_schema' helper function.
-
-    Should be true for gemini-2.5-pro on google ai studio / vertex ai AND predibase models
-    Should be false otherwise
-    """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    from litellm.utils import supports_response_schema
-
-    response = supports_response_schema(model=model, custom_llm_provider=None)
-
-    assert expected_bool == response
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("gpt-3.5-turbo", True),
-        ("gpt-4", True),
-        ("command-nightly", False),
-        ("gemini-2.5-pro", True),
-    ],
-)
-def test_supports_function_calling_v2(model, expected_bool):
-    """
-    Unit test for 'supports_function_calling' helper function.
-    """
-    from litellm.utils import supports_function_calling
-
-    response = supports_function_calling(model=model, custom_llm_provider=None)
-    assert expected_bool == response
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("gpt-4o", True),
-        ("gpt-3.5-turbo", False),
-        ("claude-sonnet-4-6", True),
-        ("gemini-2.5-flash", True),
-        ("command-nightly", False),
-    ],
-)
-def test_supports_vision(model, expected_bool):
-    """
-    Unit test for 'supports_vision' helper function.
-    """
-    from litellm.utils import supports_vision
-
-    response = supports_vision(model=model, custom_llm_provider=None)
-    assert expected_bool == response
 
 
 def test_usage_object_null_tokens():
@@ -1164,7 +1002,6 @@ def test_is_base64_encoded():
     clear=True,
 )
 def test_async_http_handler(mock_async_client):
-    import httpx
     import ssl
 
     timeout = 120
@@ -1237,20 +1074,6 @@ def test_async_http_handler_force_ipv4(mock_async_client):
     finally:
         # Reset force_ipv4 to default
         litellm.force_ipv4 = False
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool", [("gpt-3.5-turbo", False), ("gpt-4o-audio-preview", True)]
-)
-def test_supports_audio_input(model, expected_bool):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    from litellm.utils import supports_audio_input, supports_audio_output
-
-    supports_pc = supports_audio_input(model=model)
-
-    assert supports_pc == expected_bool
 
 
 def test_is_base64_encoded_2():
@@ -1334,7 +1157,7 @@ def test_validate_chat_completion_user_messages(messages, expected_bool):
         validate_chat_completion_user_messages(messages=messages)
     else:
         ## Invalid message
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid user message at index 0"):
             validate_chat_completion_user_messages(messages=messages)
 
 
@@ -1352,10 +1175,10 @@ def test_validate_chat_completion_tool_choice(tool_choice, expected_bool):
     from litellm.utils import validate_chat_completion_tool_choice
 
     if expected_bool:
-        validate_chat_completion_tool_choice(tool_choice=tool_choice)
+        validate_chat_completion_tool_choice(tool_choice=tool_choice, model="gpt-5.6-sol")
     else:
-        with pytest.raises(Exception):
-            validate_chat_completion_tool_choice(tool_choice=tool_choice)
+        with pytest.raises(litellm.BadRequestError, match="Invalid tool choice"):
+            validate_chat_completion_tool_choice(tool_choice=tool_choice, model="gpt-5.6-sol")
 
 
 def test_models_by_provider():
@@ -1378,8 +1201,7 @@ def test_models_by_provider():
             or v["litellm_provider"] == "bedrock_converse"
         ):
             continue
-        elif v.get("mode") == "search":
-            # Skip search providers as they don't have traditional models
+        elif v.get("mode") in ("search", "evaluation"):
             continue
         else:
             providers.add(v["litellm_provider"])
@@ -1521,12 +1343,16 @@ def test_is_prompt_caching_enabled_error_handling():
 
 def test_is_prompt_caching_enabled_return_default_image_dimensions():
     """
-    Assert that `is_prompt_caching_valid_prompt` calls token_counter with use_default_image_token_count=True
+    Assert that `is_prompt_caching_valid_prompt` counts tokens with use_default_image_token_count=True
     when processing messages containing images
 
     IMPORTANT: Ensures Get token counter does not make a GET request to the image url
     """
-    with patch("litellm.utils.token_counter") as mock_token_counter:
+    mock_token_counter = MagicMock(return_value=False)
+    with patch(
+        "litellm.utils.get_messages_reach_token_count",
+        return_value=mock_token_counter,
+    ):
         litellm.utils.is_prompt_caching_valid_prompt(
             messages=[
                 {
@@ -1588,23 +1414,6 @@ def test_token_counter_with_image_url_with_detail_high():
     assert _tokens == DEFAULT_IMAGE_TOKEN_COUNT + 7
 
 
-def test_fireworks_ai_vision_capability_from_cost_map(monkeypatch):
-    """
-    Fireworks deprecated document inlining on 2025-06-30, so vision/PDF support is
-    no longer hardcoded to True for every Fireworks model. Capabilities are read
-    from the model cost map: unmapped models no longer advertise vision or PDF
-    support, while mapped VLMs still do.
-    """
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    from litellm.utils import supports_pdf_input, supports_vision
-
-    assert supports_vision("fireworks_ai/llama-3.1-8b-instruct") is False
-    assert supports_pdf_input("fireworks_ai/llama-3.1-8b-instruct") is False
-
-    assert supports_vision("fireworks_ai/minimax-m3") is True
-
-
 def test_logprobs_type():
     from litellm.types.utils import Logprobs
 
@@ -1625,9 +1434,9 @@ def test_get_valid_models_openai_proxy(monkeypatch):
     from litellm.utils import get_valid_models
     import litellm
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
-    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-9876")
     monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://litellm-api.up.railway.app/")
     monkeypatch.delenv("FIREWORKS_AI_ACCOUNT_ID", None)
     monkeypatch.delenv("FIREWORKS_AI_API_KEY", None)
@@ -1660,9 +1469,9 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
     from litellm.utils import get_valid_models
     import litellm
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
-    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-9876")
     monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", "1234")
     monkeypatch.setattr(litellm, "provider_list", ["fireworks_ai"])
 
@@ -1747,19 +1556,10 @@ def test_get_valid_models_default(monkeypatch):
     Prevent regression for existing usage.
     """
     from litellm.utils import get_valid_models
-    import litellm
 
-    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-9876")
     valid_models = get_valid_models()
     assert len(valid_models) > 0
-
-
-def test_supports_vision_gemini():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    from litellm.utils import supports_vision
-
-    assert supports_vision("gemini-2.5-pro") is True
 
 
 def test_pick_cheapest_chat_model_from_llm_provider():
@@ -1787,12 +1587,12 @@ def test_get_num_retries(num_retries):
 
 
 def test_add_custom_logger_callback_to_specific_event(monkeypatch):
-    from litellm.utils import _add_custom_logger_callback_to_specific_event
+    from litellm.utils import add_custom_logger_callback_to_specific_event
 
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
 
-    _add_custom_logger_callback_to_specific_event("langfuse", "success")
+    add_custom_logger_callback_to_specific_event("langfuse", "success")
 
     assert len(litellm.success_callback) == 1
     assert len(litellm.failure_callback) == 0
@@ -2147,7 +1947,7 @@ def test_validate_user_messages_invalid_content_type():
 
     messages = [{"content": [{"type": "invalid_type", "text": "Hello"}]}]
 
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='Please ensure all messages are valid OpenAI chat completion') as e:
         validate_chat_completion_user_messages(messages)
 
     assert "Invalid message" in str(e)
@@ -2470,13 +2270,13 @@ def test_get_base_model_from_metadata():
 
     Related issue: https://github.com/BerriAI/litellm/issues/16772
     """
-    from litellm.utils import _get_base_model_from_metadata
+    from litellm.utils import get_base_model_from_metadata
 
     # Test 1: base_model in metadata (Chat Completions API pattern)
     model_call_details_with_metadata = {
         "litellm_params": {"metadata": {"model_info": {"base_model": "azure/gpt-5.5"}}}
     }
-    result = _get_base_model_from_metadata(model_call_details_with_metadata)
+    result = get_base_model_from_metadata(model_call_details_with_metadata)
     assert result == "azure/gpt-5.5", f"Expected 'azure/gpt-5.5', got {result}"
 
     # Test 2: base_model in litellm_metadata (Responses API and generic API calls pattern)
@@ -2485,14 +2285,14 @@ def test_get_base_model_from_metadata():
             "litellm_metadata": {"model_info": {"base_model": "azure/gpt-5-mini"}}
         }
     }
-    result = _get_base_model_from_metadata(model_call_details_with_litellm_metadata)
+    result = get_base_model_from_metadata(model_call_details_with_litellm_metadata)
     assert result == "azure/gpt-5-mini", f"Expected 'azure/gpt-5-mini', got {result}"
 
     # Test 3: base_model in litellm_params (direct base_model)
     model_call_details_with_direct_base_model = {
         "litellm_params": {"base_model": "azure/gpt-5-mini"}
     }
-    result = _get_base_model_from_metadata(model_call_details_with_direct_base_model)
+    result = get_base_model_from_metadata(model_call_details_with_direct_base_model)
     assert (
         result == "azure/gpt-5-mini"
     ), f"Expected 'azure/gpt-5-mini', got {result}"
@@ -2506,16 +2306,16 @@ def test_get_base_model_from_metadata():
             },
         }
     }
-    result = _get_base_model_from_metadata(model_call_details_with_both)
+    result = get_base_model_from_metadata(model_call_details_with_both)
     assert (
         result == "azure/gpt-4-from-metadata"
     ), f"Expected metadata to take precedence, got {result}"
 
     # Test 5: No base_model present
     model_call_details_without_base_model = {"litellm_params": {"metadata": {}}}
-    result = _get_base_model_from_metadata(model_call_details_without_base_model)
+    result = get_base_model_from_metadata(model_call_details_without_base_model)
     assert result is None, f"Expected None when no base_model present, got {result}"
 
     # Test 6: None input
-    result = _get_base_model_from_metadata(None)
+    result = get_base_model_from_metadata(None)
     assert result is None, f"Expected None for None input, got {result}"

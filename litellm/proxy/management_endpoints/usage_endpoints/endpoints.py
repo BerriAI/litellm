@@ -4,26 +4,32 @@ USAGE AI CHAT ENDPOINTS
 /usage/ai/chat - Stream AI chat responses about usage data
 """
 
-from typing import List, Literal, Optional
+from typing import Final, Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import Field
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.sse_keepalive import (
+    SSE_COMMENT_PING,
+    wrap_sse_stream_with_keepalive_pings,
+)
+from litellm.types.llms.base import LiteLLMBaseModel
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
-class ChatMessage(BaseModel):
+class ChatMessage(LiteLLMBaseModel):
     role: Literal["user", "assistant"]
     content: str
 
 
-class UsageAIChatRequest(BaseModel):
-    messages: List[ChatMessage] = Field(..., description="Chat messages (user/assistant history)")
-    model: Optional[str] = Field(default=None, description="Model to use for AI chat")
+class UsageAIChatRequest(LiteLLMBaseModel):
+    messages: list[ChatMessage] = Field(..., description="Chat messages (user/assistant history)")
+    model: str | None = Field(default=None, description="Model to use for AI chat")
 
 
 @router.post(
@@ -48,19 +54,23 @@ async def usage_ai_chat(
         stream_usage_ai_chat,
     )
 
-    is_admin = _user_has_admin_view(user_api_key_dict)
+    is_admin: Final = _user_has_admin_view(user_api_key_dict)
     if is_admin:
         user_id = user_api_key_dict.user_id
     else:
         user_id = require_caller_user_id_for_non_admin(user_api_key_dict)
-    messages = [{"role": m.role, "content": m.content} for m in data.messages]
+    messages: Final = [{"role": m.role, "content": m.content} for m in data.messages]
 
     return StreamingResponse(
-        stream_usage_ai_chat(
-            messages=messages,
-            model=data.model,
-            user_id=user_id,
-            is_admin=is_admin,
+        wrap_sse_stream_with_keepalive_pings(
+            stream_usage_ai_chat(
+                messages=messages,
+                model=data.model,
+                user_id=user_id,
+                is_admin=is_admin,
+            ),
+            ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
+            ping_chunk=SSE_COMMENT_PING,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

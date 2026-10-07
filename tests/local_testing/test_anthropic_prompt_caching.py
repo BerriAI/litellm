@@ -1,21 +1,15 @@
 import json
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
 from test_streaming import streaming_format_tests
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -209,8 +203,7 @@ def anthropic_messages():
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_anthropic_vertex_ai_prompt_caching(anthropic_messages, sync_mode):
-    litellm._turn_on_debug()
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+    litellm.turn_on_debug()
 
     load_vertex_ai_credentials()
 

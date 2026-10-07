@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -26,7 +26,7 @@ def _coerce_event_hook(
 
 def _get_optional_value(litellm_params: LitellmParams, optional_params: object | None, attribute_name: str) -> object:
     if optional_params is not None:
-        value = getattr(optional_params, attribute_name, None)
+        value: Final = getattr(optional_params, attribute_name, None)
         if value is not None:
             return value
     return getattr(litellm_params, attribute_name, None)
@@ -35,9 +35,9 @@ def _get_optional_value(litellm_params: LitellmParams, optional_params: object |
 def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) -> CompresrGuardrail:
     import litellm
 
-    optional_params = getattr(litellm_params, "optional_params", None)
+    optional_params: Final = getattr(litellm_params, "optional_params", None)
 
-    _callback = CompresrGuardrail(
+    _callback: Final = CompresrGuardrail(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         model=litellm_params.model,
@@ -59,6 +59,7 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
         event_hook=_coerce_event_hook(litellm_params.mode),
         default_on=litellm_params.default_on or False,
         unreachable_fallback=litellm_params.unreachable_fallback,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(  # pyright: ignore[reportUnknownMemberType]  # callback manager is untyped
         _callback
@@ -66,10 +67,10 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
     return _callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.COMPRESR.value: initialize_guardrail,
 }
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.COMPRESR.value: CompresrGuardrail,
 }

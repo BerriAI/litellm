@@ -9,14 +9,9 @@ Testing for _assemble_complete_response_from_streaming_chunks
 """
 
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
 import httpx
@@ -34,7 +29,7 @@ from litellm import (
 )
 
 from litellm.litellm_core_utils.logging_utils import (
-    _assemble_complete_response_from_streaming_chunks,
+    assemble_complete_response_from_streaming_chunks,
 )
 
 
@@ -71,7 +66,7 @@ def test_assemble_complete_response_from_streaming_chunks_1(is_async):
         "usage": None,
     }
     chunk = ModelResponseStream(**chunk)
-    complete_streaming_response = _assemble_complete_response_from_streaming_chunks(
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
         result=chunk,
         start_time=datetime.now(),
         end_time=datetime.now(),
@@ -111,7 +106,7 @@ def test_assemble_complete_response_from_streaming_chunks_1(is_async):
         "usage": None,
     }
     chunk = ModelResponseStream(**chunk)
-    complete_streaming_response = _assemble_complete_response_from_streaming_chunks(
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
         result=chunk,
         start_time=datetime.now(),
         end_time=datetime.now(),
@@ -174,7 +169,7 @@ def test_assemble_complete_response_from_streaming_chunks_2(is_async):
     chunk = ModelResponseStream(**chunk)
     chunk = _text_completion_stream_wrapper.convert_to_text_completion_object(chunk)
 
-    complete_streaming_response = _assemble_complete_response_from_streaming_chunks(
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
         result=chunk,
         start_time=datetime.now(),
         end_time=datetime.now(),
@@ -215,7 +210,7 @@ def test_assemble_complete_response_from_streaming_chunks_2(is_async):
     }
     chunk = ModelResponseStream(**chunk)
     chunk = _text_completion_stream_wrapper.convert_to_text_completion_object(chunk)
-    complete_streaming_response = _assemble_complete_response_from_streaming_chunks(
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
         result=chunk,
         start_time=datetime.now(),
         end_time=datetime.now(),
@@ -269,7 +264,7 @@ def test_assemble_complete_response_from_streaming_chunks_3(is_async):
         "usage": None,
     }
     chunk = ModelResponseStream(**chunk)
-    complete_streaming_response = _assemble_complete_response_from_streaming_chunks(
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
         result=chunk,
         start_time=datetime.now(),
         end_time=datetime.now(),
@@ -289,7 +284,7 @@ def test_assemble_complete_response_from_streaming_chunks_3(is_async):
 
     # now add a chunk to the 2nd list
 
-    complete_streaming_response = _assemble_complete_response_from_streaming_chunks(
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
         result=chunk,
         start_time=datetime.now(),
         end_time=datetime.now(),
@@ -350,7 +345,7 @@ def test_assemble_complete_response_from_streaming_chunks_4(is_async):
     # remove attribute id from chunk
     del chunk.object
 
-    complete_streaming_response = _assemble_complete_response_from_streaming_chunks(
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
         result=chunk,
         start_time=datetime.now(),
         end_time=datetime.now(),

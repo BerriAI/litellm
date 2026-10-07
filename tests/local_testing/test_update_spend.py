@@ -5,7 +5,6 @@
 import asyncio
 import os
 import random
-import sys
 import time
 import traceback
 from datetime import datetime
@@ -14,12 +13,7 @@ from dotenv import load_dotenv
 from fastapi import Request
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import asyncio
 import logging
 
 import pytest
@@ -54,7 +48,6 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
-from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     BlockUsers,
     DynamoDBArgs,
@@ -65,6 +58,7 @@ from litellm.proxy._types import (
     SpendUpdateQueueItem,
     Litellm_EntityType,
 )
+from tests._master_key import MASTER_KEY
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -104,7 +98,7 @@ async def test_batch_update_spend(prisma_client):
         )
     )
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
     await update_spend(
         prisma_client=litellm.proxy.proxy_server.prisma_client,

@@ -1,11 +1,6 @@
 import json
-import os
-import sys
 from datetime import datetime
 
-sys.path.insert(
-    0, os.path.abspath("../../../")
-)  # Adds the parent directory to the system path
 
 import litellm
 import pytest
@@ -982,7 +977,7 @@ def test_convert_to_model_response_object_with_real_error():
         },
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception) as exc_info:  # noqa: PT011  # message rides on .message, str() is empty
         convert_to_model_response_object(
             model_response_object=ModelResponse(),
             response_object=response_object,
@@ -1243,7 +1238,7 @@ def test_convert_to_model_response_object_with_error_code_only():
         },
     }
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception) as exc_info:  # noqa: B017, PT011  # bare Exception, empty message, so status_code is the assertion
         convert_to_model_response_object(
             model_response_object=ModelResponse(),
             response_object=response_object,
@@ -1254,6 +1249,8 @@ def test_convert_to_model_response_object_with_error_code_only():
             _response_headers=None,
             convert_tool_call_to_json_mode=False,
         )
+
+    assert exc_info.value.status_code == 500
 
 
 def test_model_prefix_preservation():
@@ -1421,7 +1418,7 @@ def test_error_message_includes_function_args():
         "choices": [{"index": 0}],
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='in convert_to_model_response_object') as exc_info:
         convert_to_model_response_object(
             model_response_object=ModelResponse(),
             response_object=response_object,
@@ -1626,15 +1623,11 @@ class TestMissingChoicesGuard:
 
         assert "no 'choices'" in exc_info.value.message
 
-    def test_convert_to_model_response_object_empty_choices_raises_api_error(self):
-        """Empty choices list raises APIError, same as missing/null choices.
+    def test_convert_to_model_response_object_empty_choices_returns_empty_list(self):
+        """An empty choices list is a real provider answer, so it converts to choices=[] instead of raising.
 
-        Provider-specific repair (e.g. github_copilot synthesizing choices for
-        Anthropic-native responses) happens before this guard, in the provider
-        config; the core utility keeps treating empty choices as an error.
+        See: https://github.com/BerriAI/litellm/issues/40276
         """
-        from litellm.exceptions import APIError
-
         response_object = {
             "id": "msg_123",
             "model": "some-model",
@@ -1642,16 +1635,17 @@ class TestMissingChoicesGuard:
             "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
         }
 
-        with pytest.raises(APIError) as exc_info:
-            convert_to_model_response_object(
-                response_object=response_object,
-                model_response_object=ModelResponse(),
-            )
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=ModelResponse(),
+        )
 
-        assert "no 'choices'" in exc_info.value.message
+        assert isinstance(result, ModelResponse)
+        assert result.choices == []
+        assert result.usage.prompt_tokens == 10
 
     def test_convert_to_model_response_object_null_choices_raises_api_error(self):
-        """choices=None raises APIError."""
+        """choices=None raises APIError that names the type instead of claiming the key is missing."""
         from litellm.exceptions import APIError
 
         response_object = {
@@ -1667,7 +1661,7 @@ class TestMissingChoicesGuard:
                 model_response_object=ModelResponse(),
             )
 
-        assert "no 'choices'" in exc_info.value.message
+        assert "'choices' that is not a list (NoneType)" in exc_info.value.message
 
     def test_convert_to_streaming_response_no_choices_raises_api_error(self):
         """Missing choices in streaming cache-hit path raises APIError."""
@@ -1800,41 +1794,41 @@ class TestSafeConvertCreatedField:
         import time
 
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _safe_convert_created_field,
+            safe_convert_created_field,
         )
 
-        result = _safe_convert_created_field(None)
+        result = safe_convert_created_field(None)
         assert abs(result - int(time.time())) <= 1
 
     def test_int_passthrough(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _safe_convert_created_field,
+            safe_convert_created_field,
         )
 
-        assert _safe_convert_created_field(1700000000) == 1700000000
+        assert safe_convert_created_field(1700000000) == 1700000000
 
     def test_float_truncated(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _safe_convert_created_field,
+            safe_convert_created_field,
         )
 
-        assert _safe_convert_created_field(1700000000.999) == 1700000000
+        assert safe_convert_created_field(1700000000.999) == 1700000000
 
     def test_string_converted(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _safe_convert_created_field,
+            safe_convert_created_field,
         )
 
-        assert _safe_convert_created_field("1700000000.5") == 1700000000
+        assert safe_convert_created_field("1700000000.5") == 1700000000
 
     def test_invalid_string_returns_current_time(self):
         import time
 
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _safe_convert_created_field,
+            safe_convert_created_field,
         )
 
-        result = _safe_convert_created_field("not-a-number")
+        result = safe_convert_created_field("not-a-number")
         assert abs(result - int(time.time())) <= 1
 
 
@@ -2009,14 +2003,14 @@ class TestConvertToStreamingResponseAsync:
 class TestHandleInvalidParallelToolCalls:
     def test_none_input(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _handle_invalid_parallel_tool_calls,
+            handle_invalid_parallel_tool_calls,
         )
 
-        assert _handle_invalid_parallel_tool_calls(None) is None
+        assert handle_invalid_parallel_tool_calls(None) is None
 
     def test_normal_tool_calls_unchanged(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _handle_invalid_parallel_tool_calls,
+            handle_invalid_parallel_tool_calls,
         )
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
@@ -2027,13 +2021,13 @@ class TestHandleInvalidParallelToolCalls:
                 function=Function(name="get_weather", arguments='{"city": "NYC"}'),
             )
         ]
-        result = _handle_invalid_parallel_tool_calls(tool_calls)
+        result = handle_invalid_parallel_tool_calls(tool_calls)
         assert len(result) == 1
         assert result[0].function.name == "get_weather"
 
     def test_multi_tool_use_parallel_expanded(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _handle_invalid_parallel_tool_calls,
+            handle_invalid_parallel_tool_calls,
         )
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
@@ -2060,7 +2054,7 @@ class TestHandleInvalidParallelToolCalls:
                 ),
             )
         ]
-        result = _handle_invalid_parallel_tool_calls(tool_calls)
+        result = handle_invalid_parallel_tool_calls(tool_calls)
         assert len(result) == 2
         assert result[0].function.name == "get_weather"
         assert result[0].id == "call_1_0"
@@ -2070,7 +2064,7 @@ class TestHandleInvalidParallelToolCalls:
 
     def test_invalid_json_returns_original(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _handle_invalid_parallel_tool_calls,
+            handle_invalid_parallel_tool_calls,
         )
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
@@ -2081,7 +2075,7 @@ class TestHandleInvalidParallelToolCalls:
                 function=Function(name="some_func", arguments="not valid json{{{"),
             )
         ]
-        result = _handle_invalid_parallel_tool_calls(tool_calls)
+        result = handle_invalid_parallel_tool_calls(tool_calls)
         assert len(result) == 1
         assert result[0].id == "call_1"
 
@@ -2089,13 +2083,13 @@ class TestHandleInvalidParallelToolCalls:
 class TestShouldConvertToolCallToJsonMode:
     def test_returns_true_when_conditions_met(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _should_convert_tool_call_to_json_mode,
+            should_convert_tool_call_to_json_mode,
         )
         from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 
         tool_calls = [{"function": {"name": RESPONSE_FORMAT_TOOL_NAME}}]
         assert (
-            _should_convert_tool_call_to_json_mode(
+            should_convert_tool_call_to_json_mode(
                 tool_calls=tool_calls, convert_tool_call_to_json_mode=True
             )
             is True
@@ -2103,13 +2097,13 @@ class TestShouldConvertToolCallToJsonMode:
 
     def test_returns_false_when_flag_off(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _should_convert_tool_call_to_json_mode,
+            should_convert_tool_call_to_json_mode,
         )
         from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 
         tool_calls = [{"function": {"name": RESPONSE_FORMAT_TOOL_NAME}}]
         assert (
-            _should_convert_tool_call_to_json_mode(
+            should_convert_tool_call_to_json_mode(
                 tool_calls=tool_calls, convert_tool_call_to_json_mode=False
             )
             is False
@@ -2117,12 +2111,12 @@ class TestShouldConvertToolCallToJsonMode:
 
     def test_returns_false_when_wrong_tool_name(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _should_convert_tool_call_to_json_mode,
+            should_convert_tool_call_to_json_mode,
         )
 
         tool_calls = [{"function": {"name": "some_other_tool"}}]
         assert (
-            _should_convert_tool_call_to_json_mode(
+            should_convert_tool_call_to_json_mode(
                 tool_calls=tool_calls, convert_tool_call_to_json_mode=True
             )
             is False
@@ -2130,7 +2124,7 @@ class TestShouldConvertToolCallToJsonMode:
 
     def test_returns_false_when_multiple_tool_calls(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _should_convert_tool_call_to_json_mode,
+            should_convert_tool_call_to_json_mode,
         )
         from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 
@@ -2139,7 +2133,7 @@ class TestShouldConvertToolCallToJsonMode:
             {"function": {"name": "other"}},
         ]
         assert (
-            _should_convert_tool_call_to_json_mode(
+            should_convert_tool_call_to_json_mode(
                 tool_calls=tool_calls, convert_tool_call_to_json_mode=True
             )
             is False
@@ -2147,11 +2141,11 @@ class TestShouldConvertToolCallToJsonMode:
 
     def test_returns_false_when_none(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            _should_convert_tool_call_to_json_mode,
+            should_convert_tool_call_to_json_mode,
         )
 
         assert (
-            _should_convert_tool_call_to_json_mode(
+            should_convert_tool_call_to_json_mode(
                 tool_calls=None, convert_tool_call_to_json_mode=True
             )
             is False
@@ -2473,14 +2467,14 @@ class TestConvertToModelResponseObjectCompletion:
         assert "reasoning_content" not in (message.provider_specific_fields or {})
 
     def test_response_none_raises(self):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid response object"):
             convert_to_model_response_object(
                 response_object=None,
                 model_response_object=ModelResponse(),
             )
 
     def test_model_response_none_raises(self):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid response object"):
             convert_to_model_response_object(
                 response_object={
                     "choices": [

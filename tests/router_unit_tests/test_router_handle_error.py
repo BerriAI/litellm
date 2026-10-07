@@ -3,9 +3,6 @@ import traceback, asyncio
 import pytest
 from typing import List
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
@@ -139,7 +136,7 @@ async def test_async_raise_no_deployment_exception():
     ]
 
     with patch(
-        "litellm.router_utils.handle_error._async_get_cooldown_deployments_with_debug_info",
+        "litellm.router_utils.handle_error.async_get_cooldown_deployments_with_debug_info",
         return_value=mock_cooldown_list,
     ):
         # Call the function
@@ -191,7 +188,7 @@ async def test_async_raise_no_deployment_exception_empty_cooldown_list():
     mock_cooldown_list: List = []
 
     with patch(
-        "litellm.router_utils.handle_error._async_get_cooldown_deployments_with_debug_info",
+        "litellm.router_utils.handle_error.async_get_cooldown_deployments_with_debug_info",
         return_value=mock_cooldown_list,
     ):
         # Call the function
@@ -235,7 +232,7 @@ async def test_async_raise_no_deployment_exception_none_cooldown_list():
     mock_cooldown_list = None
 
     with patch(
-        "litellm.router_utils.handle_error._async_get_cooldown_deployments_with_debug_info",
+        "litellm.router_utils.handle_error.async_get_cooldown_deployments_with_debug_info",
         return_value=mock_cooldown_list,
     ):
         # After the defensive fix, this should handle None gracefully and return empty list

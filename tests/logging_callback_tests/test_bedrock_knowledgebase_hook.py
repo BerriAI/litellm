@@ -1,9 +1,7 @@
 import io
 import os
-import sys
 
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import litellm
@@ -74,10 +72,52 @@ def setup_vector_store_registry():
 
 
 @pytest.mark.asyncio
+async def test_vector_store_hook_routes_search_through_proxy_router(
+    setup_vector_store_registry,
+):
+    proxy_router = Mock()
+    proxy_router.avector_store_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page",
+            search_query="what is litellm?",
+            data=[
+                VectorStoreSearchResult(
+                    score=1.0,
+                    content=[VectorStoreResultContent(text="routed context", type="text")],
+                )
+            ],
+        )
+    )
+    logging_obj = Mock()
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {"user_api_key_team_id": "team-a"}}
+    }
+
+    with patch("litellm.proxy.proxy_server.llm_router", proxy_router):
+        _, messages, _ = await VectorStorePreCallHook().async_get_chat_completion_prompt(
+            model="chat-model",
+            messages=[{"role": "user", "content": "what is litellm?"}],
+            non_default_params={"vector_store_ids": ["T37J8R4WTM"]},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+            litellm_logging_obj=logging_obj,
+        )
+
+    proxy_router.avector_store_search.assert_awaited_once_with(
+        vector_store_id="T37J8R4WTM",
+        query="what is litellm?",
+        custom_llm_provider="bedrock",
+        metadata={"user_api_key_team_id": "team-a"},
+    )
+    assert messages[0]["content"] == "Context:\n\nrouted context\n\n"
+
+
+@pytest.mark.asyncio
 async def test_e2e_bedrock_knowledgebase_retrieval_with_completion(
     setup_vector_store_registry,
 ):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = AsyncHTTPHandler()
     print("value of litellm.vector_store_registry:", litellm.vector_store_registry)
 
@@ -147,7 +187,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call(
     """
 
     # Init client
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     async_client = AsyncHTTPHandler()
     response = await litellm.acompletion(
         model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -191,7 +231,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_streaming(
     """
 
     # Init client
-    # litellm._turn_on_debug()
+    # litellm.turn_on_debug()
     async_client = AsyncHTTPHandler()
     response = await litellm.acompletion(
         model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
@@ -250,7 +290,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools(
     """
 
     # Init client
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = await litellm.acompletion(
         model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
         messages=[{"role": "user", "content": "what is litellm?"}],
@@ -270,7 +310,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools_
 
     In this case we filter for a non-existent user_id, which should return no results.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     response = await litellm.acompletion(
         model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
@@ -330,6 +370,7 @@ async def test_bedrock_kb_request_body_has_transformed_filters(
         custom_llm_provider,
         litellm_params,
         logging_obj,
+        embedding_executor=None,
         extra_headers=None,
         extra_body=None,
         timeout=None,
@@ -690,7 +731,7 @@ async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_regist
 async def test_e2e_bedrock_knowledgebase_retrieval_without_vector_store_registry(
     setup_vector_store_registry,
 ):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = AsyncHTTPHandler()
     litellm.vector_store_registry = None
 
@@ -755,7 +796,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_vector_store_not_in_regi
 
     In this test newUnknownVectorStoreId is not in the registry, so no vector store request is made
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = AsyncHTTPHandler()
 
     if litellm.vector_store_registry is not None:
@@ -842,7 +883,6 @@ async def test_provider_specific_fields_in_proxy_http_response(
         max_tokens=None,
         request_timeout=600,
         max_budget=None,
-        telemetry=False,
         drop_params=True,
         add_function_to_prompt=False,
         headers=None,

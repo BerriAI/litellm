@@ -1,11 +1,7 @@
 import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system paths
 
 from base_llm_unit_tests import BaseLLMChatTest
 from litellm.llms.vertex_ai.context_caching.transformation import (
@@ -78,6 +74,16 @@ GEMINI_3_IMAGE_SIZE_MAPPINGS = [
 
 
 class TestGoogleAIStudioGemini(BaseLLMChatTest):
+    test_async_pdf_handling_with_file_id = None
+    test_content_list_handling = None
+    test_developer_role_translation = None
+    test_function_calling_with_tool_response = None
+    test_image_url = None
+    test_json_response_nested_json_schema = None
+    test_json_response_nested_pydantic_obj = None
+    test_json_response_pydantic_obj = None
+    test_web_search = None
+
     def get_base_completion_call_args(self) -> dict:
         return {"model": "gemini/gemini-2.5-flash"}
 
@@ -100,7 +106,7 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         base_completion_call_args = self.get_base_completion_call_args()
 
@@ -329,7 +335,7 @@ def test_gemini_context_caching_separate_messages():
 
 
 def test_gemini_image_generation():
-    # litellm._turn_on_debug()
+    # litellm.turn_on_debug()
     response = completion(
         model="gemini/gemini-2.5-flash-image",
         messages=[{"role": "user", "content": "Generate an image of a cat"}],
@@ -614,7 +620,7 @@ def test_gemini_imagen_models_use_predict_endpoint():
 
 
 def test_gemini_thinking():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.types.utils import Message, CallTypes
     from litellm.utils import return_raw_request
     import json
@@ -654,7 +660,7 @@ def test_gemini_thinking():
 
 
 def test_gemini_thinking_budget_0():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.types.utils import Message, CallTypes
     from litellm.utils import return_raw_request
     import json
@@ -680,7 +686,7 @@ def test_gemini_finish_reason():
     import os
     from litellm import completion
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = completion(
         model="gemini/gemini-2.5-flash-lite",
         messages=[{"role": "user", "content": "give me 3 random words"}],
@@ -695,7 +701,7 @@ def test_gemini_finish_reason():
 def test_gemini_url_context():
     from litellm import completion
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     URL1 = "https://www.foodnetwork.com/recipes/ina-garten/perfect-roast-chicken-recipe-1940592"
 
     prompt = f"""
@@ -721,7 +727,7 @@ def test_gemini_url_context():
 def test_gemini_with_grounding():
     from litellm import completion, Usage, stream_chunk_builder
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.set_verbose = True
     tools = [{"googleSearch": {}}]
 
@@ -757,7 +763,7 @@ def test_gemini_with_grounding():
 def test_gemini_with_empty_function_call_arguments():
     from litellm import completion
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     tools = [
         {
             "type": "function",
@@ -1020,7 +1026,7 @@ def test_gemini_tool_use():
 
 @pytest.mark.asyncio
 async def test_gemini_image_generation_async():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = await litellm.acompletion(
         messages=[
             {
@@ -1053,7 +1059,7 @@ async def test_gemini_image_generation_async():
 
 @pytest.mark.asyncio
 async def test_gemini_image_generation_async_stream():
-    # litellm._turn_on_debug()
+    # litellm.turn_on_debug()
     response = await litellm.acompletion(
         messages=[
             {
@@ -1123,7 +1129,7 @@ def get_current_weather(location, unit="fahrenheit"):
 def test_gemini_with_thinking():
     from litellm import completion
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.modify_params = True
     model = "gemini/gemini-2.5-flash"
     messages = [
@@ -1315,7 +1321,7 @@ def test_gemini_exception_message_format():
     mock_exception.status_code = 400
 
     # Test the exception mapping for Gemini provider
-    try:
+    with pytest.raises(BadRequestError) as exc_info:
         exception_type(
             model="gemini-pro",
             original_exception=mock_exception,
@@ -1323,22 +1329,18 @@ def test_gemini_exception_message_format():
             completion_kwargs={},
             extra_kwargs={},
         )
-        # Should not reach here - exception should be raised
-        assert False, "Expected BadRequestError to be raised"
-    except BadRequestError as e:
-        # The test should FAIL initially (before fix) because it will show VertexAIException
-        # After the fix, it should show GeminiException
-        error_message = str(e)
-        print(f"Error message: {error_message}")  # For debugging
+    e = exc_info.value
+    error_message = str(e)
+    print(f"Error message: {error_message}")  # For debugging
 
-        # This assertion will initially FAIL - that's expected for TDD
-        assert "GeminiException" in error_message, (
-            f"Expected 'GeminiException' in error message, got: {error_message}. "
-            f"This test should fail before the fix is implemented."
-        )
-        assert (
-            "VertexAIException" not in error_message
-        ), f"Should not contain 'VertexAIException' in error message, got: {error_message}"
+    # This assertion will initially FAIL - that's expected for TDD
+    assert "GeminiException" in error_message, (
+        f"Expected 'GeminiException' in error message, got: {error_message}. "
+        f"This test should fail before the fix is implemented."
+    )
+    assert (
+        "VertexAIException" not in error_message
+    ), f"Should not contain 'VertexAIException' in error message, got: {error_message}"
 
 
 @pytest.mark.parametrize(
@@ -1392,8 +1394,21 @@ def l(status_code, expected_exception):
     # Set message attribute for compatibility with exception mapping
     mock_exception.message = f"HTTP {status_code}"
 
+    exception_classes = {
+        "BadRequestError": BadRequestError,
+        "AuthenticationError": AuthenticationError,
+        "PermissionDeniedError": PermissionDeniedError,
+        "NotFoundError": NotFoundError,
+        "Timeout": Timeout,
+        "RateLimitError": RateLimitError,
+        "InternalServerError": InternalServerError,
+        "APIConnectionError": APIConnectionError,
+        "ServiceUnavailableError": ServiceUnavailableError,
+    }
+    expected_class = exception_classes[expected_exception]
+
     # Test the exception mapping
-    try:
+    with pytest.raises(expected_class) as exc_info:
         exception_type(
             model="gemini-pro",
             original_exception=mock_exception,
@@ -1401,39 +1416,20 @@ def l(status_code, expected_exception):
             completion_kwargs={},
             extra_kwargs={},
         )
-        assert (
-            False
-        ), f"Expected {expected_exception} to be raised for status {status_code}"
-    except Exception as e:
-        # Verify the correct exception type is raised
-        exception_classes = {
-            "BadRequestError": BadRequestError,
-            "AuthenticationError": AuthenticationError,
-            "PermissionDeniedError": PermissionDeniedError,
-            "NotFoundError": NotFoundError,
-            "Timeout": Timeout,
-            "RateLimitError": RateLimitError,
-            "InternalServerError": InternalServerError,
-            "APIConnectionError": APIConnectionError,
-            "ServiceUnavailableError": ServiceUnavailableError,
-        }
-        expected_class = exception_classes[expected_exception]
-        assert isinstance(
-            e, expected_class
-        ), f"Expected {expected_exception}, got {type(e).__name__}"
+    e = exc_info.value
 
-        # Verify the error message contains GeminiException
-        error_message = str(e)
-        assert (
-            "GeminiException" in error_message
-        ), f"Expected 'GeminiException' in error message for status {status_code}, got: {error_message}"
-        assert (
-            "VertexAIException" not in error_message
-        ), f"Should not contain 'VertexAIException' for status {status_code}, got: {error_message}"
+    # Verify the error message contains GeminiException
+    error_message = str(e)
+    assert (
+        "GeminiException" in error_message
+    ), f"Expected 'GeminiException' in error message for status {status_code}, got: {error_message}"
+    assert (
+        "VertexAIException" not in error_message
+    ), f"Should not contain 'VertexAIException' for status {status_code}, got: {error_message}"
 
 
 def test_gemini_embedding():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = litellm.embedding(
         model="gemini/gemini-embedding-001",
         input="Hello, world!",
@@ -1814,7 +1810,7 @@ def test_gemini_image_size_limit_exceeded(monkeypatch):
     that could cause memory issues and pod crashes.
 
     The image fetch is mocked (mirroring the LargeImageClient pattern in
-    tests/test_litellm/litellm_core_utils/test_image_handling.py) so the test
+    tests/unit/litellm_core_utils/test_image_handling.py) so the test
     deterministically exercises the size-limit rejection path without any
     external network dependency.
     """

@@ -1,14 +1,10 @@
 import json
 import os
-import sys
 import time
 from datetime import datetime
 from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
@@ -243,7 +239,7 @@ async def test_slack_alerting_callback_registration(callback_manager):
     from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     # Mock the async HTTP handler
     with patch(
@@ -309,7 +305,7 @@ async def test_generic_api_compatible_callbacks_json():
 
     with patch.dict(os.environ, {"SUMOLOGIC_WEBHOOK_URL": test_sumologic_url}):
         # Test that sumologic callback is recognized from JSON file
-        result = LoggingCallbackManager._add_custom_callback_generic_api_str(
+        result = LoggingCallbackManager.add_custom_callback_generic_api_str(
             "sumologic"
         )
 
@@ -350,7 +346,7 @@ async def test_generic_api_compatible_callbacks_json_rubrik():
         {"RUBRIK_WEBHOOK_URL": test_rubrik_url, "RUBRIK_API_KEY": test_rubrik_api_key},
     ):
         # Test that rubrik callback is recognized from JSON file
-        result = LoggingCallbackManager._add_custom_callback_generic_api_str("rubrik")
+        result = LoggingCallbackManager.add_custom_callback_generic_api_str("rubrik")
 
         # Verify a GenericAPILogger instance is returned
         assert isinstance(
@@ -382,7 +378,7 @@ def test_generic_api_compatible_callbacks_json_unknown_callback():
     Test that unknown callbacks (not in JSON or callback_settings) are returned unchanged
     """
     # Test with a callback that doesn't exist in the JSON file
-    result = LoggingCallbackManager._add_custom_callback_generic_api_str(
+    result = LoggingCallbackManager.add_custom_callback_generic_api_str(
         "unknown_callback"
     )
 
@@ -413,7 +409,7 @@ async def test_generic_api_callback_settings_retry_config():
     }
 
     try:
-        result = LoggingCallbackManager._add_custom_callback_generic_api_str(
+        result = LoggingCallbackManager.add_custom_callback_generic_api_str(
             callback_name
         )
 

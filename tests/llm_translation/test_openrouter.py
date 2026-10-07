@@ -1,15 +1,10 @@
-import os
-import sys
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system paths
 import litellm
 
 
 def test_completion_openrouter_reasoning_content():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     resp = litellm.completion(
         model="openrouter/anthropic/claude-sonnet-4",
         messages=[{"role": "user", "content": "Hello world"}],
@@ -20,7 +15,7 @@ def test_completion_openrouter_reasoning_content():
 
 
 def test_completion_openrouter_image_generation():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     resp = litellm.completion(
         model="openrouter/google/gemini-2.5-flash-image",
         messages=[{"role": "user", "content": "Generate an image of a cat"}],
@@ -34,7 +29,7 @@ def test_completion_openrouter_image_generation():
 
 def test_openrouter_embedding():
     """Test OpenRouter embeddings support."""
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     resp = litellm.embedding(
         model="openrouter/openai/text-embedding-3-small",
         input=["Hello world", "How are you?"],

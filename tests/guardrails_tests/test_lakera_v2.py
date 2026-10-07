@@ -1,12 +1,9 @@
-import sys
-import os
 import io, asyncio
 import pytest
 import time
 from litellm import mock_completion
 from unittest.mock import MagicMock, AsyncMock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import LakeraAIGuardrail
 from litellm.types.guardrails import PiiEntityType, PiiAction
@@ -21,7 +18,7 @@ from litellm.types.utils import CallTypes as LitellmCallTypes, ModelResponse
 async def test_lakera_pre_call_hook_for_pii_masking():
     """Test for Lakera guardrail pre-call hook for PII masking"""
     # Setup the guardrail with specific entities config
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     lakera_guardrail = LakeraAIGuardrail(
         api_key="test_key",
     )

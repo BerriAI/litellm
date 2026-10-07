@@ -25,32 +25,50 @@ export interface RequestOptions {
   query?: QueryParams;
   headers?: Record<string, string>;
   signal?: AbortSignal;
+  /** Send browser cookies with the request; needed for cookie-authenticated proxy routes. */
+  credentials?: RequestCredentials;
 }
 
 export class ApiError extends Error {
   readonly status: number;
   readonly body: unknown;
+  /** The server's `Retry-After` delay, when it sent one. */
+  readonly retryAfterMs: number | null;
 
-  constructor(message: string, status: number, body: unknown) {
+  constructor(message: string, status: number, body: unknown, retryAfterMs: number | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.body = body;
+    this.retryAfterMs = retryAfterMs;
   }
 }
+
+/** `Retry-After` as milliseconds; the header is whole seconds or an HTTP date. */
+export const retryAfterMs = (headers?: Headers): number | null => {
+  const header = headers?.get("retry-after");
+  if (header === null || header === undefined) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
+};
 
 /**
  * Best-effort extraction of a human-readable message from a proxy error body.
  * Lives here because error parsing is the client's job; networking.tsx re-exports
  * it so existing `@/components/networking` import paths keep working.
  */
+const deriveDetailMessage = (detail: any): string | undefined => {
+  if (Array.isArray(detail)) return detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ");
+  if (typeof detail === "string") return detail;
+  if (typeof detail?.error === "string") return detail.error;
+  if (detail && typeof detail === "object") return detail.error?.message || detail.message;
+  return undefined;
+};
+
 export const deriveErrorMessage = (errorData: any): string => {
-  const detail = errorData?.detail;
-  const detailStr = Array.isArray(detail)
-    ? detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ")
-    : typeof detail === "string"
-      ? detail
-      : undefined;
+  const detailStr = deriveDetailMessage(errorData?.detail);
   return (
     (errorData?.error &&
       (errorData.error.message || (typeof errorData.error === "string" ? errorData.error : undefined))) ||
@@ -58,6 +76,38 @@ export const deriveErrorMessage = (errorData: any): string => {
     detailStr ||
     JSON.stringify(errorData)
   );
+};
+
+/**
+ * The proxy serializes HTTPException details as the string form of a Python dict,
+ * so a rejection reaches the UI as "{'error': 'actual message'}" (or that string
+ * nested inside the JSON error envelope). Unwraps to the actual message; returns
+ * the input unchanged when it does not match a known wrapper shape.
+ */
+export const unwrapProxyErrorMessage = (raw: string): string => {
+  const trimmed = raw.trim();
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object") {
+      const derived = deriveErrorMessage(parsed);
+      if (typeof derived === "string" && derived !== trimmed) {
+        return unwrapProxyErrorMessage(derived);
+      }
+    }
+  } catch {
+    const pythonDictMatch = trimmed.match(/^\{'error':\s*(['"])([\s\S]*)\1\}$/);
+    if (pythonDictMatch) {
+      return pythonDictMatch[2];
+    }
+  }
+  return raw;
+};
+
+export const extractProxyErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    return unwrapProxyErrorMessage(error.message);
+  }
+  return unwrapProxyErrorMessage(String(error));
 };
 
 export interface ApiClientConfig {
@@ -74,6 +124,7 @@ export interface ApiClientConfig {
 export interface ApiClient {
   request<T = any>(method: HttpMethod, path: string, options?: RequestOptions): Promise<T>;
   get<T = any>(path: string, options?: RequestOptions): Promise<T>;
+  getBlob(path: string, options?: RequestOptions): Promise<Blob>;
   post<T = any>(path: string, options?: RequestOptions): Promise<T>;
   put<T = any>(path: string, options?: RequestOptions): Promise<T>;
   delete<T = any>(path: string, options?: RequestOptions): Promise<T>;
@@ -100,12 +151,12 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
   const { getBaseUrl, getAuthHeaderName, onError, fetchImpl } = config;
   const doFetch: typeof fetch = (input, init) => (fetchImpl ?? fetch)(input, init);
 
-  async function request<T = any>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<T> {
-    const { accessToken, body, rawBody, query, headers: extraHeaders, signal } = options;
+  async function fetchChecked(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<Response> {
+    const { accessToken, body, rawBody, query, headers: extraHeaders, signal, credentials } = options;
 
     const url = appendQuery(`${getBaseUrl()}${path}`, query);
 
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { Accept: "application/json" };
     if (rawBody === undefined) {
       headers["Content-Type"] = "application/json";
     }
@@ -117,7 +168,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       Object.assign(headers, extraHeaders);
     }
 
-    const init: RequestInit = { method, headers, signal };
+    const init: RequestInit = { method, headers, signal, credentials };
     if (rawBody !== undefined) {
       init.body = rawBody;
     } else if (body !== undefined) {
@@ -137,16 +188,33 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
         message = raw || `HTTP ${response.status}`;
       }
       onError?.(message);
-      throw new ApiError(message, response.status, errorBody);
+      throw new ApiError(message, response.status, errorBody, retryAfterMs(response.headers));
     }
 
+    return response;
+  }
+
+  async function request<T = any>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<T> {
+    const response = await fetchChecked(method, path, options);
     const text = await response.text();
-    return (text ? JSON.parse(text) : undefined) as T;
+    if (!text) return undefined as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      const type = response.headers.get("content-type") ?? "an unknown content type";
+      throw new ApiError(`Expected JSON from ${path} but the server returned ${type}`, response.status, text);
+    }
+  }
+
+  async function getBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
+    const response = await fetchChecked("GET", path, options);
+    return response.blob();
   }
 
   return {
     request,
     get: (path, options) => request("GET", path, options),
+    getBlob,
     post: (path, options) => request("POST", path, options),
     put: (path, options) => request("PUT", path, options),
     delete: (path, options) => request("DELETE", path, options),

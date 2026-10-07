@@ -1,9 +1,4 @@
-import sys
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 
 import json
@@ -11,7 +6,7 @@ from io import BytesIO
 from typing import Dict, List
 from litellm.router_utils.batch_utils import (
     replace_model_in_jsonl,
-    _get_router_metadata_variable_name,
+    get_router_metadata_variable_name,
     InMemoryFile,
     parse_jsonl_with_embedded_newlines,
 )
@@ -105,16 +100,16 @@ def test_file_like_object(sample_file_like):
 
 def test_router_metadata_variable_name():
     """Test that the variable name is correct"""
-    assert _get_router_metadata_variable_name(function_name="completion") == "metadata"
+    assert get_router_metadata_variable_name(function_name="completion") == "metadata"
     assert (
-        _get_router_metadata_variable_name(function_name="batch") == "litellm_metadata"
+        get_router_metadata_variable_name(function_name="batch") == "litellm_metadata"
     )
     assert (
-        _get_router_metadata_variable_name(function_name="acreate_file")
+        get_router_metadata_variable_name(function_name="acreate_file")
         == "litellm_metadata"
     )
     assert (
-        _get_router_metadata_variable_name(function_name="aget_file")
+        get_router_metadata_variable_name(function_name="aget_file")
         == "litellm_metadata"
     )
 
@@ -146,6 +141,7 @@ def test_should_replace_model_in_jsonl():
     from litellm.router_utils.batch_utils import should_replace_model_in_jsonl
 
     assert should_replace_model_in_jsonl(purpose="batch") is True
+    assert should_replace_model_in_jsonl(purpose="batch", passthrough=True) is False
     assert should_replace_model_in_jsonl(purpose="test") is False
     assert should_replace_model_in_jsonl(purpose="user_data") is False
 
@@ -322,3 +318,18 @@ def test_replace_model_in_jsonl_with_embedded_newlines():
         == "This is a message\nwith multiple\nlines"
     )
     assert result_json["custom_id"] == "test123"
+
+
+def test_is_batch_retrieve_call_type_matches_only_batch_retrieves():
+    from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
+    from litellm.types.utils import CallTypes
+
+    assert is_batch_retrieve_call_type(CallTypes.aretrieve_batch.value) is True
+    assert is_batch_retrieve_call_type(CallTypes.retrieve_batch.value) is True
+
+    for call_type in CallTypes:
+        if call_type in (CallTypes.aretrieve_batch, CallTypes.retrieve_batch):
+            continue
+        assert is_batch_retrieve_call_type(call_type.value) is False
+
+    assert is_batch_retrieve_call_type(None) is False

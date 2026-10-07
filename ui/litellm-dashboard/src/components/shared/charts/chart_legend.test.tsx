@@ -21,6 +21,14 @@ describe("CustomLegend", () => {
     expect(dots[1]?.getAttribute("style")).toContain("--color-green-500");
   });
 
+  it("wraps onto multiple lines instead of overflowing when there are many categories", () => {
+    const { container } = render(
+      <CustomLegend categories={Array.from({ length: 8 }, (_, i) => `metrics.tool_${i}`)} colors={["blue", "green"]} />,
+    );
+
+    expect(container.firstElementChild?.className).toContain("flex-wrap");
+  });
+
   it("cycles colors when there are more categories than colors", () => {
     const { container } = render(
       <CustomLegend categories={["metrics.a", "metrics.b", "metrics.c"]} colors={["blue", "green"]} />,

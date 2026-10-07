@@ -13,8 +13,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 from e2e_http import require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, LiteLLMParamsBody
 from quota_client import QuotaClient
@@ -28,7 +29,7 @@ RECOVERY_TIMEOUT = float(
 
 
 def _require_redis() -> None:
-    (host,) = require_env("REDIS_HOST")
+    host = os.environ["REDIS_HOST"]
     port = int((os.environ.get("REDIS_PORT") or "6379").strip() or "6379")
     try:
         with socket.create_connection((host, port), timeout=3):
@@ -44,6 +45,14 @@ class TestRedisCircuitBreakerPath:
     @pytest.mark.covers(
         "reliability.circuit_breaker.redis.trips_then_recovers",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_burst_rate_limit_does_not_freeze_fresh_key(
         self, client: QuotaClient, resources: ResourceManager

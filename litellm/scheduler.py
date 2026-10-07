@@ -1,12 +1,14 @@
 import enum
 import heapq
-from typing import Optional
-
-from pydantic import BaseModel
+from typing import Final
 
 from litellm import print_verbose
+from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_POLLING_INTERVAL
+from litellm.types.llms.base import LiteLLMBaseModel
+
+SCHEDULER_QUEUE_TARGET: Final = "scheduler_queue"
 
 
 class SchedulerCacheKeys(enum.Enum):
@@ -14,7 +16,7 @@ class SchedulerCacheKeys(enum.Enum):
     default_in_memory_ttl = DEFAULT_IN_MEMORY_TTL  # cache queue in-memory for 5s when redis cache available
 
 
-class FlowItem(BaseModel):
+class FlowItem(LiteLLMBaseModel):
     priority: int  # Priority between 0 and 255
     request_id: str
     model_name: str
@@ -25,14 +27,14 @@ class Scheduler:
 
     def __init__(
         self,
-        polling_interval: Optional[float] = None,
-        redis_cache: Optional[RedisCache] = None,
+        polling_interval: float | None = None,
+        redis_cache: RedisCache | None = None,
     ):
         """
         polling_interval: float or null - frequency of polling queue. Default is 3ms.
         """
         self.queue: list = []
-        default_in_memory_ttl: Optional[float] = None
+        default_in_memory_ttl: float | None = None
         if redis_cache is not None:
             # if redis-cache available frequently poll that instead of using in-memory.
             default_in_memory_ttl = SchedulerCacheKeys.default_in_memory_ttl.value
@@ -42,7 +44,7 @@ class Scheduler:
     async def add_request(self, request: FlowItem):
         # We use the priority directly, as lower values indicate higher priority
         # get the queue
-        queue = await self.get_queue(model_name=request.model_name)
+        queue: Final = await self.get_queue(model_name=request.model_name)
         # update the queue
         heapq.heappush(queue, (request.priority, request.request_id))
 
@@ -61,9 +63,9 @@ class Scheduler:
             * If no healthy deployments available
             * AND request not at the top of queue
         """
-        queue = await self.get_queue(model_name=model_name)
+        queue: Final = await self.get_queue(model_name=model_name)
         if not queue:
-            raise Exception("Incorrectly setup. Queue is invalid. Queue={}".format(queue))
+            raise Exception(f"Incorrectly setup. Queue is invalid. Queue={queue}")
 
         # ------------
         # Setup values
@@ -89,17 +91,17 @@ class Scheduler:
         Remove a specific request from the priority queue for a model.
         Used when a request times out while waiting in the queue.
         """
-        queue = await self.get_queue(model_name=model_name)
-        filtered_queue = [item for item in queue if item[1] != request_id]
+        queue: Final = await self.get_queue(model_name=model_name)
+        filtered_queue: Final = [item for item in queue if item[1] != request_id]
         heapq.heapify(filtered_queue)  # restore heap invariant after filtering
         await self.save_queue(queue=filtered_queue, model_name=model_name)
         print_verbose(f"Removed request_id: {request_id} from queue for model: {model_name}")
 
     async def peek(self, id: str, model_name: str, health_deployments: list) -> bool:
         """Return if the id is at the top of the queue. Don't pop the value from heap."""
-        queue = await self.get_queue(model_name=model_name)
+        queue: Final = await self.get_queue(model_name=model_name)
         if not queue:
-            raise Exception("Incorrectly setup. Queue is invalid. Queue={}".format(queue))
+            raise Exception(f"Incorrectly setup. Queue is invalid. Queue={queue}")
 
         # ------------
         # Setup values
@@ -115,24 +117,25 @@ class Scheduler:
         """Get the status of items in the queue"""
         return self.queue
 
+    @with_service_target(SCHEDULER_QUEUE_TARGET)
     async def get_queue(self, model_name: str) -> list:
         """
         Return a queue for that specific model group
         """
         if self.cache is not None:
-            _cache_key = "{}:{}".format(SchedulerCacheKeys.queue.value, model_name)
-            response = await self.cache.async_get_cache(key=_cache_key)
+            _cache_key: Final = f"{SchedulerCacheKeys.queue.value}:{model_name}"
+            response: Final = await self.cache.async_get_cache(key=_cache_key)
             if response is None or not isinstance(response, list):
                 return []
             elif isinstance(response, list):
                 return response
         return self.queue
 
+    @with_service_target(SCHEDULER_QUEUE_TARGET)
     async def save_queue(self, queue: list, model_name: str) -> None:
         """
         Save the updated queue of the model group
         """
         if self.cache is not None:
-            _cache_key = "{}:{}".format(SchedulerCacheKeys.queue.value, model_name)
+            _cache_key: Final = f"{SchedulerCacheKeys.queue.value}:{model_name}"
             await self.cache.async_set_cache(key=_cache_key, value=queue)
-        return None

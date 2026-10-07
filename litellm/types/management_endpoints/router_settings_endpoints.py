@@ -2,18 +2,20 @@
 Types and field definitions for router settings management endpoints
 """
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Final, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 # Fallback Management Types
 
 
-class FallbackCreateRequest(BaseModel):
+class FallbackCreateRequest(LiteLLMBaseModel):
     """Request model for creating/updating fallbacks"""
 
     model: str = Field(description="The model name to configure fallbacks for (e.g., 'gpt-3.5-turbo')")
-    fallback_models: List[str] = Field(
+    fallback_models: list[str] = Field(
         description="List of fallback model names in order of priority",
         min_length=1,
     )
@@ -24,7 +26,7 @@ class FallbackCreateRequest(BaseModel):
 
     @field_validator("fallback_models")
     @classmethod
-    def validate_fallback_models(cls, v: List[str]) -> List[str]:
+    def validate_fallback_models(cls, v: list[str]) -> list[str]:
         if not v:
             raise ValueError("fallback_models must contain at least one model")
         if len(v) != len(set(v)):
@@ -39,24 +41,24 @@ class FallbackCreateRequest(BaseModel):
         return v.strip()
 
 
-class FallbackResponse(BaseModel):
+class FallbackResponse(LiteLLMBaseModel):
     """Response model for fallback operations"""
 
     model: str = Field(description="The model name")
-    fallback_models: List[str] = Field(description="List of fallback model names")
+    fallback_models: list[str] = Field(description="List of fallback model names")
     fallback_type: str = Field(description="Type of fallback")
     message: str = Field(description="Success message")
 
 
-class FallbackGetResponse(BaseModel):
+class FallbackGetResponse(LiteLLMBaseModel):
     """Response model for getting fallbacks"""
 
     model: str = Field(description="The model name")
-    fallback_models: List[str] = Field(description="List of fallback model names")
+    fallback_models: list[str] = Field(description="List of fallback model names")
     fallback_type: str = Field(description="Type of fallback")
 
 
-class FallbackDeleteResponse(BaseModel):
+class FallbackDeleteResponse(LiteLLMBaseModel):
     """Response model for deleting fallbacks"""
 
     model: str = Field(description="The model name")
@@ -67,19 +69,20 @@ class FallbackDeleteResponse(BaseModel):
 # Router Settings Types
 
 
-class RouterSettingsField(BaseModel):
+class RouterSettingsField(LiteLLMBaseModel):
     field_name: str
     field_type: str
     field_value: Any
     field_description: str
     field_default: Any = None
-    options: Optional[List[str]] = None  # For fields with predefined options/enum values
+    options: list[str] | None = None  # For fields with predefined options/enum values
     ui_field_name: str  # User-friendly display name
-    link: Optional[str] = None  # Documentation link for the field
+    link: str | None = None  # Documentation link for the field
 
 
 # Routing strategy descriptions
-ROUTING_STRATEGY_DESCRIPTIONS: Dict[str, str] = {
+ROUTING_STRATEGY_DESCRIPTIONS: Final[dict[str, str]] = {
+    "priority": "Routes group calls to the lowest-priority-number available model, with failover to higher numbers. Equal priorities share traffic. Direct member calls keep their existing policy.",
     "simple-shuffle": "Randomly picks a deployment from the list. Simple and fast.",
     "least-busy": "Routes to the deployment with the lowest number of ongoing requests.",
     "latency-based-routing": "Routes to the deployment with the lowest latency over a sliding window.",
@@ -90,7 +93,7 @@ ROUTING_STRATEGY_DESCRIPTIONS: Dict[str, str] = {
 
 
 # Define all available router settings fields
-ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
+ROUTER_SETTINGS_FIELDS: Final[list[RouterSettingsField]] = [
     RouterSettingsField(
         field_name="routing_strategy",
         field_type="String",

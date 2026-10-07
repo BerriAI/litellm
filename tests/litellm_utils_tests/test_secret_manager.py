@@ -1,6 +1,6 @@
 import base64
+import hashlib
 import os
-import sys
 import time
 import traceback
 from litellm._uuid import uuid
@@ -9,23 +9,23 @@ from dotenv import load_dotenv
 import json
 
 load_dotenv()
-import os
 import tempfile
 from uuid import uuid4
+from typing import Final
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
-from litellm.llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.chat import BedrockConverseLLM
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 from litellm.secret_managers.main import (
     get_secret,
     _should_read_secret_from_secret_manager,
 )
 from unittest.mock import AsyncMock, patch, MagicMock
+
+_AWS_FIXTURE_MASTER_KEY_SHA256: Final = "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
 
 
 def load_vertex_ai_credentials():
@@ -80,7 +80,9 @@ def test_aws_secret_manager():
     # cast json to dict
     secret_val = json.loads(secret_val)
 
-    assert secret_val["litellm_master_key"] == "sk-1234"
+    assert (
+        hashlib.sha256(secret_val["litellm_master_key"].encode()).hexdigest() == _AWS_FIXTURE_MASTER_KEY_SHA256
+    ), "Expected the fixture value stored in the CI AWS account's litellm_master_key secret"
 
 
 def redact_oidc_signature(secret_val):
@@ -160,7 +162,7 @@ def test_oidc_circle_v1_with_amazon():
     aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
     aws_web_identity_token = "oidc/circleci/"
 
-    bllm = BedrockLLM()
+    bllm = BaseAWSLLM()
     creds = bllm.get_credentials(
         aws_region_name="ca-west-1",
         aws_web_identity_token=aws_web_identity_token,

@@ -1,19 +1,14 @@
 import json
-import os
-import sys
 from datetime import datetime
 from typing import AsyncIterator, Dict, Any
 import asyncio
 import unittest.mock
 from unittest.mock import AsyncMock, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import litellm
 import pytest
 from dotenv import load_dotenv
-from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+from litellm.llms.anthropic.pass_through.messages.handler import (
     anthropic_messages,
 )
 
@@ -72,7 +67,7 @@ class BaseAnthropicMessagesTest:
     @pytest.mark.asyncio
     async def test_non_streaming_base(self):
         """Base test for non-streaming requests"""
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         request_params = self.model_config
 
@@ -139,7 +134,7 @@ class BaseAnthropicMessagesTest:
 
         Issue: https://github.com/BerriAI/litellm/issues/20342
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         request_params = self.model_config
 
@@ -201,7 +196,7 @@ class BaseAnthropicMessagesTest:
         """
         test_custom_logger = TestCustomLogger()
         litellm.callbacks = [test_custom_logger]
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         router = Router(
             model_list=[
                 {

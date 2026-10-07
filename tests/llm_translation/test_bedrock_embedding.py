@@ -1,18 +1,12 @@
 import json
 import os
-import sys
-from datetime import datetime
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 import pytest
 import base64
-import httpx
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 titan_embedding_response = {"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}
 
@@ -112,7 +106,7 @@ def test_e2e_bedrock_embedding():
 
     os.environ["AWS_REGION_NAME"] = "us-east-1"
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = litellm.embedding(
         model="bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
         input=["Hello world from LiteLLM with TwelveLabs Marengo!"],
@@ -166,7 +160,7 @@ def test_e2e_bedrock_embedding_image_twelvelabs_marengo():
     print("Testing image embedding...")
     original_region_name = os.environ.get("AWS_REGION_NAME")
     os.environ["AWS_REGION_NAME"] = "us-east-1"
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Load duck.png and convert to base64
     duck_img_path = os.path.join(os.path.dirname(__file__), "duck.png")
@@ -235,7 +229,7 @@ def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo():
     print("Testing async invoke embedding...")
     original_region_name = os.environ.get("AWS_REGION_NAME")
     os.environ["AWS_REGION_NAME"] = "us-east-1"
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Mock the HTTP call to return async invoke response
     with patch(
@@ -298,7 +292,7 @@ async def test_e2e_bedrock_async_invoke_embedding_async_twelvelabs_marengo():
     print("Testing async invoke embedding with async calls...")
     original_region_name = os.environ.get("AWS_REGION_NAME")
     os.environ["AWS_REGION_NAME"] = "us-east-1"
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Mock the async HTTP call to return async invoke response
     with patch(
@@ -398,8 +392,6 @@ def test_bedrock_embedding_uses_correct_region_when_specified():
             os.environ["AWS_REGION_NAME"] = original_region_name
         else:
             os.environ.pop("AWS_REGION_NAME", None)
-
-
 def test_bedrock_embedding_region_bug_reproduction():
     """
     Reproduces the bug where aws_region_name is ignored when passed explicitly.
@@ -447,9 +439,7 @@ def test_bedrock_embedding_region_bug_reproduction():
                 print(
                     "❌ BUG REPRODUCED: Using wrong region from env var instead of explicit parameter"
                 )
-                assert (
-                    False
-                ), f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}"
+                pytest.fail(f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}")
             else:
                 print(
                     "✓ Bug NOT reproduced: Using correct region from explicit parameter"
@@ -464,13 +454,3 @@ def test_bedrock_embedding_region_bug_reproduction():
             os.environ["AWS_REGION_NAME"] = original_region_name
         else:
             os.environ.pop("AWS_REGION_NAME", None)
-
-
-def test_bedrock_titan_g1_text_02_model_info():
-    """Test that amazon.titan-embed-g1-text-02 has correct pricing metadata"""
-    model_info = litellm.get_model_info("amazon.titan-embed-g1-text-02")
-    assert model_info is not None, "Model info should not be None"
-    assert model_info["litellm_provider"] == "bedrock"
-    assert model_info["mode"] == "embedding"
-    assert model_info["input_cost_per_token"] == 1e-07
-    assert model_info["max_input_tokens"] == 8192

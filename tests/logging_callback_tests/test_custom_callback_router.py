@@ -3,14 +3,12 @@
 import asyncio
 import inspect
 import os
-import sys
 import time
 import traceback
 from datetime import datetime
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 from typing import List, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -283,7 +281,7 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["model"], str)
 
             # checking we use base_model for azure cost calculation
-            base_model = litellm.utils._get_base_model_from_metadata(
+            base_model = litellm.utils.get_base_model_from_metadata(
                 model_call_details=kwargs
             )
 

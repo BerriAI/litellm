@@ -1,6 +1,6 @@
 """Gray Swan Cygnal guardrail integration for LiteLLM."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -17,13 +17,13 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> GraySwanGuardrail:
     import litellm
 
-    guardrail_name = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("Gray Swan guardrail requires a guardrail_name")
 
-    optional_params = getattr(litellm_params, "optional_params", None)
+    optional_params: Final = getattr(litellm_params, "optional_params", None)
 
-    grayswan_guardrail = GraySwanGuardrail(
+    grayswan_guardrail: Final = GraySwanGuardrail(
         guardrail_name=guardrail_name,
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
@@ -47,18 +47,18 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 
 def _get_config_value(litellm_params, optional_params, attribute_name):
     if optional_params is not None:
-        value = getattr(optional_params, attribute_name, None)
+        value: Final = getattr(optional_params, attribute_name, None)
         if value is not None:
             return value
     return getattr(litellm_params, attribute_name, None)
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.GRAYSWAN.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.GRAYSWAN.value: GraySwanGuardrail,
 }
 

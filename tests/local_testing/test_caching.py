@@ -1,18 +1,24 @@
 import os
-import sys
 import time
 import traceback
+import shutil
+import subprocess
+from collections.abc import Callable, Iterator
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Final
+
+import redis
+
+from litellm._redis import _get_redis_env_kwarg_mapping, get_redis_client
+from litellm._redis_credential_provider import _token_cache
 from litellm._uuid import uuid
 
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 import json
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import hashlib
 import random
@@ -33,7 +39,6 @@ from datetime import timedelta
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
 # comment
 
-import random
 import string
 
 
@@ -105,7 +110,7 @@ async def test_batch_get_cache_with_none_keys(sync_mode):
     """
     from litellm.caching.caching import RedisCache
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     redis_cache = RedisCache(
         host=os.environ.get("REDIS_HOST"),
@@ -500,7 +505,7 @@ def test_embedding_caching():
 
 @pytest.mark.asyncio
 async def test_embedding_caching_individual_items_and_then_list():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.cache = Cache()
     text_to_embed = [
         "hello",
@@ -1036,6 +1041,102 @@ def test_redis_cache_completion_stream():
 
 
 # test_redis_cache_completion_stream()
+
+
+@pytest.fixture
+def clean_cluster_iam_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    for var in ("REDIS_URL", "REDIS_CLUSTER_NODES", "REDIS_SENTINEL_NODES", *_get_redis_env_kwarg_mapping()):
+        monkeypatch.delenv(var, raising=False)
+    _token_cache.clear()
+    yield
+    _token_cache.clear()
+
+
+@pytest.fixture
+def authenticated_redis_cluster(tmp_path: Path, unused_tcp_port_factory: Callable[[], int]) -> Iterator[int]:
+    server: Final = shutil.which("redis-server")
+    if server is None:
+        pytest.skip("redis-server is required for the cluster authentication regression tests")
+    port: Final = unused_tcp_port_factory()
+    bus_port: Final = unused_tcp_port_factory()
+    log_path: Final = tmp_path / "redis.log"
+    config: Final = tmp_path / "redis.conf"
+    config.write_text(
+        f"bind 127.0.0.1\nport {port}\ncluster-port {bus_port}\n"
+        f'cluster-enabled yes\ncluster-config-file "{tmp_path / "nodes.conf"}"\n'
+        f'dir "{tmp_path}"\nsave ""\nappendonly no\n'
+    )
+    with log_path.open("w") as log:
+        process: Final = subprocess.Popen((server, str(config)), stdout=log, stderr=subprocess.STDOUT)
+        try:
+            with redis.Redis(host="127.0.0.1", port=port, socket_timeout=1, socket_connect_timeout=1) as admin:
+                for _ in range(100):
+                    try:
+                        admin.ping()
+                        break
+                    except redis.ConnectionError:
+                        time.sleep(0.1)
+                else:
+                    pytest.fail(f"Redis did not start: {log_path.read_text()}")
+                admin.execute_command("CLUSTER", "ADDSLOTS", *range(16384))
+                for _ in range(100):
+                    if admin.cluster("INFO")["cluster_state"] == "ok":
+                        break
+                    time.sleep(0.1)
+                else:
+                    pytest.fail(f"Redis cluster did not become ready: {log_path.read_text()}")
+                admin.execute_command(
+                    "ACL", "SETUSER", "identity-object-id", "on", ">local-fixture-token", "allcommands", "allkeys"
+                )
+                admin.execute_command("ACL", "SETUSER", "default", "resetpass", ">local-fixture-token")
+            yield port
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+
+
+def test_sync_cluster_authenticates_with_azure_credentials(
+    clean_cluster_iam_environment: None, monkeypatch: pytest.MonkeyPatch, authenticated_redis_cluster: int
+) -> None:
+    monkeypatch.setenv("REDIS_USERNAME", "identity-object-id")
+    credential: Final = MagicMock()
+    credential.get_token.return_value = SimpleNamespace(token="local-fixture-token")
+
+    with patch("azure.identity.DefaultAzureCredential", return_value=credential):
+        with get_redis_client(
+            startup_nodes=[{"host": "127.0.0.1", "port": authenticated_redis_cluster}],
+            azure_redis_ad_token=True,
+            password="stale-password",
+            socket_timeout=1,
+            socket_connect_timeout=1,
+        ) as client:
+            assert client.ping() is True
+            assert client.set("iam-regression", "success") is True
+            assert client.get("iam-regression") == b"success"
+
+
+def test_sync_cluster_authenticates_with_gcp_credentials(
+    clean_cluster_iam_environment: None, authenticated_redis_cluster: int
+) -> None:
+    iam_client: Final = MagicMock()
+    iam_client.generate_access_token.return_value = SimpleNamespace(access_token="local-fixture-token")
+
+    with patch("google.cloud.iam_credentials_v1.IAMCredentialsClient", return_value=iam_client):
+        with get_redis_client(
+            startup_nodes=[{"host": "127.0.0.1", "port": authenticated_redis_cluster}],
+            gcp_service_account="projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com",
+            username="stale-user",
+            password="stale-password",
+            socket_timeout=1,
+            socket_connect_timeout=1,
+        ) as client:
+            assert client.ping() is True
+            assert client.set("iam-regression", "success") is True
+            assert client.get("iam-regression") == b"success"
 
 
 @pytest.mark.skip(reason="Local test. Requires running redis cluster locally.")
@@ -2491,7 +2592,7 @@ async def test_redis_increment_pipeline():
         from litellm.caching.redis_cache import RedisCache
 
         litellm.set_verbose = True
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         redis_cache = RedisCache(
             host=os.environ["REDIS_HOST"],
             port=os.environ["REDIS_PORT"],
@@ -2762,7 +2863,7 @@ def test_caching_with_reasoning_content():
 
 def test_caching_reasoning_args_miss():  # test in memory cache
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
@@ -2788,7 +2889,7 @@ def test_caching_reasoning_args_miss():  # test in memory cache
 
 def test_caching_reasoning_args_hit():  # test in memory cache
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
@@ -2815,7 +2916,7 @@ def test_caching_reasoning_args_hit():  # test in memory cache
 
 def test_caching_thinking_args_miss():  # test in memory cache
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
@@ -2841,7 +2942,7 @@ def test_caching_thinking_args_miss():  # test in memory cache
 
 def test_caching_thinking_args_hit():  # test in memory cache
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
