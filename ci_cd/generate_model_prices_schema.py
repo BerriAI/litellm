@@ -169,18 +169,13 @@ ARRAY_KEYS: dict[str, JsonSchema] = {
 }
 
 INTEGER_KEYS: dict[str, JsonSchema] = {
-    "context_window": {
-        "type": "integer",
-        "minimum": 1,
-        "description": "Maximum combined input and generated output tokens, independent of the input and output limits.",
-    },
     "max_tokens": {
         **NONNEG_INTEGER,
         "description": "Legacy field: max output tokens if the provider specifies it, else max input tokens.",
     },
     "max_input_tokens": {
         **NONNEG_INTEGER,
-        "description": "Maximum input tokens, independent of the combined input and output context window.",
+        "description": "Maximum prompt/context tokens the model accepts.",
     },
     "max_output_tokens": {
         **NONNEG_INTEGER,
@@ -285,7 +280,7 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
                 "Gates whether a non-default temperature or the top_p/logprobs sampling params are "
                 "accepted, which hold only when the effort resolves to 'none'."
             ),
-            "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+            "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
         },
         "comment": STRING,
         "audio_transcription_config": STRING,
@@ -309,7 +304,7 @@ def classify(key: str, modes: tuple) -> Optional[JsonSchema]:
 
 def build_schema(prices: dict) -> JsonSchema:
     entries = {name: entry for name, entry in prices.items() if name not in SPECIAL_ROOT_KEYS}
-    all_keys = tuple(sorted({key for entry in entries.values() for key in entry} | {"context_window"}))
+    all_keys = tuple(sorted({key for entry in entries.values() for key in entry}))
     modes = tuple(sorted({entry["mode"] for entry in entries.values() if "mode" in entry}))
     unclassified = tuple(key for key in all_keys if classify(key, modes) is None)
     if unclassified:

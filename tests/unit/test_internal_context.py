@@ -51,6 +51,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/litellm_core_utils/specialty_caches/service_trace_id_cache.py",
         "litellm/llms/azure/common_utils.py",
         "litellm/llms/bedrock/base_aws_llm.py",
+        "litellm/llms/chatgpt/model_info.py",
         "litellm/llms/custom_httpx/http_handler.py",
         "litellm/llms/gigachat/authenticator.py",
         "litellm/llms/litellm_proxy/skills/handler.py",

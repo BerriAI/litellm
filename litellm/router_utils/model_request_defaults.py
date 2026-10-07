@@ -18,17 +18,14 @@ class _Reasoning(BaseModel):
 
 class _RequestEffort(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
-    reasoning_effort: str | int | None = None
+    reasoning_effort: str | int | _Reasoning | None = None
     reasoning: _Reasoning | None = None
 
     def effort(self) -> str | int | None:
-        return (
-            self.reasoning_effort
-            if self.reasoning_effort is not None
-            else self.reasoning.effort
-            if self.reasoning is not None
-            else None
+        direct: Final = (
+            self.reasoning_effort.effort if isinstance(self.reasoning_effort, _Reasoning) else self.reasoning_effort
         )
+        return direct if direct is not None else self.reasoning.effort if self.reasoning is not None else None
 
 
 def model_request_defaults(

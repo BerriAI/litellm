@@ -14,12 +14,18 @@ import yaml
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-from litellm.llms.chatgpt.authenticator import Authenticator, prevent_device_login
-from litellm.llms.chatgpt.model_info import get_chatgpt_model_inventory
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_CONCURRENCY, get_openai_compatible_model_inventory
+from litellm.llms.model_inventory import (
+    get_provider_model_inventory,
+    model_inventory_api_base,
+    model_inventory_identity,
+    prevent_supplier_device_login,
+)
+from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_CONCURRENCY
+from litellm.proxy.common_utils.encrypt_decrypt_utils import model_offering_identity_fingerprint
 from litellm.proxy.offering_router import OfferingRouterView, OfferingServingSnapshot
 from litellm.router import Router
+from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
 from litellm.types.proxy.model_inventory import SupplierInventoryUnavailable, SupplierModelInventory
 from litellm.types.proxy.model_metadata import GatewayModelMetadata
 from litellm.types.proxy.model_offerings import ModelOffering, ModelOfferingsConfig, SupplierConnection
@@ -32,7 +38,7 @@ class _ResolvedConnection:
     api_key: str | None
     headers: Mapping[str, str]
     fingerprint: str
-    native_account_id: str | None = None
+    supplier_identity: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,21 +69,9 @@ def _resolve_secret(value: str) -> str:
     return resolved
 
 
-def _native_account_id() -> str | None:
-    try:
-        return Authenticator().get_account_id()
-    except Exception:  # noqa: BLE001  # an unreadable native auth file is not proof of an account change
-        return None
-
-
 def _resolve_connection(connection: SupplierConnection) -> _ResolvedConnection:
-    api_base: Final = (
-        str(connection.api_base).rstrip("/")
-        if connection.api_base is not None
-        else {
-            "openrouter": "https://openrouter.ai/api/v1",
-            "vercel_ai_gateway": "https://ai-gateway.vercel.sh/v1",
-        }.get(connection.provider)
+    api_base: Final = model_inventory_api_base(
+        connection.provider, str(connection.api_base).rstrip("/") if connection.api_base is not None else None
     )
     api_key: Final = _resolve_secret(connection.api_key.get_secret_value()) if connection.api_key is not None else None
     configured_headers: Final = {
@@ -86,16 +80,16 @@ def _resolve_connection(connection: SupplierConnection) -> _ResolvedConnection:
     headers: Final = MappingProxyType(
         {**({"authorization": f"Bearer {api_key}"} if api_key is not None else {}), **configured_headers}
     )
-    fingerprint: Final = hashlib.sha256(
+    fingerprint: Final = model_offering_identity_fingerprint(
         json.dumps((connection.provider, api_base, api_key, sorted(headers.items()))).encode()
-    ).hexdigest()
+    )
     return _ResolvedConnection(
         connection.provider,
         api_base,
         api_key,
         headers,
         fingerprint,
-        _native_account_id() if connection.provider == "chatgpt" else None,
+        model_inventory_identity(connection.provider),
     )
 
 
@@ -113,7 +107,7 @@ def _load_config(path: Path) -> _LoadedConfig | _InvalidConfig:
                 (
                     hashlib.sha256(content).hexdigest(),
                     tuple(
-                        (connection.fingerprint, connection.native_account_id) for connection in connections.values()
+                        (connection.fingerprint, connection.supplier_identity) for connection in connections.values()
                     ),
                 )
             ).encode()
@@ -173,7 +167,9 @@ def _deployment(offering: ModelOffering, state: _ProviderState) -> Mapping[str, 
     deployment_id: Final = (
         "offering-"
         + hashlib.sha256(
-            json.dumps((offering.model_name, connection.fingerprint, offering.upstream_model)).encode()
+            json.dumps(
+                (offering.model_name, connection.fingerprint, offering.upstream_model, connection.supplier_identity)
+            ).encode()
         ).hexdigest()
     )
     return MappingProxyType(
@@ -224,23 +220,22 @@ class ModelOfferingsManager:
         self.router = OfferingRouterView(
             OfferingServingSnapshot(template, frozenset(), MappingProxyType({}), frozenset())
         )
+        # Globally registered native affinity callbacks must read the same pinned
+        # snapshot as request routing, rather than the empty bootstrap template.
+        for callback in template.optional_callbacks or ():
+            if isinstance(callback, EncryptedContentAffinityCheck) and callback.router is template:
+                callback.router = self.router
 
     async def _fetch_provider(self, state: _ProviderState) -> _ProviderState:
         connection: Final = state.connection
         try:
-            fetched: Final = (
-                await get_chatgpt_model_inventory(
-                    client=self.client, cache=self.cache, api_base=connection.api_base, force_refresh=True
-                )
-                if connection.provider == "chatgpt"
-                else await get_openai_compatible_model_inventory(
-                    api_base=connection.api_base or "",
-                    provider=connection.provider,
-                    headers=connection.headers,
-                    client=self.client,
-                    cache=self.cache,
-                    force_refresh=True,
-                )
+            fetched: Final = await get_provider_model_inventory(
+                provider=connection.provider,
+                api_base=connection.api_base,
+                headers=connection.headers,
+                client=self.client,
+                cache=self.cache,
+                force_refresh=True,
             )
         except Exception:  # noqa: BLE001  # supplier failures cannot replace a successful inventory with absence
             return state
@@ -267,7 +262,7 @@ class ModelOfferingsManager:
             if _unavailable_reason(offering, providers[offering.provider]) is None
         )
         try:
-            with prevent_device_login():
+            with prevent_supplier_device_login():
                 candidate: Final = (
                     self.template.snapshot_with_model_list(deployments, metadata_authoritative=True)
                     if deployments != self.deployments
@@ -331,8 +326,8 @@ class ModelOfferingsManager:
                     if (previous := self.providers.get(name)) is not None
                     and previous.connection.fingerprint == connection.fingerprint
                     and (
-                        connection.native_account_id is None
-                        or previous.connection.native_account_id == connection.native_account_id
+                        connection.supplier_identity is None
+                        or previous.connection.supplier_identity == connection.supplier_identity
                     )
                     else _ProviderState(connection, None)
                     for name, connection in loaded.connections.items()

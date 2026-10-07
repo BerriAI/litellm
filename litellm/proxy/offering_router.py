@@ -10,7 +10,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.chatgpt.authenticator import prevent_device_login
+from litellm.llms.model_inventory import prevent_supplier_device_login
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator, alias_target, caller_alias_maps
 from litellm.router import Router
@@ -36,6 +36,12 @@ _METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 class OfferingRouterView(Router):
+    """Request-pinned facade delegating native members to initialized Router instances.
+
+    Router initialization belongs to the delegated instances. Reinitializing the
+    facade would allocate unused clients and register duplicate global callbacks.
+    """
+
     def __init__(self, snapshot: OfferingServingSnapshot) -> None:
         self._offering_snapshot = snapshot
 
@@ -76,7 +82,7 @@ class OfferingRouterView(Router):
     def pin_snapshot(self) -> Generator[None]:
         token: Final = _PINNED_SNAPSHOT.set((id(self), self._offering_snapshot))
         try:
-            with prevent_device_login():
+            with prevent_supplier_device_login():
                 yield
         finally:
             _PINNED_SNAPSHOT.reset(token)
@@ -98,6 +104,7 @@ class OfferingSnapshotMiddleware:
 
 class OfferingAccessGuard(CustomLogger):
     def __init__(self, router: OfferingRouterView, general_settings: Mapping[str, object] | None = None) -> None:
+        super().__init__()
         self.router = router
         self.general_settings = general_settings if general_settings is not None else {}
 
@@ -139,6 +146,13 @@ class OfferingAccessGuard(CustomLogger):
         data: Mapping[str, object],
         call_type: CallTypesLiteral,
     ) -> Exception | None:
+        extra_body: Final = data.get("extra_body")
+        if isinstance(extra_body, Mapping) and "model" in extra_body:
+            return litellm.BadRequestError(
+                message="External offering mode does not accept supplier model overrides in extra_body",
+                model="",
+                llm_provider="",
+            )
         if any(
             data.get(name) is not None
             for name in (

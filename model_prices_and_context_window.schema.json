@@ -267,11 +267,6 @@
         "comment": {
           "type": "string"
         },
-        "context_window": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Maximum combined input and generated output tokens, independent of the input and output limits."
-        },
         "cost_per_second": {
           "type": "number",
           "minimum": 0
@@ -285,8 +280,7 @@
             "low",
             "medium",
             "high",
-            "xhigh",
-            "max"
+            "xhigh"
           ]
         },
         "deprecation_date": {
@@ -508,7 +502,7 @@
         "max_input_tokens": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum input tokens, independent of the combined input and output context window."
+          "description": "Maximum prompt/context tokens the model accepts."
         },
         "max_output_tokens": {
           "type": "integer",

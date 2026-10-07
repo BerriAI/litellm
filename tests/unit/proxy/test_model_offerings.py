@@ -3,8 +3,8 @@ from typing import Final
 
 import httpx
 import pytest
-from openai import AsyncOpenAI
 import yaml
+from openai import AsyncOpenAI
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.model_offerings import ModelOfferingsManager
@@ -196,9 +196,13 @@ async def test_snapshot_factory_dispatch_and_reload_resources_are_isolated() -> 
     response: Final = await first.aresponses(model="selected", input="fixture", mock_response="local-only")
     assert response.output[0].content[0].text == "local-only"
     assert template.get_model_names() == []
+    assert template.deployment_names == []
+    assert first.deployment_names == ["openai/fixture"]
     references: Final = tuple(weakref.ref(template.snapshot_with_model_list(models)) for _ in range(30))
     gc.collect()
     assert all(reference() is None for reference in references)
+    assert template.deployment_names == []
+    assert first.deployment_names == ["openai/fixture"]
     assert callback_counts == tuple(
         len(callbacks)
         for callbacks in (
@@ -335,3 +339,139 @@ async def test_native_client_forwards_one_supplier_authorization_value(
                 model="selected", messages=[{"role": "user", "content": "authenticate"}], client=sdk_client
             )
         assert response.choices[0].message.content == "accepted"
+
+
+async def test_global_affinity_preserves_encrypted_content_across_switch_and_pinned_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    path: Final = tmp_path / "offerings.yaml"
+    config: Final = {
+        "version": 1,
+        "providers": {
+            "source": {"provider": "openai", "api_base": "https://supplier.test/v1", "api_key": "fixture-key"}
+        },
+        "offerings": [
+            {"model_name": name, "source": "manual", "provider": "source", "upstream_model": "gpt-4o-mini"}
+            for name in ("parent", "child")
+        ],
+    }
+    path.write_text(yaml.safe_dump(config))
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": []}))
+    ) as client:
+        handler.client = client
+        template: Final = Router(model_list=[], optional_pre_call_checks=["encrypted_content_affinity"])
+        manager: Final = ModelOfferingsManager(path=path, template=template, client=handler)
+        assert await manager.reload(initial=True)
+        old: Final = manager.router.latest_snapshot()
+        origin: Final = old.router.get_model_ids("parent")[0]
+        wrapped: Final = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("opaque-fixture", origin)
+        with manager.router.pin_snapshot():
+            config["offerings"] = config["offerings"][1:]
+            path.write_text(yaml.safe_dump(config))
+            assert await manager.reload()
+            request: Final = {
+                "input": [{"type": "reasoning", "encrypted_content": wrapped}, {"role": "user", "content": "fixture"}]
+            }
+            child: Final = [row for row in old.router.get_model_list() or [] if row["model_name"] == "child"]
+            result: Final = await manager.router.async_callback_filter_deployments(
+                model="child",
+                healthy_deployments=child,
+                messages=None,
+                parent_otel_span=None,
+                request_kwargs=request,
+            )
+            assert result == child
+            assert request["input"][0]["encrypted_content"] == wrapped
+        next_request: Final = {
+            "input": [{"type": "reasoning", "encrypted_content": wrapped}, {"role": "user", "content": "fixture"}]
+        }
+        await manager.router.async_callback_filter_deployments(
+            model="child",
+            healthy_deployments=child,
+            messages=None,
+            parent_otel_span=None,
+            request_kwargs=next_request,
+        )
+        assert next_request["input"] == [{"role": "user", "content": "fixture"}]
+        assert template.deployment_names == []
+
+
+async def test_private_connection_identity_is_stable_and_changes_on_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "fixture-server-owned-key")
+    path: Final = tmp_path / "offerings.yaml"
+    config: Final = {
+        "version": 1,
+        "providers": {
+            "source": {
+                "provider": "openai",
+                "api_base": "https://supplier.test/v1",
+                "headers": {"Authorization": "Basic dXNlcjpwYXNz"},
+            }
+        },
+        "offerings": [
+            {"model_name": "selected", "source": "manual", "provider": "source", "upstream_model": "gpt-4o-mini"}
+        ],
+    }
+    path.write_text(yaml.safe_dump(config))
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": []}))
+    ) as client:
+        handler.client = client
+        manager: Final = ModelOfferingsManager(path=path, template=Router(model_list=[]), client=handler)
+        assert await manager.reload(initial=True)
+        before: Final = manager.router.get_model_ids()
+        assert await manager.reload(force_inventory=True)
+        assert manager.router.get_model_ids() == before
+        config["providers"]["source"]["headers"]["Authorization"] = "Basic dXNlcjpuZXctcGFzcw=="
+        path.write_text(yaml.safe_dump(config))
+        assert await manager.reload()
+        assert manager.router.get_model_ids() != before
+
+
+async def test_native_account_change_changes_private_deployment_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.chatgpt.authenticator import Authenticator
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "fixture-server-owned-key")
+    monkeypatch.setenv("CHATGPT_API_BASE", "https://native.test/backend-api/codex")
+    account: Final = {"id": "first"}
+    monkeypatch.setattr(Authenticator, "get_account_id", lambda self: account["id"])
+    monkeypatch.setattr(Authenticator, "get_access_token", lambda self, **kwargs: "fixture-oauth")
+    path: Final = tmp_path / "offerings.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "providers": {"native": {"provider": "chatgpt"}},
+                "offerings": [
+                    {"model_name": "selected", "source": "auto", "provider": "native", "upstream_model": "fixture"}
+                ],
+            }
+        )
+    )
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"models": [{"slug": "fixture"}]}))
+    ) as client:
+        handler.client = client
+        manager: Final = ModelOfferingsManager(path=path, template=Router(model_list=[]), client=handler)
+        assert await manager.reload(initial=True)
+        first: Final = manager.router.get_model_ids()
+        assert len(first) == 1
+        account["id"] = "second"
+        assert await manager.reload(force_inventory=True)
+        assert manager.router.get_model_ids() != first
+        assert manager.router.latest_snapshot().available_models == {"selected"}

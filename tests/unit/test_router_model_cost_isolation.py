@@ -3345,3 +3345,58 @@ def test_price_data_reload_refreshes_the_cached_model_group_and_deployment_info(
 
     assert router.cached_model_group_info("grp").input_cost_per_token == new_price
     assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == new_price
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        LiteLLM_Params(model="openai/*", api_base="https://fixture.test/v1"),
+        LiteLLM_Params(model="openai/fixture", api_base="https://fixture.test/v1", use_clientside_credentials=True),
+        LiteLLM_Params(model="anthropic/claude-sonnet-4-5"),
+    ),
+)
+async def test_deployment_metadata_skips_unresolved_or_unsupported_supplier_connections(params: LiteLLM_Params) -> None:
+    router: Final = Router(model_list=[])
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+
+    def unexpected(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"No catalog request expected for {request.url.path}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(unexpected)) as http_client:
+        handler.client = http_client
+        assert await router._aget_deployment_model_metadata(params, client=handler) == {}
+
+
+async def test_deployment_metadata_uses_resolved_catalog_credentials_and_independent_limits() -> None:
+    router: Final = Router(model_list=[])
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    paths: Final[list[str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        assert request.headers["authorization"] == "Bearer operator-override"
+        assert request.headers["x-provider-route"] == "fixture"
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"id": "fixture", "context_window": 1200, "max_input_tokens": 1100, "max_output_tokens": 200}]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        handler.client = http_client
+        metadata: Final = await router._aget_deployment_model_metadata(
+            LiteLLM_Params(
+                model="openai/fixture",
+                api_base="https://fixture.test/v1",
+                api_key="default-key",
+                extra_headers={"Authorization": "Bearer operator-override", "x-provider-route": "fixture"},
+            ),
+            client=handler,
+        )
+    assert paths == ["/v1/models"]
+    assert metadata["context_window"] == 1200
+    assert metadata["max_input_tokens"] == 1100
+    assert metadata["max_output_tokens"] == 200

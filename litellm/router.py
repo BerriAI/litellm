@@ -127,10 +127,8 @@ from litellm.llms.base_llm.vector_store.transformation import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
-    MODEL_INFO_DISCOVERY_PROVIDERS,
     MODEL_INFO_REFRESH_CONCURRENCY,
     MODEL_INFO_REFRESH_SECONDS,
-    get_openai_compatible_model_info,
 )
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -10018,6 +10016,7 @@ class Router:
         snapshot: Final = copy.copy(self)
         snapshot.model_metadata_authoritative = metadata_authoritative
         snapshot.pattern_router = PatternMatchRouter()
+        snapshot.deployment_names = []
         snapshot.provider_default_deployment_ids = []
         snapshot._zero_cost_cache = {}
         snapshot._discovered_model_info_cache = InMemoryCache(
@@ -10825,43 +10824,10 @@ class Router:
     async def _aget_deployment_model_metadata(
         self, params: LiteLLM_Params, *, client: AsyncHTTPHandler | None
     ) -> Mapping[str, object]:
-        if params.get("use_clientside_credentials") or "*" in params.model:
-            return MappingProxyType({})
-        if params.model.startswith("chatgpt/"):
-            from litellm.llms.chatgpt.model_info import get_chatgpt_model_info
+        from litellm.llms.model_inventory import get_deployment_model_metadata
 
-            return await get_chatgpt_model_info(
-                model=params.model.removeprefix("chatgpt/"),
-                api_base=params.api_base,
-                client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
-                cache=self.cache.in_memory_cache,
-            )
-        model, provider, dynamic_api_key, api_base = litellm.get_llm_provider(model=params.model, litellm_params=params)
-        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
-            return MappingProxyType({})
-        discovery_api_base: Final = api_base or {
-            "openrouter": "https://openrouter.ai/api/v1",
-            "vercel_ai_gateway": "https://ai-gateway.vercel.sh/v1",
-        }.get(provider)
-        if discovery_api_base is None or "*" in model or params.get("use_clientside_credentials"):
-            return MappingProxyType({})
-        api_key: Final = params.api_key or dynamic_api_key
-        headers: Final = TypeAdapter(Mapping[str, str]).validate_python(
-            params.get("extra_headers") or params.get("headers") or MappingProxyType({})
-        )
-        auth_headers: Final = (
-            MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
-        )
-        return await get_openai_compatible_model_info(
-            model=model,
-            api_base=discovery_api_base,
-            provider=provider,
-            headers=MappingProxyType(
-                {
-                    **auth_headers,
-                    **MappingProxyType({key.lower(): value for key, value in headers.items()}),
-                }
-            ),
+        return await get_deployment_model_metadata(
+            params=params,
             client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
             cache=self.cache.in_memory_cache,
         )

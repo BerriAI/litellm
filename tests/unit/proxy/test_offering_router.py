@@ -1,8 +1,9 @@
 from types import MappingProxyType
 from typing import Final
 
-import litellm
 import pytest
+
+import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
@@ -146,3 +147,26 @@ async def test_public_and_router_aliases_follow_offering_availability_without_cr
         assert await guard.async_filter_listed_models(admin, ("fast",)) == ("fast",)
         legacy: Final = OfferingAccessGuard(view, {"use_team_public_model_name": False})
         assert await legacy.async_filter_listed_models(auth, ("fast", active)) == (active,)
+
+
+async def test_body_model_override_cannot_bypass_offering_authority() -> None:
+    view: Final = OfferingRouterView(
+        OfferingServingSnapshot(Router(model_list=[]), frozenset({"selected"}), MappingProxyType({}), frozenset())
+    )
+    guard: Final = OfferingAccessGuard(view)
+    assert guard.message_logging is True
+    assert guard.turn_off_message_logging is False
+    auth: Final = UserAPIKeyAuth()
+    for call_type in ("acompletion", "aresponses"):
+        assert isinstance(
+            await guard.async_pre_call_hook(
+                auth, DualCache(), {"model": "selected", "extra_body": {"model": "unselected"}}, call_type
+            ),
+            litellm.BadRequestError,
+        )
+        assert (
+            await guard.async_pre_call_hook(
+                auth, DualCache(), {"model": "selected", "extra_body": {"metadata": {"fixture": "allowed"}}}, call_type
+            )
+            is None
+        )

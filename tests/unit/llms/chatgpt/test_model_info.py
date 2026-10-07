@@ -16,6 +16,7 @@ async def test_account_catalog_preserves_client_policy_separately_from_model_lim
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_API_BASE", "https://account.test/backend-api/codex")
     auth_file: Final = tmp_path / "auth.json"
     auth_file.write_text(
         json.dumps({"access_token": "local-token", "account_id": "local-account", "expires_at": 10**30})
@@ -76,6 +77,7 @@ async def test_switching_accounts_invalidates_catalog_without_exposing_credentia
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_API_BASE", "https://account.test/backend-api/codex")
     auth_file: Final = tmp_path / "auth.json"
     cache: Final = InMemoryCache()
     handler: Final = AsyncHTTPHandler()
@@ -106,6 +108,7 @@ async def test_discovery_without_authorization_never_starts_device_login(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_API_BASE", "https://account.test/backend-api/codex")
     with pytest.raises(GetAccessTokenError, match="model discovery cannot start device login"):
         Authenticator().get_access_token(allow_device_login=False)
 
@@ -133,6 +136,7 @@ async def test_invalid_or_unavailable_catalog_preserves_fallback(
     status: int, body: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_API_BASE", "https://account.test/backend-api/codex")
     (tmp_path / "auth.json").write_text(json.dumps({"access_token": "local", "expires_at": 10**30}))
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
@@ -166,3 +170,28 @@ def test_codex_ui_efforts_are_not_advertised_as_api_efforts(
     ).metadata()
     assert metadata["reasoning_effort_levels"] == ("high", "max", "disabled")
     assert metadata["default_reasoning_effort"] == expected
+
+
+async def test_caller_api_base_cannot_exfiltrate_saved_server_oauth(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import Mock
+
+    from litellm.llms.chatgpt.model_info import get_chatgpt_model_inventory
+    from litellm.types.proxy.model_inventory import SupplierInventoryUnavailable
+
+    monkeypatch.setenv("CHATGPT_API_BASE", "https://trusted.test/backend-api/codex")
+    token: Final = Mock(side_effect=AssertionError("Rejected destinations must not even read the access token"))
+    monkeypatch.setattr(Authenticator, "get_access_token", token)
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+
+    def reject(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("Saved OAuth must not reach a caller-controlled destination")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reject)) as client:
+        handler.client = client
+        result: Final = await get_chatgpt_model_inventory(
+            client=handler, cache=InMemoryCache(), api_base="https://attacker.test/capture"
+        )
+    assert isinstance(result, SupplierInventoryUnavailable)
+    assert result.reason == "authentication"
+    token.assert_not_called()

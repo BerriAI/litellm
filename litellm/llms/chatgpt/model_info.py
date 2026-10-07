@@ -125,6 +125,22 @@ class _ChatGPTCatalog(BaseModel):
     error: object | None = None
 
 
+def chatgpt_model_inventory_api_base(api_base: str | None = None, *, authenticator: Authenticator | None = None) -> str:
+    """Saved server OAuth credentials may only be sent to the server-configured backend."""
+    auth: Final = authenticator if authenticator is not None else Authenticator()
+    trusted_base: Final = auth.get_api_base().rstrip("/")
+    if api_base is not None and api_base.rstrip("/") != trusted_base:
+        raise ValueError("Native model discovery requires the server-configured API base")
+    return trusted_base
+
+
+def chatgpt_model_inventory_identity() -> str | None:
+    try:
+        return Authenticator().get_account_id()
+    except Exception:  # noqa: BLE001  # unreadable server auth is not proof of an account change
+        return None
+
+
 async def get_chatgpt_model_info(
     *,
     model: str,
@@ -153,8 +169,9 @@ async def get_chatgpt_model_inventory(
 ) -> SupplierModelInventory | SupplierInventoryUnavailable:
     auth: Final = authenticator if authenticator is not None else Authenticator()
     try:
+        trusted_base: Final = chatgpt_model_inventory_api_base(api_base, authenticator=auth)
         account: Final = await asyncio.to_thread(auth.get_account_id)
-        url: Final = f"{(api_base or auth.get_api_base()).rstrip('/')}/models?client_version={_CATALOG_CLIENT_VERSION}"
+        url: Final = f"{trusted_base}/models?client_version={_CATALOG_CLIENT_VERSION}"
         credential_scope: Final = hashlib.sha256(json.dumps((url, account)).encode()).hexdigest() if account else None
     except Exception:  # noqa: BLE001  # malformed native auth is unavailable, never an authoritative empty inventory
         return SupplierInventoryUnavailable("authentication")

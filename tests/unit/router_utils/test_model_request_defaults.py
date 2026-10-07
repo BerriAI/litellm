@@ -94,3 +94,14 @@ def test_request_budget_maps_are_immutable_and_only_common_policy_is_advertised(
     assert defaults is not None
     with pytest.raises(TypeError):
         defaults.output_token_budget_by_reasoning_effort["max"] = 1
+
+
+@pytest.mark.parametrize("surface,key", [("acompletion", "max_tokens"), ("aresponses", "max_output_tokens")])
+def test_structured_reasoning_effort_preserves_summary_and_caller_precedence(surface, key):
+    metadata: Final = {"request_defaults": _POLICY}
+    deployment: Final = {"reasoning_effort": {"effort": "max", "summary": "auto"}}
+    request: Final = {"reasoning_effort": {"effort": "high", "summary": "auto"}}
+    assert model_request_defaults(metadata, deployment, request, surface) == {key: 65536}
+    assert model_request_defaults(metadata, deployment, {}, surface) == {key: 131072}
+    assert request == {"reasoning_effort": {"effort": "high", "summary": "auto"}}
+    assert deployment == {"reasoning_effort": {"effort": "max", "summary": "auto"}}
