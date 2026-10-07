@@ -827,6 +827,33 @@ async def test_injection_points_still_reach_a_native_responses_provider():
     assert "cache_control_injection_points" not in body
 
 
+@pytest.mark.asyncio
+async def test_injection_points_reach_a_provider_prefixed_native_responses_model():
+    """Bedrock Mantle resolves its Responses config from the price map by bare model name,
+    so predicting the bridge with the ``bedrock_mantle/``-prefixed name read as bridged and
+    deferred the system point to a chat-completions pass this native path never runs."""
+    injected_client = AsyncHTTPHandler()
+    mock_post = AsyncMock(
+        return_value=MockResponse(_minimal_responses_api_payload("resp_mantle", "openai.gpt-5.6-sol"), 200)
+    )
+    injected_client.post = mock_post
+
+    await litellm.aresponses(
+        model="bedrock_mantle/openai.gpt-5.6-sol",
+        api_key="fake-bearer-token",
+        aws_region_name="us-east-1",
+        input=copy.deepcopy(_INJECTION_POINT_INPUT),
+        cache_control_injection_points=copy.deepcopy(_SYSTEM_INJECTION_POINT),
+        client=injected_client,
+    )
+
+    assert mock_post.call_args.kwargs["url"].endswith("/openai/v1/responses")
+    body = _sent_body(mock_post)
+    assert body["input"][0]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert body["prompt_cache_options"] == {"mode": "implicit"}
+    assert "cache_control_injection_points" not in body
+
+
 async def _bridged_body(mock_post, *, points, input, instructions="You are a documentation assistant."):
     injected_client = AsyncHTTPHandler()
     injected_client.post = mock_post

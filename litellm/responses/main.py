@@ -526,6 +526,13 @@ def _api_base_kwarg(kwargs: Mapping[str, object]) -> str | None:
     return api_base if isinstance(api_base, str) else None
 
 
+def _dispatched_model_name(model: str, custom_llm_provider: str, api_base: str | None) -> str:
+    provider_model, _, _, _ = litellm.get_llm_provider(
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+    )
+    return _strip_responses_routing_prefix(provider_model)
+
+
 def _will_bridge_to_chat_completions(
     model: str,
     custom_llm_provider: str | None,
@@ -536,16 +543,23 @@ def _will_bridge_to_chat_completions(
     """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
 
     Resolving the config is a pure lookup, so this asks the same question the dispatch
-    asks rather than restating its condition. Both callers resolve the provider before
-    this runs, so the only way to be wrong is a prompt manager that moves the model
-    across the bridge boundary, which would leave the deferred points to a pass that
-    never comes.
+    asks rather than restating its condition, with the model name the dispatch hands the
+    lookup: a provider whose config is keyed by model name (Bedrock Mantle reads the
+    price map) answers nothing for ``bedrock_mantle/openai.gpt-5.6-sol`` and would read
+    as bridged. Both callers resolve the provider before this runs, so the only way to be
+    wrong is a prompt manager that moves the model across the bridge boundary, which
+    would leave the deferred points to a pass that never comes.
     """
     normalized_model: Final = _normalize_openai_chat_completions_responses_model(model)
     if custom_llm_provider is None:
         return True
     return _bridges_to_chat_completions(
-        _resolve_responses_api_provider_config(normalized_model[0], custom_llm_provider, model_info, api_base),
+        _resolve_responses_api_provider_config(
+            _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base),
+            custom_llm_provider,
+            model_info,
+            api_base,
+        ),
         use_chat_completions_api or normalized_model[1],
     )
 
