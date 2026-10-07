@@ -4698,6 +4698,29 @@ def test_tool_result_is_error_puts_the_marker_first_in_part_lists():
     ]
 
 
+def test_tool_result_is_error_with_empty_content_keeps_the_marker():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": "",
+                        "is_error": True,
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert result[1]["content"] == "[tool error]"
+
+
 def test_tool_result_without_is_error_keeps_content_unchanged():
     adapter = LiteLLMAnthropicMessagesAdapter()
 
