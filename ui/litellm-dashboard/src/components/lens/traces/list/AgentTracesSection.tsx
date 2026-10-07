@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
 import { useTraceFindings } from "./useTraceFindings";
+import { matchesFeedback, useTraceFeedback } from "./useTraceFeedback";
 import { useTraceSignals } from "./useTraceSignals";
 import { useOptionalLensApi } from "../../data/LensServices";
 import { lensKeys } from "../../data/queries";
@@ -100,7 +101,7 @@ export function AgentTracesSection({
 }: AgentTracesSectionProps) {
   const live = useTracesLive();
   const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
-  const { query, setQuery, agent, status } = useRunFilterRouting();
+  const { query, setQuery, agent, status, feedback: feedbackFilter } = useRunFilterRouting();
   const [showSetup, setShowSetup] = useState(false);
   const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
@@ -124,7 +125,15 @@ export function AgentTracesSection({
     () => filterRuns(traces.traces, query, { agent, status }),
     [traces.traces, query, agent, status],
   );
-  const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
+  const windowed = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
+  const feedback = useTraceFeedback(accessToken, windowed, isActive);
+  const runs = useMemo(
+    () =>
+      feedbackFilter === "all"
+        ? windowed
+        : windowed.filter((run) => matchesFeedback(feedback.get(run.trace_ref || run.trace_id), feedbackFilter)),
+    [windowed, feedback, feedbackFilter],
+  );
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
   const findings = useTraceFindings(accessToken, runs, isActive, canViewFindings);
   const signalSetup = useSignalSetup(isActive && canViewFindings !== false);
@@ -231,6 +240,7 @@ export function AgentTracesSection({
         <AgentTracesTable
           traces={runs}
           findings={findings}
+          feedback={feedback}
           canViewFindings={canViewFindings}
           signals={signals}
           showSignals={signalSetup.on}

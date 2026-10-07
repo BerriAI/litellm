@@ -12,7 +12,8 @@ import {
   ComboboxList,
 } from "@/components/ui/combobox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useRunFilterRouting } from "../../routing";
+import { type FeedbackFilter, useRunFilterRouting } from "../../routing";
+import { LOW_SCORE } from "../useTraceFeedback";
 import { traceAgentNames } from "../../utils";
 import { RunSearch } from "./RunSearch";
 
@@ -29,12 +30,17 @@ interface RunsToolbarProps {
 }
 
 export function RunsToolbar({ query, onQueryChange, runs, range, busy, children }: RunsToolbarProps) {
-  const { agent, status, setAgent, setStatus } = useRunFilterRouting();
+  const { agent, status, feedback, setAgent, setStatus, setFeedback } = useRunFilterRouting();
   const agents = [...new Set([...runs.flatMap(traceAgentNames), ...(agent ? [agent] : [])])].sort();
   const statuses = [
     { value: "all", label: "All status" },
     { value: "ok", label: "No errors" },
     { value: "error", label: "With errors" },
+  ];
+  const feedbackFilters: { value: FeedbackFilter; label: string }[] = [
+    { value: "all", label: "All feedback" },
+    { value: "rated", label: "Has feedback" },
+    { value: "low", label: `Low score (≤${LOW_SCORE})` },
   ];
   return (
     <div className="flex shrink-0 flex-col bg-card">
@@ -71,6 +77,22 @@ export function RunsToolbar({ query, onQueryChange, runs, range, busy, children 
           </SelectTrigger>
           <SelectContent>
             {statuses.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          items={feedbackFilters}
+          value={feedback}
+          onValueChange={(value: FeedbackFilter | null) => value !== null && setFeedback(value)}
+        >
+          <SelectTrigger size="sm" className="h-8 min-w-32 text-xs" aria-label="Filter traces by feedback">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {feedbackFilters.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>

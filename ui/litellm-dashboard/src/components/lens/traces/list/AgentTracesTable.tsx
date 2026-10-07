@@ -16,6 +16,7 @@ import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation 
 import { SpanIcon } from "../ui/SpanIcon";
 import type { TraceFindingState } from "./useTraceFindings";
 import { flaggedSignals, isFlagged, type TraceSignalState } from "./useTraceSignals";
+import { LOW_SCORE, type TraceFeedbackState } from "./useTraceFeedback";
 import { SignalPills } from "../ui/SignalPills";
 import { FrameworkLogo, traceFramework } from "../ui/TraceFramework";
 import type { TraceSummary } from "../types";
@@ -25,6 +26,7 @@ import { fmtMs, previewText, traceDisplayName, traceAgentNames } from "../utils"
 interface AgentTracesTableProps {
   traces: TraceSummary[];
   findings: ReadonlyMap<string, TraceFindingState>;
+  feedback?: ReadonlyMap<string, TraceFeedbackState>;
   canViewFindings?: boolean;
   signals?: ReadonlyMap<string, TraceSignalState>;
   showSignals?: boolean;
@@ -89,6 +91,8 @@ const SignalsContext = createContext<ReadonlyMap<string, TraceSignalState>>(new 
 const NO_SIGNALS: ReadonlyMap<string, TraceSignalState> = new Map();
 const SignalSetupContext = createContext<{ configured: boolean; onSetUp?: () => void }>({ configured: false });
 const FLAGGED_ROW = "bg-destructive/[0.04] shadow-[inset_2px_0_0_var(--color-destructive)] hover:bg-destructive/[0.07]";
+const FeedbackContext = createContext<ReadonlyMap<string, TraceFeedbackState>>(new Map());
+const NO_FEEDBACK: ReadonlyMap<string, TraceFeedbackState> = new Map();
 
 function AgentCell({ run }: { run: TraceSummary }) {
   const framework = traceFramework(run);
@@ -178,6 +182,30 @@ function SignalsCell({ run }: { run: TraceSummary }) {
   return <SignalPills flags={flags} className="overflow-hidden" />;
 }
 
+export function FeedbackScore({ run }: { run: TraceSummary }) {
+  const state = useContext(FeedbackContext).get(runKey(run));
+  if (!state || state.status === "pending")
+    return <Skeleton aria-label="Loading feedback" className="ml-auto h-3 w-8" />;
+  if (state.status === "error") return <span title="Could not load feedback">Unavailable</span>;
+  const { count, average, lowest } = state.summary;
+  if (count === 0 || average == null) return <span title="No feedback yet">—</span>;
+  const low = lowest != null && lowest <= LOW_SCORE;
+  return (
+    <span
+      data-testid="feedback-score"
+      data-low={low || undefined}
+      title={`${count} ${count === 1 ? "rating" : "ratings"}, lowest ${lowest}/10`}
+      className={cn(
+        "inline-flex items-center gap-1 rounded px-1.5 py-0.5",
+        low ? "bg-destructive/10 text-destructive" : "bg-muted text-foreground",
+      )}
+    >
+      {average.toFixed(1)}
+      <span className="text-muted-foreground">·{count}</span>
+    </span>
+  );
+}
+
 const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
   {
     id: "time",
@@ -261,6 +289,13 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
     meta: { numeric: true, className: NUM },
   },
   {
+    id: "feedback",
+    size: 96,
+    header: "Feedback",
+    cell: ({ row }) => <FeedbackScore run={row.original} />,
+    meta: { numeric: true, className: NUM },
+  },
+  {
     id: "open",
     size: 32,
     enableHiding: false,
@@ -312,6 +347,7 @@ const bodyClassName = (blurred?: boolean) => cn("transition-[filter]", blurred &
 export function AgentTracesTable({
   traces,
   findings,
+  feedback = NO_FEEDBACK,
   canViewFindings = true,
   signals = NO_SIGNALS,
   showSignals = false,
@@ -347,6 +383,7 @@ export function AgentTracesTable({
   const table = useReactTable(tableOptions);
   return (
     <FindingsContext.Provider value={findings}>
+      <FeedbackContext.Provider value={feedback}>
       <SignalsContext.Provider value={signals}>
         <SignalSetupContext.Provider value={{ configured: showSignals, onSetUp: onSetUpSignals }}>
           <InspectorTable.Root table={table} data-testid="runs-table">
@@ -405,6 +442,7 @@ export function AgentTracesTable({
           </InspectorTable.Root>
         </SignalSetupContext.Provider>
       </SignalsContext.Provider>
+      </FeedbackContext.Provider>
     </FindingsContext.Provider>
   );
 }

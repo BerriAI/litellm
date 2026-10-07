@@ -54,10 +54,14 @@ export const OPEN_TRACE_PARSERS = {
   fullscreen: parseAsBoolean.withDefault(false),
 };
 
+export const FEEDBACK_FILTERS = ["all", "rated", "low"] as const;
+export type FeedbackFilter = (typeof FEEDBACK_FILTERS)[number];
+
 export const RUN_FILTER_PARSERS = {
   q: parseAsString.withDefault(""),
   agent: parseAsString.withDefault(""),
   status: parseAsStringLiteral(["all", "ok", "error"]).withDefault("all"),
+  feedback: parseAsStringLiteral(FEEDBACK_FILTERS).withDefault("all"),
   ...TIME_RANGE_PARSERS,
 };
 
@@ -137,11 +141,13 @@ export function useLocalRunSelection(initialSpanId: string | null): RunSelection
 }
 
 export function useRunFilterRouting() {
-  const [{ q, agent, status }, setParams] = useQueryStates(RUN_FILTER_PARSERS);
+  const [{ q, agent, status, feedback }, setParams] = useQueryStates(RUN_FILTER_PARSERS);
   return {
     query: q,
     agent,
     status,
+    feedback,
+    setFeedback: (feedback: FeedbackFilter) => void setParams({ feedback }),
     setQuery: (query: string) => void setParams({ q: query }),
     setAgent: (agent: string) => void setParams({ agent }),
     setStatus: (status: "all" | "ok" | "error") => void setParams({ status }),
