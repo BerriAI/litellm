@@ -99,8 +99,6 @@ const DEFAULT_DATE_RANGE = (): DateRangePickerValue => ({
   to: new Date(),
 });
 
-/** Resolves the persisted time range. Relative presets ("7d", "today", ...) are
- * recomputed fresh from `now` on every load, so a saved preset never goes stale. */
 function loadPersistedDateRange(): DateRangePickerValue {
   const presetLabel = getLocalStorageItem(USAGE_DATE_RANGE_PRESET_KEY);
   if (presetLabel) {
@@ -118,7 +116,6 @@ function loadPersistedDateRange(): DateRangePickerValue {
         return { from: fromDate, to: toDate };
       }
     } catch {
-      // fall through to default
     }
   }
 
@@ -165,10 +162,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // Separate loading states for better UX
   const [isDateChanging, setIsDateChanging] = useState(false);
 
-  // Single date state that directly triggers data fetching. Initialized from
-  // localStorage so a saved selection survives a page reload; relative presets
-  // ("7d", "today", ...) are recomputed fresh here rather than replayed as a
-  // frozen timestamp, so "now" always tracks the actual current day.
   const [dateValue, setDateValue] = useState<DateRangePickerValue>(() => loadPersistedDateRange());
 
   const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
@@ -195,11 +188,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     setUsageViewState(value);
     setLocalStorageItem(USAGE_VIEW_KEY, value);
   }, []);
-  // Capabilities (org-admin membership, tag usage) are read from the server and
-  // a persisted view is restored from localStorage, so either can grant a view
-  // the current session no longer has. Derive the view in render rather than
-  // storing it, so the fallback lands on the same paint and the selector never
-  // holds a value it no longer offers.
   const usageView: UsageOption = isUsageOptionAvailable(selectedUsageView, {
     userRole,
     canViewTagUsage,
@@ -367,9 +355,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     persistDateRange(newValue);
   }, []);
 
-  // If the user leaves this tab open across midnight (or backgrounded on
-  // mobile), a relative preset like "Today"/"7d" should track the real
-  // current day again once they come back, not stay pinned to load time.
   useEffect(() => {
     const refreshPresetIfStale = () => {
       const presetLabel = getMatchingRelativeOption(dateValue);

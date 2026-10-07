@@ -354,9 +354,6 @@ describe("UsagePage", () => {
   };
 
   beforeEach(() => {
-    // UsagePageView now persists the selected view/tab/date-range to
-    // localStorage; without clearing it here, whichever test runs first
-    // pollutes every test after it in this file.
     localStorage.clear();
     mockUseAuthorized.mockReturnValue({
       isLoading: false,
@@ -1403,11 +1400,6 @@ describe("UsagePage", () => {
     it.each(["agent", "organization", "customer", "user"])(
       "should not restore a persisted %s usage view for a session without access to it",
       async (persistedView) => {
-        // The persisted view can outlive the session that set it (role change,
-        // org-admin membership revoked, a different account signing in on the
-        // same browser). Restoring it verbatim would land a non-admin on a
-        // selector value with no matching panel and no way to get back except
-        // manually reselecting a different option.
         localStorage.setItem("litellmUsageView", persistedView);
         mockUseAuthorized.mockReturnValue(nonAdminSession);
 

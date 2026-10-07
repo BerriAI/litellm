@@ -110,12 +110,6 @@ export interface UsageOptionAvailability {
   isOrgAdmin?: boolean;
 }
 
-/**
- * Single source of truth for whether a given usage view is available to the
- * current user, mirroring the capability matrix in OPTIONS below. Used both
- * to filter the select's menu and to validate a usage view restored from
- * persisted state (e.g. localStorage), whose role may have changed since.
- */
 export const isUsageOptionAvailable = (
   value: UsageOption,
   { userRole, canViewTagUsage = false, isOrgAdmin = false }: UsageOptionAvailability,

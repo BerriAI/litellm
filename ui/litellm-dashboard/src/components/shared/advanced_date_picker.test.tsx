@@ -250,11 +250,6 @@ describe("AdvancedDatePicker", () => {
   });
 
   it("should close dropdown on Apply even without requestIdleCallback (Safari)", async () => {
-    // Safari has never implemented requestIdleCallback. Simulate that by
-    // removing the polyfill installed in the beforeAll above for this one
-    // test, so a regression that puts setIsOpen(false) after the
-    // requestIdleCallback call (and lets its ReferenceError swallow it)
-    // fails here instead of only in real Safari.
     const original = window.requestIdleCallback;
     // @ts-expect-error - deleting a browser API to emulate Safari's absence of it
     delete window.requestIdleCallback;
