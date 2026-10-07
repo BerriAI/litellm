@@ -191,6 +191,7 @@ async fn schema_supports_span_rollups_and_spend_joins(
         ("cursor_ms".into(), Parameter::Integer(0)),
         ("cursor_trace_id".into(), Parameter::Text(String::new())),
         ("limit".into(), Parameter::Integer(10)),
+        ("agent".into(), Parameter::Text(String::new())),
     ]);
     let listed: serde_json::Value = serde_json::from_str(
         &execute_named_read(
@@ -665,6 +666,7 @@ async fn listed_agent_names_preserve_scope_and_cursor(
         ("cursor_ms".into(), Parameter::Integer(0)),
         ("cursor_trace_id".into(), Parameter::Text(String::new())),
         ("limit".into(), Parameter::Integer(1)),
+        ("agent".into(), Parameter::Text(String::new())),
     ]);
     let first: serde_json::Value = serde_json::from_str(
         &execute_named_read(
@@ -720,7 +722,7 @@ async fn listed_agent_names_preserve_scope_and_cursor(
         .collect::<BTreeMap<_, _>>();
     assert_eq!(
         names["shared"],
-        serde_json::json!(["research_agent", "reviewer"])
+        serde_json::json!(["research_agent", "reviewer", "unnamed"])
     );
     assert_eq!(names["second"], serde_json::json!(["support_agent"]));
     let frameworks = [&first["data"][0], &second["data"][0]]
@@ -813,6 +815,7 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
         ("cursor_ms".into(), Parameter::Integer(0)),
         ("cursor_trace_id".into(), Parameter::Text(String::new())),
         ("limit".into(), Parameter::Integer(10)),
+        ("agent".into(), Parameter::Text(String::new())),
     ]);
     let listed: serde_json::Value = serde_json::from_str(
         &execute_named_read(
@@ -2337,6 +2340,7 @@ async fn rollup_cost_completeness_preserves_missing_ids_and_fails_closed_for_his
             cursor_ms: 0,
             cursor_trace_id: "".into(),
             limit: 10,
+            agent: String::new(),
         },
     );
     let reader = Connection::reader(&database.url, "trace_test")?;
