@@ -1,17 +1,15 @@
-"""Harness coverage for the gen-AI span selection in `test_otel_trace_e2e`.
+"""Harness coverage for the gen-AI span selection `logging/test_otel_trace_e2e` relies on.
 
-Carries no `e2e` marker: this exercises the selection helper itself against
-Jaeger-shaped payloads, so it runs whether or not a proxy is up. The live
-assertions it protects are expensive to reproduce (they need an upstream that
-fails the first attempt), which is exactly why the helper is worth pinning
-here.
+This exercises the selection helper itself against Jaeger-shaped payloads, so it
+runs without a proxy. The live assertions it protects are expensive to reproduce
+(they need an upstream that fails the first attempt), which is exactly why the
+helper is worth pinning here.
 """
 
 from __future__ import annotations
 
 import pytest
-from otel_client import JaegerTrace
-from test_otel_trace_e2e import TTFT_TAG, one_served_genai_span, served_genai_spans
+from otel_client import TTFT_TAG, JaegerTrace, one_served_genai_span, served_genai_spans
 
 GENAI_SPAN = "chat claude-haiku-4-5"
 
