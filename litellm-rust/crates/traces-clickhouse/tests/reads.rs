@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
 
 use litellm_http::Client;
-use litellm_traces::query::named::ReadAccessParams;
-use litellm_traces_cache::{ReadError, TraceReader};
+use litellm_storage_clickhouse::fetch;
+use litellm_traces::query::named::{self as contracts, ReadAccessParams};
+use litellm_traces_cache::{ReadError, TraceListQuery, TraceReader};
 use litellm_traces_clickhouse::{
-    ClickHouseTraces, Connection, InsertTable, QueryScope, insert_rows,
+    ClickHouseTraces, Connection, InsertTable, Parameter, QueryScope, ReadQuery,
+    execute_named_read, insert_rows,
+    query::named::{ListTraces, ListTracesParams},
 };
 use rstest::rstest;
 use serde_json::json;
@@ -94,7 +97,17 @@ async fn list_costs_match_each_run_when_response_ids_are_reused(
         team_ids: vec!["team-a".into()],
     };
     let page = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .list_traces(
+            &store,
+            &access,
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: 2_000_000_000_000,
+                cursor: None,
+                limit: 50,
+                agent: "",
+            },
+        )
         .await?;
     assert_eq!(page.data.len(), runs.len());
     for (trace_id, _, cost) in runs {
@@ -223,7 +236,17 @@ async fn large_runs_remain_complete_under_default_reader_limits(
         team_ids: vec!["team-a".into()],
     };
     let page = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 500)
+        .list_traces(
+            &store,
+            &access,
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: 2_000_000_000_000,
+                cursor: None,
+                limit: 500,
+                agent: "",
+            },
+        )
         .await?;
     assert_eq!(page.data.len(), runs);
     assert!(
@@ -376,7 +399,17 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
         team_ids: Vec::new(),
     };
     let listed = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 10)
+        .list_traces(
+            &store,
+            &access,
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: 2_000_000_000_000,
+                cursor: None,
+                limit: 10,
+                agent: "",
+            },
+        )
         .await?;
     let summary = listed
         .data
@@ -539,7 +572,17 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
         team_ids: Vec::new(),
     };
     let before = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .list_traces(
+            &store,
+            &access,
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: 2_000_000_000_000,
+                cursor: None,
+                limit: 50,
+                agent: "",
+            },
+        )
         .await?;
     let run = before
         .data
@@ -568,12 +611,32 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
     )
     .await?;
     let cached = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .list_traces(
+            &store,
+            &access,
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: 2_000_000_000_000,
+                cursor: None,
+                limit: 50,
+                agent: "",
+            },
+        )
         .await?;
     assert_eq!(cached.data, before.data);
     let (reader, store) = make_reader(client, connection);
     let after = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .list_traces(
+            &store,
+            &access,
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: 2_000_000_000_000,
+                cursor: None,
+                limit: 50,
+                agent: "",
+            },
+        )
         .await?;
     assert_eq!(after.data.len(), before.data.len());
     let limited = after
@@ -710,7 +773,17 @@ async fn assigned_call_ids_require_shared_ownership_through_detail_and_batch_rea
         team_ids: vec!["team-a".into(), "team-b".into()],
     };
     let page = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .list_traces(
+            &store,
+            &access,
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: 2_000_000_000_000,
+                cursor: None,
+                limit: 50,
+                agent: "",
+            },
+        )
         .await?;
     assert_eq!(page.data.len(), cases.len());
     let summary = page
@@ -826,7 +899,17 @@ async fn native_cost_correlation_survives_session_grouping_and_excludes_other_ow
         team_ids: Vec::new(),
     };
     let page = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .list_traces(
+            &store,
+            &access,
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: 2_000_000_000_000,
+                cursor: None,
+                limit: 50,
+                agent: "",
+            },
+        )
         .await?;
     assert_eq!(page.data.len(), 1);
     let summary = &page.data[0];
@@ -840,5 +923,386 @@ async fn native_cost_correlation_survives_session_grouping_and_excludes_other_ow
         detail.spans[0].spend_log_request_id.as_deref(),
         Some("log-key-a")
     );
+    Ok(())
+}
+
+const LABEL_START_MS: i64 = 1_790_000_000_000;
+
+fn label_row(
+    trace: &str,
+    offset_ms: i64,
+    (span, parent, name): (&str, &str, &str),
+    kind: &str,
+    (agent, service): (&str, &str),
+    overrides: &[(&str, serde_json::Value)],
+) -> BTreeMap<String, serde_json::Value> {
+    BTreeMap::from([
+        (
+            "Timestamp".into(),
+            json!((LABEL_START_MS + offset_ms) * 1_000_000),
+        ),
+        ("TraceId".into(), json!(trace)),
+        ("SpanId".into(), json!(span)),
+        ("ParentSpanId".into(), json!(parent)),
+        ("SpanName".into(), json!(name)),
+        ("ObservationType".into(), json!(kind)),
+        ("AgentName".into(), json!(agent)),
+        ("WrapperCandidate".into(), json!(false)),
+        ("ServiceName".into(), json!(service)),
+        ("TeamId".into(), json!("team-a")),
+        ("ApiKeyHash".into(), json!("key")),
+        ("UserId".into(), json!("user-a")),
+        ("Duration".into(), json!(1_000_000)),
+    ])
+    .into_iter()
+    .chain(
+        overrides
+            .iter()
+            .map(|(column, value)| ((*column).to_owned(), value.clone())),
+    )
+    .collect()
+}
+
+async fn seed_label_runs(fixture: &SeededDatabase) -> TestResult {
+    let wrapper = [("WrapperCandidate", json!(true))];
+    let other_team = [("TeamId", json!("team-b")), ("UserId", json!("user-b"))];
+    let claude = ("claude-code", "claude-code");
+    let rows = vec![
+        label_row(
+            "claude-run",
+            1_000,
+            ("c1", "", "claude_code.interaction"),
+            "agent",
+            claude,
+            &[],
+        ),
+        label_row(
+            "claude-run",
+            1_001,
+            ("c2", "c1", "claude_code.llm_request"),
+            "llm",
+            claude,
+            &[],
+        ),
+        label_row(
+            "named-run",
+            2_000,
+            ("n1", "", "invoke_agent researcher"),
+            "agent",
+            ("researcher", "research-app"),
+            &[],
+        ),
+        label_row(
+            "named-run",
+            2_001,
+            ("n2", "n1", "helper"),
+            "agent",
+            ("", "research-app"),
+            &[],
+        ),
+        label_row(
+            "unnamed-run",
+            3_000,
+            ("u1", "", "planner"),
+            "agent",
+            ("", "plan-app"),
+            &[],
+        ),
+        label_row(
+            "plain-run",
+            4_000,
+            ("p1", "", "POST /chat"),
+            "llm",
+            ("", "chat-service"),
+            &[],
+        ),
+        label_row(
+            "wrapped-run",
+            5_000,
+            ("w1", "", "Agent workflow"),
+            "agent",
+            ("", "wrap-app"),
+            &wrapper,
+        ),
+        label_row(
+            "wrapped-run",
+            5_001,
+            ("w2", "w1", "invoke_agent writer"),
+            "agent",
+            ("writer", "wrap-app"),
+            &[],
+        ),
+        label_row(
+            "lone-wrapper-run",
+            6_000,
+            ("l1", "", "lone wrapper"),
+            "agent",
+            ("", "lone-app"),
+            &wrapper,
+        ),
+        label_row(
+            "other-team-run",
+            7_000,
+            ("o1", "", "invoke_agent intruder"),
+            "agent",
+            ("intruder", "other"),
+            &other_team,
+        ),
+        label_row(
+            "old-run",
+            -86_400_000,
+            ("x1", "", "invoke_agent ancient"),
+            "agent",
+            ("ancient", "old-app"),
+            &[],
+        ),
+        label_row(
+            "newest-run",
+            8_000,
+            ("z1", "", "invoke_agent researcher"),
+            "agent",
+            ("researcher", "research-app"),
+            &[],
+        ),
+    ];
+    let writer = Connection::writer(&fixture.database.url)?;
+    insert_rows(
+        &fixture.database.client,
+        &writer,
+        DATABASE,
+        InsertTable::OtelTraces,
+        rows,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn trace_agents(
+    fixture: &SeededDatabase,
+    connection: &Connection,
+    access: &ReadAccessParams,
+    end_ms: i64,
+) -> TestResult<Vec<String>> {
+    let parameters = BTreeMap::from([
+        (
+            "all_teams".into(),
+            Parameter::Integer(i64::from(access.all_teams)),
+        ),
+        ("user_id".into(), Parameter::Text(access.user_id.clone())),
+        (
+            "team_ids".into(),
+            Parameter::Strings(access.team_ids.clone()),
+        ),
+        ("start_ms".into(), Parameter::Integer(LABEL_START_MS)),
+        ("end_ms".into(), Parameter::Integer(end_ms)),
+        ("limit".into(), Parameter::Unsigned(1_000)),
+    ]);
+    let body = execute_named_read(
+        &fixture.database.client,
+        connection,
+        ReadQuery::TraceAgents,
+        &parameters,
+    )
+    .await?;
+    let rows: serde_json::Value = serde_json::from_str(&body)?;
+    Ok(rows["data"]
+        .as_array()
+        .ok_or("agent rows")?
+        .iter()
+        .map(|row| row["agent_name"].as_str().unwrap_or_default().to_owned())
+        .collect())
+}
+
+fn label_access(all_teams: bool, user_id: &str, team_ids: &[&str]) -> ReadAccessParams {
+    ReadAccessParams {
+        all_teams,
+        user_id: user_id.into(),
+        team_ids: team_ids.iter().map(|team| (*team).to_owned()).collect(),
+    }
+}
+
+fn trace_ids(page: &litellm_traces::TracePage) -> Vec<&str> {
+    page.data.iter().map(|run| run.trace_id.as_str()).collect()
+}
+
+const TEAM_A_AGENTS: [&str; 7] = [
+    "chat-service",
+    "claude-code",
+    "helper",
+    "lone wrapper",
+    "planner",
+    "researcher",
+    "writer",
+];
+
+#[rstest]
+#[case::team(label_access(false, "", &["team-a"]), TEAM_A_AGENTS.to_vec())]
+#[case::user(label_access(false, "user-a", &[]), TEAM_A_AGENTS.to_vec())]
+#[case::all_teams(
+    label_access(true, "", &[]),
+    vec!["chat-service", "claude-code", "helper", "intruder", "lone wrapper", "planner", "researcher", "writer"]
+)]
+#[case::other_team(label_access(false, "", &["team-b"]), vec!["intruder"])]
+#[tokio::test]
+async fn trace_agents_lists_scoped_window_labels(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] access: ReadAccessParams,
+    #[case] expected: Vec<&str>,
+) -> TestResult {
+    let fixture = migrated_database?;
+    seed_label_runs(&fixture).await?;
+    let connection = fixture
+        .readers
+        .connection(&fixture.database.client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let agents = trace_agents(&fixture, &connection, &access, LABEL_START_MS + 60_000).await?;
+    assert_eq!(agents, expected);
+    let before_runs = trace_agents(&fixture, &connection, &access, LABEL_START_MS + 500).await?;
+    assert!(before_runs.is_empty(), "{before_runs:?}");
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn list_traces_filters_by_agent_before_limit(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+) -> TestResult {
+    let fixture = migrated_database?;
+    seed_label_runs(&fixture).await?;
+    let connection = fixture
+        .readers
+        .connection(&fixture.database.client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let (reader, store) = make_reader(&fixture.database.client, connection);
+    let access = label_access(false, "", &["team-a"]);
+    let (start_ms, end_ms) = (LABEL_START_MS, LABEL_START_MS + 60_000);
+    let list = |cursor: Option<String>, limit: u32, agent: &'static str| {
+        let (reader, store, access) = (&reader, &store, &access);
+        async move {
+            reader
+                .list_traces(
+                    store,
+                    access,
+                    TraceListQuery {
+                        start_ms,
+                        end_ms,
+                        cursor: cursor.as_deref(),
+                        limit,
+                        agent,
+                    },
+                )
+                .await
+        }
+    };
+    let first = list(None, 1, "researcher").await?;
+    assert_eq!(trace_ids(&first), ["newest-run"]);
+    let next = list(first.next_cursor.clone(), 1, "researcher").await?;
+    assert_eq!(trace_ids(&next), ["named-run"]);
+    assert_eq!(
+        trace_ids(&list(None, 1, "claude-code").await?),
+        ["claude-run"]
+    );
+    assert_eq!(
+        trace_ids(&list(None, 10, "chat-service").await?),
+        ["plain-run"]
+    );
+    assert_eq!(trace_ids(&list(None, 10, "helper").await?), ["named-run"]);
+    assert!(list(None, 10, "intruder").await?.data.is_empty());
+    assert!(list(None, 10, "Agent workflow").await?.data.is_empty());
+    let unfiltered = list(None, 1, "").await?;
+    assert_eq!(trace_ids(&unfiltered), ["newest-run"]);
+    assert!(unfiltered.next_cursor.is_some());
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn sql_agent_labels_match_resolved_run_summaries(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+) -> TestResult {
+    let fixture = migrated_database?;
+    seed_label_runs(&fixture).await?;
+    let connection = fixture
+        .readers
+        .connection(&fixture.database.client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let (reader, store) = make_reader(&fixture.database.client, connection.clone());
+    let access = label_access(true, "", &[]);
+    let (start_ms, end_ms) = (LABEL_START_MS, LABEL_START_MS + 60_000);
+    let page = reader
+        .list_traces(
+            &store,
+            &access,
+            TraceListQuery {
+                start_ms,
+                end_ms,
+                cursor: None,
+                limit: 50,
+                agent: "",
+            },
+        )
+        .await?;
+    let agents = trace_agents(&fixture, &connection, &access, end_ms).await?;
+    let listed = fetch::<ListTraces>(
+        &fixture.database.client,
+        &connection,
+        &ListTracesParams::from(contracts::ListTracesParams {
+            access: access.clone(),
+            start_ms,
+            end_ms,
+            cursor_ms: 0,
+            cursor_trace_id: String::new(),
+            limit: 50,
+            agent: String::new(),
+        }),
+    )
+    .await?;
+    assert_eq!(page.data.len(), 8);
+    let mut filtered = BTreeMap::new();
+    for agent in &agents {
+        let runs = reader
+            .list_traces(
+                &store,
+                &access,
+                TraceListQuery {
+                    start_ms,
+                    end_ms,
+                    cursor: None,
+                    limit: 50,
+                    agent,
+                },
+            )
+            .await?;
+        filtered.insert(agent.as_str(), runs);
+    }
+    for summary in &page.data {
+        assert!(!summary.resolution_limited, "{}", summary.trace_id);
+        let labels = if summary.agent_names.is_empty() {
+            vec![summary.service.clone()]
+        } else {
+            summary.agent_names.clone()
+        };
+        let row = listed
+            .iter()
+            .find(|row| row.0.trace_id == summary.trace_id)
+            .ok_or("missing listed row")?;
+        assert_eq!(
+            row.0.agent_names, summary.agent_names,
+            "{}",
+            summary.trace_id
+        );
+        assert!(
+            labels.iter().all(|label| agents.contains(label)),
+            "{labels:?}"
+        );
+        for (agent, runs) in &filtered {
+            assert_eq!(
+                trace_ids(runs).contains(&summary.trace_id.as_str()),
+                labels.iter().any(|label| label == agent),
+                "{} under {agent}",
+                summary.trace_id
+            );
+        }
+    }
     Ok(())
 }
