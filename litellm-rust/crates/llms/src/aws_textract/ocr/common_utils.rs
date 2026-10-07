@@ -1,6 +1,8 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth_aws::{AwsCredentialSource, SigV4Signer, resolve_aws_region};
+use litellm_host::failure::UpstreamResponse;
 use litellm_http::outbound::RequestSigner;
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrPage, OcrUsageInfo};
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantNames};
 
@@ -9,7 +11,6 @@ use crate::base_llm::ocr::{
     error::Error,
     transformation::{OcrEnvironment, OcrRequestContext, PreparedOcrRequest},
 };
-use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrPage, OcrUsageInfo};
 
 const TEXTRACT_SERVICE: &str = "textract";
 const AWS_JSON_CONTENT_TYPE: &str = "application/x-amz-json-1.1";
@@ -322,20 +323,19 @@ struct AwsError {
 /// Textract answers both an unsupported format and a multi-page PDF or TIFF
 /// with a bare "unsupported document format", which reads like a corrupt file.
 /// Say what the synchronous API accepts.
-pub(super) fn error_class(body: String, status: u16, headers: Vec<(String, String)>) -> Error {
-    let unsupported = serde_json::from_str::<AwsError>(&body)
+pub(super) fn error_class(response: UpstreamResponse) -> UpstreamResponse {
+    let unsupported = serde_json::from_str::<AwsError>(&response.body)
         .ok()
         .filter(|error| error.kind.ends_with(UNSUPPORTED_DOCUMENT));
-    Error::Provider {
-        status,
-        body: match unsupported {
-            Some(error) => format!(
+    match unsupported {
+        Some(error) => UpstreamResponse {
+            body: format!(
                 "{UNSUPPORTED_DOCUMENT}: {}. aws_textract uses Textract's synchronous API, which reads a JPEG, PNG, or a single-page PDF or TIFF; other formats and multi-page documents are not supported",
                 error.message
             ),
-            None => body,
+            ..response
         },
-        headers,
+        None => response,
     }
 }
 
@@ -415,7 +415,10 @@ mod tests {
                 "invalid model: aws_textract has no model {model:?} - use one of: detect-document-text, analyze-document"
             )
         );
-        assert_eq!(error.http_status_code(), Some(400));
+        assert_eq!(
+            litellm_host::failure::Classify::kind(&error),
+            litellm_host::failure::Kind::Request
+        );
     }
 
     #[rstest]
@@ -562,17 +565,21 @@ mod tests {
     ) {
         let response_headers = vec![("x-amzn-requestid".to_string(), "abc".to_string())];
 
-        let Error::Provider {
+        let UpstreamResponse {
             status,
             body: reported,
             headers,
-        } = error_class(body.into(), 400, response_headers.clone())
-        else {
-            panic!("expected a provider error");
-        };
+            url,
+        } = error_class(UpstreamResponse {
+            status: 400,
+            headers: response_headers.clone(),
+            body: body.into(),
+            url: Some("https://textract.invalid/".into()),
+        });
 
         assert_eq!(status, 400);
         assert_eq!(headers, response_headers);
+        assert_eq!(url.as_deref(), Some("https://textract.invalid/"));
         match hinted_message {
             Some(message) => {
                 assert!(reported.contains(message), "{reported}");

@@ -8,6 +8,8 @@ pub mod provider;
 pub mod resources;
 
 pub use error::RouteError;
+/// The staged call steps every route composes; see `litellm_llms::base_llm::call`.
+pub use litellm_llms::base_llm::call;
 
 #[derive(Clone, Default)]
 pub struct CallOptions {

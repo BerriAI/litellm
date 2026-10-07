@@ -5,15 +5,18 @@ mod prepare;
 pub mod route;
 mod types;
 
+use std::sync::Arc;
+
 use futures_util::FutureExt;
 use litellm_auth::AuthServices;
 use litellm_host::interceptors::{ExecutionFacts, Interceptors, ResultSource};
-
-use litellm_inference::{caching::CallCache, context::CallContext};
-use litellm_secrets::source::SecretSource;
-use std::sync::Arc;
-
 pub use litellm_inference::RouteError as Error;
+use litellm_inference::{
+    caching::CallCache,
+    call::{self, Failure},
+    context::CallContext,
+};
+use litellm_secrets::source::SecretSource;
 pub use types::{
     MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping, messages_body,
 };
@@ -53,7 +56,7 @@ impl MessagesRoute {
         call: MessagesCall,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         options: impl Into<litellm_inference::CallOptions>,
-    ) -> Result<MessagesCallResponse, Error> {
+    ) -> Result<MessagesCallResponse, Failure<Error>> {
         let context = CallContext::new(interceptors, options.into());
         litellm_host::lifecycle::observe_call(context.observers.clone(), self.run(call, context))
             .await
@@ -71,14 +74,17 @@ impl MessagesRoute {
         &self,
         call: MessagesCall,
         context: CallContext<'_, impl Interceptors<Error>>,
-    ) -> Result<MessagesCallResponse, Error> {
+    ) -> Result<MessagesCallResponse, Failure<Error>> {
         litellm_inference::diagnostic::call(async {
-            let prepared = prepare::prepare(call, self.secrets.as_ref()).await?;
-            litellm_inference::diagnostic::provider(
-                &prepared.body.model,
-                prepared.provider.as_str(),
-            );
-            let request = self.prepare_outbound(prepared, &context).boxed().await?;
+            let request = call::prepare(async {
+                let prepared = prepare::prepare(call, self.secrets.as_ref()).await?;
+                litellm_inference::diagnostic::provider(
+                    &prepared.body.model,
+                    prepared.provider.as_str(),
+                );
+                self.prepare_outbound(prepared, &context).boxed().await
+            })
+            .await?;
             let cache = CallCache::<route::Messages>::from_wire(
                 self.cache.as_ref().filter(|_| request.cacheable()),
                 context.cache,
@@ -93,12 +99,11 @@ impl MessagesRoute {
                     ResultSource::Provider,
                 ),
             };
-            context
-                .result_ready(ExecutionFacts {
-                    provider: identity,
-                    source: source.clone(),
-                })
-                .await?;
+            call::post_call(context.result_ready(ExecutionFacts {
+                provider: identity,
+                source: source.clone(),
+            }))
+            .await?;
             Ok(cache.finish(output, &source).await)
         })
         .await

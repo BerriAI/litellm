@@ -2,7 +2,7 @@ use litellm_host::{
     interceptors::{ExecutionFacts, ResultSource},
     lifecycle::ExecutionEvent,
 };
-use litellm_http::transport::Error as TransportError;
+use litellm_inference::call::{Failure, Stage, UpstreamResponse};
 use litellm_inference_messages::{MessagesCallResponse, messages_body};
 use litellm_inference_testing::{
     RecordingSecrets, http_config, no_secrets, provider_http, resources,
@@ -23,7 +23,6 @@ async fn calls_defer_execution_until_polled(
     #[case] with_observer: bool,
 ) {
     use futures_util::future::BoxFuture;
-
     use litellm_host::lifecycle::CallEvent;
 
     let upstream = upstream([message_response()]).await;
@@ -36,7 +35,7 @@ async fn calls_defer_execution_until_polled(
     let request = host.request().unwrap();
     let observer: Option<litellm_host::observation::ObservationSender> =
         with_observer.then(|| host.events.0.sender.clone());
-    let future: BoxFuture<'_, Result<MessagesCallResponse, Error>> = if with_hooks {
+    let future: BoxFuture<'_, Result<MessagesCallResponse, Failure<Error>>> = if with_hooks {
         Box::pin(route.execute(request, &host, observer))
     } else {
         Box::pin(route.execute(request, &(), observer))
@@ -165,7 +164,8 @@ async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
     .await
     .expect_err("upstream error propagates");
 
-    let Error::Transport(TransportError::Http { status, body }) = error else {
+    assert_eq!(error.stage, Stage::Upstream);
+    let Error::Upstream(UpstreamResponse { status, body, .. }) = error.error else {
         panic!("{error:?}");
     };
     assert_eq!(status, 400);
@@ -174,7 +174,7 @@ async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
 
 #[rstest]
 #[tokio::test]
-async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall) {
+async fn a_long_error_body_is_kept_whole(call: MessagesCall) {
     let long = "x".repeat(600);
     let upstream = upstream([ResponseTemplate::new(500).set_body_string(long.clone())]).await;
 
@@ -186,12 +186,25 @@ async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall
     .await
     .expect_err("upstream error propagates");
 
+    assert_eq!(error.stage, Stage::Upstream);
+    let Error::Upstream(UpstreamResponse {
+        status: upstream_status,
+        body: upstream_body,
+        url: upstream_url,
+        ..
+    }) = error.error
+    else {
+        panic!("expected the provider's answer");
+    };
+    assert_eq!(upstream_status, 500);
+    assert_eq!(upstream_body, long);
     assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status: 500,
-            body: format!("{}... (truncated)", &long[..256])
-        })
+        upstream_url,
+        Some(format!(
+            "{}{}",
+            upstream.uri(),
+            only_request(&upstream).await.url.path()
+        ))
     );
 }
 
@@ -214,12 +227,25 @@ async fn an_upstream_error_keeps_its_status_and_body(call: MessagesCall, #[case]
     .await
     .expect_err("upstream error propagates");
 
+    assert_eq!(error.stage, Stage::Upstream);
+    let Error::Upstream(UpstreamResponse {
+        status: upstream_status,
+        body: upstream_body,
+        url: upstream_url,
+        ..
+    }) = error.error
+    else {
+        panic!("expected the provider's answer");
+    };
+    assert_eq!(upstream_status, status);
+    assert_eq!(upstream_body, "upstream said no");
     assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status,
-            body: "upstream said no".into()
-        })
+        upstream_url,
+        Some(format!(
+            "{}{}",
+            upstream.uri(),
+            only_request(&upstream).await.url.path()
+        ))
     );
 }
 
@@ -241,7 +267,10 @@ async fn an_unreadable_success_body_is_an_invalid_response(
     .await
     .expect_err("an unreadable body fails");
 
-    assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
+    assert!(
+        matches!(error.error, Error::InvalidResponse(_)),
+        "{error:?}"
+    );
 }
 
 #[rstest]
@@ -258,7 +287,7 @@ async fn a_provider_slower_than_the_timeout_fails_the_call(call: MessagesCall) {
     .await
     .expect_err("the call times out");
 
-    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    assert!(matches!(error.error, Error::Transport(_)), "{error:?}");
 }
 
 #[rstest]

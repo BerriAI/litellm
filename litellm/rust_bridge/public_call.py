@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final, TypeVar, cast  # noqa: TID251  # narrows caller-owned containers without copying them
 
@@ -71,7 +71,7 @@ def optional_sequence(value: object) -> Sequence[object] | None:
     return cast("Sequence[object]", value)  # cast-ok: the same caller-owned object is handed on unchanged
 
 
-def inference_decline_reason(parameters: tuple[str, ...], kwargs: Mapping[str, object]) -> str | None:
+def unsupported_argument(parameters: tuple[str, ...], kwargs: Mapping[str, object]) -> str | None:
     if litellm.drop_params or litellm.modify_params:
         return "native inference does not implement the configured parameter rewrites"
     for name, value in kwargs.items():
@@ -89,6 +89,8 @@ class NativeCall:
     args: tuple[object, ...]
     kwargs: Mapping[str, object]
     bound: Mapping[str, object]
+    standby: bool = False
+    """Python is waiting to serve the call if Rust fails before the provider acts on it."""
 
 
 def native_call(args: tuple[object, ...], kwargs: Mapping[str, object], fields: Mapping[str, object]) -> NativeCall:
@@ -105,5 +107,6 @@ def native_call_hook(
     call: NativeCall,
     _args: tuple[object, ...],
     _kwargs: Mapping[str, object],
+    standby: bool,
 ) -> NativeResultT:
-    return hook(call)
+    return hook(replace(call, standby=standby))

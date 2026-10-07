@@ -1,20 +1,19 @@
 use litellm_auth::ResolvedCredential;
-use litellm_host_python::{InvokeError, PythonBinding, missing_state, to_py};
-use litellm_host_python::{PythonHostCalls, PythonOwned};
+use litellm_host_python::{
+    InvokeError, PythonBinding, PythonHostCalls, PythonOwned, Settlement, missing_state, to_py,
+};
 use litellm_inference_ocr::route::{Ocr, OcrCall, OcrOp};
-use litellm_llms::base_llm::ocr::error::Error;
+use litellm_llms::base_llm::{call::Failure, ocr::error::Error};
 use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 use pyo3::{
-    exceptions::{PyBaseException, PyException},
+    exceptions::PyException,
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::PyDict,
 };
 
-use super::{
-    errors::to_pyerr as ocr_error_to_pyerr,
-    project::{OcrHostHandles, project_request},
-};
+use super::project::{OcrHostHandles, project_request};
+use crate::errors::{public_error, settle};
 
 enum OcrHostData {
     Unprojected,
@@ -28,13 +27,15 @@ enum OcrHostData {
 pub(super) struct OcrPythonHost {
     request: Py<PyAny>,
     data: OcrHostData,
+    standby: bool,
 }
 
 impl OcrPythonHost {
-    pub(super) fn new(request: Py<PyAny>) -> Self {
+    pub(super) fn new(request: Py<PyAny>, standby: bool) -> Self {
         Self {
             request,
             data: OcrHostData::Unprojected,
+            standby,
         }
     }
 
@@ -71,24 +72,15 @@ impl OcrPythonHost {
             return error;
         }
         let provider = match &self.data {
-            OcrHostData::Projected(handles) => handles.provider,
-            _ => "",
+            OcrHostData::Projected(handles) => Some(handles.provider),
+            _ => None,
         };
-        let mapped = py
-            .import("litellm.rust_bridge.ocr.route_host")
-            .and_then(|module| module.getattr("map_failure"))
-            .and_then(|map| map.call1((error.value(py), self.request.bind(py), provider)))
-            .and_then(|mapped| mapped.extract::<Py<PyBaseException>>().map_err(PyErr::from));
-        match mapped {
-            Ok(mapped) => PyErr::from_value(mapped.into_bound(py).into_any()),
-            Err(_) => error,
-        }
+        public_error(py, error.clone_ref(py), self.request.bind(py), provider).unwrap_or(error)
     }
 }
 
 impl PythonBinding for OcrPythonHost {
     type Protocol = Ocr;
-    type Failure = PyErr;
 
     fn decode_request(
         &mut self,
@@ -126,13 +118,17 @@ impl PythonBinding for OcrPythonHost {
         match chunk {}
     }
 
-    fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
-        if let Error::Secret(source) = &error
+    fn map_error(&self, py: Python<'_>, failure: Failure<Error>) -> PyResult<Settlement> {
+        if let Error::Secret(source) = &failure.error
             && let Some(original) = crate::secrets::python_error(py, source)
         {
-            return Ok(original);
+            return Ok(Settlement::Fail(original));
         }
-        Ok(self.map_failure(py, ocr_error_to_pyerr(error)))
+        let provider = match &self.data {
+            OcrHostData::Projected(handles) => Some(handles.provider),
+            _ => None,
+        };
+        settle(py, failure, self.standby, self.request.bind(py), provider)
     }
 
     fn host_error(error: &PyErr) -> Error {
@@ -211,7 +207,7 @@ del provider
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let mut host = OcrPythonHost::new(py.None());
+            let mut host = OcrPythonHost::new(py.None(), false);
             assert!(host.decode_request(py, &kwargs).unwrap().caller_token);
             locals.del_item("kwargs").unwrap();
             drop(kwargs);

@@ -8,7 +8,7 @@ use litellm_llms::base_llm::ocr::error::Error;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde_json::{Map, Value};
 
-use super::{document::FileDocumentInput, errors::to_pyerr as ocr_error_to_pyerr};
+use super::{document::FileDocumentInput, prepare_failure as ocr_error_to_pyerr};
 use crate::{
     credentials::{self, CallerTokenProvider},
     marshal::{project_optional_fields, python_timeout_seconds, request_input_sources},
@@ -158,9 +158,9 @@ pub(super) fn project_request(
 #[cfg(test)]
 mod tests {
     use litellm_llms_types::formats::ocr::OcrDocument;
-    use pyo3::exceptions::PyValueError;
 
     use super::*;
+    use crate::errors::RustFailure;
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);
@@ -453,8 +453,8 @@ kwargs = {}
                 .eval(c"{'type': 'mystery', 'mystery': 'x'}", None, None)
                 .unwrap();
             let error = project_document(&document).unwrap_err();
-            assert!(error.is_instance_of::<PyValueError>(py));
-            assert!(error.to_string().contains("document"));
+            assert!(error.is_instance_of::<RustFailure>(py));
+            assert!(report_message(py, &error).contains("document"));
         });
     }
 
@@ -466,14 +466,14 @@ kwargs = {}
             assert!(
                 project_document(&missing)
                     .unwrap_err()
-                    .is_instance_of::<PyValueError>(py)
+                    .is_instance_of::<RustFailure>(py)
             );
 
             let non_string = py.eval(c"{'type': 1}", None, None).unwrap();
             assert!(
                 project_document(&non_string)
                     .unwrap_err()
-                    .is_instance_of::<PyValueError>(py)
+                    .is_instance_of::<RustFailure>(py)
             );
 
             let locals = eval(
@@ -506,21 +506,49 @@ document = Document()
         Python::initialize();
         Python::attach(|py| {
             let error = project_document(&py.eval(document, None, None).unwrap()).unwrap_err();
-            let value = error.value(py);
-            assert!(error.is_instance_of::<PyValueError>(py));
+            assert!(error.is_instance_of::<RustFailure>(py));
             assert_eq!(
-                value.to_string(),
+                report_message(py, &error),
                 "invalid OCR request field: document.type"
             );
+            let report = error
+                .value(py)
+                .getattr("args")
+                .unwrap()
+                .get_item(0)
+                .unwrap();
             assert_eq!(
-                value
-                    .getattr("status_code")
+                report
+                    .get_item("stage")
                     .unwrap()
-                    .extract::<u16>()
+                    .extract::<String>()
                     .unwrap(),
-                400
+                "prepare"
+            );
+            assert_eq!(
+                report
+                    .get_item("kind")
+                    .unwrap()
+                    .get_item("kind")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "request"
             );
         });
+    }
+
+    fn report_message(py: Python<'_>, error: &PyErr) -> String {
+        error
+            .value(py)
+            .getattr("args")
+            .unwrap()
+            .get_item(0)
+            .unwrap()
+            .get_item("message")
+            .unwrap()
+            .extract()
+            .unwrap()
     }
 
     fn request_and_kwargs<'py>(

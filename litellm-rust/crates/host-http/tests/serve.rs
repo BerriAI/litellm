@@ -1,4 +1,4 @@
-use litellm_host::lifecycle::ExecutionEvent;
+use litellm_host::failure::Stage;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -14,12 +14,20 @@ use futures_util::{StreamExt, stream};
 use http::{StatusCode, header::CONTENT_TYPE};
 use litellm_host::{
     call::{CallOutput, hosted_call},
+    failure::Failure,
     interceptors::{Interceptors, RawResponse, RequestContext, WireRequest},
-    lifecycle::{CallEvent, CallObserver},
+    lifecycle::{CallEvent, CallObserver, ExecutionEvent},
     machine::MachineFault,
     protocol::{Protocol, Reply},
 };
 use litellm_host_http::{Error, ResponseEncoder, StreamEncoder, Unary, serve, serve_unary};
+
+fn unstaged(error: Error<Failure<TestError>>) -> Error<TestError> {
+    match error {
+        Error::Call(failure) => Error::Call(failure.error),
+        Error::Protocol => Error::Protocol,
+    }
+}
 use rstest::{fixture, rstest};
 use serde_json::json;
 
@@ -44,6 +52,10 @@ impl Protocol for TestProtocol {
     type Error = TestError;
     type Request = &'static str;
     type HostCall = Reply<&'static str>;
+
+    fn host_call_stage(_: &Self::HostCall) -> Stage {
+        Stage::Prepare
+    }
     type Chunk = Bytes;
     type StreamHead = &'static str;
 }
@@ -102,7 +114,7 @@ impl StreamEncoder for Adapter {
         Ok(chunk)
     }
 
-    fn encode_stream_error(&self, error: Error<TestError>) -> Bytes {
+    fn encode_stream_error(&self, error: Error<Failure<TestError>>) -> Bytes {
         Bytes::from(format!("event: error\ndata: {error:?}\n\n"))
     }
 }
@@ -197,29 +209,32 @@ async fn projection_custom_operations_and_hooks_feed_the_http_response(intercept
         "projected",
         None,
         |request, services, route_hooks, _observations| async move {
-            let custom = services.call(|reply| reply).await?;
-            let wire = route_hooks
-                .before_provider_request(
-                    WireRequest {
-                        url: request.into(),
-                        headers: Vec::new(),
-                        body: json!({}),
-                    },
-                    RequestContext {
-                        model: custom.into(),
-                        custom_llm_provider: "test".into(),
-                        optional_params: json!({}),
-                        secret_fields: Vec::new(),
-                        api_key: None,
-                    },
-                )
-                .await?;
-            route_hooks
-                .after_provider_response(RawResponse {
-                    body: wire.url.clone(),
-                })
-                .await?;
-            Ok(CallOutput::Complete(Bytes::from(wire.url)))
+            litellm_host::failure::prepare(async move {
+                let custom = services.call(|reply| reply).await?;
+                let wire = route_hooks
+                    .before_provider_request(
+                        WireRequest {
+                            url: request.into(),
+                            headers: Vec::new(),
+                            body: json!({}),
+                        },
+                        RequestContext {
+                            model: custom.into(),
+                            custom_llm_provider: "test".into(),
+                            optional_params: json!({}),
+                            secret_fields: Vec::new(),
+                            api_key: None,
+                        },
+                    )
+                    .await?;
+                route_hooks
+                    .after_provider_response(RawResponse {
+                        body: wire.url.clone(),
+                    })
+                    .await?;
+                Ok(CallOutput::Complete(Bytes::from(wire.url)))
+            })
+            .await
         },
     );
     let response = serve(
@@ -271,17 +286,21 @@ async fn body_demand_controls_polling_and_lifecycle(
         "input",
         None,
         move |_, _, _, _observations| async move {
-            let chunks = stream::unfold((0, release), move |(index, release)| {
-                provider_polls.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    (index < 2).then(|| (Ok(Bytes::from(index.to_string())), (index + 1, release)))
-                }
+            litellm_host::failure::prepare(async move {
+                let chunks = stream::unfold((0, release), move |(index, release)| {
+                    provider_polls.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        (index < 2)
+                            .then(|| (Ok(Bytes::from(index.to_string())), (index + 1, release)))
+                    }
+                })
+                .boxed();
+                Ok(CallOutput::Stream {
+                    head: "text/event-stream",
+                    chunks,
+                })
             })
-            .boxed();
-            Ok(CallOutput::Stream {
-                head: "text/event-stream",
-                chunks,
-            })
+            .await
         },
     );
     let response = serve(
@@ -341,19 +360,22 @@ async fn stream_failure_emits_one_error_frame_and_stops(
         "input",
         None,
         move |_, _, _, _observations| async move {
-            let chunks = stream::iter([
-                Ok(Bytes::from_static(b"first")),
-                Err(TestError::Provider),
-                Ok(Bytes::from_static(b"must not be delivered")),
-            ])
-            .inspect(move |_| {
-                provider_polls.fetch_add(1, Ordering::SeqCst);
+            litellm_host::failure::prepare(async move {
+                let chunks = stream::iter([
+                    Ok(Bytes::from_static(b"first")),
+                    Err(TestError::Provider),
+                    Ok(Bytes::from_static(b"must not be delivered")),
+                ])
+                .inspect(move |_| {
+                    provider_polls.fetch_add(1, Ordering::SeqCst);
+                })
+                .boxed();
+                Ok(CallOutput::Stream {
+                    head: "text/event-stream",
+                    chunks,
+                })
             })
-            .boxed();
-            Ok(CallOutput::Stream {
-                head: "text/event-stream",
-                chunks,
-            })
+            .await
         },
     );
     let response = serve(
@@ -371,6 +393,7 @@ async fn stream_failure_emits_one_error_frame_and_stops(
     } else {
         "first"
     };
+    let expected = Failure::receive(expected);
     assert_eq!(
         body,
         format!(
@@ -397,15 +420,18 @@ async fn failures_before_open_return_an_error(interceptors: Hooks, #[case] rejec
         "input",
         None,
         move |_, services, _, _observations| async move {
-            services.call(|reply| reply).await?;
-            match rejection {
-                Rejection::Head => Ok(CallOutput::Stream {
-                    head: "text/event-stream",
-                    chunks: stream::pending().boxed(),
-                }),
-                Rejection::None => Err(TestError::Provider),
-                _ => Ok(CallOutput::Complete(Bytes::new())),
-            }
+            litellm_host::failure::prepare(async move {
+                services.call(|reply| reply).await?;
+                match rejection {
+                    Rejection::Head => Ok(CallOutput::Stream {
+                        head: "text/event-stream",
+                        chunks: stream::pending().boxed(),
+                    }),
+                    Rejection::None => Err(TestError::Provider),
+                    _ => Ok(CallOutput::Complete(Bytes::new())),
+                }
+            })
+            .await
         },
     );
     let expected = if rejection == Rejection::None {
@@ -422,6 +448,7 @@ async fn failures_before_open_return_an_error(interceptors: Hooks, #[case] rejec
             Some(observer.0.sender.clone())
         )
         .await
+        .map_err(unstaged)
         .unwrap_err(),
         Error::Call(expected)
     );
@@ -446,19 +473,22 @@ async fn cancelling_pending_work_releases_the_machine(
         "input",
         None,
         move |_, _, _, _observations| async move {
-            if !streaming {
-                let _release = release;
-                return std::future::pending().await;
-            }
-            let chunks = stream::once(async move {
-                let _release = release;
-                std::future::pending().await
+            litellm_host::failure::prepare(async move {
+                if !streaming {
+                    let _release = release;
+                    return std::future::pending().await;
+                }
+                let chunks = stream::once(async move {
+                    let _release = release;
+                    std::future::pending().await
+                })
+                .boxed();
+                Ok(CallOutput::Stream {
+                    head: "text/event-stream",
+                    chunks,
+                })
             })
-            .boxed();
-            Ok(CallOutput::Stream {
-                head: "text/event-stream",
-                chunks,
-            })
+            .await
         },
     );
     let mut response = Box::pin(serve(
@@ -499,32 +529,35 @@ async fn hook_rejection_stops_execution_and_is_reported_once(
         "input",
         None,
         move |_, _, route_hooks, _observations| async move {
-            if event {
-                route_hooks
-                    .after_provider_response(RawResponse {
-                        body: "response".into(),
-                    })
-                    .await?;
-            } else {
-                route_hooks
-                    .before_provider_request(
-                        WireRequest {
-                            url: "url".into(),
-                            headers: Vec::new(),
-                            body: json!({}),
-                        },
-                        RequestContext {
-                            model: "model".into(),
-                            custom_llm_provider: "provider".into(),
-                            optional_params: json!({}),
-                            secret_fields: Vec::new(),
-                            api_key: None,
-                        },
-                    )
-                    .await?;
-            }
-            executed.store(true, Ordering::SeqCst);
-            Ok(CallOutput::Complete(Bytes::new()))
+            litellm_host::failure::prepare(async move {
+                if event {
+                    route_hooks
+                        .after_provider_response(RawResponse {
+                            body: "response".into(),
+                        })
+                        .await?;
+                } else {
+                    route_hooks
+                        .before_provider_request(
+                            WireRequest {
+                                url: "url".into(),
+                                headers: Vec::new(),
+                                body: json!({}),
+                            },
+                            RequestContext {
+                                model: "model".into(),
+                                custom_llm_provider: "provider".into(),
+                                optional_params: json!({}),
+                                secret_fields: Vec::new(),
+                                api_key: None,
+                            },
+                        )
+                        .await?;
+                }
+                executed.store(true, Ordering::SeqCst);
+                Ok(CallOutput::Complete(Bytes::new()))
+            })
+            .await
         },
     );
     let interceptors = Hooks {
@@ -540,6 +573,7 @@ async fn hook_rejection_stops_execution_and_is_reported_once(
             Some(observer.0.sender.clone()),
         )
         .await
+        .map_err(unstaged)
         .unwrap_err(),
         Error::Call(TestError::Hook)
     );
@@ -569,16 +603,19 @@ async fn invalid_host_operations_fail_without_panicking(
     let observer = interceptors.observer.clone();
     let machine = CallMachine::<TestProtocol, HostedCompletion<Bytes>>::new(None, move |host| {
         Box::pin(async move {
-            match flow {
-                InvalidFlow::DeliverBeforeOpen => {
-                    let _ = host.stream.send_chunk(Bytes::new()).await?;
+            litellm_host::failure::prepare(async move {
+                match flow {
+                    InvalidFlow::DeliverBeforeOpen => {
+                        let _ = host.stream.send_chunk(Bytes::new()).await?;
+                    }
+                    InvalidFlow::OpenTwice => {
+                        let _ = host.stream.open_stream("text/event-stream").await?;
+                        let _ = host.stream.open_stream("text/event-stream").await?;
+                    }
                 }
-                InvalidFlow::OpenTwice => {
-                    let _ = host.stream.open_stream("text/event-stream").await?;
-                    let _ = host.stream.open_stream("text/event-stream").await?;
-                }
-            }
-            Ok(HostedCompletion::StreamEnded)
+                Ok(HostedCompletion::StreamEnded)
+            })
+            .await
         })
     });
     let result = serve(
@@ -608,6 +645,10 @@ impl Protocol for UnaryProtocol {
     type Error = TestError;
     type Request = &'static str;
     type HostCall = std::convert::Infallible;
+
+    fn host_call_stage(call: &Self::HostCall) -> Stage {
+        match *call {}
+    }
     type Chunk = std::convert::Infallible;
     type StreamHead = std::convert::Infallible;
 }
@@ -620,28 +661,31 @@ async fn unary_calls_use_into_response_after_hooks_and_before_success(intercepto
         "projected",
         None,
         |request, _, route_hooks, _observations| async move {
-            let wire = route_hooks
-                .before_provider_request(
-                    WireRequest {
-                        url: request.into(),
-                        headers: Vec::new(),
-                        body: json!({}),
-                    },
-                    RequestContext {
-                        model: "rewritten".into(),
-                        custom_llm_provider: "test".into(),
-                        optional_params: json!({}),
-                        secret_fields: Vec::new(),
-                        api_key: None,
-                    },
-                )
-                .await?;
-            route_hooks
-                .after_provider_response(RawResponse {
-                    body: wire.url.clone(),
-                })
-                .await?;
-            Ok(CallOutput::Complete(json!({"url": wire.url})))
+            litellm_host::failure::prepare(async move {
+                let wire = route_hooks
+                    .before_provider_request(
+                        WireRequest {
+                            url: request.into(),
+                            headers: Vec::new(),
+                            body: json!({}),
+                        },
+                        RequestContext {
+                            model: "rewritten".into(),
+                            custom_llm_provider: "test".into(),
+                            optional_params: json!({}),
+                            secret_fields: Vec::new(),
+                            api_key: None,
+                        },
+                    )
+                    .await?;
+                route_hooks
+                    .after_provider_response(RawResponse {
+                        body: wire.url.clone(),
+                    })
+                    .await?;
+                Ok(CallOutput::Complete(json!({"url": wire.url})))
+            })
+            .await
         },
     );
     let response = serve_unary(
@@ -688,10 +732,13 @@ async fn unary_failure_preserves_the_error_without_converting(
         "input",
         None,
         |_, _, route_hooks, _observations| async move {
-            route_hooks
-                .after_provider_response(RawResponse { body: "raw".into() })
-                .await?;
-            Err(TestError::Provider)
+            litellm_host::failure::prepare(async move {
+                route_hooks
+                    .after_provider_response(RawResponse { body: "raw".into() })
+                    .await?;
+                Err(TestError::Provider)
+            })
+            .await
         },
     );
     let interceptors = Hooks {
@@ -710,7 +757,7 @@ async fn unary_failure_preserves_the_error_without_converting(
         Some(observer.0.sender.clone()),
     )
     .await;
-    assert_eq!(result.unwrap_err(), Error::Call(expected));
+    assert_eq!(unstaged(result.unwrap_err()), Error::Call(expected));
     assert!(!converted.load(Ordering::SeqCst));
     let events = observer.0.lock().unwrap();
     assert!(matches!(events.first(), Some(CallEvent::Started { .. })));
@@ -728,8 +775,11 @@ async fn cancelling_unary_execution_releases_work_without_converting(interceptor
         "input",
         None,
         move |_, _, _, _observations| async move {
-            let _release = release;
-            std::future::pending().await
+            litellm_host::failure::prepare(async move {
+                let _release = release;
+                std::future::pending().await
+            })
+            .await
         },
     );
     let converted = AtomicBool::new(false);
@@ -761,6 +811,10 @@ impl Protocol for CustomUnaryProtocol {
     type Error = TestError;
     type Request = &'static str;
     type HostCall = Reply<&'static str>;
+
+    fn host_call_stage(_: &Self::HostCall) -> Stage {
+        Stage::Prepare
+    }
     type Chunk = std::convert::Infallible;
     type StreamHead = std::convert::Infallible;
 }
@@ -813,12 +867,15 @@ async fn unary_custom_operations_and_conversion_finish_before_terminal_observati
         "request",
         None,
         move |request, services, _, _observations| async move {
-            let _release = release;
-            let credential = services.call(|reply| reply).await?;
-            executed.store(true, Ordering::SeqCst);
-            Ok(CallOutput::Complete(Bytes::from(format!(
-                "{request}/{credential}"
-            ))))
+            litellm_host::failure::prepare(async move {
+                let _release = release;
+                let credential = services.call(|reply| reply).await?;
+                executed.store(true, Ordering::SeqCst);
+                Ok(CallOutput::Complete(Bytes::from(format!(
+                    "{request}/{credential}"
+                ))))
+            })
+            .await
         },
     );
     let result = serve_unary(
@@ -836,7 +893,10 @@ async fn unary_custom_operations_and_conversion_finish_before_terminal_observati
     assert_eq!(converted.load(Ordering::SeqCst), !reject_op);
     assert!(released.load(Ordering::SeqCst));
     if reject_op || reject_response {
-        assert_eq!(result.unwrap_err(), Error::Call(TestError::Adapter));
+        assert_eq!(
+            unstaged(result.unwrap_err()),
+            Error::Call(TestError::Adapter)
+        );
         assert!(matches!(
             observer.0.lock().unwrap().as_slice(),
             [CallEvent::Started { .. }, CallEvent::Failed { .. }]

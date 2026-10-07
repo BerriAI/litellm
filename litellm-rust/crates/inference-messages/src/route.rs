@@ -1,3 +1,4 @@
+use litellm_host::failure::Stage;
 use std::convert::Infallible;
 
 use bytes::Bytes;
@@ -23,6 +24,10 @@ impl Protocol for Messages {
     type Error = Error;
     type Request = MessagesCall;
     type HostCall = Infallible;
+
+    fn host_call_stage(call: &Self::HostCall) -> Stage {
+        match *call {}
+    }
     type Chunk = Bytes;
     type StreamHead = MessagesStreamHead;
 }

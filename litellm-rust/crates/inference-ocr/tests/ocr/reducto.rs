@@ -1,7 +1,10 @@
-use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::{Arc, Mutex};
 
-use litellm_host::{interceptors::WireRequest, lifecycle::CallEvent};
+use litellm_host::{
+    interceptors::WireRequest,
+    lifecycle::{CallEvent, ExecutionEvent},
+};
+use litellm_inference::call::{Kind, Stage};
 use rstest::rstest;
 
 use super::*;
@@ -197,11 +200,12 @@ async fn invalid_document_sources_are_rejected_before_sending(
         "sent invalid source: {source}"
     );
     let error = result.unwrap_err();
+    assert_eq!(error.stage, Stage::Prepare);
     assert_eq!(
-        std::mem::discriminant(&error),
+        std::mem::discriminant(&error.error),
         std::mem::discriminant(&expected)
     );
-    assert_eq!(error.http_status_code(), Some(400));
+    assert_eq!(error.kind(), Kind::Request);
     assert_eq!(error.to_string(), expected.to_string());
 }
 

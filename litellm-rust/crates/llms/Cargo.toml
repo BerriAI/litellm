@@ -33,6 +33,7 @@ strum.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
 url.workspace = true
 
 [dev-dependencies]
@@ -41,3 +42,4 @@ aws-smithy-eventstream = "=0.61.4"
 aws-smithy-types = "1.6.1"
 rstest.workspace = true
 tokio.workspace = true
+wiremock.workspace = true

@@ -1,33 +1,15 @@
 //! The Python face of the text codecs: one `Tokenizer` class over the tiktoken and Hugging
 //! Face backends, carrying the read-only surface of `tiktoken.Encoding` and
 //! `tokenizers.Tokenizer` that `litellm/litellm_core_utils/tokenizer.py` wraps.
-use std::borrow::Cow;
 #[cfg(any(feature = "tiktoken", feature = "huggingface"))]
 use std::collections::HashMap;
-use std::sync::Arc;
 #[cfg(feature = "fast")]
 use std::sync::OnceLock;
+use std::{borrow::Cow, sync::Arc};
 
 use litellm_host_python::{enter_native, release_gil};
 #[cfg(feature = "fast")]
 use litellm_token_counter::fast::{FastCounter, FastTokenizer};
-use litellm_token_counter::{Error, TextCodec};
-use pyo3::{exceptions::PyUnicodeEncodeError, prelude::*, types::PyString};
-
-#[cfg(any(feature = "tiktoken", feature = "huggingface"))]
-use pyo3::exceptions::PyValueError;
-#[cfg(feature = "huggingface")]
-use pyo3::{exceptions::PyIOError, types::PyDict};
-#[cfg(feature = "tiktoken")]
-use pyo3::{
-    exceptions::{PyKeyError, PyRuntimeError},
-    types::PyBytes,
-};
-
-#[cfg(not(all(feature = "tiktoken", feature = "huggingface")))]
-use crate::errors::RustBridgeDeclined;
-use crate::routes::token_counter::token_count_error_to_pyerr;
-
 #[cfg(feature = "huggingface")]
 use litellm_token_counter::huggingface::{
     EncodeInput, Encoding, HuggingFaceTokenizer, InputSequence, PaddingDirection, PaddingStrategy,
@@ -35,6 +17,21 @@ use litellm_token_counter::huggingface::{
 };
 #[cfg(feature = "tiktoken")]
 use litellm_token_counter::tiktoken::{TiktokenTokenizer, Vocabulary};
+use litellm_token_counter::{Error, TextCodec};
+#[cfg(any(feature = "tiktoken", feature = "huggingface"))]
+use pyo3::exceptions::PyValueError;
+#[cfg(feature = "huggingface")]
+use pyo3::{exceptions::PyIOError, types::PyDict};
+use pyo3::{exceptions::PyUnicodeEncodeError, prelude::*, types::PyString};
+#[cfg(feature = "tiktoken")]
+use pyo3::{
+    exceptions::{PyKeyError, PyRuntimeError},
+    types::PyBytes,
+};
+
+#[cfg(not(all(feature = "tiktoken", feature = "huggingface")))]
+use crate::errors::unsupported;
+use crate::routes::token_counter::token_count_error_to_pyerr;
 
 #[cfg(feature = "tiktoken")]
 pub(crate) fn load_tiktoken(py: Python<'_>, encoding: &str) -> PyResult<TiktokenTokenizer> {
@@ -100,7 +97,7 @@ impl Tokenizer {
         #[cfg(not(feature = "tiktoken"))]
         {
             let _ = (py, encoding);
-            Err(RustBridgeDeclined::new_err(
+            Err(unsupported(
                 "tokenizer backend requires the tiktoken feature",
             ))
         }
@@ -118,7 +115,7 @@ impl Tokenizer {
         #[cfg(not(feature = "huggingface"))]
         {
             let _ = (py, tokenizer_json);
-            Err(RustBridgeDeclined::new_err(
+            Err(unsupported(
                 "tokenizer backend requires the huggingface feature",
             ))
         }
@@ -151,7 +148,7 @@ impl Tokenizer {
         #[cfg(not(feature = "huggingface"))]
         {
             let _ = (py, identifier, revision, token);
-            Err(RustBridgeDeclined::new_err(
+            Err(unsupported(
                 "tokenizer backend requires the huggingface feature",
             ))
         }

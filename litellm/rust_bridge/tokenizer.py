@@ -71,7 +71,7 @@ def get_encoding(name: str) -> Encoding:
     return runtime.run(
         TIKTOKEN_CONTEXT,
         binding=TOKENIZER,
-        native=lambda factory: _native_encoding(factory, name),
+        native=lambda factory, _standby: _native_encoding(factory, name),
         python=lambda: _python_encoding(name),
     )
 
@@ -83,7 +83,7 @@ def anthropic() -> HuggingFace:
     return runtime.run(
         HUGGINGFACE_CONTEXT,
         binding=TOKENIZER,
-        native=lambda factory: HuggingFaceTokenizer(_native_anthropic(factory)),
+        native=lambda factory, _standby: HuggingFaceTokenizer(_native_anthropic(factory)),
         python=lambda: PythonHuggingFaceTokenizer.from_str(claude_json_str),
     )
 
@@ -92,7 +92,7 @@ def from_str(json: str) -> HuggingFace:
     return runtime.run(
         HUGGINGFACE_CONTEXT,
         binding=TOKENIZER,
-        native=lambda factory: HuggingFaceTokenizer(factory.from_json(json)),
+        native=lambda factory, _standby: HuggingFaceTokenizer(factory.from_json(json)),
         python=lambda: PythonHuggingFaceTokenizer.from_str(json),
     )
 
@@ -101,7 +101,7 @@ def from_pretrained(identifier: str, revision: str = "main", token: str | None =
     return runtime.run(
         HUGGINGFACE_CONTEXT,
         binding=TOKENIZER,
-        native=lambda factory: HuggingFaceTokenizer(
+        native=lambda factory, _standby: HuggingFaceTokenizer(
             factory.from_pretrained(identifier, revision=revision, token=token)
         ),
         python=lambda: PythonHuggingFaceTokenizer.from_pretrained(identifier, revision=revision, token=token),

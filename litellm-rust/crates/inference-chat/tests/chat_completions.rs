@@ -1,11 +1,11 @@
-use litellm_host::interceptors::RawResponse;
-use litellm_host::{
-    interceptors::{ExecutionFacts, ResultSource},
-    lifecycle::ExecutionEvent,
-};
 use std::time::Duration;
 
+use litellm_host::{
+    interceptors::{ExecutionFacts, RawResponse, ResultSource},
+    lifecycle::ExecutionEvent,
+};
 use litellm_http::transport::Error as TransportError;
+use litellm_inference::call::{Failure, Stage, UpstreamResponse};
 use litellm_inference_chat::{Error, types::ChatCompletionsRequest};
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use rstest::{fixture, rstest};
@@ -17,7 +17,9 @@ use support::*;
 
 const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
-async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletionsResponse, Error> {
+async fn complete(
+    request: ChatCompletionsRequest<'_>,
+) -> Result<ChatCompletionsResponse, Failure<Error>> {
     chat_completions_route().execute(request, &(), None).await
 }
 
@@ -180,7 +182,7 @@ async fn a_response_it_cannot_normalize_is_reported_as_already_sent(
     .await
     .expect_err("response cannot be normalized");
 
-    assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
+    assert_eq!(error.stage, Stage::Receive, "{error:?}");
 }
 
 #[rstest]
@@ -201,12 +203,25 @@ async fn an_upstream_error_status_keeps_its_code_and_body(
     .await
     .expect_err("upstream rejects");
 
+    assert_eq!(error.stage, Stage::Upstream);
+    let Error::Upstream(UpstreamResponse {
+        status: upstream_status,
+        body: upstream_body,
+        url: upstream_url,
+        ..
+    }) = error.error
+    else {
+        panic!("expected the provider's answer");
+    };
+    assert_eq!(upstream_status, status);
+    assert_eq!(upstream_body, "slow down");
     assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status,
-            body: "slow down".into()
-        })
+        upstream_url,
+        Some(format!(
+            "{}{}",
+            upstream.uri(),
+            only_request(&upstream).await.url.path()
+        ))
     );
 }
 
@@ -222,15 +237,18 @@ async fn a_connection_that_is_never_established_returns_a_connect_error(
     .await
     .expect_err("nothing is listening");
 
+    assert_eq!(error.stage, Stage::Send);
     assert!(
-        matches!(error, Error::Transport(TransportError::Connect(_))),
+        matches!(error.error, Error::Transport(TransportError::Connect(_))),
         "{error:?}"
     );
 }
 
 #[rstest]
 #[tokio::test]
-async fn a_timeout_after_sending_returns_a_network_error(request: ChatCompletionsRequest<'static>) {
+async fn a_timeout_after_sending_may_have_reached_the_provider(
+    request: ChatCompletionsRequest<'static>,
+) {
     let upstream =
         upstream([anthropic_response(ANTHROPIC_MESSAGE).set_delay(Duration::from_secs(5))]).await;
     let base = upstream.uri();
@@ -243,8 +261,9 @@ async fn a_timeout_after_sending_returns_a_network_error(request: ChatCompletion
     .await
     .expect_err("the call times out");
 
+    assert_eq!(error.stage, Stage::Receive);
     assert!(
-        matches!(error, Error::Transport(TransportError::Network(_))),
+        matches!(error.error, Error::Transport(TransportError::Timeout(_))),
         "{error:?}"
     );
 }
@@ -358,10 +377,11 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
         )
         .await
         .unwrap_err();
-    let Error::PostCallHook(source) = error else {
-        panic!("expected retained callback error")
-    };
-    assert_eq!(*source, Error::InvalidRequest("callback rejected".into()));
+    assert_eq!(error.stage, Stage::PostCall);
+    assert_eq!(
+        error.error,
+        Error::InvalidRequest("callback rejected".into())
+    );
     assert_eq!(received(&upstream).await.len(), 1);
 }
 
@@ -383,7 +403,7 @@ async fn completed_chat_records_route_and_resolved_provider(
         .await
         .unwrap();
     let summaries = traces.summaries("litellm.route");
-    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries.len(), 1, "{:?}", traces.records());
     assert_eq!(summaries[0]["route"], "chat_completions");
     assert_eq!(summaries[0]["model"], model);
     assert_eq!(summaries[0]["provider"], "anthropic");

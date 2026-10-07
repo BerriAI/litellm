@@ -1,10 +1,16 @@
 use futures_util::future::BoxFuture;
-use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
-use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
-use litellm_llms::base_llm::ocr::{
-    error::Error,
-    handler::{CallHooks, OcrClient},
-    transformation::PreparedOcrRequest,
+use litellm_host::{
+    interceptors::{Interceptors, RawResponse, RequestContext, WireRequest},
+    lifecycle::ExecutionEvent,
+    observation::ObservationSender,
+};
+use litellm_llms::base_llm::{
+    call::{self, Failure},
+    ocr::{
+        error::Error,
+        handler::{CallHooks, OcrClient},
+        transformation::PreparedOcrRequest,
+    },
 };
 use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 use serde_json::Value;
@@ -18,17 +24,22 @@ pub(crate) async fn perform_ocr_request(
     host: &impl Interceptors<Error>,
     caller_document: bool,
     observers: Option<&ObservationSender>,
-) -> Result<LiteLLMOcrResponse, Error> {
-    request.response_format()?;
+) -> Result<LiteLLMOcrResponse, Failure<Error>> {
     let config = request.config;
-    let secrets = client
-        .secret_source()
-        .resolve(&config.secret_names())
-        .await
-        .map_err(|error| Error::Secret(std::sync::Arc::new(error)))?;
-    let request = prepare_request(request, caller_document, client, secrets);
+    let request = call::prepare(async {
+        request.response_format()?;
+        let secrets = client
+            .secret_source()
+            .resolve(&config.secret_names())
+            .await
+            .map_err(|error| Error::Secret(std::sync::Arc::new(error)))?;
+        Ok(prepare_request(request, caller_document, client, secrets))
+    })
+    .await?;
     let interceptors = OcrCallHooks::new(host, &request, config, observers);
-    config.ocr(client, &request, &interceptors).await
+    let execute: BoxFuture<'_, Result<LiteLLMOcrResponse, Failure<Error>>> =
+        Box::pin(config.ocr(client, &request, &interceptors));
+    execute.await
 }
 
 struct OcrCallHooks<'a, H> {

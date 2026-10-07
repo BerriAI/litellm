@@ -1,11 +1,12 @@
 from types import MappingProxyType
 from typing import Final
 
-from litellm.rust_bridge.messages.route_host import arguments, response
-from litellm.rust_bridge.public_call import NativeCall
 import pytest
+
 import litellm
 from litellm.rust_bridge.messages import route_host
+from litellm.rust_bridge.messages.route_host import arguments, response
+from litellm.rust_bridge.public_call import NativeCall
 
 
 def test_response_is_a_detached_public_messages_dict() -> None:
@@ -92,39 +93,6 @@ def test_additional_drop_params_keep_only_string_paths(configured: object, expec
     settings: Final = route_host.settings({"additional_drop_params": configured})
 
     assert settings["additional_drop_params"] == expected
-
-
-def test_native_request_rejections_map_to_the_public_400() -> None:
-    from types import MappingProxyType
-
-    from litellm.rust_bridge.public_call import NativeCall
-
-    request: Final = NativeCall(
-        args=(),
-        kwargs=MappingProxyType({}),
-        bound={
-            "model": "anthropic/claude-sonnet-5",
-            "messages": (),
-            "max_tokens": 8,
-            "stream": None,
-            "api_key": None,
-            "api_base": None,
-            "custom_llm_provider": None,
-            **MappingProxyType({}),
-        },
-    )
-    rejected: Final = ValueError("claude-sonnet-5 does not support top_k=5")
-    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
-
-    mapped: Final = route_host.map_failure(rejected, request.bound, "anthropic")
-
-    assert isinstance(mapped, litellm.BadRequestError)
-    assert mapped.status_code == 400
-    assert "does not support top_k=5" in mapped.message
-    assert mapped.model == "claude-sonnet-5"
-    assert not isinstance(
-        route_host.map_failure(ValueError("plain"), request.bound, "anthropic"), litellm.BadRequestError
-    )
 
 
 def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handler_does() -> None:

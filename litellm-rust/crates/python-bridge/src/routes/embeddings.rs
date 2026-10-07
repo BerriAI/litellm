@@ -1,13 +1,11 @@
 use pyo3::prelude::*;
 
-use crate::errors::RustBridgeDeclined;
+use crate::errors::unsupported;
 
 #[pyfunction]
 pub(crate) fn embedding(call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     drop(super::NativeCall::extract(&call)?);
-    Err(RustBridgeDeclined::new_err(
-        "native embeddings route is not implemented",
-    ))
+    Err(unsupported("native embeddings route is not implemented"))
 }
 
 #[pyfunction]
@@ -20,12 +18,12 @@ mod tests {
     use pyo3::{prelude::*, types::PyDict};
     use rstest::rstest;
 
-    use crate::errors::RustBridgeDeclined;
+    use crate::errors::RustFailure;
 
     #[rstest]
     #[case::sync(false)]
     #[case::asynchronous(true)]
-    fn both_entrypoints_decline_before_provider_execution(#[case] asynchronous: bool) {
+    fn both_entrypoints_fail_before_provider_execution(#[case] asynchronous: bool) {
         Python::initialize();
         Python::attach(|py| {
             let locals = PyDict::new(py);
@@ -42,8 +40,22 @@ call = SimpleNamespace(args=(), kwargs={}, bound={'model':'test-model','input':'
             } else {
                 super::embedding(call)
             }
-            .expect_err("native embeddings must decline until a route machine exists");
-            assert!(error.is_instance_of::<RustBridgeDeclined>(py));
+            .expect_err("native embeddings must fail until a route machine exists");
+            assert!(error.is_instance_of::<RustFailure>(py));
+            let report = error
+                .value(py)
+                .getattr("args")
+                .unwrap()
+                .get_item(0)
+                .unwrap();
+            assert_eq!(
+                report
+                    .get_item("stage")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "prepare"
+            );
         });
     }
 }

@@ -1,28 +1,31 @@
-use std::sync::Arc;
-use std::task::Poll;
+use std::{sync::Arc, task::Poll};
 
 use futures_util::future::{AbortHandle, Abortable};
-use litellm_host::call::HostedCompletion;
-use litellm_host::machine::{HostFailure, Machine, MachineStep};
-use litellm_host::protocol::Protocol;
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+use litellm_host::{
+    call::HostedCompletion,
+    failure::Failure,
+    machine::{HostFailure, Machine, MachineStep},
+    protocol::Protocol,
+};
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 use tokio::sync::Mutex;
 
-use crate::missing_state;
-use crate::runtime::{poll_async_value, run_async_value, run_sync_value};
+use crate::{
+    missing_state,
+    runtime::{poll_async_value, run_async_value, run_sync_value},
+};
 
 type NativeResult<M> = Result<
     MachineStep<
         <M as Machine>::Protocol,
         HostedCompletion<<<M as Machine>::Protocol as Protocol>::Response>,
     >,
-    <<M as Machine>::Protocol as Protocol>::Error,
+    Failure<<<M as Machine>::Protocol as Protocol>::Error>,
 >;
 
 type MachineResult<M> = Result<
     MachineStep<<M as Machine>::Protocol, <M as Machine>::Complete>,
-    <<M as Machine>::Protocol as Protocol>::Error,
+    Failure<<<M as Machine>::Protocol as Protocol>::Error>,
 >;
 
 struct MachineState<M: Machine> {

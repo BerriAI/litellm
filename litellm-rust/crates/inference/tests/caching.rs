@@ -27,6 +27,7 @@ use litellm_host::{
 use litellm_inference::{
     RouteError,
     caching::{Cachable, CacheRequest, StreamCachable, execute_streaming, execute_unary},
+    call::{Failure, Stage},
 };
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
@@ -38,6 +39,10 @@ impl Protocol for TestRoute {
     type Response = Value;
     type Error = RouteError;
     type HostCall = Infallible;
+
+    fn host_call_stage(call: &Self::HostCall) -> Stage {
+        match *call {}
+    }
     type Chunk = Bytes;
     type StreamHead = ();
 }
@@ -315,7 +320,9 @@ async fn a_provider_failure_never_populates_the_cache(cache: Arc<dyn ResponseCac
         None,
         || async {
             calls.fetch_add(1, Ordering::SeqCst);
-            Err(RouteError::Unsupported("test provider failure"))
+            Err(Failure::prepare(RouteError::Unsupported(
+                "test provider failure",
+            )))
         },
     )
     .await;
@@ -554,7 +561,10 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
         )
         .await
         {
-            Ok(output) => consume(output).await.map(|bytes| json!(bytes)),
+            Ok(output) => consume(output)
+                .await
+                .map(|bytes| json!(bytes))
+                .map_err(Failure::receive),
             Err(error) => Err(error),
         }
     } else {
@@ -571,7 +581,10 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
     if reject {
         assert!(matches!(
             result,
-            Err(RouteError::Unsupported("cache accounting rejected"))
+            Err(Failure {
+                stage: Stage::PostCall,
+                error: RouteError::Unsupported("cache accounting rejected"),
+            })
         ));
     } else {
         assert_eq!(result.unwrap(), expected);
@@ -592,6 +605,10 @@ impl Protocol for UnaryTestRoute {
     type Response = Value;
     type Error = RouteError;
     type HostCall = Infallible;
+
+    fn host_call_stage(call: &Self::HostCall) -> Stage {
+        match *call {}
+    }
     type Chunk = Infallible;
     type StreamHead = Infallible;
 }

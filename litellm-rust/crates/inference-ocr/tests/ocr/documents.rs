@@ -1,5 +1,6 @@
 use base64::Engine;
 use litellm_host::interceptors::WireRequest;
+use litellm_inference::call::Failure;
 use litellm_inference_ocr::types::OcrDocumentInput;
 use litellm_inference_testing::{http_config, no_secrets, resources};
 use rstest::rstest;
@@ -154,7 +155,7 @@ async fn an_empty_byte_document_fails_before_sending() {
 
     let error = perform(request).await.unwrap_err();
 
-    assert!(matches!(error, Error::EmptyFile), "{error:?}");
+    assert!(matches!(error.error, Error::EmptyFile), "{error:?}");
     assert!(received(&upstream).await.is_empty());
 }
 
@@ -175,7 +176,7 @@ async fn a_missing_path_document_fails_before_sending() {
 
     assert!(
         matches!(
-            &error,
+            &error.error,
             Error::FileRead { path: failed, source }
                 if *failed == path && source.kind() == std::io::ErrorKind::NotFound
         ),
@@ -216,7 +217,13 @@ async fn configured_client_preserves_document_url_policy(#[case] allowed: bool) 
     .await;
 
     if !allowed {
-        assert!(matches!(result, Err(Error::BlockedDocumentUrl)));
+        assert!(matches!(
+            result,
+            Err(Failure {
+                error: Error::BlockedDocumentUrl,
+                ..
+            })
+        ));
         assert!(received(&documents).await.is_empty());
         assert!(received(&upstream).await.is_empty());
         return;

@@ -17,6 +17,8 @@ from socket import socket as Socket
 from types import SimpleNamespace
 from typing import Final
 
+from litellm.rust_bridge import failures
+
 REQUEST_STARTED: Final = threading.Event()
 REQUEST_CANCELLED: Final = threading.Event()
 
@@ -164,8 +166,11 @@ def success_value(route: str, response: dict[object, object]) -> object:
 
 
 def assert_rate_limit(route: str, error: BaseException) -> None:
-    if error.args != (429, native_response(429, route).decode()):
-        raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
+    report: Final = failures.report(error)
+    if report is None or not isinstance(report.kind, failures.UpstreamKind):
+        raise AssertionError(f"{route} raised without an upstream failure report: {error!r}")
+    if (report.stage, report.kind.status, report.kind.body) != ("upstream", 429, native_response(429, route).decode()):
+        raise AssertionError(f"{route} returned the wrong 429 error: {report!r}")
 
 
 def exercise_sync(native: object, api_base: str) -> None:
@@ -174,7 +179,7 @@ def exercise_sync(native: object, api_base: str) -> None:
         assert_success(route, function(route_call(route, api_base, "success")))
         try:
             function(route_call(route, api_base, "429"))
-        except native.RustUpstreamError as error:
+        except native.RustFailure as error:
             assert_rate_limit(route, error)
         else:
             raise AssertionError(f"{route} accepted a 429 response")
@@ -186,7 +191,7 @@ async def exercise_async(native: object, api_base: str) -> None:
         assert_success(route, await function(route_call(route, api_base, "success")))
         try:
             await function(route_call(route, api_base, "429"))
-        except native.RustUpstreamError as error:
+        except native.RustFailure as error:
             assert_rate_limit(route, error)
         else:
             raise AssertionError(f"a{route} accepted a 429 response")

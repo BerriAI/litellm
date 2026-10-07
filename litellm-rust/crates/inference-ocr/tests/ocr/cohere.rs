@@ -37,6 +37,6 @@ async fn a_non_image_document_is_rejected_before_sending(
         .await
         .unwrap_err();
 
-    assert!(matches!(error, Error::CohereImageOnly), "{error:?}");
+    assert!(matches!(error.error, Error::CohereImageOnly), "{error:?}");
     assert!(received(&upstream).await.is_empty());
 }

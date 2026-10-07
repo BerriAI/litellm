@@ -1,10 +1,10 @@
-use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::Mutex;
 
 use litellm_host::{
     interceptors::{ExecutionFacts, RequestContext, ResultSource, WireRequest},
-    lifecycle::CallEvent,
+    lifecycle::{CallEvent, ExecutionEvent},
 };
+use litellm_inference::call::{Failure, Stage, UpstreamResponse};
 use litellm_inference_messages::{MessagesCallResponse, route::Messages};
 use litellm_inference_testing::{RecordingSecrets, no_secrets};
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
@@ -172,16 +172,19 @@ async fn rejected_results_are_not_delivered_or_cached(
         } else {
             match route.execute(host.request().unwrap(), &host, None).await {
                 Ok(MessagesCallResponse::Complete(_)) => Ok(()),
-                Ok(MessagesCallResponse::Stream { chunks, .. }) => {
-                    chunks.try_collect::<Vec<_>>().await.map(|_| ())
-                }
+                Ok(MessagesCallResponse::Stream { chunks, .. }) => chunks
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .map(|_| ())
+                    .map_err(Failure::receive),
                 Err(error) => Err(error),
             }
         };
         assert_eq!(
             result,
             if reject {
-                Err(Error::Unsupported("result rejected"))
+                Err(Failure::post_call(Error::Unsupported("result rejected"),
+                ))
             } else {
                 Ok(())
             }
@@ -196,9 +199,9 @@ async fn rejected_results_are_not_delivered_or_cached(
     }
 }
 
-async fn run_through(host: &RecordingHost) -> Result<MessagesOutput, Error> {
+async fn run_through(host: &RecordingHost) -> Result<MessagesOutput, Failure<Error>> {
     litellm_host_native::in_process::run_hosted(
-        machine(Arc::new(RecordingSecrets::empty()))(host.request()?),
+        machine(Arc::new(RecordingSecrets::empty()))(host.request().map_err(Failure::prepare)?),
         host.runtime(),
     )
     .await
@@ -279,13 +282,17 @@ async fn response_mode_follows_the_intercepted_request(
         .logger()
         .instrument(async {
             let output = messages_route(no_secrets())
-                .execute(host.request()?, &host, None)
+                .execute(host.request().map_err(Failure::prepare)?, &host, None)
                 .await?;
             match output {
                 MessagesCallResponse::Stream { chunks, .. } => {
                     assert_eq!(expected_stream, Some(true));
                     assert_eq!(
-                        chunks.try_collect::<Vec<_>>().await?.concat(),
+                        chunks
+                            .try_collect::<Vec<_>>()
+                            .await
+                            .map_err(Failure::receive)?
+                            .concat(),
                         sse.as_bytes()
                     );
                 }
@@ -294,14 +301,20 @@ async fn response_mode_follows_the_intercepted_request(
                     assert_eq!(*message, serde_json::from_value(message_body()).unwrap());
                 }
             }
-            Ok::<_, Error>(())
+            Ok::<_, Failure<Error>>(())
         })
         .await;
 
     let summaries = traces.summaries("litellm.route");
     assert_eq!(summaries.len(), 1);
     let Some(expected_stream) = expected_stream else {
-        assert!(matches!(result, Err(Error::InvalidRequest(_))));
+        assert!(matches!(
+            result,
+            Err(Failure {
+                stage: Stage::Prepare,
+                error: Error::InvalidRequest(_)
+            })
+        ));
         assert!(received(&upstream).await.is_empty());
         assert_eq!(summaries[0]["outcome"], "failure");
         return;
@@ -329,7 +342,10 @@ async fn a_before_send_failure_never_sends(call: MessagesCall) {
         .await
         .expect_err("the host failure fails the call");
 
-    assert_eq!(error, Error::InvalidRequest("vetoed by the host".into()));
+    assert_eq!(
+        error,
+        Failure::prepare(Error::InvalidRequest("vetoed by the host".into()))
+    );
     assert!(received(&upstream).await.is_empty());
     assert!(host.raw_responses().is_empty());
 }
@@ -399,4 +415,34 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
         .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
     assert_eq!(optional_params, json!({"max_tokens": 16}));
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_http_failure_keeps_the_url_rewritten_by_the_host(call: MessagesCall) {
+    let upstream = upstream([ResponseTemplate::new(429).set_body_string("slow down")]).await;
+    let rewritten = format!("{}/rewritten/messages", upstream.uri());
+    let target = rewritten.clone();
+    let host = RecordingHost::new(
+        authenticated(call, "http://127.0.0.1:1".into()),
+        Box::new(move |wire| {
+            Ok(WireRequest {
+                url: target.clone(),
+                ..wire
+            })
+        }),
+    );
+    let error = run_through(&host)
+        .await
+        .expect_err("provider rejects the rewritten request");
+    assert_eq!(error.stage, Stage::Upstream);
+    let Error::Upstream(UpstreamResponse { url, status, .. }) = error.error else {
+        panic!("expected the provider's answer");
+    };
+    assert_eq!(status, 429);
+    assert_eq!(url, Some(rewritten));
+    assert_eq!(
+        only_request(&upstream).await.url.path(),
+        "/rewritten/messages"
+    );
 }

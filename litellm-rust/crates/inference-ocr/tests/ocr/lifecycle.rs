@@ -1,13 +1,11 @@
-use litellm_host::interceptors::RawResponse;
-use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 
 use litellm_host::{
-    interceptors::{RequestContext, WireRequest},
-    lifecycle::CallEvent,
+    interceptors::{RawResponse, RequestContext, WireRequest},
+    lifecycle::{CallEvent, ExecutionEvent},
 };
 use litellm_inference_ocr::{
     route::{Ocr, OcrCall, OcrOp},
@@ -83,7 +81,7 @@ async fn a_blocking_before_send_prevents_the_call_and_emits_one_failure() {
     .unwrap_err();
 
     assert!(
-        matches!(&error, Error::InvalidRequest(message) if message == "blocked"),
+        matches!(&error.error, Error::InvalidRequest(message) if message == "blocked"),
         "{error:?}"
     );
     assert_eq!(interceptions.load(Ordering::SeqCst), 1);
@@ -127,7 +125,10 @@ async fn an_invalid_provider_response_is_observed_before_normalization_fails() {
 
     let error = perform_with(host).await.unwrap_err();
 
-    assert!(matches!(error, Error::ResponseField { .. }), "{error:?}");
+    assert!(
+        matches!(error.error, Error::ResponseField { .. }),
+        "{error:?}"
+    );
     assert_eq!(*observed.lock().unwrap(), [r#"{"pages":"invalid"}"#]);
 }
 

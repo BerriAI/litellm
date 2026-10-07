@@ -1,9 +1,10 @@
-use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 
 use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};
 use litellm_core_utils::{call_arguments::CallArguments, settings::ProcessEnvironment};
+use litellm_host::failure::UpstreamResponse;
 use litellm_http::outbound::{OutboundRequest, RequestSigner};
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 use litellm_secrets::source::Secrets;
 use serde::{
     Serialize,
@@ -180,7 +181,15 @@ pub fn response_format(optional_params: &CallArguments) -> Result<OcrResponseFor
     optional_params
         .get("req_format")
         .filter(|value| !value.is_null())
-        .map(|value| serde_json::from_value(value.clone()).map_err(|_| Error::RequestFormat))
+        .map(|value| {
+            serde_json::from_value(value.clone()).map_err(|_| {
+                Error::RequestFormat(
+                    value
+                        .as_str()
+                        .map_or_else(|| value.to_string(), str::to_owned),
+                )
+            })
+        })
         .transpose()
         .map(|format| format.unwrap_or_default())
 }
@@ -365,17 +374,10 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         }
     }
 
-    fn get_error_class(
-        &self,
-        error_message: String,
-        status_code: u16,
-        headers: Vec<(String, String)>,
-    ) -> Error {
-        Error::Provider {
-            status: status_code,
-            body: error_message,
-            headers,
-        }
+    /// A provider may reword its own error body before the host sees it; the status,
+    /// headers and URL are the provider's answer and stay as they are.
+    fn transform_upstream_error(&self, response: UpstreamResponse) -> UpstreamResponse {
+        response
     }
 
     /// Provider-specific check applied to the composed body, both before and

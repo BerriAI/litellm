@@ -1,11 +1,13 @@
+use litellm_host::failure::{Classify, Kind, UpstreamResponse};
+
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
-    #[error("upstream OCR error ({status}): {body}")]
-    Provider {
-        status: u16,
-        body: String,
-        headers: Vec<(String, String)>,
-    },
+    #[error(transparent)]
+    Upstream(#[from] UpstreamResponse),
+    #[error("OCR document download failed with status {0}")]
+    DocumentDownloadStatus(u16),
+    #[error("OCR document download timed out")]
+    DocumentDownloadTimeout,
     #[error("File is empty or could not be read")]
     EmptyFile,
     #[error("Failed to read OCR file {}: {source}", path.display())]
@@ -16,14 +18,16 @@ pub enum Error {
     },
     #[error("OCR document preparation task failed: {0}")]
     DocumentTask(#[source] std::sync::Arc<tokio::task::JoinError>),
+    #[error("OCR host {0}")]
+    Machine(litellm_host::machine::MachineFault),
     #[error("Invalid MIME type: {0}")]
     InvalidMimeType(String),
     #[error(
         "Cohere Parse only accepts `image_url` documents; document_url and PDF inputs are not supported"
     )]
     CohereImageOnly,
-    #[error("Invalid `req_format`. Expected 'native' or 'litellm'.")]
-    RequestFormat,
+    #[error("Invalid `req_format`: {0:?}. Expected 'native' or 'litellm'.")]
+    RequestFormat(String),
     #[error("invalid OCR request field: {path}")]
     RequestField { path: String },
     #[error("missing required field: {0}")]
@@ -114,11 +118,7 @@ pub enum Error {
 
 impl From<litellm_host::machine::MachineFault> for Error {
     fn from(fault: litellm_host::machine::MachineFault) -> Self {
-        use litellm_host::machine::MachineFault;
-        Self::InvalidRequest(match fault {
-            MachineFault::Abandoned => "OCR host driver was abandoned".into(),
-            MachineFault::Protocol(message) => format!("OCR {message}"),
-        })
+        Self::Machine(fault)
     }
 }
 
@@ -130,59 +130,55 @@ impl From<litellm_core_utils::call_arguments::ArgumentError> for Error {
     }
 }
 
-impl Error {
-    pub fn http_status_code(&self) -> Option<u16> {
+impl Classify for Error {
+    fn kind(&self) -> Kind {
         match self {
-            Self::Provider { status, .. }
-            | Self::Transport(litellm_http::transport::Error::Http { status, .. }) => Some(*status),
-            error if error.is_request() => Some(400),
-            _ => None,
-        }
-    }
-
-    pub fn is_request(&self) -> bool {
-        matches!(
-            self,
+            Self::Upstream(response) => Kind::Upstream(response.clone()),
+            Self::Unsupported(_) => Kind::Unsupported,
+            Self::Auth(litellm_auth::Error::MissingApiKey { .. })
+            | Self::MissingAzureAiCredentials
+            | Self::MissingAzureDocumentIntelligenceCredentials
+            | Self::MissingReductoApiKey => Kind::Auth,
+            Self::Auth(_) | Self::FileRead { .. } => Kind::Request,
+            Self::Transport(litellm_http::transport::Error::Timeout(_))
+            | Self::DocumentDownloadTimeout
+            | Self::PollTimeout => Kind::Timeout,
+            Self::Transport(_) => Kind::Connection,
             Self::EmptyFile
-                | Self::InvalidMimeType(_)
-                | Self::CohereImageOnly
-                | Self::RequestFormat
-                | Self::RequestField { .. }
-                | Self::MissingField(_)
-                | Self::MissingDocumentUrl
-                | Self::InvalidDataUri
-                | Self::ReductoSource
-                | Self::InlineDocumentTooLarge
-                | Self::BlockedDocumentUrl
-                | Self::DownloadDisabled
-                | Self::DownloadTooLarge
-                | Self::TooManyRedirects
-                | Self::Pages(_)
-                | Self::Features
-                | Self::DotModel
-                | Self::InvalidRequest(_)
-                | Self::InvalidProvider(_)
-                | Self::InvalidModel { .. }
-                | Self::Params(_)
-                | Self::Headers(_)
-                | Self::Http(_)
-        )
-    }
-
-    pub fn is_response(&self) -> bool {
-        matches!(
-            self,
+            | Self::InvalidMimeType(_)
+            | Self::CohereImageOnly
+            | Self::ReductoSource
+            | Self::RequestFormat(_)
+            | Self::RequestField { .. }
+            | Self::MissingField(_)
+            | Self::MissingDocumentUrl
+            | Self::InvalidDataUri
+            | Self::InlineDocumentTooLarge
+            | Self::BlockedDocumentUrl
+            | Self::DownloadDisabled
+            | Self::DownloadTooLarge
+            | Self::TooManyRedirects
+            | Self::DocumentDownloadStatus(_)
+            | Self::Pages(_)
+            | Self::Features
+            | Self::DotModel
+            | Self::InvalidRequest(_)
+            | Self::InvalidProvider(_)
+            | Self::InvalidModel { .. }
+            | Self::Params(_)
+            | Self::Headers(_)
+            | Self::Http(_) => Kind::Request,
             Self::TooLarge { .. }
-                | Self::ResponseField { .. }
-                | Self::EmptyContent
-                | Self::MissingRedirectLocation
-                | Self::InvalidRedirect
-                | Self::OperationStatus(_)
-                | Self::NumericRange(_)
-                | Self::PollLocation
-                | Self::PollOrigin
-                | Self::PollTimeout
-                | Self::InvalidResponse(_)
-        )
+            | Self::ResponseField { .. }
+            | Self::EmptyContent
+            | Self::MissingRedirectLocation
+            | Self::InvalidRedirect
+            | Self::OperationStatus(_)
+            | Self::NumericRange(_)
+            | Self::PollLocation
+            | Self::PollOrigin
+            | Self::InvalidResponse(_) => Kind::Response,
+            Self::DocumentTask(_) | Self::Machine(_) | Self::Secret(_) => Kind::Internal,
+        }
     }
 }

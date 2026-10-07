@@ -6,14 +6,18 @@ from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
 
 from typing_extensions import assert_never
 
-from litellm.exceptions import APIError
-from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
+from litellm._logging import verbose_logger
+from litellm.rust_bridge import failures
+from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import RouteContext, Rules, decision
 from litellm.rust_bridge.configuration import Decision
-from litellm.rust_bridge.response_metadata import mark_rust_response
+from litellm.rust_bridge.response_metadata import mark_rerouted_response, mark_rust_response
 
 NativeT = TypeVar("NativeT")
 ResultT = TypeVar("ResultT")
+
+NativeInvoke: TypeAlias = Callable[[NativeT, bool], ResultT]
+"""Runs the loaded native binding; the flag says Python stands by to serve the call if Rust abandons it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,8 +26,8 @@ class RustHandled(Generic[ResultT]):
 
 
 @dataclass(frozen=True, slots=True)
-class RustDeclined:
-    reason: str
+class RustRerouted:
+    report: failures.NativeFailure
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +35,7 @@ class RustUnavailable:
     pass
 
 
-RustAttempt: TypeAlias = RustHandled[ResultT] | RustDeclined | RustUnavailable
+RustAttempt: TypeAlias = RustHandled[ResultT] | RustRerouted | RustUnavailable
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,22 +61,30 @@ def run(
     context: RouteContext,
     *,
     binding: NativeBinding[NativeT],
-    native: Callable[[NativeT], ResultT],
+    native: NativeInvoke[NativeT, ResultT],
     python: Callable[[], ResultT] | NoPythonImplementation,
     rules: Rules | None = None,
 ) -> ResultT:
     selected: Final = decision(context, rules)
     if isinstance(python, NoPythonImplementation):
         _require_rust(context, selected)
-        return _required(_attempt_native(context, binding, native), context)
+        return _required(_attempt_native(context, binding, native, standby=False), context)
     match selected:
         case Decision.PYTHON:
             return python()
-        case Decision.RUST_WITH_FALLBACK | Decision.RUST_REQUIRED:
-            result: Final = _attempt_native(context, binding, native)
-            if isinstance(result, RustHandled) or selected is Decision.RUST_REQUIRED:
-                return _required(result, context)
-            return python()
+        case Decision.RUST_REQUIRED:
+            return _required(_attempt_native(context, binding, native, standby=False), context)
+        case Decision.RUST_WITH_FALLBACK:
+            result: Final = _attempt_native(context, binding, native, standby=True)
+            match result:
+                case RustHandled(value=value):
+                    return mark_rust_response(value)
+                case RustRerouted(report=report):
+                    return mark_rerouted_response(python(), report.stage)
+                case RustUnavailable():
+                    return python()
+                case _:
+                    assert_never(result)
         case _:
             assert_never(selected)
 
@@ -81,22 +93,30 @@ async def arun(
     context: RouteContext,
     *,
     binding: NativeBinding[NativeT],
-    native: Callable[[NativeT], Awaitable[ResultT]],
+    native: NativeInvoke[NativeT, Awaitable[ResultT]],
     python: Callable[[], Awaitable[ResultT]] | NoPythonImplementation,
     rules: Rules | None = None,
 ) -> ResultT:
     selected: Final = decision(context, rules)
     if isinstance(python, NoPythonImplementation):
         _require_rust(context, selected)
-        return _required(await _aattempt_native(context, binding, native), context)
+        return _required(await _aattempt_native(context, binding, native, standby=False), context)
     match selected:
         case Decision.PYTHON:
             return await python()
-        case Decision.RUST_WITH_FALLBACK | Decision.RUST_REQUIRED:
-            result: Final = await _aattempt_native(context, binding, native)
-            if isinstance(result, RustHandled) or selected is Decision.RUST_REQUIRED:
-                return _required(result, context)
-            return await python()
+        case Decision.RUST_REQUIRED:
+            return _required(await _aattempt_native(context, binding, native, standby=False), context)
+        case Decision.RUST_WITH_FALLBACK:
+            result: Final = await _aattempt_native(context, binding, native, standby=True)
+            match result:
+                case RustHandled(value=value):
+                    return mark_rust_response(value)
+                case RustRerouted(report=report):
+                    return mark_rerouted_response(await python(), report.stage)
+                case RustUnavailable():
+                    return await python()
+                case _:
+                    assert_never(result)
         case _:
             assert_never(selected)
 
@@ -110,24 +130,30 @@ def _require_rust(context: RouteContext, selected: Decision) -> None:
 
 
 def _attempt_native(
-    context: RouteContext, binding: NativeBinding[NativeT], native: Callable[[NativeT], ResultT]
+    context: RouteContext, binding: NativeBinding[NativeT], native: NativeInvoke[NativeT, ResultT], *, standby: bool
 ) -> RustAttempt[ResultT]:
     loaded: Final = binding.load()
     return attempt(
-        native_call=None if loaded is None else lambda: native(loaded),
+        native_call=None if loaded is None else lambda: native(loaded, standby),
         adapt=_identity,
         context=_error_context(context),
+        standby=standby,
     )
 
 
 async def _aattempt_native(
-    context: RouteContext, binding: NativeBinding[NativeT], native: Callable[[NativeT], Awaitable[ResultT]]
+    context: RouteContext,
+    binding: NativeBinding[NativeT],
+    native: NativeInvoke[NativeT, Awaitable[ResultT]],
+    *,
+    standby: bool,
 ) -> RustAttempt[ResultT]:
     loaded: Final = binding.load()
     return await aattempt(
-        native_call=None if loaded is None else lambda: native(loaded),
+        native_call=None if loaded is None else lambda: native(loaded, standby),
         adapt=_identity,
         context=_error_context(context),
+        standby=standby,
     )
 
 
@@ -150,19 +176,14 @@ def attempt(
     native_call: Callable[[], NativeT] | None,
     adapt: Callable[[NativeT], ResultT],
     context: BridgeErrorContext,
+    standby: bool,
 ) -> RustAttempt[ResultT]:
     if native_call is None:
         return RustUnavailable()
-    exceptions: Final = native_exception_types()
-    if exceptions is None:
-        return RustHandled(adapt(native_call()))
-    declined, upstream = exceptions
     try:
         value: Final = native_call()
-    except declined as error:
-        return RustDeclined(reason=_decline_reason(error))
-    except upstream as error:
-        _raise_upstream(error, context)
+    except Exception as error:
+        return _abandoned(error, context, standby)
     return RustHandled(adapt(value))
 
 
@@ -171,51 +192,46 @@ async def aattempt(
     native_call: Callable[[], Awaitable[NativeT]] | None,
     adapt: Callable[[NativeT], ResultT],
     context: BridgeErrorContext,
+    standby: bool,
 ) -> RustAttempt[ResultT]:
     if native_call is None:
         return RustUnavailable()
-    exceptions: Final = native_exception_types()
-    if exceptions is None:
-        return RustHandled(adapt(await native_call()))
-    declined, upstream = exceptions
     try:
         value: Final = await native_call()
-    except declined as error:
-        return RustDeclined(reason=_decline_reason(error))
-    except upstream as error:
-        _raise_upstream(error, context)
+    except Exception as error:
+        return _abandoned(error, context, standby)
     return RustHandled(adapt(value))
 
 
-def _decline_reason(error: BaseException) -> str:
-    reason: Final[object] = error.args[0] if error.args else str(error)
-    return reason if isinstance(reason, str) else str(reason)
+def _abandoned(error: Exception, context: BridgeErrorContext, standby: bool) -> RustRerouted:
+    """A bare native failure is an attempt Rust abandoned for the standby to serve.
+
+    Rust settles every other failure as its public exception before it crosses. Without a standby,
+    a bare failure comes from an entrypoint that runs no lifecycle, and it is made public here."""
+    report: Final = failures.report(error)
+    if report is None:
+        raise error
+    if not standby:
+        raise failures.public_exception(
+            error, {"model": context.model, "custom_llm_provider": context.provider}, context.provider or None
+        )
+    verbose_logger.warning(
+        "Rust %s route handed the call to Python after a %s failure (%s, provider=%s, model=%s): %s",
+        context.route,
+        report.stage,
+        report.kind.kind,
+        context.provider,
+        context.model,
+        report.message,
+    )
+    return RustRerouted(report)
 
 
-def _raise_required(
-    result: RustDeclined | RustUnavailable,
-    context: BridgeErrorContext,
-) -> NoReturn:
-    raise RuntimeError(f"Rust {context.route} bridge {_required_reason(result)}")
-
-
-def _required_reason(result: RustDeclined | RustUnavailable) -> str:
+def _raise_required(result: RustRerouted | RustUnavailable, context: BridgeErrorContext) -> NoReturn:
     match result:
         case RustUnavailable():
-            return "is unavailable"
-        case RustDeclined(reason=reason):
-            return f"declined the request: {reason}"
-
-
-def _raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoReturn:
-    args: Final[tuple[object, ...]] = error.args
-    status_value: Final = args[0] if args else 0
-    message_value: Final = args[1] if len(args) > 1 else str(error)
-    status: Final = status_value if isinstance(status_value, int) else 0
-    message: Final = message_value if isinstance(message_value, str) else str(message_value)
-    raise APIError(
-        status_code=status or 500,
-        message=f"litellm rust {context.route}: {message}",
-        llm_provider=context.provider,
-        model=context.model,
-    ) from error
+            raise RuntimeError(f"Rust {context.route} bridge is unavailable")
+        case RustRerouted(report=report):
+            raise RuntimeError(f"Rust {context.route} bridge abandoned the call at {report.stage} with no standby")
+        case _:
+            assert_never(result)

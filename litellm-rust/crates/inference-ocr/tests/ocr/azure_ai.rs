@@ -264,7 +264,7 @@ async fn credential_failures_send_no_provider_request(
     .await
     .unwrap_err();
 
-    assert!(expected(&error), "unexpected error: {error:?}");
+    assert!(expected(&error.error), "unexpected error: {error:?}");
     assert_eq!(provider.calls(), expected_calls);
     assert!(received(&upstream).await.is_empty());
 }

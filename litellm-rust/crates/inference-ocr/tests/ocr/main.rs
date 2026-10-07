@@ -1,7 +1,10 @@
+use std::sync::Mutex;
+
 use litellm_host::{
     interceptors::{RequestContext, WireRequest},
     lifecycle::CallEvent,
 };
+use litellm_inference::call::Failure;
 use litellm_inference_ocr::{
     OcrRoute,
     document::prepare_document,
@@ -13,7 +16,6 @@ use litellm_inference_testing::{http_config, no_secrets, resources};
 use litellm_llms::base_llm::ocr::{error::Error, settings::OcrSettings};
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument};
 use serde_json::{Map, Value, json};
-use std::sync::Mutex;
 use wiremock::{MockServer, ResponseTemplate};
 
 #[path = "../support/mod.rs"]
@@ -57,13 +59,13 @@ fn ocr_route_with(settings: OcrSettings) -> OcrRoute {
     )
 }
 
-async fn perform(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
+async fn perform(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Failure<Error>> {
     ocr_route().execute(request, &(), None).await
 }
 
-async fn perform_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
+async fn perform_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Failure<Error>> {
     let result = litellm_host_native::in_process::run_hosted(
-        ocr_route().machine(host.request()?, None),
+        ocr_route().machine(host.request().map_err(Failure::prepare)?, None),
         host.runtime(),
     )
     .await

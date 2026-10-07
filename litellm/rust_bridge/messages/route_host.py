@@ -10,8 +10,6 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
-from litellm.rust_bridge import failures
-from litellm.rust_bridge.public_call import optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 _DROP_PATHS: Final = TypeAdapter(list[object])
@@ -41,18 +39,6 @@ def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, obj
 
 def arguments(request: Mapping[str, object]) -> Mapping[str, object]:
     return request
-
-
-def map_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception:
-    if getattr(error, "messages_request_error", False):
-        return litellm.BadRequestError(
-            message=str(error),
-            model=str(request["model"]).removeprefix(f"{request_provider}/"),
-            llm_provider=request_provider,
-        )
-    return failures.map_native_failure(
-        error, str(request["model"]), request_provider, arguments(request), optional_str(request.get("api_base"))
-    )
 
 
 def _drop_params(kwargs: Mapping[str, object]) -> bool:

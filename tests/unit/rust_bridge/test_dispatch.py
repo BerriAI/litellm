@@ -38,7 +38,7 @@ def test_route_without_rules_forwards_before_request_projection(rules: Rules) ->
         {"stream": True},
         python=lambda *args, **kwargs: stream,
         binding=binding(),
-        native=lambda hook, request, args, kwargs: pytest.fail("Python-only routes must not call native"),
+        native=lambda hook, request, args, kwargs, _standby: pytest.fail("Python-only routes must not call native"),
         rules=rules,
     )
     assert result is stream
@@ -64,7 +64,7 @@ def test_unconditional_python_rule_prevents_later_rust_rule_projection() -> None
         {},
         python=lambda *args, **kwargs: expected,
         binding=binding(),
-        native=lambda hook, request, args, kwargs: pytest.fail("First-match Python rule must prevent native"),
+        native=lambda hook, request, args, kwargs, _standby: pytest.fail("First-match Python rule must prevent native"),
         rules=rules,
     )
     assert result is expected
@@ -85,7 +85,9 @@ def test_disabled_optional_rust_rule_forwards_before_projection() -> None:
             {},
             python=lambda *args, **kwargs: expected,
             binding=binding(),
-            native=lambda hook, request, args, kwargs: pytest.fail("Disabled optional Rust must not call native"),
+            native=lambda hook, request, args, kwargs, _standby: pytest.fail(
+                "Disabled optional Rust must not call native"
+            ),
             rules=rules,
         )
     finally:
@@ -118,7 +120,7 @@ def test_native_stream_result_is_not_consumed_or_wrapped() -> None:
         {"stream": True},
         python=lambda *args, **kwargs: pytest.fail("Required native stream dispatch must not call Python"),
         binding=native_binding,
-        native=lambda hook, value, args, kwargs: hook(value, args, kwargs),
+        native=lambda hook, value, args, kwargs, _standby: hook(value, args, kwargs),
         rules=rules,
     )
     assert result is stream
@@ -146,7 +148,7 @@ async def test_async_route_without_rules_preserves_async_iterator_result(rules: 
         {"stream": True},
         python=python,
         binding=binding(),
-        native=lambda hook, request, args, kwargs: pytest.fail("Python-only routes must not call native"),
+        native=lambda hook, request, args, kwargs, _standby: pytest.fail("Python-only routes must not call native"),
         rules=rules,
     )
     assert result is stream
@@ -179,7 +181,7 @@ async def test_async_dispatch_accepts_websocket_style_none_result() -> None:
         {},
         python=python,
         binding=native_binding,
-        native=lambda hook, value, args, kwargs: hook(value, args, kwargs),
+        native=lambda hook, value, args, kwargs, _standby: hook(value, args, kwargs),
         rules=rules,
     )
     assert result is None
@@ -201,7 +203,9 @@ def test_rules_for_other_routes_and_constrained_python_rules_skip_projection() -
         {},
         python=lambda *args, **kwargs: expected,
         binding=binding(),
-        native=lambda hook, request, args, kwargs: pytest.fail("Rules that cannot select Rust must not call native"),
+        native=lambda hook, request, args, kwargs, _standby: pytest.fail(
+            "Rules that cannot select Rust must not call native"
+        ),
         rules=rules,
     )
     assert result is expected
@@ -227,7 +231,7 @@ async def test_async_bypass_forwards_to_python_without_native() -> None:
         {},
         python=python,
         binding=binding(),
-        native=lambda hook, value, args, kwargs: pytest.fail("Bypassed requests must not call native"),
+        native=lambda hook, value, args, kwargs, _standby: pytest.fail("Bypassed requests must not call native"),
         rules=rules,
     )
     assert result is expected
@@ -251,12 +255,12 @@ async def dispatch_without_python(
             {"page": 1},
             python=NO_PYTHON,
             binding=bound,
-            native=lambda hook, value, args, kwargs: hook(value, args, kwargs),
+            native=lambda hook, value, args, kwargs, _standby: hook(value, args, kwargs),
             rules=rules,
         )
 
     async def native(
-        hook: NativeRoute, value: Request, args: tuple[object, ...], kwargs: Mapping[str, object]
+        hook: NativeRoute, value: Request, args: tuple[object, ...], kwargs: Mapping[str, object], _standby: bool
     ) -> object:
         return hook(value, args, kwargs)
 

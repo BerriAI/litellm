@@ -1,7 +1,10 @@
+use litellm_host::failure::Stage;
 use std::{
     convert::Infallible,
-    sync::Arc,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use axum::body::to_bytes;
@@ -35,6 +38,10 @@ impl Protocol for TestProtocol {
     type Error = TestError;
     type Request = ();
     type HostCall = Infallible;
+
+    fn host_call_stage(call: &Self::HostCall) -> Stage {
+        match *call {}
+    }
     type Chunk = Bytes;
     type StreamHead = ();
 }
@@ -73,7 +80,7 @@ async fn sse_preserves_encoded_chunks_and_uses_the_supplied_error_format(#[case]
     assert_eq!(
         body,
         if fail {
-            "event: custom\ndata: first\n\nevent: custom_error\ndata: Call(Upstream)\n\n"
+            "event: custom\ndata: first\n\nevent: custom_error\ndata: Call(Failure { stage: Receive, error: Upstream })\n\n"
         } else {
             "event: custom\ndata: first\n\ndata: [DONE]\n\n"
         }

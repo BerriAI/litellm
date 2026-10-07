@@ -1,3 +1,4 @@
+use litellm_inference::call::{Kind, Stage};
 use litellm_llms::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
 use litellm_llms_types::{
     headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
@@ -93,7 +94,7 @@ async fn a_call_without_credentials_fails_before_sending(
 
     assert!(
         matches!(
-            error,
+            error.error,
             Error::Auth(litellm_auth::Error::MissingApiKey { .. })
         ),
         "{error:?}"
@@ -161,7 +162,7 @@ async fn unsupported_providers_are_rejected_before_sending(
     .await
     .expect_err("unsupported provider errors");
 
-    assert_eq!(error, Error::InvalidProvider(reported.into()));
+    assert_eq!(error.error, Error::InvalidProvider(reported.into()));
 }
 
 #[rstest]
@@ -412,7 +413,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
         .await
         .expect_err("an unsupported param is rejected without drop_params");
     assert!(
-        matches!(&error, Error::InvalidRequest(message) if message.to_string().contains(rejected_as)),
+        matches!(&error.error, Error::InvalidRequest(message) if message.to_string().contains(rejected_as)),
         "{error:?}"
     );
     assert!(received(&upstream).await.is_empty());
@@ -609,7 +610,8 @@ async fn an_invalid_request_fails_before_sending(call: MessagesCall, #[case] fie
     .await
     .expect_err("the request is rejected");
 
-    assert!(error.is_request(), "{error:?}");
+    assert_eq!(error.stage, Stage::Prepare, "{error:?}");
+    assert_eq!(error.kind(), Kind::Request, "{error:?}");
     assert!(received(&upstream).await.is_empty());
 }
 

@@ -1,9 +1,13 @@
-use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
 use std::time::Duration;
 
 use litellm_auth::AuthServices;
-use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
-use litellm_http::{Client, outbound::OutboundRequest, request::truncate_error_body};
+use litellm_host::{
+    interceptors::{Interceptors, RawResponse, RequestContext, WireRequest},
+    lifecycle::ExecutionEvent,
+    observation::ObservationSender,
+};
+use litellm_http::{Client, outbound::OutboundRequest};
+use litellm_inference::call::{self, Failure};
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     chat::transformation::ProviderChatResponseData,
@@ -22,7 +26,7 @@ pub(super) async fn execute(
     cache_options: Option<litellm_cache_response::CachePolicy>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
-) -> Result<ChatCompletionsResponse, Error> {
+) -> Result<ChatCompletionsResponse, Failure<Error>> {
     let ProviderChatCompletionsRequest {
         model,
         custom_llm_provider,
@@ -42,21 +46,25 @@ pub(super) async fn execute(
         secret_fields: Vec::new(),
         api_key,
     };
-    let authenticated = resolve_auth(auth, environment, &|key| secrets.get(key)).await?;
     let identity = litellm_host::interceptors::ProviderIdentity {
         model: context.model.clone(),
         provider: context.custom_llm_provider.clone(),
     };
-    let wire = interceptors
-        .before_provider_request(
-            WireRequest {
-                url,
-                headers: authenticated.headers,
-                body,
-            },
-            context,
-        )
-        .await?;
+    let (authenticated, wire) = call::prepare(async {
+        let authenticated = resolve_auth(auth, environment, &|key| secrets.get(key)).await?;
+        let wire = interceptors
+            .before_provider_request(
+                WireRequest {
+                    url,
+                    headers: authenticated.headers.clone(),
+                    body,
+                },
+                context,
+            )
+            .await?;
+        Ok((authenticated, wire))
+    })
+    .await?;
     let cache = cache.filter(|_| authenticated.signer.is_none());
     let cache_request = litellm_inference::caching::CacheRequest::from_wire(
         identity,
@@ -69,81 +77,48 @@ pub(super) async fn execute(
         interceptors,
         observers,
         || async move {
-            let outbound = outbound_request(
-                Authenticated {
-                    headers: wire.headers,
-                    signer: authenticated.signer,
-                },
-                wire.url,
-                &wire.body,
-                timeout,
-            )?;
-
-            let response = litellm_inference::outbound::send(outbound, http)
-                .await
-                .map_err(|err| {
-                    // Failing to establish the connection means the request never went out,
-                    // so the host can still serve it. Everything else here, a timeout
-                    // above all, may have reached the provider and been answered.
-                    if err.is_connect() || err.is_builder() {
-                        Error::Transport(litellm_http::transport::Error::Connect(err.to_string()))
-                    } else {
-                        Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
-                    }
-                })?;
-
-            let status = response.status();
-            let text = response.text().await.map_err(|err| {
-                Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
-            })?;
-
-            if !status.is_success() {
-                return Err(Error::Transport(litellm_http::transport::Error::Http {
-                    status: status.as_u16(),
-                    body: truncate_error_body(&text),
-                }));
-            }
+            let outbound = call::prepare(async {
+                outbound_request(
+                    Authenticated {
+                        headers: wire.headers,
+                        signer: authenticated.signer,
+                    },
+                    wire.url,
+                    &wire.body,
+                    timeout,
+                )
+            })
+            .await?;
+            let response = call::send(http, outbound).await?;
+            let text = call::receive(async {
+                response
+                    .text()
+                    .await
+                    .map_err(|error| Error::Transport(error.into()))
+            })
+            .await?;
             let raw = RawResponse { body: text.clone() };
             if let Some(observers) = observers {
                 observers.emit(litellm_host::lifecycle::CallEvent::Execution(
                     ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
                 ));
             }
-            interceptors
-                .after_provider_response(raw)
-                .await
-                .map_err(Error::post_call)?;
-
-            let body: Value = serde_json::from_str(&text).map_err(|err| {
-                Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
-                    "chat completions response JSON",
-                    err,
-                ))
-            })?;
-            config
-                .transform_response(&model, ProviderChatResponseData { body })
-                .map_err(Error::from)
-                .map_err(as_response_error)
+            call::post_call(interceptors.after_provider_response(raw)).await?;
+            call::receive(async {
+                let body: Value = serde_json::from_str(&text).map_err(|err| {
+                    Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+                        "chat completions response JSON",
+                        err,
+                    ))
+                })?;
+                config
+                    .transform_response(&model, ProviderChatResponseData { body })
+                    .map_err(Error::from)
+            })
+            .await
         },
     )
     .await
-}
-
-/// Re-tag an error raised while normalizing a response the provider already
-/// returned.
-///
-/// A config reports the same variants on either side of the call: a missing
-/// field or an unsupported block can mean "this request cannot be translated"
-/// during prepare and "this response cannot be normalized" here. Only the
-/// second kind has already been billed, and a host that keeps a reference
-/// implementation must not retry those, so collapse them to one variant that
-/// can only mean the provider was already called.
-pub(super) fn as_response_error(err: Error) -> Error {
-    match err {
-        already @ (Error::InvalidResponse(_)
-        | Error::Transport(litellm_http::transport::Error::Http { .. })) => already,
-        other => Error::InvalidResponse(other.to_string().into()),
-    }
 }
 
 pub(super) fn outbound_request(
@@ -300,31 +275,11 @@ mod tests {
         .await
         .expect_err("the upstream failure fails the call");
 
+        assert_eq!(error.stage, call::Stage::Upstream);
         assert!(matches!(
-            error,
-            Error::Transport(litellm_http::transport::Error::Http { status: 500, .. })
+            error.error,
+            Error::Upstream(call::UpstreamResponse { status: 500, .. })
         ));
         assert!(interceptors.raw.into_inner().unwrap().is_empty());
-    }
-
-    #[rstest::rstest]
-    fn response_errors_collapse_to_one_variant_that_can_only_mean_already_sent() {
-        for original in [
-            Error::MissingField("usage"),
-            Error::Unsupported("non-text response content block"),
-            Error::InvalidRequest("whatever".to_string().into()),
-            Error::Auth(litellm_auth::Error::InvalidHeader),
-        ] {
-            let label = format!("{original:?}");
-            assert!(
-                matches!(as_response_error(original), Error::InvalidResponse(_)),
-                "{label} must not stay retryable once the provider has answered"
-            );
-        }
-        let upstream = Error::Transport(litellm_http::transport::Error::Http {
-            status: 500,
-            body: "boom".to_string(),
-        });
-        assert_eq!(as_response_error(upstream.clone()), upstream);
     }
 }

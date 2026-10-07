@@ -94,7 +94,7 @@ async fn a_secret_manager_failure_fails_the_call_before_sending(call: MessagesCa
     .expect_err("a secret manager failure fails the call");
 
     assert!(
-        matches!(&error, Error::Secret(source) if matches!(source.source_error(), litellm_secrets::Error::ManagedSecretMissing)),
+        matches!(&error.error, Error::Secret(source) if matches!(source.source_error(), litellm_secrets::Error::ManagedSecretMissing)),
         "{error:?}"
     );
     assert!(received(&upstream).await.is_empty());
@@ -196,7 +196,7 @@ async fn azure_without_a_base_anywhere_fails_before_sending(call: MessagesCall) 
     .expect_err("azure needs a base");
 
     assert_eq!(
-        error,
+        error.error,
         Error::Auth(litellm_auth::Error::MissingApiBase {
             provider: "Azure",
             guidance: "Set `api_base` or the AZURE_API_BASE environment variable. Expected format: https://<resource-name>.services.ai.azure.com/anthropic"

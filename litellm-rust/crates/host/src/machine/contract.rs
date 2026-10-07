@@ -1,6 +1,9 @@
 use std::{future::Future, pin::Pin};
 
-use crate::protocol::{HostRequest, Protocol};
+use crate::{
+    failure::Failure,
+    protocol::{HostRequest, Protocol},
+};
 
 pub enum MachineStep<R: Protocol, C> {
     Suspended(HostRequest<R>),
@@ -12,7 +15,7 @@ pub type Step<'a, M> = Pin<
         dyn Future<
                 Output = Result<
                     MachineStep<<M as Machine>::Protocol, <M as Machine>::Complete>,
-                    <<M as Machine>::Protocol as Protocol>::Error,
+                    Failure<<<M as Machine>::Protocol as Protocol>::Error>,
                 >,
             > + Send
             + 'a,
@@ -24,7 +27,7 @@ pub type Interrupted<'a, M> = Pin<
         dyn Future<
                 Output = Result<
                     <M as Machine>::Complete,
-                    <<M as Machine>::Protocol as Protocol>::Error,
+                    Failure<<<M as Machine>::Protocol as Protocol>::Error>,
                 >,
             > + Send
             + 'a,
@@ -51,8 +54,8 @@ pub trait Machine: Send {
 
     fn resume(&mut self) -> Step<'_, Self>;
 
-    /// The host failed to perform the pending op, or the caller cancelled. The call
-    /// yields no further ops.
+    /// The host failed to perform the pending op, or the caller cancelled. The machine
+    /// reports the failure at the stage of that op. The call yields no further ops.
     fn interrupt(
         &mut self,
         failure: HostFailure<<Self::Protocol as Protocol>::Error>,

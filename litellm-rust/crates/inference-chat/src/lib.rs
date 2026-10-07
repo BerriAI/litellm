@@ -2,16 +2,17 @@ use litellm_host::observation::ObservationSender;
 pub mod route;
 pub mod types;
 pub use litellm_inference::RouteError as Error;
+use litellm_inference::call::{self, Failure};
 mod common_utils;
 pub mod constants;
 pub(crate) mod handler;
 mod prepare;
-use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
-use prepare::{prepare_provider_request, resolve_request};
+use std::sync::Arc;
 
 use litellm_auth::AuthServices;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use litellm_secrets::source::SecretSource;
-use std::sync::Arc;
+use prepare::{prepare_provider_request, resolve_request};
 use types::ChatCompletionsRequest;
 
 #[derive(Clone)]
@@ -48,7 +49,7 @@ impl ChatCompletionsRoute {
         request: ChatCompletionsRequest<'_>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         options: impl Into<litellm_inference::CallOptions>,
-    ) -> Result<ChatCompletionsResponse, Error> {
+    ) -> Result<ChatCompletionsResponse, Failure<Error>> {
         let litellm_inference::CallOptions {
             cache: cache_options,
             observers,
@@ -71,24 +72,29 @@ impl ChatCompletionsRoute {
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<ChatCompletionsResponse, Error> {
-        let resolved = resolve_request(request)?;
-        let snapshot = self
-            .secrets
-            .resolve(&resolved.config.secret_names())
-            .await?;
-        let prepared = prepare_provider_request(resolved, snapshot)?;
+    ) -> Result<ChatCompletionsResponse, Failure<Error>> {
+        let prepared = call::prepare(async {
+            let resolved = resolve_request(request)?;
+            let snapshot = self
+                .secrets
+                .resolve(&resolved.config.secret_names())
+                .await?;
+            prepare_provider_request(resolved, snapshot)
+        })
+        .await?;
         litellm_inference::diagnostic::provider(&prepared.model, &prepared.custom_llm_provider);
-        let execute: futures_util::future::BoxFuture<'_, Result<ChatCompletionsResponse, Error>> =
-            Box::pin(handler::execute(
-                &self.http,
-                &self.auth,
-                prepared,
-                self.cache.clone(),
-                cache_options,
-                interceptors,
-                observers,
-            ));
+        let execute: futures_util::future::BoxFuture<
+            '_,
+            Result<ChatCompletionsResponse, Failure<Error>>,
+        > = Box::pin(handler::execute(
+            &self.http,
+            &self.auth,
+            prepared,
+            self.cache.clone(),
+            cache_options,
+            interceptors,
+            observers,
+        ));
         execute.await
     }
 }

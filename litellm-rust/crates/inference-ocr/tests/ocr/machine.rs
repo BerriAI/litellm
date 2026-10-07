@@ -12,6 +12,7 @@ use litellm_host::{
     protocol::{HostRequest, InterceptRequest},
 };
 use litellm_host_native::services::HostCallHandler;
+use litellm_inference::call::Failure;
 use litellm_inference_ocr::{
     route::{OcrCall, OcrMachine, OcrOp},
     types::OcrDocumentInput,
@@ -28,7 +29,7 @@ async fn drive_until(
     host: &LocalOcrHost,
     mut intercept: impl FnMut(WireRequest) -> Result<WireRequest, HostFailure<Error>>,
 ) -> (
-    Result<LiteLLMOcrResponse, Error>,
+    Result<LiteLLMOcrResponse, Failure<Error>>,
     Vec<&'static str>,
     OcrMachine,
 ) {
@@ -54,7 +55,9 @@ async fn drive_until(
                 ops.push(match op {
                     OcrOp::AcquireAzureAdToken(_) => "AcquireAzureAdToken",
                 });
-                host.handle_host_call(op).await.map_err(HostFailure::Error)
+                host.handle_host_call(op)
+                    .await
+                    .map_err(HostFailure::Error)
             }
             HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
                 wire, reply, ..
@@ -119,7 +122,10 @@ async fn a_hand_driven_machine_performs_the_same_call() {
     assert_eq!(ops, ["BeforeSend", "response"]);
     assert!(matches!(
         machine.resume().await,
-        Err(Error::InvalidRequest(_))
+        Err(Failure {
+            error: Error::InvalidRequest(_),
+            ..
+        })
     ));
 }
 
@@ -174,7 +180,7 @@ async fn a_before_send_failure_ends_the_call_without_reaching_transport(
     .await;
 
     assert!(
-        matches!(&outcome, Err(Error::InvalidRequest(actual)) if actual == message),
+        matches!(&outcome, Err(Failure { error: Error::InvalidRequest(actual), .. }) if actual == message),
         "{outcome:?}"
     );
     assert_eq!(ops, ["BeforeSend"]);
@@ -255,16 +261,15 @@ async fn interrupt_drops_provider_captures_before_returning() {
 
     drive_until_notified(&mut machine, &host, &entered).await;
     assert!(!dropped.load(Ordering::SeqCst));
-    let acknowledgement = machine.interrupt(HostFailure::Cancelled(Error::InvalidRequest(
-        "cancelled".into(),
-    )));
+    let acknowledgement =
+        machine.interrupt(HostFailure::Cancelled(Error::InvalidRequest("cancelled".into())));
 
     assert!(
         dropped.load(Ordering::SeqCst),
         "interrupt returned while provider captures were still alive"
     );
     assert!(
-        matches!(acknowledgement.await, Err(Error::InvalidRequest(message)) if message == "cancelled")
+        matches!(acknowledgement.await, Err(Failure { error: Error::InvalidRequest(message), .. }) if message == "cancelled")
     );
 }
 

@@ -52,7 +52,7 @@ class BedrockAudioTranscriptionRustDispatch:
         optional_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
-        def native(rust: RustTranscription) -> TranscriptionResponse:
+        def native(rust: RustTranscription, _standby: bool) -> TranscriptionResponse:
             fields: Final = {
                 "model": model,
                 "audio": self._audio_payload(audio_file),
@@ -85,7 +85,7 @@ class BedrockAudioTranscriptionRustDispatch:
         optional_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
-        async def native(rust: RustAtranscription) -> TranscriptionResponse:
+        async def native(rust: RustAtranscription, _standby: bool) -> TranscriptionResponse:
             fields: Final = {
                 "model": model,
                 "audio": self._audio_payload(audio_file),

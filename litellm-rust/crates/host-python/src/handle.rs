@@ -1,9 +1,12 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use pyo3::{
+    exceptions::{PyBaseException, PyRuntimeError},
+    gc::{PyTraverseError, PyVisit},
+    prelude::*,
+};
+
 use crate::panic_to_pyerr;
-use pyo3::exceptions::{PyBaseException, PyRuntimeError};
-use pyo3::gc::{PyTraverseError, PyVisit};
-use pyo3::prelude::*;
 
 pub type PythonLifecycle = for<'py> fn(Python<'py>) -> PyResult<Bound<'py, PyModule>>;
 

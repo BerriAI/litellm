@@ -9,23 +9,24 @@ import pytest
 import litellm
 from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
 from litellm.rust_bridge import bindings, configuration
+from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.transcription.native import NATIVE_ATRANSCRIPTION, NATIVE_TRANSCRIPTION
 
 MODEL: Final = "bedrock/mistral.voxtral-mini-3b-2507"
 AUDIO_FILE: Final = ("audio.wav", b"audio", "audio/wav")
 
 
-class RustBridgeDeclined(Exception):
+class RustFailure(Exception):
     pass
 
 
-class RustUpstreamError(Exception):
-    pass
+def native_failure(stage: str, kind: str, message: str, **payload: object) -> RustFailure:
+    return RustFailure({"stage": stage, "kind": {"kind": kind, **payload}, "message": message})
 
 
 @pytest.fixture(autouse=True)
 def isolated_bridge(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
-    native: Final = SimpleNamespace(RustBridgeDeclined=RustBridgeDeclined, RustUpstreamError=RustUpstreamError)
+    native: Final = SimpleNamespace(RustFailure=RustFailure)
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
     monkeypatch.delenv("LITELLM_RUST", raising=False)
     configuration.reset_rust_configuration()
@@ -40,20 +41,15 @@ class SyncBridge:
         self._effect: Final = effect
         self.calls: tuple[dict[str, object], ...] = ()
 
-    def __call__(
-        self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> dict[str, object]:
+    def __call__(self, call: NativeCall) -> dict[str, object]:
         self.calls = (
             *self.calls,
-            {"model": model, "audio": audio, "provider": custom_llm_provider, "timeout": timeout_seconds},
+            {
+                "model": call.bound["model"],
+                "audio": call.bound["audio"],
+                "provider": call.bound["custom_llm_provider"],
+                "timeout": call.bound["timeout_seconds"],
+            },
         )
         if self._effect is not None:
             raise self._effect
@@ -64,18 +60,8 @@ class AsyncBridge:
     def __init__(self) -> None:
         self.calls: tuple[str, ...] = ()
 
-    async def __call__(
-        self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> dict[str, object]:
-        self.calls = (*self.calls, model)
+    async def __call__(self, call: NativeCall) -> dict[str, object]:
+        self.calls = (*self.calls, str(call.bound["model"]))
         return {"text": "async rust"}
 
 
@@ -129,17 +115,24 @@ def test_missing_native_binding_raises_without_python_fallback() -> None:
         dispatch_sync()
 
 
-def test_admission_decline_raises_for_required_route() -> None:
-    NATIVE_TRANSCRIPTION.override(SyncBridge(RustBridgeDeclined("unsupported format")))
+def test_prepare_failure_raises_the_public_exception_for_required_route() -> None:
+    NATIVE_TRANSCRIPTION.override(SyncBridge(native_failure("prepare", "unsupported", "unsupported format")))
 
-    with pytest.raises(RuntimeError, match="declined the request: unsupported format"):
+    with pytest.raises(litellm.UnsupportedParamsError, match="unsupported format") as raised:
         dispatch_sync()
+    assert raised.value.llm_provider == "bedrock"
 
 
-def test_upstream_error_maps_to_api_error() -> None:
-    NATIVE_TRANSCRIPTION.override(SyncBridge(RustUpstreamError(503, "bedrock down")))
+def test_upstream_error_maps_to_the_public_status_exception() -> None:
+    NATIVE_TRANSCRIPTION.override(
+        SyncBridge(
+            native_failure(
+                "upstream", "upstream", "bedrock down", status=503, headers=[], body="bedrock down", url=None
+            )
+        )
+    )
 
-    with pytest.raises(litellm.APIError, match="bedrock down") as raised:
+    with pytest.raises(litellm.ServiceUnavailableError, match="bedrock down") as raised:
         dispatch_sync()
     assert raised.value.status_code == 503
 

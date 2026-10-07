@@ -1,4 +1,6 @@
-use super::{native, python};
+use litellm_host::failure::Stage;
+use std::sync::Arc;
+
 use litellm_cache_response::{
     CacheOptions, CachePolicy, CacheScope, ResponseCacheService, ScopedCache,
 };
@@ -7,7 +9,8 @@ use litellm_host::{
     protocol::Protocol,
 };
 use pyo3::{prelude::*, types::PyDict};
-use std::sync::Arc;
+
+use super::{native, python, python::CacheCall};
 
 pub(crate) struct Cached<P>(std::marker::PhantomData<P>);
 
@@ -16,6 +19,13 @@ impl<P: Protocol> Protocol for Cached<P> {
     type Response = P::Response;
     type Error = P::Error;
     type HostCall = python::CacheCall;
+
+    fn host_call_stage(call: &Self::HostCall) -> Stage {
+        match call {
+            CacheCall::Lookup { .. } => Stage::Prepare,
+            CacheCall::Store { .. } => Stage::PostCall,
+        }
+    }
     type Chunk = P::Chunk;
     type StreamHead = P::StreamHead;
 }
@@ -79,7 +89,7 @@ pub(crate) fn admit_native(
     if let Some(configured) = selected_cache(py, kwargs, call_type)?
         && native::v2::native_handle(&configured)?.is_none()
     {
-        return Err(crate::errors::RustBridgeDeclined::new_err(
+        return Err(crate::errors::unsupported(
             "the configured cache requires Python inference",
         ));
     }

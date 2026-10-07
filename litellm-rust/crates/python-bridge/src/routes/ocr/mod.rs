@@ -1,5 +1,4 @@
 mod document;
-mod errors;
 mod host;
 mod project;
 
@@ -34,6 +33,7 @@ fn run_ocr(
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
+    standby: bool,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     let (arguments, hooks) = crate::routes::call_hooks(
@@ -61,10 +61,15 @@ fn run_ocr(
             let route = litellm_inference_ocr::OcrRoute::new(client);
             Ok(route.machine(request, None))
         },
-        OcrPythonHost::new(request.unbind()),
+        OcrPythonHost::new(request.unbind(), standby),
         hooks,
         asynchronous,
     )
+}
+
+/// A failure in a helper that never contacts the provider.
+pub(super) fn prepare_failure(error: litellm_llms::base_llm::ocr::error::Error) -> PyErr {
+    crate::errors::failure_to_pyerr(litellm_llms::base_llm::call::Failure::prepare(error))
 }
 
 fn ocr_settings(py: Python<'_>) -> PyResult<OcrSettings> {
@@ -83,13 +88,27 @@ fn project_provider_defaults(snapshot: &Snapshot<'_>) -> PyResult<OcrSettings> {
 #[pyfunction]
 pub(crate) fn ocr(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_ocr(py, call.bound.into_any(), call.args, call.kwargs, false)
+    run_ocr(
+        py,
+        call.bound.into_any(),
+        call.args,
+        call.kwargs,
+        call.standby,
+        false,
+    )
 }
 
 #[pyfunction]
 pub(crate) fn aocr(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_ocr(py, call.bound.into_any(), call.args, call.kwargs, true)
+    run_ocr(
+        py,
+        call.bound.into_any(),
+        call.args,
+        call.kwargs,
+        call.standby,
+        true,
+    )
 }
 
 #[pyfunction]
@@ -99,7 +118,7 @@ pub(crate) fn ocr_health_check_document(
     custom_llm_provider: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
     let document = provider_config::get_health_check_document(model, custom_llm_provider)
-        .map_err(errors::to_pyerr)?;
+        .map_err(prepare_failure)?;
     to_py(py, &document)
 }
 
@@ -111,7 +130,7 @@ pub(crate) fn ocr_passthrough_response(
     body: &[u8],
 ) -> PyResult<Option<Py<PyAny>>> {
     provider_config::passthrough_response(model, endpoint, body)
-        .map_err(errors::to_pyerr)?
+        .map_err(prepare_failure)?
         .map(|response| to_py(py, &response.into_json()))
         .transpose()
 }

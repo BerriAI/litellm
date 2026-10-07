@@ -1,30 +1,34 @@
 use std::ops::ControlFlow;
 
-use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
-use pyo3::gc::{PyTraverseError, PyVisit};
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
-
 use litellm_host::{
     call::HostedCompletion,
+    failure::Failure,
     interceptors::WireRequest,
     lifecycle::{CallEvent, ExecutionEvent, FailureOrigin, Timing, epoch_seconds},
     machine::{HostFailure, Machine, MachineStep},
     observation::ObservationSender,
     protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
 };
+use pyo3::{
+    exceptions::{PyBaseException, PyException, PyRuntimeError},
+    gc::{PyTraverseError, PyVisit},
+    prelude::*,
+    types::PyDict,
+};
 
-use crate::PythonHostCalls;
-use crate::handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle};
-use crate::hooks::{HookResume, HookStep, PythonCallEvent, PythonCallHooks};
-use crate::native::{NativeMachine, NativePoll};
-use crate::{InvokeError, PythonBinding, missing_state};
+use crate::{
+    InvokeError, PythonBinding, PythonHostCalls, Settlement,
+    handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle},
+    hooks::{HookResume, HookStep, PythonCallEvent, PythonCallHooks},
+    missing_state,
+    native::{NativeMachine, NativePoll},
+};
 
 type ProtocolOf<H> = <H as PythonBinding>::Protocol;
 type ErrorOf<H> = <ProtocolOf<H> as Protocol>::Error;
 type ResponseOf<H> = <ProtocolOf<H> as Protocol>::Response;
 type NativeStep<H> = MachineStep<ProtocolOf<H>, HostedCompletion<ResponseOf<H>>>;
-type NativeResult<H> = Result<NativeStep<H>, ErrorOf<H>>;
+type NativeResult<H> = Result<NativeStep<H>, Failure<ErrorOf<H>>>;
 type Interruption<H> = Option<HostFailure<ErrorOf<H>>>;
 type StartMachine<P, M> = Box<
     dyn FnOnce(Python<'_>, &Bound<'_, PyDict>, <P as Protocol>::Request) -> PyResult<M>
@@ -276,7 +280,9 @@ where
                 self.arguments = Some(arguments);
                 let request = match decoded {
                     Ok(request) => request,
-                    Err(InvokeError::Native(error)) => return self.machine_failed(py, error),
+                    Err(InvokeError::Native(error)) => {
+                        return self.machine_failed(py, Failure::prepare(error));
+                    }
                     Err(InvokeError::Python(error)) => {
                         return self.failure(py, error, FailureOrigin::Call);
                     }
@@ -567,25 +573,35 @@ where
         }
     }
 
-    fn machine_failed(&mut self, py: Python<'_>, error: ErrorOf<H>) -> PyResult<ExecutionStep> {
+    fn machine_failed(
+        &mut self,
+        py: Python<'_>,
+        error: Failure<ErrorOf<H>>,
+    ) -> PyResult<ExecutionStep> {
         self.ended_at.get_or_insert_with(epoch_seconds);
-        let error = match self.interrupted.take() {
-            Some(retained) => PyErr::from_value(retained.into_bound(py).into_any()),
-            None => self.classified(py, error),
-        };
-        self.failure(py, error, FailureOrigin::Call)
+        if let Some(retained) = self.interrupted.take() {
+            let error = PyErr::from_value(retained.into_bound(py).into_any());
+            return self.failure(py, error, FailureOrigin::Call);
+        }
+        match self.settled(py, error) {
+            Settlement::Fail(error) => self.failure(py, error, FailureOrigin::Call),
+            Settlement::Abandon(error) => {
+                self.stage = Stage::Failed(error.clone_ref(py).into_value(py));
+                Err(error)
+            }
+        }
     }
 
-    /// The route's public exception for a native failure. When classification itself
-    /// fails, that failure is raised with the native error's text as its `__context__`.
-    fn classified(&self, py: Python<'_>, error: ErrorOf<H>) -> PyErr {
+    /// What the host does with a native failure. When settling itself fails, that failure
+    /// is raised with the native error's text as its `__context__`.
+    fn settled(&self, py: Python<'_>, error: Failure<ErrorOf<H>>) -> Settlement {
         let native = error.to_string();
-        let classifier_error = match self.binding.map_error(py, error) {
-            Ok(failure) => return failure.into(),
-            Err(classifier_error) => classifier_error,
+        let settle_error = match self.binding.map_error(py, error) {
+            Ok(settlement) => return settlement,
+            Err(settle_error) => settle_error,
         };
-        classifier_error.set_context(py, Some(PyRuntimeError::new_err(native)));
-        classifier_error
+        settle_error.set_context(py, Some(PyRuntimeError::new_err(native)));
+        Settlement::Fail(settle_error)
     }
 
     fn succeeded(&mut self, py: Python<'_>, response: Py<PyAny>) -> PyResult<ExecutionStep> {
@@ -707,16 +723,19 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use litellm_host::{
-        interceptors::{RawResponse, RequestContext},
+        hooks::CallHooks,
+        interceptors::{Interceptors, RawResponse, RequestContext},
         machine::{CallMachine, MachineFault},
     };
-    use pyo3::exceptions::{PyBaseException, PyValueError};
-    use pyo3::types::PyDict;
+    use pyo3::{
+        exceptions::{PyBaseException, PyValueError},
+        types::PyDict,
+    };
+
+    use litellm_host::failure::Stage as CallStage;
 
     use super::*;
     use crate::{PythonOwned, PythonRuntime};
-    use litellm_host::hooks::CallHooks;
-    use litellm_host::interceptors::Interceptors;
 
     static PYTHON_GLOBALS: Mutex<()> = Mutex::new(());
 
@@ -763,6 +782,10 @@ mod tests {
         type Error = Error;
         type Request = String;
         type HostCall = (&'static str, Reply<String>);
+
+        fn host_call_stage(_: &Self::HostCall) -> CallStage {
+            CallStage::Prepare
+        }
         type Chunk = std::convert::Infallible;
         type StreamHead = std::convert::Infallible;
     }
@@ -843,7 +866,6 @@ mod tests {
 
     impl PythonBinding for SyntheticBinding {
         type Protocol = Synthetic;
-        type Failure = Classified;
 
         fn decode_request(
             &mut self,
@@ -882,12 +904,12 @@ mod tests {
                 .unbind())
         }
 
-        fn map_error(&self, _: Python<'_>, error: Error) -> PyResult<Classified> {
+        fn map_error(&self, _: Python<'_>, error: Failure<Error>) -> PyResult<Settlement> {
             self.log.push(format!("classify:{error}"));
             if self.classifier_fails {
                 return Err(pyo3::exceptions::PyTypeError::new_err("classifier failed"));
             }
-            Ok(Classified(error.0))
+            Ok(Settlement::Fail(Classified(error.error.0).into()))
         }
 
         fn host_error(error: &PyErr) -> Error {
@@ -1151,7 +1173,9 @@ mod tests {
                 py,
                 |_| {
                     CallMachine::<Synthetic>::new(None, |host| {
-                        Box::pin(async move { host.services.call(|reply| ("read", reply)).await })
+                        Box::pin(litellm_host::failure::prepare(async move {
+                            host.services.call(|reply| ("read", reply)).await
+                        }))
                     })
                 },
                 op,
@@ -1295,7 +1319,7 @@ mod tests {
     fn success_machine() -> impl FnOnce(String) -> CallMachine<Synthetic> + Send + Sync {
         move |projected| {
             CallMachine::new(None, move |host| {
-                Box::pin(async move {
+                Box::pin(litellm_host::failure::prepare(async move {
                     let signed = host.services.call(|reply| ("sign", reply)).await?;
                     let wire = host
                         .interceptors
@@ -1305,7 +1329,7 @@ mod tests {
                         .after_provider_response(RawResponse { body: "raw".into() })
                         .await?;
                     Ok(format!("{projected}|{signed}|{}", wire.url))
-                })
+                }))
             })
         }
     }
@@ -1562,6 +1586,10 @@ mod tests {
         type Error = Error;
         type Request = ();
         type HostCall = std::convert::Infallible;
+
+        fn host_call_stage(call: &Self::HostCall) -> CallStage {
+            match *call {}
+        }
         type Chunk = &'static str;
         type StreamHead = Vec<(&'static str, &'static str)>;
     }
@@ -1570,7 +1598,6 @@ mod tests {
 
     impl PythonBinding for StreamingBinding {
         type Protocol = Streaming;
-        type Failure = Classified;
 
         fn decode_request(
             &mut self,
@@ -1602,8 +1629,8 @@ mod tests {
             Ok(py.None())
         }
 
-        fn map_error(&self, _: Python<'_>, error: Error) -> PyResult<Classified> {
-            Ok(Classified(error.0))
+        fn map_error(&self, _: Python<'_>, error: Failure<Error>) -> PyResult<Settlement> {
+            Ok(Settlement::Fail(Classified(error.error.0).into()))
         }
 
         fn host_error(error: &PyErr) -> Error {
@@ -1791,7 +1818,9 @@ mod tests {
     fn failing_machine() -> impl FnOnce(String) -> CallMachine<Synthetic> + Send + Sync {
         move |_| {
             CallMachine::new(None, |_| {
-                Box::pin(async move { Err(Error("provider exploded".into())) })
+                Box::pin(litellm_host::failure::prepare(async move {
+                    Err(Error("provider exploded".into()))
+                }))
             })
         }
     }
@@ -2272,7 +2301,6 @@ mod tests {
             struct Cancelling(Log);
             impl PythonBinding for Cancelling {
                 type Protocol = Synthetic;
-                type Failure = Classified;
                 fn decode_request(
                     &mut self,
                     _: Python<'_>,
@@ -2299,9 +2327,9 @@ mod tests {
                 fn encode_response(&mut self, _: Python<'_>, _: String) -> PyResult<Py<PyAny>> {
                     Err(missing_state())
                 }
-                fn map_error(&self, _: Python<'_>, error: Error) -> PyResult<Classified> {
+                fn map_error(&self, _: Python<'_>, error: Failure<Error>) -> PyResult<Settlement> {
                     self.0.push("classify");
-                    Ok(Classified(error.0))
+                    Ok(Settlement::Fail(Classified(error.error.0).into()))
                 }
                 fn host_error(error: &PyErr) -> Error {
                     Error(error.to_string())

@@ -1,11 +1,12 @@
-use litellm_host::observation::ObservationSender;
 use std::{future::Future, ops::ControlFlow};
 
 use litellm_host::{
     call::{HostedCompletion, HostedMachine},
+    failure::Failure,
     interceptors::Interceptors,
     lifecycle::{CallEvent, FailureOrigin, Timing, epoch_seconds},
     machine::{Machine, MachineFault},
+    observation::ObservationSender,
     protocol::Protocol,
 };
 
@@ -44,7 +45,7 @@ pub struct Host<'a, S, H, C> {
 pub async fn run<M, S, H, C>(
     machine: M,
     host: Host<'_, S, H, C>,
-) -> Result<M::Complete, <M::Protocol as Protocol>::Error>
+) -> Result<M::Complete, Failure<<M::Protocol as Protocol>::Error>>
 where
     M: Machine,
     S: HostCallHandler<M::Protocol>,
@@ -57,7 +58,7 @@ where
 pub async fn run_hosted<P, S, H, C>(
     machine: HostedMachine<P>,
     host: Host<'_, S, H, C>,
-) -> Result<HostedCompletion<P::Response>, P::Error>
+) -> Result<HostedCompletion<P::Response>, Failure<P::Error>>
 where
     P: Protocol,
     P::Error: From<MachineFault>,
@@ -75,7 +76,7 @@ async fn run_with_completion<M, S, H, C>(
     machine: M,
     host: Host<'_, S, H, C>,
     detached: impl Fn(&M::Complete) -> bool,
-) -> Result<M::Complete, <M::Protocol as Protocol>::Error>
+) -> Result<M::Complete, Failure<<M::Protocol as Protocol>::Error>>
 where
     M: Machine,
     S: HostCallHandler<M::Protocol>,
@@ -116,7 +117,7 @@ where
 async fn consume<M, S, H, C>(
     mut driver: Driver<M, &S, &H>,
     stream: &C,
-) -> Result<M::Complete, <M::Protocol as Protocol>::Error>
+) -> Result<M::Complete, Failure<<M::Protocol as Protocol>::Error>>
 where
     M: Machine,
     S: HostCallHandler<M::Protocol>,

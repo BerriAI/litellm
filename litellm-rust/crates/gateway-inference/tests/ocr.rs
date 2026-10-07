@@ -147,18 +147,21 @@ async fn malformed_multipart_uses_an_openai_error_envelope(
 #[rstest]
 #[case::missing_document(
     "/v1/ocr", "mistral/test-ocr", "",
-    Error::Ocr(decode_request_value::<OcrDocument>(Value::Null, "document").unwrap_err()),
+    Error::from(decode_request_value::<OcrDocument>(Value::Null, "document").unwrap_err()),
 )]
 #[case::empty_document(
     "/v1/ocr",
     "mistral/test-ocr",
     "--test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.pdf\"\r\n\r\n\r\n",
-    Error::Ocr(OcrError::EmptyFile)
+    Error::from(OcrError::EmptyFile)
 )]
 #[case::empty_audio(
-    "/v1/audio/transcriptions", "bedrock/test-model",
+    "/v1/audio/transcriptions",
+    "bedrock/test-model",
     "--test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\n\r\n\r\n",
-    Error::Route(litellm_llms::Error::MissingField("audio.data").into()),
+    Error::from(litellm_inference::RouteError::from(litellm_llms::Error::MissingField(
+        "audio.data"
+    )))
 )]
 #[tokio::test]
 async fn upload_validation_errors_come_from_core(

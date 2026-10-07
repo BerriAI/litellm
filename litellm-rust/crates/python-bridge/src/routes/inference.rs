@@ -1,19 +1,19 @@
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
-use litellm_host_python::{from_py, lookup, to_py};
-use litellm_http::transport::Error as TransportError;
-use litellm_inference::RouteError;
+use litellm_host_python::{Settlement, from_py, lookup, to_py};
+use litellm_inference::{RouteError, call::Failure};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::{RustUpstreamError, route_error_to_pyerr},
+    errors::settle,
     marshal::{RouteOptions, optional_timeout, python_timeout_seconds},
 };
 
 pub(super) struct InferenceHost {
     pub request: Py<PyAny>,
     module: &'static str,
+    standby: bool,
 }
 
 pub(super) struct ProjectedCall {
@@ -23,8 +23,12 @@ pub(super) struct ProjectedCall {
 }
 
 impl InferenceHost {
-    pub fn new(request: Py<PyAny>, module: &'static str) -> Self {
-        Self { request, module }
+    pub fn new(request: Py<PyAny>, module: &'static str, standby: bool) -> Self {
+        Self {
+            request,
+            module,
+            standby,
+        }
     }
 
     pub fn project(
@@ -122,26 +126,20 @@ impl InferenceHost {
             .map(Bound::unbind)
     }
 
-    pub fn error(&self, py: Python<'_>, error: RouteError) -> PyResult<PyErr> {
-        if let RouteError::Secret(source) = &error
+    pub fn error(&self, py: Python<'_>, failure: Failure<RouteError>) -> PyResult<Settlement> {
+        if let RouteError::Secret(source) = &failure.error
             && let Some(original) = crate::secrets::python_error(py, source.source_error())
         {
-            return Ok(original);
+            return Ok(Settlement::Fail(original));
         }
-        let native = match error {
-            RouteError::Transport(TransportError::Http { status, body }) => {
-                let error = RustUpstreamError::new_err((status, body));
-                error
-                    .value(py)
-                    .setattr("headers", Vec::<(String, String)>::new())?;
-                error
-            }
-            other => route_error_to_pyerr(other),
+        settle(py, failure, self.standby, self.request.bind(py), None)
+    }
+
+    /// Why the route host cannot serve this request natively, when it declares a check.
+    pub fn unsupported_request(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        let Some(check) = py.import(self.module)?.getattr_opt("unsupported_request")? else {
+            return Ok(None);
         };
-        let mapped = py
-            .import(self.module)?
-            .getattr("map_failure")?
-            .call1((native.value(py), self.request.bind(py)))?;
-        Ok(PyErr::from_value(mapped))
+        check.call1((self.request.bind(py),))?.extract()
     }
 }

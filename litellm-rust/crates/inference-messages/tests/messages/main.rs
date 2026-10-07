@@ -4,6 +4,7 @@ use std::{
 };
 
 use litellm_http::{HttpSettings, Resolution};
+use litellm_inference::call::Failure;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping,
     route::{Messages, MessagesMachine, MessagesOutput},
@@ -104,14 +105,17 @@ fn machine(secrets: Arc<dyn SecretSource>) -> impl FnOnce(MessagesCall) -> Messa
 async fn run_with(
     secrets: Arc<RecordingSecrets>,
     call: MessagesCall,
-) -> Result<MessagesOutput, Error> {
+) -> Result<MessagesOutput, Failure<Error>> {
     let host = LocalMessagesHost::new(call);
-    litellm_host_native::in_process::run_hosted(machine(secrets)(host.request()?), host.runtime())
-        .await
+    litellm_host_native::in_process::run_hosted(
+        machine(secrets)(host.request().map_err(Failure::prepare)?),
+        host.runtime(),
+    )
+    .await
 }
 
 /// Runs the route with a secret source that knows nothing, so no environment leaks in.
-async fn run(call: MessagesCall) -> Result<MessagesOutput, Error> {
+async fn run(call: MessagesCall) -> Result<MessagesOutput, Failure<Error>> {
     run_with(Arc::new(RecordingSecrets::empty()), call).await
 }
 

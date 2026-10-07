@@ -1,6 +1,7 @@
 use std::ops::ControlFlow;
 
 use litellm_host::{
+    failure::Failure,
     interceptors::Interceptors,
     machine::{HostFailure, Machine, MachineStep},
     protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
@@ -10,6 +11,7 @@ use crate::services::HostCallHandler;
 
 type ProtocolOf<M> = <M as Machine>::Protocol;
 type ErrorOf<M> = <ProtocolOf<M> as Protocol>::Error;
+type FailureOf<M> = Failure<ErrorOf<M>>;
 
 pub enum Boundary<M: Machine> {
     Complete(M::Complete),
@@ -41,22 +43,22 @@ where
         }
     }
 
-    pub async fn advance(&mut self) -> Result<Boundary<M>, ErrorOf<M>> {
+    pub async fn advance(&mut self) -> Result<Boundary<M>, FailureOf<M>> {
         self.resume(ControlFlow::Continue(())).await
     }
 
-    pub async fn detach(&mut self) -> Result<Boundary<M>, ErrorOf<M>> {
+    pub async fn detach(&mut self) -> Result<Boundary<M>, FailureOf<M>> {
         self.resume(ControlFlow::Break(())).await
     }
 
     /// Interrupts the machine with a failure the consumer hit at the last stream boundary,
     /// dropping the held demand reply unanswered
-    pub async fn fail(&mut self, error: ErrorOf<M>) -> Result<M::Complete, ErrorOf<M>> {
+    pub async fn fail(&mut self, error: ErrorOf<M>) -> Result<M::Complete, FailureOf<M>> {
         self.demand = None;
         self.machine.interrupt(HostFailure::Error(error)).await
     }
 
-    async fn resume(&mut self, demand: ControlFlow<()>) -> Result<Boundary<M>, ErrorOf<M>> {
+    async fn resume(&mut self, demand: ControlFlow<()>) -> Result<Boundary<M>, FailureOf<M>> {
         if let Some(reply) = self.demand.take() {
             reply.send(demand);
         }
@@ -71,7 +73,10 @@ where
                     .result_ready(facts)
                     .await
                     .map(|()| reply.send(())),
-                HostRequest::HostCall(call) => self.services.handle_host_call(call).await,
+                HostRequest::HostCall(call) => self
+                    .services
+                    .handle_host_call(call)
+                    .await,
                 HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
                     wire,
                     context,

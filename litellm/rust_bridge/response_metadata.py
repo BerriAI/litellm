@@ -15,3 +15,8 @@ def mark_rust_response(response: ResultT) -> ResultT:
         {"x-litellm-rust": "true", **({"x-litellm-cache-key": cache_key} if isinstance(cache_key, str) else {})},
     )
     return response
+
+
+def mark_rerouted_response(response: ResultT, stage: str) -> ResultT:
+    _add_headers_to_response(response, {"x-litellm-rust-fallback": stage})
+    return response

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use litellm_http::{HttpSettings, Resolution};
+use litellm_inference::call::{Stage, UpstreamResponse};
 use litellm_inference_testing::{RecordingSecrets, http_config, no_secrets, resources};
 use litellm_llms::{
     base_llm::ocr::transformation::{BaseOcrConfig, OCR_RESPONSE_MAX_BYTES},
@@ -92,13 +93,15 @@ async fn an_upstream_error_keeps_its_status_whole_body_and_headers(
         .unwrap_err();
 
     assert_eq!(received(&upstream).await.len(), 1);
-    let Error::Provider {
+    assert_eq!(error.stage, Stage::Upstream);
+    let Error::Upstream(UpstreamResponse {
         status,
         body,
         headers,
-    } = error
+        ..
+    }) = error.error
     else {
-        panic!("expected provider error, got {error:?}");
+        panic!("expected the provider's answer, got {error:?}");
     };
     assert_eq!(status, 422);
     for (name, value) in [

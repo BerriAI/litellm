@@ -20,7 +20,7 @@ mod runtime;
 mod services;
 
 pub use argument::lookup;
-pub use binding::PythonBinding;
+pub use binding::{PythonBinding, Settlement};
 pub use conversion_cache::{FromPythonCache, ToPythonCache};
 pub use driver::{CallOptions, run_call};
 pub use error::{InvokeError, missing_state};

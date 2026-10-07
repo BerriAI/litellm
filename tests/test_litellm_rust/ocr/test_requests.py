@@ -67,6 +67,8 @@ async def test_ocr_contract_provider_error_details(
         await call_native(ocr_server, asynchronous, num_retries=0)
     response: Final = caught.value.response
     assert isinstance(response, httpx.Response)
+    if ocr_backend:
+        assert str(response.request.url) == ocr_server.base_url + ocr_server.requests[0].path
     if preserved == "body":
         assert response.content == json.dumps(payload).encode()
     else:
@@ -83,7 +85,7 @@ async def test_ocr_contract_invalid_response_format(
     asynchronous: bool,
 ) -> None:
     ocr_server.expected_requests = 0
-    with pytest.raises(litellm.UnsupportedParamsError) as caught:
+    with pytest.raises(litellm.BadRequestError) as caught:
         await call_native(ocr_server, asynchronous, req_format="bogus", num_retries=0)
     assert caught.value.status_code == 400
     for value in ("req_format", "bogus", "native", "litellm"):

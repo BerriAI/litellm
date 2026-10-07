@@ -1,8 +1,9 @@
-use litellm_host::observation::ObservationSender;
+use litellm_host::failure::Stage;
 use std::convert::Infallible;
 
 use litellm_host::{
     call::{CallOutput, HostedMachine, hosted_call},
+    observation::ObservationSender,
     protocol::Protocol,
 };
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
@@ -19,6 +20,10 @@ impl Protocol for ChatCompletions {
     type Error = Error;
     type Request = ChatCompletionsCall;
     type HostCall = Infallible;
+
+    fn host_call_stage(call: &Self::HostCall) -> Stage {
+        match *call {}
+    }
     type Chunk = Infallible;
     type StreamHead = Infallible;
 }
@@ -58,7 +63,7 @@ impl ChatCompletionsRoute {
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<ChatCompletionsResponse, Error> {
+    ) -> Result<ChatCompletionsResponse, litellm_inference::call::Failure<Error>> {
         litellm_inference::diagnostic::unary(async {
             let request = ChatCompletionsRequest {
                 model: &call.model,

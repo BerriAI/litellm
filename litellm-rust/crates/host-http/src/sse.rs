@@ -1,7 +1,7 @@
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use http::{HeaderValue, header::CONTENT_TYPE};
-use litellm_host::protocol::Protocol;
+use litellm_host::{failure::Failure, protocol::Protocol};
 
 use crate::{Error, ResponseEncoder, StreamEncoder, Unary};
 
@@ -37,7 +37,7 @@ impl<P, C, F, R> StreamEncoder for Sse<P, C, F>
 where
     P: Protocol<Chunk = Bytes>,
     C: Fn(P::Response) -> R + Send + Sync + 'static,
-    F: Fn(Error<P::Error>) -> Bytes + Send + Sync + 'static,
+    F: Fn(Error<Failure<P::Error>>) -> Bytes + Send + Sync + 'static,
     R: IntoResponse,
 {
     fn encode_stream_head(&self, _: P::StreamHead) -> Result<http::Response<()>, P::Error> {
@@ -52,7 +52,7 @@ where
         Ok(chunk)
     }
 
-    fn encode_stream_error(&self, error: Error<P::Error>) -> Bytes {
+    fn encode_stream_error(&self, error: Error<Failure<P::Error>>) -> Bytes {
         (self.stream_error)(error)
     }
 }

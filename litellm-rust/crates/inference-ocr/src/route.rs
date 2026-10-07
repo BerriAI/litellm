@@ -1,3 +1,4 @@
+use litellm_host::failure::Stage;
 use litellm_auth::{ResolvedCredential, TokenProviderHandle};
 use litellm_host::observation::ObservationSender;
 use litellm_host::{
@@ -29,6 +30,10 @@ impl Protocol for Ocr {
     type Error = Error;
     type Request = OcrCall;
     type HostCall = OcrOp;
+
+    fn host_call_stage(_: &Self::HostCall) -> Stage {
+        Stage::Prepare
+    }
     type Chunk = std::convert::Infallible;
     type StreamHead = std::convert::Infallible;
 }

@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, time::SystemTime};
 
 use litellm_auth_aws::{Credentials, aws_signature_headers, sign_post};
+use litellm_inference::call::{Stage, UpstreamResponse};
 use rstest::rstest;
 use time::{PrimitiveDateTime, format_description};
 use wiremock::Request;
@@ -162,8 +163,9 @@ async fn a_multi_page_rejection_reaches_the_caller_with_the_single_page_limit(#[
         .await
         .unwrap_err();
 
-    let Error::Provider { status, body, .. } = error else {
-        panic!("expected a provider error, got {error:?}");
+    assert_eq!(error.stage, Stage::Upstream);
+    let Error::Upstream(UpstreamResponse { status, body, .. }) = error.error else {
+        panic!("expected the provider's answer, got {error:?}");
     };
     assert_eq!(status, 400);
     assert!(

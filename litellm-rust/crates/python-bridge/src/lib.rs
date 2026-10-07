@@ -17,13 +17,17 @@ mod tokenizer;
 
 #[pymodule(gil_used = true)]
 mod _native {
+    #[pymodule_export]
+    use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
+    use pyo3::{prelude::*, types::PyModule};
+
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
     #[pymodule_export]
     use crate::diagnostics::{gil_stats, process_state_started, reserve_process_for_forking};
     #[pymodule_export]
-    use crate::errors::{RustBridgeDeclined, RustUpstreamError};
+    use crate::errors::RustFailure;
     #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
@@ -51,9 +55,6 @@ mod _native {
     use crate::tokenizer::HuggingFaceEncoding;
     #[pymodule_export]
     use crate::tokenizer::Tokenizer;
-    #[pymodule_export]
-    use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
-    use pyo3::{prelude::*, types::PyModule};
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -87,8 +88,7 @@ mod tests {
         Python::attach(|py| {
             let mut expected = vec![
                 "NativeCacheHandle",
-                "RustBridgeDeclined",
-                "RustUpstreamError",
+                "RustFailure",
                 "ForkedAfterNativeRuntimeStarted",
                 "ProcessReservedForForking",
                 "ocr",

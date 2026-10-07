@@ -40,9 +40,6 @@ impl<'a, I: Interceptors<RouteError>> CallContext<'a, I> {
                 ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
             ));
         }
-        self.interceptors
-            .after_provider_response(raw)
-            .await
-            .map_err(RouteError::post_call)
+        self.interceptors.after_provider_response(raw).await
     }
 }

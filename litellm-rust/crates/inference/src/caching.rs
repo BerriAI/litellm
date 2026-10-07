@@ -22,7 +22,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tokio_util::codec::Decoder;
 
-use crate::RouteError;
+use crate::{
+    RouteError,
+    call::{self, Failure},
+};
 
 pub trait Cachable: Protocol<Error = RouteError> {
     const SURFACE: &'static str;
@@ -146,12 +149,12 @@ pub async fn execute_unary<P, F, Fut>(
     interceptors: &impl Interceptors<RouteError>,
     observers: Option<&ObservationSender>,
     provider: F,
-) -> Result<P::Response, RouteError>
+) -> Result<P::Response, Failure<RouteError>>
 where
     P: Cachable,
     P::Response: Serialize + DeserializeOwned,
     F: FnOnce() -> Fut,
-    Fut: Future<Output = Result<P::Response, RouteError>>,
+    Fut: Future<Output = Result<P::Response, Failure<RouteError>>>,
 {
     let identity = request.identity.clone();
     crate::diagnostic::provider(&identity.model, &identity.provider);
@@ -168,14 +171,14 @@ where
         None => (provider().await?, ResultSource::Provider),
     };
     let from_provider = source == ResultSource::Provider;
-    publish(
+    call::post_call(publish(
         ExecutionFacts {
             provider: identity,
             source,
         },
         interceptors,
         observers,
-    )
+    ))
     .await?;
     if from_provider && let Some(session) = session {
         session.store_response::<P>(&response).await;
@@ -190,12 +193,12 @@ pub async fn execute_streaming<P, F, Fut>(
     interceptors: &impl Interceptors<RouteError>,
     observers: Option<&ObservationSender>,
     provider: F,
-) -> Result<OutputOf<P>, RouteError>
+) -> Result<OutputOf<P>, Failure<RouteError>>
 where
     P: StreamCachable,
     P::Response: Serialize + DeserializeOwned,
     F: FnOnce() -> Fut,
-    Fut: Future<Output = Result<OutputOf<P>, RouteError>>,
+    Fut: Future<Output = Result<OutputOf<P>, Failure<RouteError>>>,
 {
     let identity = request.identity.clone();
     crate::diagnostic::provider(&identity.model, &identity.provider);
@@ -209,14 +212,14 @@ where
         Some(hit) => hit,
         None => (provider().await?, ResultSource::Provider),
     };
-    publish(
+    call::post_call(publish(
         ExecutionFacts {
             provider: identity,
             source: source.clone(),
         },
         interceptors,
         observers,
-    )
+    ))
     .await?;
     Ok(cache.finish(output, &source).await)
 }

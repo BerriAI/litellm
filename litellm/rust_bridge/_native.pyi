@@ -12,8 +12,9 @@ from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMe
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import EmbeddingResponse, ModelResponse
 
-class RustBridgeDeclined(Exception): ...
-class RustUpstreamError(Exception): ...
+class RustFailure(Exception):
+    """A native call Rust abandoned for Python to serve; ``args[0]`` is the report ``failures.report`` reads."""
+
 class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
 
@@ -247,8 +248,7 @@ __all__ = [
     "NativeTraceStorage",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
-    "RustBridgeDeclined",
-    "RustUpstreamError",
+    "RustFailure",
     "TokenCounter",
     "Tokenizer",
     "achat_completions",

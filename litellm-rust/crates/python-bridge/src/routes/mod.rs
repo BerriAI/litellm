@@ -21,6 +21,9 @@ struct NativeCall<'py> {
     args: Bound<'py, PyTuple>,
     kwargs: Bound<'py, PyDict>,
     bound: Bound<'py, PyDict>,
+    /// Another implementation of this call is waiting to serve it if Rust fails before the
+    /// provider acts on it.
+    standby: bool,
 }
 
 impl<'py> NativeCall<'py> {
@@ -29,6 +32,7 @@ impl<'py> NativeCall<'py> {
             args: call.getattr("args")?.cast_into()?,
             kwargs: mapping_dict(&call.getattr("kwargs")?)?,
             bound: mapping_dict(&call.getattr("bound")?)?,
+            standby: call.getattr("standby")?.extract()?,
         })
     }
 }
