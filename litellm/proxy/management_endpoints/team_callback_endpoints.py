@@ -31,7 +31,8 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
-    conflicting_shared_option_error,
+    conflicting_capture_error,
+    conflicting_span_scope_error,
     cross_entry_family_error,
 )
 from litellm.proxy.common_utils.callback_utils import (
@@ -351,9 +352,16 @@ async def add_team_callbacks(
         decrypted_logging: Final = decrypt_callback_vars(team_metadata).get("logging")
         stored_entries: Final = decrypted_logging if isinstance(decrypted_logging, list) else ()
         stored_entry_vars: Final = [entry.get("callback_vars") or {} for entry in stored_entries]
-        scope_error: Final = conflicting_shared_option_error(data.callback_vars, stored_entry_vars)
+        scope_error: Final = conflicting_span_scope_error(data.callback_vars, stored_entry_vars)
         if scope_error is not None:
             raise _callback_config_error(scope_error)
+        capture_error: Final = conflicting_capture_error(
+            data.callback_name,
+            data.callback_vars,
+            [(entry.get("callback_name"), entry_vars) for entry, entry_vars in zip(stored_entries, stored_entry_vars)],
+        )
+        if capture_error is not None:
+            raise _callback_config_error(capture_error)
         # One entry has to own a credential family end to end. The entries are
         # flattened into one dict before a request reads them, so an entry
         # naming only a destination would pair with a key written on another

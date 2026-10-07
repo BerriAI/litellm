@@ -57,6 +57,7 @@ from litellm.integrations.otel.plumbing.providers import (
     TenantFanOutSpanProcessor,
     _OverriddenBackendFilter,
     _sink_key,
+    attach_tenant_fan_out,
     build_tracer_provider,
     deliverable_destinations,
     operator_sink_scopes,
@@ -4573,19 +4574,19 @@ class TestCaptureMessageContent:
         assert not any(carries_content(span) for span in model_calls)
 
     @pytest.mark.parametrize(
-        ("setting", "content_exported"),
-        [("no_content", False), ("span_only", True), ("event_only", False), ("span_and_event", True), (None, False)],
+        ("global_capture", "content_exported"),
+        [(CaptureMessageContent.NO_CONTENT, False), (CaptureMessageContent.SPAN_ONLY, True)],
     )
-    def test_a_request_routed_to_the_teams_credentials_honors_the_setting(
-        self, setting: str | None, content_exported: bool
+    def test_a_routed_provider_exports_content_only_when_the_global_setting_captures(
+        self, global_capture: CaptureMessageContent, content_exported: bool
     ) -> None:
-        """A failure-only entry, or a destination the fan-out could not deliver, leaves the
-        model call on the per-request tracer route with the team's credentials."""
+        """A sibling destination's span_only makes the logger collect content, and a request
+        routed to this callback's team credentials must not carry it under a global no_content."""
         exporters: dict[ExporterOwner | None, InMemorySpanExporter] = {}
-        kind = f"lit8244_routed_{setting}"
+        kind = f"lit8244_routed_{global_capture.value}"
         register_exporter_factory(kind, lambda spec: exporters.setdefault(spec.owner, InMemorySpanExporter()))
         config = OpenTelemetryV2Config(
-            capture_message_content=CaptureMessageContent.NO_CONTENT,
+            capture_message_content=global_capture,
             exporters=[
                 ExporterSpec(
                     kind=kind,
@@ -4597,41 +4598,48 @@ class TestCaptureMessageContent:
             ],
         )
         cache = TenantTracerCache(config, "langfuse_otel", "litellm")
-        params = {"langfuse_public_key": "pk-team", "langfuse_secret_key": "sk-team"}
-        if setting is not None:
-            params["capture_message_content"] = setting
 
-        route = cache.route_for(get_tracer(TracerProvider(), "litellm"), params)
+        route = cache.route_for(
+            get_tracer(TracerProvider(), "litellm"),
+            {"langfuse_public_key": "pk-team", "langfuse_secret_key": "sk-team"},
+        )
         with route.tracer.start_as_current_span("chat gpt-4o") as llm:
             llm.set_attributes(mapped(_MODEL_CALL_WITH_CONTENT))
         cache.release(route.provider)
 
         assert route.detached is True
-        team_copy = by_name(exporters[ExporterOwner.LANGFUSE_OTEL])["chat gpt-4o"]
-        assert carries_content(team_copy) is content_exported
-        assert team_copy.attributes["gen_ai.usage.input_tokens"] == 12
-        assert not carries_content(by_name(exporters[None])["chat gpt-4o"])
+        for exporter in (exporters[ExporterOwner.LANGFUSE_OTEL], exporters[None]):
+            copy = by_name(exporter)["chat gpt-4o"]
+            assert carries_content(copy) is content_exported
+            assert copy.attributes["gen_ai.usage.input_tokens"] == 12
 
-    def test_a_restricted_and_an_unrestricted_team_never_share_a_routed_provider(self):
-        cache = TenantTracerCache(
-            OpenTelemetryV2Config(
-                capture_message_content=CaptureMessageContent.NO_CONTENT,
-                exporters=[
-                    ExporterSpec(kind="otlp_http", endpoint="http://op.local", owner=ExporterOwner.LANGFUSE_OTEL)
-                ],
-            ),
-            "langfuse_otel",
-            "litellm",
+    @pytest.mark.parametrize("first", ["newrelic", "langfuse_otel"])
+    def test_an_omitted_setting_follows_its_own_callbacks_mode_whatever_the_callback_order(
+        self, monkeypatch: pytest.MonkeyPatch, first: str
+    ) -> None:
+        monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+        tenant = InMemorySpanExporter()
+        monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, "otlp_http", lambda _spec: tenant)
+        langfuse = OpenTelemetryV2Config(
+            capture_message_content=CaptureMessageContent.SPAN_ONLY,
+            exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.LANGFUSE_OTEL)],
         )
-        default = get_tracer(TracerProvider(), "litellm")
-        creds = {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}
+        newrelic = OpenTelemetryV2Config(
+            capture_message_content=CaptureMessageContent.NO_CONTENT,
+            exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.NEWRELIC)],
+        )
+        provider = TracerProvider()
+        attach_tenant_fan_out(provider, *((newrelic, langfuse) if first == "newrelic" else (langfuse, newrelic)))
+        destination = OtelDestination(
+            endpoint="http://team.local/api/public/otel",
+            headers=MappingProxyType({"Authorization": "Basic dA=="}),
+            callback_name="langfuse_otel",
+        )
 
-        restricted = cache.route_for(default, {**creds, "capture_message_content": "no_content"})
-        capturing = cache.route_for(default, {**creds, "capture_message_content": "span_only"})
+        self._run(provider, (destination,), mapped(_MODEL_CALL_WITH_CONTENT))
+        provider.force_flush()
 
-        assert restricted.provider is not capturing.provider
-        cache.release(restricted.provider)
-        cache.release(capturing.provider)
+        assert carries_content(by_name(tenant)["chat gpt-4o"])
 
     @pytest.mark.usefixtures("allow_test_hosts")
     @pytest.mark.parametrize("setting", ["no_content", "span_only", "event_only", "span_and_event", None])
@@ -4691,9 +4699,24 @@ class TestCaptureMessageContent:
 
         assert saved.callback_vars["capture_message_content"] == value
 
-    def test_the_legacy_team_callback_metadata_rejects_an_unsupported_value(self):
-        with pytest.raises(ValueError, match="Invalid capture_message_content"):
-            TeamCallbackMetadata(success_callback=["langfuse_otel"], callback_vars={"capture_message_content": "all"})
+    def test_a_team_wide_callback_vars_map_cannot_carry_the_setting(self):
+        """The flattened map is shared by every callback, so a value there would apply to all of them."""
+        with pytest.raises(ValueError, match="Invalid callback variable: capture_message_content"):
+            TeamCallbackMetadata(
+                success_callback=["langfuse_otel", "signoz"], callback_vars={"capture_message_content": "span_only"}
+            )
+
+    def test_flattening_the_entries_leaves_the_setting_on_its_own_entry(self):
+        flattened = convert_key_logging_metadata_to_callback(
+            AddTeamCallback(
+                callback_name="langfuse_otel",
+                callback_type="success",
+                callback_vars={"langfuse_public_key": "pk", "capture_message_content": "span_only"},
+            ),
+            None,
+        )
+
+        assert flattened.callback_vars == {"langfuse_public_key": "pk"}
 
 
 class TestArizeProjectRouting:

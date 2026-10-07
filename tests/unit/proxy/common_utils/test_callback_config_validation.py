@@ -2,7 +2,8 @@ import pytest
 
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
-    conflicting_shared_option_error,
+    conflicting_capture_error,
+    conflicting_span_scope_error,
     cross_entry_family_error,
     logging_metadata_config_error,
 )
@@ -59,7 +60,7 @@ def test_a_bad_span_scope_is_reported_even_when_the_environment_is_fine():
 def test_one_span_scope_per_team(new_vars, stored, rejected):
     """The entries flatten last-wins, so a second scope would export whichever entry
     was stored last. An entry that names no scope leaves the stored one in charge."""
-    error = conflicting_shared_option_error(new_vars, stored)
+    error = conflicting_span_scope_error(new_vars, stored)
     assert (error is not None) is rejected
     if rejected:
         assert "langfuse_span_scope" in error and stored[-1]["langfuse_span_scope"] in error
@@ -288,26 +289,55 @@ def test_an_unsupported_capture_message_content_is_rejected_on_key_logging_metad
     assert error is not None and "Invalid capture_message_content" in error
 
 
+def test_each_entry_keeps_its_own_capture_message_content():
+    error = logging_metadata_config_error(
+        {
+            "logging": [
+                {
+                    "callback_name": "langfuse_otel",
+                    "callback_type": "success",
+                    "callback_vars": {"capture_message_content": "span_only"},
+                },
+                {
+                    "callback_name": "arize",
+                    "callback_type": "success",
+                    "callback_vars": {"capture_message_content": "no_content"},
+                },
+            ]
+        }
+    )
+    assert error is None
+
+
+def test_a_failure_only_entry_rejects_capture_message_content():
+    error = callback_config_error("langfuse_otel", {"capture_message_content": "no_content"}, "failure")
+    assert error is not None and "capture_message_content" in error and "success_and_failure" in error
+
+
 @pytest.mark.parametrize(
-    "new_vars, stored, rejected",
+    ("stored", "rejected"),
     [
-        ({"capture_message_content": "no_content"}, [{"capture_message_content": "span_only"}], True),
-        ({"capture_message_content": "event_only"}, [{"capture_message_content": "span_and_event"}], True),
-        (
-            {"capture_message_content": "span_only"},
-            [{"langfuse_public_key": "pk"}, {"capture_message_content": "no_content"}],
-            True,
-        ),
-        ({"capture_message_content": "no_content"}, [{"capture_message_content": "no_content"}], False),
-        ({"capture_message_content": "event_only"}, [{"capture_message_content": "event_only"}], False),
-        ({"capture_message_content": "no_content"}, [{"langfuse_span_scope": "llm_only"}], False),
-        ({"langfuse_public_key": "pk"}, [{"capture_message_content": "no_content"}], False),
+        ([("langfuse_otel", {"capture_message_content": "no_content"})], True),
+        ([("langfuse_otel", {"capture_message_content": "span_only"})], False),
+        ([("langfuse_otel", {"langfuse_public_key": "pk"})], False),
+        ([("newrelic", {"capture_message_content": "no_content"})], False),
     ],
 )
-def test_one_capture_message_content_per_team(new_vars, stored, rejected):
-    """The entries flatten last-wins on the routed path, so a second value would apply
-    whichever entry was stored last to the team's traffic."""
-    error = conflicting_shared_option_error(new_vars, stored)
+def test_entries_for_one_backend_share_one_capture_message_content(stored, rejected):
+    """The backend's entries merge into one destination, so a second value would silently win or lose."""
+    error = conflicting_capture_error("langfuse_otel", {"capture_message_content": "span_only"}, stored)
     assert (error is not None) is rejected
-    if rejected:
-        assert "capture_message_content" in error
+
+
+def test_key_logging_entries_for_one_backend_may_not_disagree_on_capture_message_content():
+    def entry(callback_type, capture):
+        return {
+            "callback_name": "langfuse_otel",
+            "callback_type": callback_type,
+            "callback_vars": {"capture_message_content": capture},
+        }
+
+    error = logging_metadata_config_error(
+        {"logging": [entry("success", "no_content"), entry("success_and_failure", "span_only")]}
+    )
+    assert error is not None and "already set to 'no_content' by another langfuse_otel entry" in error

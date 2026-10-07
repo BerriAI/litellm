@@ -1,4 +1,3 @@
-import base64
 import json
 import re
 import uuid
@@ -406,15 +405,13 @@ def test_cache_hit_twin_of_a_no_content_team_is_redacted(rig: Rig) -> None:
     assert [span["name"] for span in tenant if _carries(span, marker)] == [], _names(tenant)
 
 
-def test_failure_only_entry_routed_with_team_credentials_is_redacted(rig: Rig) -> None:
-    """A failure-only entry gets no fan-out destination, so the team's account is reached by the routed fallback."""
-    _, key = rig.team_key("no_content", "fail", kind="failure")
-    team_account: Final = ("authorization", "Basic " + base64.b64encode(b"pk-lf-fail:sk-lf-fail").decode())
-    cursors: Final = rig.cursors()
-    sent: Final = _served(rig.send(key))
-    routed: Final = _arrived(rig.sinks.operator, cursors.operator, sent, frozenset(), team_account)
-    assert [span["name"] for span in routed if _carries(span, sent.marker)] == [], _names(routed)
-    assert _model_spans(routed)[0]["attributes"].get("gen_ai.request.model"), _names(routed)
+def test_a_failure_only_entry_rejects_the_setting(rig: Rig) -> None:
+    team: Final = rig.scenario.team()
+    response: Final = rig.attach(
+        team, "langfuse_otel", {**rig.langfuse("fail"), "capture_message_content": "no_content"}, "failure"
+    )
+    assert response.status_code == 400, response.text
+    assert "success_and_failure" in response.text, response.text
 
 
 def test_key_level_logging_with_no_content_is_redacted(rig: Rig) -> None:
@@ -504,13 +501,17 @@ def test_newrelic_destination_drops_genai_content(rig: Rig) -> None:
 
 
 def test_span_only_team_lifts_global_no_content_only_for_its_destination(dark_rig: Rig) -> None:
+    """The sibling Arize entry gets a fan-out destination and the SigNoz entry rides the routed tracer."""
     team, key = dark_rig.team_key("span_only", "b")
-    attached: Final = dark_rig.attach(
-        team,
-        "arize",
-        {"arize_space_key": "space-sibling", "arize_api_key": "arize-sibling"},
+    siblings: Final = (
+        dark_rig.attach(team, "arize", {"arize_space_key": "space-sibling", "arize_api_key": "arize-sibling"}),
+        dark_rig.attach(
+            team,
+            "signoz",
+            {"signoz_ingestion_endpoint": dark_rig.sinks.arize + "/v1/traces", "signoz_ingestion_key": "signoz-team"},
+        ),
     )
-    assert attached.status_code == 200, attached.text
+    assert [response.status_code for response in siblings] == [200, 200], [response.text for response in siblings]
     cursors: Final = dark_rig.cursors()
     sent: Final = _served(dark_rig.send(key))
     assert dark_rig.upstream_hits(sent.marker) == 1
@@ -523,9 +524,17 @@ def test_span_only_team_lifts_global_no_content_only_for_its_destination(dark_ri
         frozenset(),
         ("arize-space-id", "space-sibling"),
     )
+    signoz: Final = _arrived(
+        dark_rig.sinks.arize,
+        cursors.arize,
+        sent,
+        frozenset(),
+        ("signoz-ingestion-key", "signoz-team"),
+    )
     assert any(_carries(span, sent.marker) for span in tenant), _names(tenant)
     assert not any(_carries(span, sent.marker) for span in operator), _names(operator)
     assert not any(_carries(span, sent.marker) for span in sibling), _names(sibling)
+    assert not any(_carries(span, sent.marker) for span in signoz), _names(signoz)
 
 
 def test_an_unsupported_value_fails_registration(rig: Rig) -> None:
@@ -542,15 +551,11 @@ def test_classic_langfuse_rejects_the_setting(rig: Rig) -> None:
     assert "capture_message_content" in response.text, response.text
 
 
-def test_a_conflicting_second_entry_is_rejected(rig: Rig) -> None:
+def test_a_second_entry_for_the_same_backend_cannot_disagree(rig: Rig) -> None:
     team, _ = rig.team_key("no_content", "a")
-    response: Final = rig.attach(
-        team,
-        "arize",
-        {"arize_space_key": "space-a", "arize_api_key": "arize-a", "capture_message_content": "span_only"},
-    )
+    response: Final = rig.attach(team, "langfuse_otel", {"capture_message_content": "span_only"}, "success_and_failure")
     assert response.status_code == 400, response.text
-    assert "already set to 'no_content'" in response.text, response.text
+    assert "already set to 'no_content' by another langfuse_otel entry" in response.text, response.text
 
 
 def test_replacing_the_registration_switches_the_team_to_content(rig: Rig) -> None:
@@ -612,13 +617,17 @@ def test_stalled_tenant_during_a_mixed_burst_keeps_serving_and_each_teams_policy
             _assert_content_twin(rig, result, cursors)
 
 
-def _write_config(directory: Path, sinks: SpanSinks, name: str) -> Path:
+def _write_config(directory: Path, sinks: SpanSinks, name: str, callbacks: tuple[str, ...]) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["litellm_settings"] = {
         **config.get("litellm_settings", {}),
-        "callbacks": ["langfuse_otel"],
+        "callbacks": list(callbacks),
         "otel_tenant_destination_mode": "additive",
-        "provider_url_destination_allowed_hosts": [urlparse(sinks.tenant).netloc, urlparse(sinks.operator).netloc],
+        "provider_url_destination_allowed_hosts": [
+            urlparse(sinks.tenant).netloc,
+            urlparse(sinks.operator).netloc,
+            urlparse(sinks.arize).netloc,
+        ],
     }
     config["general_settings"] = {**config.get("general_settings", {}), "user_api_key_cache_ttl": 2}
     path: Final = directory / f"{name}.yaml"
@@ -628,7 +637,12 @@ def _write_config(directory: Path, sinks: SpanSinks, name: str) -> Path:
 
 @contextmanager
 def _started(
-    provider: Wire, sinks: SpanSinks, newrelic: ConnectSink, directory: Path, capture: str | None
+    provider: Wire,
+    sinks: SpanSinks,
+    newrelic: ConnectSink,
+    directory: Path,
+    capture: str | None,
+    callbacks: tuple[str, ...] = ("langfuse_otel",),
 ) -> Generator[Rig]:
     environment: Final = {
         "LITELLM_OTEL_V2": "1",
@@ -643,6 +657,8 @@ def _started(
         "WANDB_API_KEY": "wandb-operator",
         "WANDB_PROJECT_ID": "operator/weave",
         "WANDB_HOST": sinks.arize,
+        "SIGNOZ_INGESTION_ENDPOINT": sinks.arize + "/v1/traces",
+        "SIGNOZ_INGESTION_KEY": "signoz-operator",
         "HTTPS_PROXY": newrelic.proxy_url,
         "NO_PROXY": "127.0.0.1,localhost",
         "REQUESTS_CA_BUNDLE": newrelic.ca_pem,
@@ -654,7 +670,7 @@ def _started(
             gateway,
             directory,
             environment,
-            config=_write_config(directory, sinks, "capture"),
+            config=_write_config(directory, sinks, "capture", callbacks),
             remove_environment=(
                 "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
                 "LITELLM_OTEL_TENANT_DESTINATION_MODE",
@@ -693,5 +709,12 @@ def rig(
 def dark_rig(
     provider: Wire, audit_sinks: SpanSinks, newrelic_sink: ConnectSink, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[Rig]:
-    with _started(provider, audit_sinks, newrelic_sink, tmp_path_factory.mktemp("capture-no-content"), None) as started:
+    with _started(
+        provider,
+        audit_sinks,
+        newrelic_sink,
+        tmp_path_factory.mktemp("capture-no-content"),
+        None,
+        ("langfuse_otel", "signoz"),
+    ) as started:
         yield started

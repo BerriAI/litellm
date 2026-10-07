@@ -3652,6 +3652,9 @@ ArizeOtlpProtocol = Literal["grpc", "http/protobuf"]
 ARIZE_OTLP_PROTOCOLS: Final[frozenset[str]] = frozenset(get_args(ArizeOtlpProtocol))
 
 
+CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
+
+
 class CaptureMessageContent(str, Enum):
     NO_CONTENT = "no_content"
     SPAN_ONLY = "span_only"
@@ -3671,8 +3674,6 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_host: str | None
     langfuse_environment: ReadOnly[str | None]
     langfuse_span_scope: ReadOnly[OtelSpanScope | None]
-
-    capture_message_content: ReadOnly[CaptureMessageContent | None]
 
     # Langfuse prompt version
     langfuse_prompt_version: int | None

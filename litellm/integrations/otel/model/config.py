@@ -290,16 +290,7 @@ class OpenTelemetryV2Config(BaseSettings):
         here are lower_snake_case; normalizing at the boundary keeps both
         spellings working and lets every downstream comparison stay exact.
         """
-        if isinstance(value, str):
-            normalized: Final = parse_capture_message_content(value.lower())
-            if normalized is not None:
-                return normalized
-            verbose_logger.warning(
-                "Unrecognized OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT value %r; defaulting to no_content",
-                value,
-            )
-            return CaptureMessageContent.NO_CONTENT
-        return value
+        return _normalized_capture_message_content(value)
 
     @field_validator("langfuse_span_scope", mode="before")
     @classmethod
@@ -377,6 +368,38 @@ class OpenTelemetryV2Config(BaseSettings):
     @classmethod
     def from_env(cls) -> "OpenTelemetryV2Config":
         return cls()
+
+
+def _normalized_capture_message_content(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    normalized: Final = parse_capture_message_content(value.lower())
+    if normalized is not None:
+        return normalized
+    verbose_logger.warning(
+        "Unrecognized OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT value %r; defaulting to no_content",
+        value,
+    )
+    return CaptureMessageContent.NO_CONTENT
+
+
+class _CaptureMessageContentSettings(BaseSettings):
+    model_config = SettingsConfigDict(extra="ignore")
+
+    capture_message_content: CaptureMessageContent = Field(
+        default=CaptureMessageContent.NO_CONTENT,
+        validation_alias=AliasChoices("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"),
+    )
+
+    @field_validator("capture_message_content", mode="before")
+    @classmethod
+    def _normalize_capture_message_content(cls, value: object) -> object:
+        return _normalized_capture_message_content(value)
+
+
+def capture_message_content_from_env() -> CaptureMessageContent:
+    """The global capture mode, read without building a settings model that rereads every other env var"""
+    return _CaptureMessageContentSettings().capture_message_content
 
 
 _EXCLUDED_SERVICES_INPUT: Final[TypeAdapter[str | tuple[object, ...]]] = TypeAdapter(str | tuple[object, ...])

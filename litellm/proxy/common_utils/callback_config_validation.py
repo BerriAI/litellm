@@ -10,12 +10,12 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
+from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR
+
 _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
 _LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
 _LANGFUSE_SPAN_SCOPE_VAR: Final = "langfuse_span_scope"
-_CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
-_SHARED_OPTION_VARS: Final = (_LANGFUSE_SPAN_SCOPE_VAR, _CAPTURE_MESSAGE_CONTENT_VAR)
 _ARIZE_CALLBACK: Final = "arize"
 _ARIZE_OTLP_PROTOCOL_VAR: Final = "arize_otlp_protocol"
 _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
@@ -38,7 +38,7 @@ def callback_config_error(
     )
     if langfuse_error is not None:
         return langfuse_error
-    capture_error: Final = _capture_message_content_error(callback_name, callback_vars)
+    capture_error: Final = _capture_message_content_error(callback_name, callback_vars, callback_type)
     if capture_error is not None:
         return capture_error
     if callback_name != _NEWRELIC_CALLBACK:
@@ -85,8 +85,10 @@ def _langfuse_span_scope_error(callback_name: str | None, callback_vars: Mapping
     return None
 
 
-def _capture_message_content_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
-    value: Final = callback_vars.get(_CAPTURE_MESSAGE_CONTENT_VAR)
+def _capture_message_content_error(
+    callback_name: str | None, callback_vars: Mapping[str, str], callback_type: str | None
+) -> str | None:
+    value: Final = callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)
     if value is None:
         return None
     from litellm.integrations.otel.presets.destinations import destination_capable_backends
@@ -96,13 +98,13 @@ def _capture_message_content_error(callback_name: str | None, callback_vars: Map
 
     supported: Final = sorted(destination_capable_backends())
     if callback_name not in supported:
-        return (
-            f"{_CAPTURE_MESSAGE_CONTENT_VAR} applies to the OTel v2 callbacks {supported} only, not {callback_name!r}"
-        )
+        return f"{CAPTURE_MESSAGE_CONTENT_VAR} applies to the OTel v2 callbacks {supported} only, not {callback_name!r}"
     try:
         validate_capture_message_content_value(value)
     except ValueError as e:
         return str(e)
+    if callback_type == "failure":
+        return f"{CAPTURE_MESSAGE_CONTENT_VAR} needs callback_type 'success' or 'success_and_failure'"
     return None
 
 
@@ -126,7 +128,7 @@ _VAR_FAMILIES: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 _FAMILY_OPTION_VARS: Final[frozenset[str]] = frozenset(
-    {*_SHARED_OPTION_VARS, _ARIZE_OTLP_PROTOCOL_VAR, *_ARIZE_SAMPLING_RATE_VARS}
+    {_LANGFUSE_SPAN_SCOPE_VAR, _ARIZE_OTLP_PROTOCOL_VAR, *_ARIZE_SAMPLING_RATE_VARS}
 )
 
 
@@ -198,30 +200,38 @@ def cross_entry_family_error(
     )
 
 
-def _conflicting_option_error(var: str, incoming: str, stored_vars_by_entry: Sequence[Mapping[str, str]]) -> str | None:
+def conflicting_span_scope_error(
+    callback_vars: Mapping[str, str] | None,
+    stored_vars_by_entry: Sequence[Mapping[str, str]],
+) -> str | None:
+    incoming: Final = None if callback_vars is None else callback_vars.get(_LANGFUSE_SPAN_SCOPE_VAR)
+    if incoming is None:
+        return None
     return next(
         (
-            f"{var} is already set to {stored!r} by another callback entry. "
-            f"Every entry shares one value: remove that entry or send the same value."
+            f"{_LANGFUSE_SPAN_SCOPE_VAR} is already set to {stored!r} by another callback entry. "
+            f"Every entry shares one scope: remove that entry or send the same value."
             for entry in stored_vars_by_entry
-            if (stored := entry.get(var)) not in (None, incoming)
+            if (stored := entry.get(_LANGFUSE_SPAN_SCOPE_VAR)) not in (None, incoming)
         ),
         None,
     )
 
 
-def conflicting_shared_option_error(
+def conflicting_capture_error(
+    callback_name: str,
     callback_vars: Mapping[str, str] | None,
-    stored_vars_by_entry: Sequence[Mapping[str, str]],
+    stored_entries: Sequence[tuple[str | None, Mapping[str, str]]],
 ) -> str | None:
-    if not callback_vars:
+    incoming: Final = None if callback_vars is None else callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)
+    if incoming is None:
         return None
-    incoming_by_var: Final = {var: callback_vars[var] for var in _SHARED_OPTION_VARS if var in callback_vars}
     return next(
         (
-            error
-            for var, incoming in incoming_by_var.items()
-            if (error := _conflicting_option_error(var, incoming, stored_vars_by_entry)) is not None
+            f"{CAPTURE_MESSAGE_CONTENT_VAR} is already set to {stored!r} by another {callback_name} entry. "
+            f"Every {callback_name} entry shares one value: remove that entry or send the same value."
+            for name, entry_vars in stored_entries
+            if name == callback_name and (stored := entry_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)) not in (None, incoming)
         ),
         None,
     )
@@ -235,17 +245,31 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
         return None
     entry_vars: Final = tuple(_entry_callback_vars(entry) for entry in entries)
+    named_vars: Final = tuple(zip((_entry_callback_name(entry) for entry in entries), entry_vars))
     return next(
         (
             error
             for error in (
                 *(_logging_entry_error(entry) for entry in entries),
-                *(conflicting_shared_option_error(entry_vars[i], entry_vars[:i]) for i in range(len(entry_vars))),
+                *(conflicting_span_scope_error(entry_vars[i], entry_vars[:i]) for i in range(len(entry_vars))),
+                *(_conflicting_entry_capture_error(named_vars[i], named_vars[:i]) for i in range(len(named_vars))),
             )
             if error is not None
         ),
         None,
     )
+
+
+def _entry_callback_name(entry: object) -> str | None:
+    callback_name: Final = entry.get("callback_name") if isinstance(entry, Mapping) else None
+    return callback_name if isinstance(callback_name, str) else None
+
+
+def _conflicting_entry_capture_error(
+    entry: tuple[str | None, Mapping[str, str]], earlier: Sequence[tuple[str | None, Mapping[str, str]]]
+) -> str | None:
+    callback_name, callback_vars = entry
+    return None if callback_name is None else conflicting_capture_error(callback_name, callback_vars, earlier)
 
 
 def _entry_callback_vars(entry: object) -> Mapping[str, str]:

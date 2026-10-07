@@ -5,7 +5,7 @@ import random
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -50,6 +50,7 @@ from litellm.integrations.otel.model.config import (
     ExporterOwner,
     ExporterSpec,
     OpenTelemetryV2Config,
+    capture_message_content_from_env,
 )
 from litellm.integrations.otel.model.semconv import (
     DB,
@@ -662,6 +663,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         operator_sinks: 'Mapping[_SinkKey, "OtelSpanScope"]' = MappingProxyType({}),
         excluded_db_systems: frozenset[str] = frozenset(),
         default_capture: CaptureMessageContent = CaptureMessageContent.NO_CONTENT,
+        default_capture_by_backend: Mapping[str, CaptureMessageContent] = MappingProxyType({}),
         pending_drains: int = _MAX_PENDING_DRAINS,
         drain_pool: _DrainPool | None = None,
         sampling_draw: Callable[[], float] | None = None,
@@ -670,6 +672,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._draw: Final = sampling_draw if sampling_draw is not None else random.random
         self._excluded_db_systems: Final = excluded_db_systems
         self._default_capture: Final = default_capture
+        self._default_capture_by_backend: Final = default_capture_by_backend
         self._drain_seconds: Final = shutdown_drain_seconds
         self._lock: Final = threading.Condition()
         self._closed = False  # guarded by ``_lock``: an unlocked read races the teardown it gates
@@ -712,13 +715,21 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         for held_span, held_destination in self._settle(trace_id, failed):
             self._forward(held_span, held_destination)
 
+    def _default_capture_for(self, destination: "OtelDestination") -> CaptureMessageContent:
+        backend: Final = destination.callback_name
+        return (
+            self._default_capture_by_backend.get(backend, self._default_capture) if backend else self._default_capture
+        )
+
     def _forward(self, span: ReadableSpan, destination: "OtelDestination") -> None:
         processor: Final = self._acquire(destination)
         if processor is None:
             return
         try:
             processor.on_end(
-                _scoped(_for_destination(span, destination, self._default_capture), destination.span_scope)
+                _scoped(
+                    _for_destination(span, destination, self._default_capture_for(destination)), destination.span_scope
+                )
             )
         except Exception as exc:  # noqa: BLE001  # one destination's failure must not cost the others their span
             verbose_logger.debug("OTel V2 fan-out: forwarding to %s failed: %s", destination.endpoint, exc)
@@ -1360,24 +1371,13 @@ def build_resource(config: OpenTelemetryV2Config) -> Resource:
 
 
 def _spec_processor(
-    spec: ExporterSpec,
-    use_simple_processor: bool | None,
-    global_captures: bool,
-    content_owner: str | None,
-    owner_captures: bool | None,
+    spec: ExporterSpec, use_simple_processor: bool | None, strip_message_content: bool
 ) -> SpanProcessor:
     exporting: Final = _processor_for(
         _exporter_from_spec(spec),
         (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
     )
-    if owner_captures is None:
-        return exporting
-    captures: Final = (
-        owner_captures
-        if content_owner is not None and spec.owner is not None and spec.owner.value == content_owner
-        else global_captures
-    )
-    return exporting if captures else _MessageContentFilter(exporting)
+    return _MessageContentFilter(exporting) if strip_message_content else exporting
 
 
 def build_tracer_provider(
@@ -1386,8 +1386,7 @@ def build_tracer_provider(
     baggage_processor: SpanProcessor | None = None,
     use_simple_processor: bool | None = None,
     tenant_overrides: bool = False,
-    content_owner: str | None = None,
-    owner_captures: bool | None = None,
+    strip_message_content: bool = False,
 ) -> TracerProvider:
     """Build the shared :class:`TracerProvider`.
 
@@ -1406,8 +1405,9 @@ def build_tracer_provider(
 
     ``config.langfuse_span_scope`` narrows the exporter owned by ``langfuse_otel``
     alone; a collector or any other backend in the same config keeps the full tree.
-    ``content_owner`` and ``owner_captures`` set the content policy for a routed
-    provider's owned exporter; its other exporters follow the global policy.
+    ``strip_message_content`` removes prompt and response content before every
+    exporter, for a routed provider whose spans can carry content another
+    destination asked for.
     """
     provider: Final = TracerProvider(resource=build_resource(config))
     if baggage_processor is None:
@@ -1423,13 +1423,7 @@ def build_tracer_provider(
     for spec in config.exporters:
         if spec.requires_headers and not spec.headers:
             continue
-        processor = _spec_processor(
-            spec,
-            use_simple_processor,
-            config.capture_span_content,
-            content_owner,
-            owner_captures,
-        )
+        processor = _spec_processor(spec, use_simple_processor, strip_message_content)
         owner = spec.owner.value if tenant_overrides and spec.owner is not None else None
         scope = _operator_scope(config, spec)
         sink = _sink_key(spec.endpoint, parse_headers(spec.headers)) if _exports_to_the_wire(spec) else None
@@ -1475,9 +1469,19 @@ def attach_tenant_fan_out(
             TenantFanOutSpanProcessor(
                 operator_sinks=operator_sink_scopes(*configs),
                 excluded_db_systems=excluded_db_systems,
-                default_capture=(configs[0].capture_message_content if configs else CaptureMessageContent.NO_CONTENT),
+                default_capture=capture_message_content_from_env(),
+                default_capture_by_backend=MappingProxyType(dict(_owned_capture_modes(configs))),
             )
         )
+
+
+def _owned_capture_modes(
+    configs: Sequence[OpenTelemetryV2Config],
+) -> Iterator[tuple[str, CaptureMessageContent]]:
+    for config in configs:
+        for spec in config.exporters:
+            if spec.owner is not None:
+                yield spec.owner.value, config.capture_message_content
 
 
 def deliverable_destinations(

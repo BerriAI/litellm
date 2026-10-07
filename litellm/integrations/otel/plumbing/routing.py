@@ -24,11 +24,7 @@ from opentelemetry.trace import Tracer
 
 from litellm._logging import verbose_logger
 from litellm.constants import OTEL_SERVICE_NAME_METADATA_KEYS
-from litellm.integrations.otel.model.config import (
-    ExporterSpec,
-    OpenTelemetryV2Config,
-    parse_capture_message_content,
-)
+from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.plumbing.context import destination_backends
 from litellm.integrations.otel.plumbing.providers import (
     build_tracer_provider,
@@ -73,7 +69,7 @@ _MAX_RETIRED_PROVIDERS: Final = 64
 
 _HeaderItems: TypeAlias = tuple[tuple[str, str], ...]
 
-_RouteKey: TypeAlias = tuple[_HeaderItems, _HeaderItems, str | None, str | None, bool]
+_RouteKey: TypeAlias = tuple[_HeaderItems, _HeaderItems, str | None, str | None]
 
 _NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
@@ -253,26 +249,15 @@ class TenantTracerCache:
         # A fixed per-integration region endpoint (New Relic us/eu), never a
         # caller-supplied host; ``None`` keeps the preset's own endpoint.
         endpoint: Final = dynamic_otlp_endpoint(self._callback_name, dynamic_params)
-        configured_capture: Final = (
-            parse_capture_message_content(dynamic_params.get("capture_message_content"))
-            if dynamic_params is not None
-            else None
-        )
-        owner_captures: Final = (
-            configured_capture.captures_span
-            if credential_headers and configured_capture is not None
-            else self._config.capture_span_content
-        )
         cache_key: Final = (
             tuple(sorted(credential_headers.items())),
             tuple(sorted(project_headers.items())),
             endpoint,
             service_name,
-            owner_captures,
         )
         with self._lock:
             provider: Final = self._cached_provider_locked(
-                cache_key, credential_headers, project_headers, endpoint, service_name, owner_captures
+                cache_key, credential_headers, project_headers, endpoint, service_name
             )
             self._open_span_counts[provider] = self._open_span_counts.get(provider, 0) + 1
             evicted: Final = self._evicted_on_overflow_locked()
@@ -291,7 +276,6 @@ class TenantTracerCache:
         project_headers: Mapping[str, str],
         endpoint: str | None,
         service_name: str | None,
-        owner_captures: bool,
     ) -> TracerProvider:
         cached: Final = self._providers.get(cache_key)
         if cached is not None:
@@ -299,8 +283,7 @@ class TenantTracerCache:
             return cached
         built: Final = build_tracer_provider(
             self._routed_config(credential_headers, project_headers, endpoint, service_name),
-            content_owner=self._callback_name if credential_headers else None,
-            owner_captures=owner_captures,
+            strip_message_content=not self._config.capture_span_content,
         )
         self._providers[cache_key] = built
         return built

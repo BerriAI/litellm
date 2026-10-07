@@ -13,10 +13,9 @@ from typing import Final
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.otel.model.config import parse_capture_message_content
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
-from litellm.types.utils import OtelSpanScope, StandardCallbackDynamicParams
+from litellm.types.utils import CaptureMessageContent, OtelSpanScope, StandardCallbackDynamicParams
 
 #: An endpoint plus the OTLP transport to reach it with, or ``None`` when the backend
 #: names no destination. The transport is ``None`` where the backend has only one.
@@ -188,6 +187,7 @@ def destination_for(
     callback_name: str,
     params: StandardCallbackDynamicParams,
     service_name: str | None = None,
+    capture_message_content: CaptureMessageContent | None = None,
 ) -> OtelDestination | None:
     """The destination ``params`` names for ``callback_name``, or ``None``.
 
@@ -218,7 +218,7 @@ def destination_for(
         callback_name=callback_name,
         protocol=protocol,
         span_scope=_span_scope(callback_name, params),
-        capture_message_content=parse_capture_message_content(params.get("capture_message_content")),
+        capture_message_content=capture_message_content,
         success_sampling_rate=success_sampling_rate,
         error_sampling_rate=error_sampling_rate,
     )

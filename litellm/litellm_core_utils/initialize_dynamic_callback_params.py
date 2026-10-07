@@ -154,10 +154,10 @@ _request_blocked_callback_params: Final = frozenset(
     }
 )
 
-# Params that must reach ``standard_callback_dynamic_params`` only
+# Request-blocked params that must still reach ``standard_callback_dynamic_params``
 # when the proxy itself stamped them from admin-configured team/key callback
 # settings (the trusted-vars channel). The OTel per-tenant tracer routing reads
-# ``standard_callback_dynamic_params``, so without this overlay such a param
+# ``standard_callback_dynamic_params``, so without this overlay a blocked param
 # could never drive routing at all.
 _trusted_overlay_callback_params: Final = frozenset(
     {
@@ -165,7 +165,6 @@ _trusted_overlay_callback_params: Final = frozenset(
         "newrelic_region",
         "signoz_ingestion_endpoint",
         "signoz_ingestion_key",
-        "capture_message_content",
     }
 )
 
