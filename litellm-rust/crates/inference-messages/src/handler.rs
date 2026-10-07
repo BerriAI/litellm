@@ -174,10 +174,12 @@ async fn send(
 
 async fn provider_error(response: reqwest::Response) -> Error {
     let status = response.status().as_u16();
+    let request_url = Some(response.url().to_string());
     match response.text().await {
         Ok(text) => {
             log_error_body(status, &text);
             Error::Transport(TransportError::Http {
+                request_url,
                 status,
                 body: truncate_error_body(&text),
             })

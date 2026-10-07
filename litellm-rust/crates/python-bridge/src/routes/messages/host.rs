@@ -3,7 +3,6 @@ use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
-use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, messages_body,
     route::{Messages, MessagesStreamHead},
@@ -19,7 +18,7 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::{RustUpstreamError, route_error_to_pyerr},
+    errors::route_error_to_pyerr,
     marshal::{optional_timeout, python_timeout_seconds},
 };
 
@@ -65,13 +64,6 @@ fn merge_headers(
 
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
     match error {
-        Error::Transport(TransportError::Http { status, body }) => {
-            let error = RustUpstreamError::new_err((status, body));
-            error
-                .value(py)
-                .setattr("headers", Vec::<(String, String)>::new())?;
-            Ok(error)
-        }
         Error::InvalidRequest(message) => {
             let error = PyValueError::new_err(message.to_string());
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
@@ -336,6 +328,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use litellm_http::transport::Error as TransportError;
 
     fn map(value: Value) -> Map<String, Value> {
         serde_json::from_value(value).unwrap()
@@ -370,7 +363,7 @@ mod tests {
     #[case::missing_field(Error::MissingField("max_tokens"), true)]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
     #[case::upstream_failure(
-        Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),
+        Error::Transport(TransportError::Http { request_url: None,  status: 400, body: "bad".into() }),
         false,
     )]
     fn only_request_rejections_carry_the_request_error_marker(

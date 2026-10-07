@@ -400,3 +400,37 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
         .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
     assert_eq!(optional_params, json!({"max_tokens": 16}));
 }
+
+#[rstest]
+#[tokio::test]
+async fn an_http_failure_keeps_the_url_rewritten_by_the_host(call: MessagesCall) {
+    let upstream = upstream([ResponseTemplate::new(429).set_body_string("slow down")]).await;
+    let rewritten = format!("{}/rewritten/messages", upstream.uri());
+    let target = rewritten.clone();
+    let host = RecordingHost::new(
+        authenticated(call, "http://127.0.0.1:1".into()),
+        Box::new(move |wire| {
+            Ok(WireRequest {
+                url: target.clone(),
+                ..wire
+            })
+        }),
+    );
+    let error = run_through(&host)
+        .await
+        .expect_err("provider rejects the rewritten request");
+    let Error::Transport(litellm_http::transport::Error::Http {
+        request_url,
+        status,
+        ..
+    }) = error
+    else {
+        panic!("expected an HTTP failure");
+    };
+    assert_eq!(status, 429);
+    assert_eq!(request_url, Some(rewritten));
+    assert_eq!(
+        only_request(&upstream).await.url.path(),
+        "/rewritten/messages"
+    );
+}

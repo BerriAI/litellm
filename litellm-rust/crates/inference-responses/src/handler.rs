@@ -66,8 +66,10 @@ pub(super) async fn execute(
                 .map_err(network)?;
             let status = response.status().as_u16();
             if !response.status().is_success() {
+                let request_url = Some(response.url().to_string());
                 let body = response.text().await.map_err(network)?;
                 return Err(litellm_http::transport::Error::Http {
+                    request_url,
                     status,
                     body: litellm_http::request::truncate_error_body(&body),
                 }

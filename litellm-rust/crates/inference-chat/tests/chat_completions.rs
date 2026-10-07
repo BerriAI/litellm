@@ -204,6 +204,11 @@ async fn an_upstream_error_status_keeps_its_code_and_body(
     assert_eq!(
         error,
         Error::Transport(TransportError::Http {
+            request_url: Some(format!(
+                "{}{}",
+                upstream.uri(),
+                only_request(&upstream).await.url.path()
+            )),
             status,
             body: "slow down".into()
         })
