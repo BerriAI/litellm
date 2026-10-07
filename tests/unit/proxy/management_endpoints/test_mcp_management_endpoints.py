@@ -58,6 +58,7 @@ def generate_mock_mcp_server_db_record(
     url: str = "https://db-server.example.com/mcp",
     transport: str = "sse",
     auth_type: Optional[str] = None,
+    rpm: int | None = None,
 ) -> LiteLLM_MCPServerTable:
     """Generate a mock MCP server record from database"""
     now = datetime.now()
@@ -71,6 +72,7 @@ def generate_mock_mcp_server_db_record(
         updated_at=now,
         created_by="test_user",
         updated_by="test_user",
+        rpm=rpm,
     )
 
 
@@ -4080,6 +4082,7 @@ class TestUpdateMCPServer:
             url="https://test.example.com/mcp",
             transport="http",
         )
+        assert existing_server.rpm is None
         existing_server.extra_headers = []  # Initially empty
 
         # Create update request with extra_headers
@@ -4087,6 +4090,7 @@ class TestUpdateMCPServer:
             server_id="test-server-1",
             alias="Updated Test Server",
             extra_headers=["X-Custom-Header", "X-Another-Header"],
+            rpm=5,
         )
 
         # Mock the updated server with extra_headers
@@ -4095,6 +4099,7 @@ class TestUpdateMCPServer:
             alias="Updated Test Server",
             url="https://test.example.com/mcp",
             transport="http",
+            rpm=5,
         )
         updated_server.extra_headers = ["X-Custom-Header", "X-Another-Header"]
 
@@ -4148,10 +4153,12 @@ class TestUpdateMCPServer:
                 "X-Another-Header",
             ]
             assert called_payload.alias == "Updated Test Server"
+            assert called_payload.rpm == 5
 
             # Verify the result includes extra_headers
             assert result.extra_headers == ["X-Custom-Header", "X-Another-Header"]
             assert result.alias == "Updated Test Server"
+            assert result.rpm == 5
 
 
 class TestAddMCPServerAtomicity:
@@ -4174,9 +4181,10 @@ class TestAddMCPServerAtomicity:
             alias="echo",
             url="https://echo.example.com/mcp",
             transport=MCPTransport.http,
+            rpm=5,
         )
         admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
-        created_server = generate_mock_mcp_server_db_record(server_id="created-1", alias="echo")
+        created_server = generate_mock_mcp_server_db_record(server_id="created-1", alias="echo", rpm=5)
 
         mock_manager = MagicMock()
         mock_manager.add_server = AsyncMock()
@@ -4203,8 +4211,10 @@ class TestAddMCPServerAtomicity:
             result = await add_mcp_server(payload=payload, user_api_key_dict=admin)
 
         create_mock.assert_awaited_once()
+        assert create_mock.call_args.args[1].rpm == 5
         mock_manager.reload_servers_from_database.assert_awaited_once()
         assert result.server_id == "created-1"
+        assert result.rpm == 5
 
     @pytest.mark.asyncio
     async def test_create_500s_and_skips_registry_when_db_write_fails(self):

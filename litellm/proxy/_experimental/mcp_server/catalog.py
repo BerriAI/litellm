@@ -952,24 +952,48 @@ async def aggregate_gateway_tools(
     prefetched: Mapping[str, OAuthCredentialPayload],
     *,
     record_listing: bool = False,
+    enforce_rate_limits: bool = True,
 ) -> AggregateToolListing:
     import time
 
-    from mcp.types import PaginatedRequestParams
+    from mcp.types import ListToolsResult, PaginatedRequestParams
     from pydantic import TypeAdapter
 
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
         SERVER_OUTCOMES_META_KEY,
         AggregateToolListing,
         ServerOutcome,
+        classify_list_exception,
     )
-    from litellm.proxy._experimental.mcp_server.operations import _aggregate_server_key, global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.operations import (
+        _aggregate_server_key,
+        _mcp_server_rate_limit_rejection,
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
     async with global_mcp_server_manager.catalog.operation() as snapshot:
         servers: Final = {server.server_id: server for server in allowed}
         listing_updates: Final = ExitStack()
+        rejections: Final[list[ProxyRateLimitError]] = []  # mutable-ok: concurrent fetches share first-page errors
 
         async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
+            if enforce_rate_limits:
+                error: Final = await _mcp_server_rate_limit_rejection(servers[server_id], context.user_api_key_auth)
+                if error is not None:
+                    if cursor is not None:
+                        raise error
+                    rejections.append(error)
+                    return ListToolsResult(
+                        tools=[],
+                        _meta={
+                            SERVER_OUTCOMES_META_KEY: {
+                                _aggregate_server_key(servers[server_id]): classify_list_exception(error).model_dump(
+                                    mode="json"
+                                )
+                            }
+                        },
+                    )
             result, outcome = await get_filtered_server_tools(
                 servers[server_id],
                 context=context,
@@ -1003,6 +1027,8 @@ async def aggregate_gateway_tools(
             fetch=fetch,
             now=int(time.time()),
         )
+        if params.cursor is None and servers and len(rejections) == len(servers):
+            raise rejections[0]
         listing_updates.close()
         return AggregateToolListing(
             tools=result.tools,
@@ -1063,6 +1089,7 @@ async def list_gateway_catalog(
         global_mcp_server_manager,
         raise_denied_scoped_mcp_access,
     )
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
     context = replace(context, _caller=await MCPRequestHandler.refresh_catalog_authority(context.user_api_key_auth))
     params: Final = request.params or PaginatedRequestParams()
@@ -1080,6 +1107,7 @@ async def list_gateway_catalog(
                 requested_names=list(scope), user_api_key_auth=caller, client_ip=client_ip
             )
         servers: Final = {server.server_id: server for server in allowed}
+        rejections: Final[list[ProxyRateLimitError]] = []  # mutable-ok: concurrent fetches share first-page errors
 
         async def fetch(server_id: str, cursor: str | None) -> CatalogListResult:
             server: Final = servers[server_id]
@@ -1090,7 +1118,26 @@ async def list_gateway_catalog(
                 SERVER_OUTCOMES_META_KEY,
                 classify_list_exception,
             )
-            from litellm.proxy._experimental.mcp_server.operations import _aggregate_server_key
+            from litellm.proxy._experimental.mcp_server.operations import (
+                _aggregate_server_key,
+                _mcp_server_rate_limit_rejection,
+            )
+
+            error: Final = await _mcp_server_rate_limit_rejection(server, caller)
+            if error is not None:
+                if cursor is not None:
+                    raise error
+                rejections.append(error)
+                return combine_optional_catalog(
+                    request,
+                    (),
+                    None,
+                    {
+                        SERVER_OUTCOMES_META_KEY: {
+                            _aggregate_server_key(server): classify_list_exception(error).model_dump(mode="json")
+                        }
+                    },
+                )
 
             try:
                 page: Final = await fetch_optional_catalog_page(context, request, server, allowed, cursor)
@@ -1126,6 +1173,8 @@ async def list_gateway_catalog(
             fetch=fetch,
             now=int(time.time()),
         )
+        if params.cursor is None and servers and len(rejections) == len(servers):
+            raise rejections[0]
         from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
             SERVER_OUTCOMES_META_KEY,
             ServerOutcome,

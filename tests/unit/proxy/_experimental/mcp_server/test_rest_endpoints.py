@@ -1206,6 +1206,87 @@ class TestTestToolsList:
 class TestListToolsRestAPI:
     pytestmark = pytest.mark.asyncio
 
+    async def test_single_server_rate_limit_returns_429_without_fetching_tools(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        server: Final = MCPServer(
+            server_id="rate-limited-server",
+            name="rate-limited-server",
+            server_name="rate-limited-server",
+            transport=MCPTransport.http,
+        )
+        caller: Final = UserAPIKeyAuth()
+        manager: Final = MCPServerManager()
+        monkeypatch.setitem(manager.registry, server.server_id, server)
+        enforcement: Final = AsyncMock(side_effect=ProxyRateLimitError(detail="server RPM exceeded"))
+        proxy_logging: Final = MagicMock(enforce_mcp_server_rate_limits=enforcement)
+        upstream: Final = AsyncMock(return_value=[Tool(name="should-not-list", inputSchema={})])
+
+        async def allowed_servers(*_: object, **__: object) -> list[str]:
+            return [server.server_id]
+
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", AsyncMock(return_value=[caller]))
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+        monkeypatch.setattr(manager, "get_allowed_mcp_servers", allowed_servers)
+        monkeypatch.setattr(manager, "filter_server_ids_by_ip_with_info", lambda ids, _ip: (ids, 0))
+        monkeypatch.setattr(manager, "_get_tools_from_server", upstream)
+
+        with pytest.raises(HTTPException) as error:
+            await rest_endpoints.list_tool_rest_api(
+                _build_request(path="/mcp-rest/tools/list", method="GET"),
+                server_id=server.server_id,
+                user_api_key_dict=caller,
+            )
+
+        assert error.value.status_code == 429
+        enforcement.assert_awaited_once_with(caller, server)
+        upstream.assert_not_awaited()
+
+    async def test_admin_unfiltered_tools_list_does_not_enforce_server_rpm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy._types import LitellmUserRoles
+
+        server: Final = MCPServer(
+            server_id="admin-unfiltered-server",
+            name="admin-unfiltered-server",
+            server_name="admin-unfiltered-server",
+            transport=MCPTransport.http,
+            allowed_tools=["enabled-tool"],
+        )
+        caller: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        manager: Final = MCPServerManager()
+        monkeypatch.setitem(manager.registry, server.server_id, server)
+        enforcement: Final = AsyncMock()
+        proxy_logging: Final = MagicMock(enforce_mcp_server_rate_limits=enforcement)
+        upstream: Final = AsyncMock(return_value=[Tool(name="disabled-tool", inputSchema={})])
+
+        async def allowed_servers(*_: object, **__: object) -> list[str]:
+            return [server.server_id]
+
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", AsyncMock(return_value=[caller]))
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+        monkeypatch.setattr(manager, "get_allowed_mcp_servers", allowed_servers)
+        monkeypatch.setattr(manager, "filter_server_ids_by_ip_with_info", lambda ids, _ip: (ids, 0))
+        monkeypatch.setattr(manager, "_get_tools_from_server", upstream)
+
+        result: Final = await rest_endpoints.list_tool_rest_api(
+            _build_request(path="/mcp-rest/tools/list", method="GET"),
+            server_id=server.server_id,
+            include_disabled_tools=True,
+            user_api_key_dict=caller,
+        )
+
+        assert [tool.name for tool in result["tools"]] == ["disabled-tool"]
+        enforcement.assert_not_awaited()
+        upstream.assert_awaited_once()
+
     async def test_rejects_disallowed_server(self, monkeypatch):
         async def fake_contexts(user_api_key_auth):
             return [user_api_key_auth]
