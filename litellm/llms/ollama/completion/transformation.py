@@ -187,6 +187,7 @@ class OllamaConfig(BaseConfig):
             "temperature",
             "seed",
             "frequency_penalty",
+            "presence_penalty",
             "stop",
             "response_format",
             "max_completion_tokens",
@@ -213,6 +214,8 @@ class OllamaConfig(BaseConfig):
                 optional_params["top_p"] = value
             elif param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
+            elif param == "presence_penalty":
+                optional_params["presence_penalty"] = value
             elif param == "stop":
                 optional_params["stop"] = value
             elif param == "reasoning_effort" and value is not None:

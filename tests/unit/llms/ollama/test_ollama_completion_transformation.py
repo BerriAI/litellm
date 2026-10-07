@@ -775,3 +775,15 @@ def test_transform_request_leaves_unreadable_images_untouched(payload: str) -> N
     data = _transform_image_request(payload, "png")
 
     assert data["images"] == [payload]
+
+
+def test_map_openai_params_forwards_presence_penalty() -> None:
+    config = OllamaConfig()
+
+    assert "presence_penalty" in config.get_supported_openai_params("test-model")
+    assert config.map_openai_params(
+        non_default_params={"presence_penalty": 0.5},
+        optional_params={},
+        model="test-model",
+        drop_params=False,
+    ) == {"presence_penalty": 0.5}
