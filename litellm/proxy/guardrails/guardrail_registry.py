@@ -3,23 +3,28 @@
 import asyncio
 import importlib
 import os
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain, count
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, TypeVar, cast
 
-from pydantic import ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, GUARDRAIL_ROTATION_ATTEMPTS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_tool_message_for_guardrail,
 )
+from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
+from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX, is_sensitive_callback_key
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
 )
@@ -54,6 +59,7 @@ from .guardrail_hooks.llm_as_a_judge import (
     initialize_guardrail as initialize_llm_as_a_judge,
 )
 from .guardrail_initializers import (
+    configured_event_hooks,
     initialize_bedrock,
     initialize_hide_secrets,
     initialize_lakera,
@@ -75,6 +81,129 @@ class _GuardrailRowLike(Protocol):
 def _guardrail_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_GuardrailsTable]":
     """Typed view of the guardrails table actions exposed by the Prisma repository."""
     return GuardrailsRepository(prisma_client).table
+
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_ARRAY: Final = TypeAdapter(list[object])
+
+
+def _as_json_object(value: object) -> dict[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return _JSON_OBJECT.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _as_json_array(value: object) -> list[object] | None:
+    return _JSON_ARRAY.validate_python(value) if isinstance(value, list) else None
+
+
+def contains_encrypted_marker(value: object, depth: int = 0) -> bool:
+    """True if any string in value, at any JSON depth, starts with the encrypted-value prefix."""
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return False
+    if isinstance(value, str):
+        return value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)
+    json_object: Final = _as_json_object(value)
+    if json_object is not None:
+        return any(contains_encrypted_marker(v, depth + 1) for v in json_object.values())
+    json_array: Final = _as_json_array(value)
+    return json_array is not None and any(contains_encrypted_marker(item, depth + 1) for item in json_array)
+
+
+def _encrypted_param(key: str, value: object, new_encryption_key: str | None, depth: int = 0) -> object:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return value
+    json_object: Final = _as_json_object(value)
+    if json_object is not None:
+        return {k: _encrypted_param(k, v, new_encryption_key, depth + 1) for k, v in json_object.items()}
+    json_array: Final = _as_json_array(value)
+    if json_array is not None:
+        return [_encrypted_param(key, item, new_encryption_key, depth + 1) for item in json_array]
+    if not (
+        isinstance(value, str)
+        and value
+        and is_sensitive_callback_key(key)
+        and not value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)
+    ):
+        return value
+    try:
+        return CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(value, new_encryption_key=new_encryption_key)
+    except Exception:  # noqa: BLE001  # no salt key or master key configured: store the value as written
+        return value
+
+
+def _decrypted_param(key: str, value: object, depth: int = 0) -> object:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return value
+    json_object: Final = _as_json_object(value)
+    if json_object is not None:
+        return {k: _decrypted_param(k, v, depth + 1) for k, v in json_object.items()}
+    json_array: Final = _as_json_array(value)
+    if json_array is not None:
+        return [_decrypted_param(key, item, depth + 1) for item in json_array]
+    if not (isinstance(value, str) and value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)):
+        return value
+    decrypted: Final = decrypt_value_helper(
+        value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX),
+        key=key,
+        exception_type="debug",
+        return_original_value=False,
+    )
+    return value if decrypted is None else decrypted
+
+
+def encrypt_guardrail_litellm_params(
+    litellm_params: Mapping[str, object], new_encryption_key: str | None = None
+) -> dict[str, object]:
+    """Encrypt every string stored under a sensitive key (at any dict depth) for the guardrails table."""
+    return {key: _encrypted_param(key, value, new_encryption_key) for key, value in litellm_params.items()}
+
+
+def decrypt_guardrail_litellm_params(litellm_params: Mapping[str, object]) -> dict[str, object]:
+    """Decrypt values written by encrypt_guardrail_litellm_params; plaintext values pass through unchanged."""
+    return {key: _decrypted_param(key, value) for key, value in litellm_params.items()}
+
+
+def guardrail_from_db_row(row: Iterable[tuple[str, object]]) -> Guardrail:
+    """Build a Guardrail from a guardrails table row with its litellm_params decrypted."""
+    fields: Final = dict(row)
+    stored_params: Final = _as_json_object(fields.get("litellm_params"))
+    if stored_params is None:
+        return Guardrail(**fields)
+    return Guardrail(**{**fields, "litellm_params": decrypt_guardrail_litellm_params(stored_params)})
+
+
+async def _rotate_guardrail_row(
+    prisma_client: PrismaClient,
+    row: "prisma_models.LiteLLM_GuardrailsTable | None",
+    encryption_key: str,
+    attempts_left: int = GUARDRAIL_ROTATION_ATTEMPTS,
+) -> int:
+    """Re-encrypt one row's params under encryption_key with a compare-and-set on updated_at.
+    A row edited since it was read is re-read and retried, up to attempts_left writes. Returns 1 when rewritten."""
+    if row is None or not isinstance(row.litellm_params, Mapping):
+        return 0
+    rotated_params: Final = encrypt_guardrail_litellm_params(
+        decrypt_guardrail_litellm_params(row.litellm_params), new_encryption_key=encryption_key
+    )
+    if rotated_params == row.litellm_params:
+        return 0
+    if await _guardrail_table(prisma_client).update_many(
+        where={"guardrail_id": row.guardrail_id, "updated_at": row.updated_at},
+        data={"litellm_params": safe_dumps(rotated_params)},
+    ):
+        return 1
+    if attempts_left <= 1:
+        verbose_proxy_logger.warning(
+            "Guardrail %s kept changing during master key rotation; its secrets were not re-encrypted",
+            row.guardrail_id,
+        )
+        return 0
+    latest_row: Final = await _guardrail_table(prisma_client).find_unique(where={"guardrail_id": row.guardrail_id})
+    return await _rotate_guardrail_row(prisma_client, latest_row, encryption_key, attempts_left - 1)
 
 
 guardrail_initializer_registry: Final = {
@@ -295,7 +424,7 @@ class GuardrailRegistry:
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
                 litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
-            litellm_params: Final[str] = safe_dumps(litellm_params_dict)
+            litellm_params: Final[str] = safe_dumps(encrypt_guardrail_litellm_params(litellm_params_dict))
             guardrail_info: Final[str] = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Create guardrail in DB
@@ -341,7 +470,7 @@ class GuardrailRegistry:
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
                 litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
-            litellm_params: Final[str] = safe_dumps(litellm_params_dict)
+            litellm_params: Final[str] = safe_dumps(encrypt_guardrail_litellm_params(litellm_params_dict))
             guardrail_info: Final[str] = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Update in DB
@@ -357,8 +486,7 @@ class GuardrailRegistry:
             if updated_guardrail is None:
                 raise ValueError(f"Guardrail not found, passed guardrail_id={guardrail_id}")
 
-            # Convert to dict and return
-            return dict(updated_guardrail)
+            return dict(guardrail_from_db_row(updated_guardrail))
         except Exception as e:
             raise Exception(f"Error updating guardrail in DB: {e}")
 
@@ -378,7 +506,7 @@ class GuardrailRegistry:
 
             guardrails: Final[list[Guardrail]] = []
             for guardrail in guardrails_from_db:
-                guardrails.append(Guardrail(**(dict(guardrail))))
+                guardrails.append(guardrail_from_db_row(guardrail))
 
             return guardrails
         except Exception as e:
@@ -394,7 +522,7 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))
+            return guardrail_from_db_row(guardrail)
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
@@ -410,9 +538,19 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))
+            return guardrail_from_db_row(guardrail)
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
+
+    @staticmethod
+    async def rotate_guardrail_params_master_key(prisma_client: PrismaClient, new_master_key: str) -> int:
+        """Re-encrypt every guardrail row's sensitive litellm_params under the key the proxy decrypts with after the
+        rotation (LITELLM_SALT_KEY when set, otherwise new_master_key). Returns the number of rows rewritten."""
+        salt_key: Final = os.environ.get(SALT_KEY_ENV_VAR)
+        encryption_key: Final = new_master_key if salt_key is None else salt_key
+        rows: Final = await _guardrail_table(prisma_client).find_many()
+        rotated = [await _rotate_guardrail_row(prisma_client, row, encryption_key) for row in rows]
+        return sum(rotated)
 
 
 def _apply_configured_bool_overrides(instance: CustomGuardrail, litellm_params: LitellmParams) -> None:
@@ -436,9 +574,46 @@ def _as_callback_tuple(
     return (initialized,)
 
 
-def _configure_callback_scoping(
+def _logging_only_scope_error(
     custom_guardrail_callback: CustomGuardrail, guardrail_name: str, litellm_params: LitellmParams
+) -> str | None:
+    logging_only_scope: Final = litellm_params.logging_only_scope
+    if logging_only_scope is not None and GuardrailEventHooks.logging_only.value not in configured_event_hooks(
+        litellm_params.mode
+    ):
+        return (
+            f"Guardrail {guardrail_name}: logging_only_scope is set, but mode does not include logging_only, "
+            "so it would never apply. Add logging_only to mode or remove logging_only_scope."
+        )
+    if logging_only_scope in ("input", "output") and not custom_guardrail_callback.supports_logging_only_scope():
+        return (
+            f"Guardrail {guardrail_name}: logging_only_scope={logging_only_scope!r} is not supported by this "
+            "guardrail, whose logging_only hook scans on its own. Remove logging_only_scope."
+        )
+    return None
+
+
+def _configure_callback_scoping(
+    custom_guardrail_callback: CustomGuardrail,
+    guardrail_name: str,
+    litellm_params: LitellmParams,
+    *,
+    reject_invalid_logging_only_scope: bool = False,
 ) -> None:
+    logging_only_scope: Final = litellm_params.logging_only_scope
+    logging_only_scope_error: Final = _logging_only_scope_error(
+        custom_guardrail_callback, guardrail_name, litellm_params
+    )
+    if logging_only_scope_error is not None:
+        if reject_invalid_logging_only_scope:
+            raise ValueError(logging_only_scope_error)
+        verbose_proxy_logger.error(
+            "%s Ignoring logging_only_scope; the guardrail keeps its configured mode.",
+            logging_only_scope_error.replace("\r", "").replace("\n", ""),
+        )
+        custom_guardrail_callback.logging_only_scope = None
+    else:
+        custom_guardrail_callback.logging_only_scope = logging_only_scope
     for scoping_param in (
         "skip_system_message_in_guardrail",
         "skip_tool_message_in_guardrail",
@@ -459,6 +634,28 @@ def _configure_callback_scoping(
             "scanning, so no request content would ever be scanned. Remove one of the two."
         )
     _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
+
+
+_ParamsT = TypeVar("_ParamsT", bound=BaseModel)
+
+
+def parse_tolerant_litellm_params(
+    litellm_params_data: Mapping[str, object],
+    guardrail_name: str,
+    params_model: type[_ParamsT] = LitellmParams,
+) -> _ParamsT:
+    try:
+        return params_model(**litellm_params_data)
+    except ValidationError as validation_error:
+        if any(tuple(error["loc"]) != ("logging_only_scope",) for error in validation_error.errors()):
+            raise
+        verbose_proxy_logger.error(
+            "Guardrail %s: logging_only_scope=%r is not one of 'input', 'output' or 'both'. "
+            "Ignoring logging_only_scope; the guardrail keeps its configured mode.",
+            guardrail_name.replace("\r", "").replace("\n", ""),
+            str(litellm_params_data.get("logging_only_scope")).replace("\r", "").replace("\n", "")[:100],
+        )
+        return params_model(**MappingProxyType({**litellm_params_data, "logging_only_scope": None}))
 
 
 class InMemoryGuardrailHandler:
@@ -497,6 +694,8 @@ class InMemoryGuardrailHandler:
         config_file_path: str | None = None,
         llm_router: Optional["Router"] = None,
         source: Literal["db", "config"] = "config",
+        *,
+        reject_invalid_logging_only_scope: bool = False,
     ) -> Guardrail | None:
         """
         Initialize a guardrail from a dictionary and add it to the litellm callback manager
@@ -517,7 +716,10 @@ class InMemoryGuardrailHandler:
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
         if isinstance(litellm_params_data, dict):
-            litellm_params = LitellmParams(**litellm_params_data)
+            if reject_invalid_logging_only_scope:
+                litellm_params = LitellmParams(**litellm_params_data)
+            else:
+                litellm_params = parse_tolerant_litellm_params(litellm_params_data, guardrail["guardrail_name"])
         else:
             litellm_params = litellm_params_data
 
@@ -543,8 +745,18 @@ class InMemoryGuardrailHandler:
             config_file_path=config_file_path,
             llm_router=llm_router,
         )
-        for custom_guardrail_callback in created_callbacks:
-            _configure_callback_scoping(custom_guardrail_callback, guardrail["guardrail_name"], litellm_params)
+        try:
+            for custom_guardrail_callback in created_callbacks:
+                _configure_callback_scoping(
+                    custom_guardrail_callback,
+                    guardrail["guardrail_name"],
+                    litellm_params,
+                    reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
+                )
+        except Exception:
+            for custom_guardrail_callback in created_callbacks:
+                litellm.logging_callback_manager.remove_callback_from_all_lists(custom_guardrail_callback)
+            raise
 
         parsed_guardrail: Final = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),
@@ -592,6 +804,28 @@ class InMemoryGuardrailHandler:
         primary: Final = self.guardrail_id_to_custom_guardrail.get(guardrail_id)
         siblings: Final = self.guardrail_id_to_sibling_callbacks.get(guardrail_id, ())
         return (() if primary is None else (primary,)) + siblings
+
+    def _reject_invalid_logging_only_scope(self, guardrail_id: str, guardrail: Guardrail) -> None:
+        """
+        Strictly validate logging_only_scope on a row whose params are otherwise
+        unchanged, without rebuilding the live callback.
+
+        API write paths send the whole object, so an invalid scope must still be
+        rejected even when the write changed nothing else. But an unchanged row
+        must not force a teardown + re-append: initialize_guardrail appends the
+        rebuilt callback at the END of litellm.callbacks, so a no-op PUT would
+        reorder guardrails and change which one wins between a BLOCK and a MASK
+        guardrail over the same content.
+        """
+        params: Final = guardrail.get("litellm_params")
+        if not isinstance(params, (dict, LitellmParams)):
+            return
+        litellm_params: Final = LitellmParams(**params) if isinstance(params, dict) else params
+        guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
+        for custom_guardrail_callback in self._tracked_callbacks(guardrail_id):
+            scope_error = _logging_only_scope_error(custom_guardrail_callback, guardrail_name, litellm_params)
+            if scope_error is not None:
+                raise ValueError(scope_error)
 
     def initialize_custom_guardrail(
         self,
@@ -652,25 +886,26 @@ class InMemoryGuardrailHandler:
         guardrail_id: str,
         guardrail: Guardrail,
         source: Literal["db", "config"] = "db",
+        *,
+        reject_invalid_logging_only_scope: bool = False,
     ) -> None:
         """
-        Update a guardrail in memory
-
-        - updates the guardrail in memory
-        - updates the guardrail params in litellm.callback_manager
+        Update a guardrail in memory: a changed name or litellm_params rebuilds the
+        live callback from the new row (fail-closed: an invalid row keeps the
+        previous instance and raises), anything else only refreshes the stored row
         """
-        self.IN_MEMORY_GUARDRAILS[guardrail_id] = guardrail
-        self._sources[guardrail_id] = source
-
-        tracked_callbacks: Final = self._tracked_callbacks(guardrail_id)
-        if not tracked_callbacks:
+        updated_guardrail: Final = cast(Guardrail, {**guardrail, "guardrail_id": guardrail_id})
+        if self._has_guardrail_params_changed(guardrail_id, updated_guardrail):
+            self.reinitialize_guardrail(
+                guardrail=updated_guardrail,
+                source=source,
+                reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
+            )
             return
-        updated_litellm_params: Final = cast(LitellmParams, guardrail.get("litellm_params", {}))
-        tracked_callbacks[0].update_in_memory_litellm_params(litellm_params=updated_litellm_params)
-        for sibling_callback in tracked_callbacks[1:]:
-            sibling_stage = sibling_callback.event_hook
-            sibling_callback.update_in_memory_litellm_params(litellm_params=updated_litellm_params)
-            sibling_callback.event_hook = sibling_stage
+        if reject_invalid_logging_only_scope:
+            self._reject_invalid_logging_only_scope(guardrail_id, updated_guardrail)
+        self.IN_MEMORY_GUARDRAILS[guardrail_id] = updated_guardrail
+        self._sources[guardrail_id] = source
 
     def delete_in_memory_guardrail(self, guardrail_id: str) -> None:
         """
@@ -754,6 +989,7 @@ class InMemoryGuardrailHandler:
     @staticmethod
     def _normalize_litellm_params_for_comparison(
         params: LitellmParams | Mapping[str, object] | None,
+        guardrail_name: str,
     ) -> Mapping[str, object] | None:
         """
         Render litellm_params to a canonical dict so an in-memory LitellmParams and
@@ -770,7 +1006,7 @@ class InMemoryGuardrailHandler:
             return params.model_dump()
         if isinstance(params, dict):
             try:
-                return LitellmParams(**params).model_dump()
+                return parse_tolerant_litellm_params(params, guardrail_name).model_dump()
             except ValidationError as e:
                 verbose_proxy_logger.warning(
                     "Could not normalize guardrail litellm_params for comparison; treating the guardrail as changed. Error: %s",
@@ -793,8 +1029,12 @@ class InMemoryGuardrailHandler:
             return True
 
         # Compare litellm_params
-        existing_dict: Final = self._normalize_litellm_params_for_comparison(existing.get("litellm_params"))
-        new_dict: Final = self._normalize_litellm_params_for_comparison(new_guardrail.get("litellm_params"))
+        existing_dict: Final = self._normalize_litellm_params_for_comparison(
+            existing.get("litellm_params"), existing.get("guardrail_name", "Unknown")
+        )
+        new_dict: Final = self._normalize_litellm_params_for_comparison(
+            new_guardrail.get("litellm_params"), new_guardrail.get("guardrail_name", "Unknown")
+        )
 
         # Compare and identify specific differences
         changed_fields = {}
@@ -820,6 +1060,8 @@ class InMemoryGuardrailHandler:
         guardrail: Guardrail,
         config_file_path: str | None = None,
         source: Literal["db", "config"] = "config",
+        *,
+        reject_invalid_logging_only_scope: bool = False,
     ) -> Guardrail | None:
         """
         Force re-initialization of a guardrail even if it exists in memory.
@@ -849,7 +1091,12 @@ class InMemoryGuardrailHandler:
         # instance instead of leaving the guardrail silently removed: a guardrail
         # that was enforcing must never fail open because an update was bad.
         try:
-            return self.initialize_guardrail(guardrail=guardrail, config_file_path=config_file_path, source=source)
+            return self.initialize_guardrail(
+                guardrail=guardrail,
+                config_file_path=config_file_path,
+                source=source,
+                reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
+            )
         except Exception as init_error:
             if previous_guardrail is not None:
                 verbose_proxy_logger.exception(
@@ -864,9 +1111,48 @@ class InMemoryGuardrailHandler:
                     verbose_proxy_logger.exception("Restoring previous guardrail %s also failed", guardrail_id)
             raise ValueError(f"Guardrail initialization failed: {init_error}") from init_error
 
-    def sync_guardrail_from_db(self, guardrail: Guardrail, config_file_path: str | None = None) -> Guardrail | None:
+    def _with_loaded_values_where_undecryptable(self, guardrail_id: str, guardrail: Guardrail) -> Guardrail:
+        """Swap each DB litellm_params value that did not decrypt with the current key for the loaded guardrail's value,
+        or keep the loaded guardrail whole when it has no value for one of them."""
+        existing: Final = self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
+        stored_params: Final = guardrail.get("litellm_params")
+        db_params: Final = _as_json_object(
+            stored_params.model_dump() if isinstance(stored_params, BaseModel) else stored_params
+        )
+        if existing is None or db_params is None or not contains_encrypted_marker(db_params):
+            return guardrail
+        loaded_params: Final = self._normalize_litellm_params_for_comparison(
+            existing.get("litellm_params"), guardrail.get("guardrail_name", "Unknown")
+        )
+        verbose_proxy_logger.warning(
+            "Guardrail %s has litellm_params that do not decrypt with the current key; keeping the loaded values for "
+            "them. Restart the proxy if the master key was rotated.",
+            guardrail_id,
+        )
+        if loaded_params is None or any(
+            contains_encrypted_marker(value) and loaded_params.get(key) is None for key, value in db_params.items()
+        ):
+            return existing
+        return Guardrail(
+            **{
+                **guardrail,
+                "litellm_params": {
+                    key: loaded_params.get(key) if contains_encrypted_marker(value) else value
+                    for key, value in db_params.items()
+                },
+            }
+        )
+
+    def sync_guardrail_from_db(
+        self,
+        guardrail: Guardrail,
+        config_file_path: str | None = None,
+        *,
+        reject_invalid_logging_only_scope: bool = False,
+    ) -> Guardrail | None:
         """
         Sync a guardrail from DB - initializes if new, re-initializes if changed.
+        DB values that do not decrypt with the current key keep the loaded guardrail's values.
         This is the method to call during DB polling.
         """
         guardrail_id: Final = guardrail.get("guardrail_id")
@@ -874,16 +1160,21 @@ class InMemoryGuardrailHandler:
             verbose_proxy_logger.error("Cannot sync guardrail without guardrail_id")
             return None
 
-        if self._has_guardrail_params_changed(guardrail_id, guardrail):
-            guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
+        synced: Final = self._with_loaded_values_where_undecryptable(guardrail_id, guardrail)
+        if self._has_guardrail_params_changed(guardrail_id, synced):
+            guardrail_name: Final = synced.get("guardrail_name", "Unknown")
             verbose_proxy_logger.info(
                 "Guardrail '%s' (ID: %s) params changed, re-initializing...", guardrail_name, guardrail_id
             )
             return self.reinitialize_guardrail(
-                guardrail=guardrail,
+                guardrail=synced,
                 config_file_path=config_file_path,
                 source="db",
+                reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
             )
+
+        if reject_invalid_logging_only_scope:
+            self._reject_invalid_logging_only_scope(guardrail_id, synced)
 
         # Params unchanged but the entry is still DB-backed; make sure the
         # source marker reflects that even if it was previously set differently

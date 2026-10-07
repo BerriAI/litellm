@@ -3,7 +3,9 @@ Helper utilities for tracking the cost of built-in tools.
 """
 
 from collections.abc import Mapping
-from typing import Final, Literal
+from typing import Final, Literal, cast
+
+from pydantic import ValidationError
 
 import litellm
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
@@ -13,6 +15,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.types.llms.openai import (
     FileSearchTool,
     ResponsesAPIResponse,
+    ResponsesToolUsage,
     WebSearchOptions,
 )
 from litellm.types.utils import (
@@ -30,6 +33,17 @@ from litellm.types.utils import (
 def _output_item_type(output_item: object) -> str | None:
     item_type: Final = output_item.get("type") if isinstance(output_item, dict) else getattr(output_item, "type", None)
     return item_type if isinstance(item_type, str) else None
+
+
+def _reported_web_search_requests(response_object: ResponsesAPIResponse) -> int | None:
+    tool_usage: Final = getattr(response_object, "tool_usage", None)
+    if tool_usage is None:
+        return None
+    try:
+        web_search: Final = ResponsesToolUsage.model_validate(tool_usage).web_search
+    except ValidationError:
+        return None
+    return None if web_search is None else web_search.num_requests
 
 
 def _usage_reports_server_side_web_search_calls(usage: Usage) -> bool:
@@ -182,15 +196,19 @@ class StandardBuiltInToolCostTracking:
 
         Providers that report a request count in usage (gemini, anthropic, xai, vertex) are handled by
         get_cost_for_web_search_request and never reach here. This path prices per call, so it must count
-        the web_search_call items. Chat-completions responses only expose url_citation annotations with no
-        count, so they floor to a single billable search.
+        the web_search_call items, unless the response reports the billable count itself
+        (Bedrock's tool_usage.web_search.num_requests, which excludes open_page fetches). Chat-completions
+        responses only expose url_citation annotations with no count, so they floor to a single billable search.
         """
-        if isinstance(response_object, ResponsesAPIResponse):
-            count = sum(
-                1 for output_item in response_object.output if _output_item_type(output_item) == "web_search_call"
-            )
-            return max(count, 1)
-        return 1
+        if not isinstance(response_object, ResponsesAPIResponse):
+            return 1
+        reported: Final = _reported_web_search_requests(response_object)
+        if reported is not None:
+            return reported
+        count: Final = sum(
+            1 for output_item in response_object.output if _output_item_type(output_item) == "web_search_call"
+        )
+        return max(count, 1)
 
     @staticmethod
     def _handle_file_search_cost(
@@ -721,9 +739,10 @@ class StandardBuiltInToolCostTracking:
         return False
 
     @staticmethod
-    def _get_web_search_options(kwargs: dict) -> WebSearchOptions | None:
+    def get_web_search_options(kwargs: Mapping[str, object]) -> WebSearchOptions | None:
         if "web_search_options" in kwargs:
-            return WebSearchOptions(**kwargs.get("web_search_options", {}))
+            web_search_options: Final = cast(WebSearchOptions, kwargs.get("web_search_options", {}))
+            return WebSearchOptions(**web_search_options)
 
         tools: Final = StandardBuiltInToolCostTracking._get_tools_from_kwargs(
             kwargs=kwargs, tool_type="web_search_preview"
@@ -733,27 +752,31 @@ class StandardBuiltInToolCostTracking:
             for tool in tools:
                 if isinstance(tool, dict):
                     if StandardBuiltInToolCostTracking._is_web_search_tool_call(tool):
-                        return WebSearchOptions(**tool)
+                        return WebSearchOptions(**cast(WebSearchOptions, tool))
         return None
 
+    _get_web_search_options = get_web_search_options
+
     @staticmethod
-    def _get_tools_from_kwargs(kwargs: dict, tool_type: str) -> list[dict] | None:
+    def _get_tools_from_kwargs(kwargs: Mapping[str, object], tool_type: str) -> list[object] | None:
         if "tools" in kwargs:
-            return kwargs.get("tools", [])
+            return cast(list[object], kwargs.get("tools", []))
         return None
 
     @staticmethod
-    def _get_file_search_tool_call(kwargs: dict) -> FileSearchTool | None:
+    def get_file_search_tool_call(kwargs: Mapping[str, object]) -> FileSearchTool | None:
         tools: Final = StandardBuiltInToolCostTracking._get_tools_from_kwargs(kwargs, "file_search")
         if tools:
             for tool in tools:
                 if isinstance(tool, dict):
                     if StandardBuiltInToolCostTracking._is_file_search_tool_call(tool):
-                        return FileSearchTool(**tool)
+                        return FileSearchTool(**cast(FileSearchTool, tool))
         return None
 
+    _get_file_search_tool_call = get_file_search_tool_call
+
     @staticmethod
-    def _is_web_search_tool_call(tool: dict) -> bool:
+    def _is_web_search_tool_call(tool: Mapping[str, object]) -> bool:
         if tool.get("type", None) == "web_search_preview":
             return True
         if tool.get("type", None) == "web_search":
@@ -763,7 +786,7 @@ class StandardBuiltInToolCostTracking:
         return False
 
     @staticmethod
-    def _is_file_search_tool_call(tool: dict) -> bool:
+    def _is_file_search_tool_call(tool: Mapping[str, object]) -> bool:
         if tool.get("type", None) == "file_search":
             return True
         return False

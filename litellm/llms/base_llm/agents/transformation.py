@@ -10,7 +10,7 @@ InteractionsHTTPHandler).
 """
 
 from abc import ABC, abstractmethod
-from typing import Any
+from collections.abc import Mapping
 
 import httpx
 
@@ -35,7 +35,7 @@ class BaseAgentsAPIConfig(ABC):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict[str, Any],
+        litellm_params: Mapping[str, object],
     ) -> str:
         """Return the full URL for POST /agents (create)."""
 
@@ -43,7 +43,7 @@ class BaseAgentsAPIConfig(ABC):
     def validate_environment(
         self,
         headers: dict[str, str],
-        litellm_params: dict[str, Any],
+        litellm_params: dict[str, object],
     ) -> dict[str, str]:
         """Validate credentials and return auth headers."""
 
@@ -51,8 +51,8 @@ class BaseAgentsAPIConfig(ABC):
     def transform_create_request(
         self,
         name: str,
-        litellm_params: dict[str, Any],
-    ) -> dict[str, Any]:
+        litellm_params: Mapping[str, object],
+    ) -> dict[str, object]:
         """Map name + litellm_params to the provider's create-agent body."""
 
     @abstractmethod
@@ -71,8 +71,8 @@ class BaseAgentsAPIConfig(ABC):
     def transform_list_request(
         self,
         api_base: str | None,
-        litellm_params: dict[str, Any],
-    ) -> tuple[str, dict[str, Any]]:
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """Return (url, query_params) for GET /agents."""
 
     @abstractmethod
@@ -91,8 +91,8 @@ class BaseAgentsAPIConfig(ABC):
         self,
         name: str,
         api_base: str | None,
-        litellm_params: dict[str, Any],
-    ) -> tuple[str, dict[str, Any]]:
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """Return (url, query_params) for GET /agents/{name}."""
 
     @abstractmethod
@@ -112,7 +112,7 @@ class BaseAgentsAPIConfig(ABC):
         self,
         name: str,
         api_base: str | None,
-        litellm_params: dict[str, Any],
+        litellm_params: Mapping[str, object],
     ) -> str:
         """Return the URL for DELETE /agents/{name}."""
 
@@ -133,8 +133,8 @@ class BaseAgentsAPIConfig(ABC):
         self,
         name: str,
         api_base: str | None,
-        litellm_params: dict[str, Any],
-    ) -> tuple[str, dict[str, Any]]:
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """Return (url, query_params) for GET /agents/{name}/versions."""
 
     @abstractmethod

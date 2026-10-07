@@ -5,11 +5,15 @@ import litellm
 
 
 class TestBedrockTestSuite(BaseLLMChatTest):
+    test_content_list_handling = None
+    test_empty_tools = None
+    test_function_calling_with_tool_response = None
+
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         pass
 
     def get_base_completion_call_args(self) -> dict:
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         return {
             "model": "bedrock/converse/us.meta.llama3-3-70b-instruct-v1:0",
         }

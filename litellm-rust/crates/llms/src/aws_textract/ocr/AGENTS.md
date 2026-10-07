@@ -1,0 +1,12 @@
+- https://docs.aws.amazon.com/textract/latest/APIReference/Welcome.md
+- https://docs.aws.amazon.com/textract/latest/APIReference/API_Operations.md
+- https://docs.aws.amazon.com/textract/latest/APIReference/API_DetectDocumentText.md
+- https://docs.aws.amazon.com/textract/latest/APIReference/API_AnalyzeDocument.md
+- https://docs.aws.amazon.com/textract/latest/APIReference/API_StartDocumentTextDetection.md
+- https://docs.aws.amazon.com/textract/latest/APIReference/API_Document.md
+- https://docs.aws.amazon.com/textract/latest/APIReference/API_Block.md
+- https://docs.aws.amazon.com/textract/latest/dg/what-is.md
+- https://docs.aws.amazon.com/textract/latest/dg/sync.md
+- https://docs.aws.amazon.com/textract/latest/dg/async.md
+- https://docs.aws.amazon.com/textract/latest/dg/how-it-works-document-layout.md
+- https://docs.aws.amazon.com/textract/latest/dg/limits.md

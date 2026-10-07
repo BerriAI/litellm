@@ -11,7 +11,7 @@ Endpoints for /project operations
 #### PROJECT MANAGEMENT ####
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -22,7 +22,11 @@ from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamAccess, is_team_admin, is_team_member
+from litellm.proxy.management.teams.dependencies import get_team_access
+from litellm.proxy.management.users.service import org_admin_org_ids
 from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
+from litellm.proxy.management_endpoints.team_admin_field_permissions import team_admin_may_manage_projects
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
@@ -82,37 +86,69 @@ async def _check_user_permission_for_project(
     user_api_key_dict: UserAPIKeyAuth,
     team_id: str | None,
     prisma_client: PrismaClient,
+    general_settings: Mapping[str, object],
     require_admin: bool = False,
     team_object: LiteLLM_TeamTable | None = None,
 ) -> bool:
     """
     Check if user has permission to manage a project.
 
-    Returns True if user is proxy admin or team admin (when team_id provided).
+    Returns True if user is proxy admin, or a team admin of ``team_id`` when the
+    ``team_admin_editable_team_fields`` setting grants team admins the ``projects`` permission.
     If require_admin=True, only proxy admins are allowed.
 
     If team_object is provided, it will be used instead of fetching from DB
     (avoids duplicate DB queries when team was already fetched for validation).
     """
-    is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
-    if require_admin:
+    if require_admin or is_proxy_admin:
         return is_proxy_admin
 
-    if is_proxy_admin:
-        return True
-
-    if not team_id or not user_api_key_dict.user_id:
+    if not team_id or not user_api_key_dict.user_id or not team_admin_may_manage_projects(general_settings):
         return False
 
-    team = team_object
-    if team is None:
-        team = await _team_table(prisma_client).find_unique(where={"team_id": team_id})
+    team_row: Final = (
+        team_object
+        if team_object is not None
+        else await _team_table(prisma_client).find_unique(where={"team_id": team_id})
+    )
+    if team_row is None:
+        return False
 
-    if team and team.admins:
-        return user_api_key_dict.user_id in team.admins
+    team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
+    return is_team_admin(user_api_key_dict, team) or user_api_key_dict.user_id in (team.admins or [])
 
-    return False
+
+async def _can_view_team_projects(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_id: str | None,
+    prisma_client: PrismaClient,
+    team_access: TeamAccess,
+) -> bool:
+    if user_api_key_has_admin_view(user_api_key_dict):
+        return True
+    if not team_id or not user_api_key_dict.user_id:
+        return False
+    team_row: Final = await _team_table(prisma_client).find_unique(where={"team_id": team_id})
+    if team_row is None:
+        return False
+    team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
+    return is_team_member(user_api_key_dict, team) or await team_access.allows(
+        user_api_key_dict, team, TEAM_OR_ORG_ADMIN
+    )
+
+
+def _visible_projects_where(team_ids: list[str], admin_org_ids: frozenset[str]) -> dict[str, object]:
+    # bounded-ok: one caller's team memberships
+    member_scope: Final[dict[str, object]] = {"team_id": {"in": team_ids}}
+    if not admin_org_ids:
+        return member_scope
+    org_scope: Final[dict[str, object]] = {
+        # bounded-ok: orgs one caller administers
+        "litellm_team_table": {"is": {"organization_id": {"in": sorted(admin_org_ids)}}}
+    }
+    return {"OR": [member_scope, org_scope]}
 
 
 async def _validate_team_exists(
@@ -430,7 +466,7 @@ async def new_project(
 
     ```bash
     curl --location 'http://0.0.0.0:4000/project/new' \\
-    --header 'Authorization: Bearer sk-1234' \\
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \\
     --header 'Content-Type: application/json' \\
     --data '{
         "project_alias": "flight-search-assistant",
@@ -457,7 +493,7 @@ async def new_project(
 
     ```bash
     curl --location 'http://0.0.0.0:4000/project/new' \\
-    --header 'Authorization: Bearer sk-1234' \\
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \\
     --header 'Content-Type: application/json' \\
     --data '{
         "project_alias": "hotel-recommendations",
@@ -531,6 +567,7 @@ async def new_project(
             user_api_key_dict=user_api_key_dict,
             team_id=data.team_id,
             prisma_client=prisma_client,
+            general_settings=general_settings,
             team_object=LiteLLM_TeamTable.model_validate(team_object.model_dump()),
         )
 
@@ -644,7 +681,7 @@ async def update_project(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/project/update' \\
-    --header 'Authorization: Bearer sk-1234' \\
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \\
     --header 'Content-Type: application/json' \\
     --data '{
         "project_id": "project-123",
@@ -735,6 +772,7 @@ async def update_project(
             user_api_key_dict=user_api_key_dict,
             team_id=existing_project.team_id,
             prisma_client=prisma_client,
+            general_settings=general_settings,
         )
 
         if not has_permission:
@@ -751,6 +789,7 @@ async def update_project(
                 user_api_key_dict=user_api_key_dict,
                 team_id=data.team_id,
                 prisma_client=prisma_client,
+                general_settings=general_settings,
                 team_object=(
                     LiteLLM_TeamTable.model_validate(target_team_obj.model_dump()) if target_team_obj else None
                 ),
@@ -780,7 +819,10 @@ async def update_project(
 
         # Handle budget updates
         budget_fields = LiteLLM_BudgetTable.model_fields.keys()
-        budget_updates = {k: v for k, v in update_data.items() if k in budget_fields}
+        budget_updates = {
+            **{k: v for k, v in update_data.items() if k in budget_fields},
+            **({"max_budget": None} if "max_budget" in data.model_fields_set and data.max_budget is None else {}),
+        }
 
         if budget_updates and existing_project.budget_id:
             # Update existing budget
@@ -867,14 +909,14 @@ async def delete_project(
     Example:
     ```bash
     curl --location --request DELETE 'http://0.0.0.0:4000/project/delete' \\
-    --header 'Authorization: Bearer sk-1234' \\
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \\
     --header 'Content-Type: application/json' \\
     --data '{
         "project_ids": ["project-123", "project-456"]
     }'
     ```
     """
-    from litellm.proxy.proxy_server import premium_user, prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import general_settings, premium_user, prisma_client, user_api_key_cache
 
     try:
         if not premium_user:
@@ -896,6 +938,7 @@ async def delete_project(
             user_api_key_dict=user_api_key_dict,
             team_id=None,
             prisma_client=prisma_client,
+            general_settings=general_settings,
             require_admin=True,
         )
 
@@ -963,6 +1006,7 @@ async def delete_project(
 async def project_info(
     project_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    team_access: TeamAccess = Depends(get_team_access),
 ):
     """
     Get information about a specific project
@@ -973,7 +1017,7 @@ async def project_info(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/project/info?project_id=project-123' \\
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -999,21 +1043,7 @@ async def project_info(
                 param="project_id",
             )
 
-        # Check if user has access to this project (admin or team member)
-        is_admin = user_api_key_has_admin_view(user_api_key_dict)
-        is_team_member = False
-
-        if project.team_id and user_api_key_dict.user_id:
-            team = await _team_table(prisma_client).find_unique(where={"team_id": project.team_id})
-            if team:
-                caller_user_id = user_api_key_dict.user_id
-                for m in team.members_with_roles or []:
-                    m_user_id = m.get("user_id") if isinstance(m, dict) else getattr(m, "user_id", None)
-                    if m_user_id == caller_user_id:
-                        is_team_member = True
-                        break
-
-        if not (is_admin or is_team_member):
+        if not await _can_view_team_projects(user_api_key_dict, project.team_id, prisma_client, team_access):
             raise HTTPException(
                 status_code=403,
                 detail={"error": "You don't have access to this project"},
@@ -1042,7 +1072,7 @@ async def list_projects(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/project/list' \\
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -1062,16 +1092,13 @@ async def list_projects(
                 include={"litellm_budget_table": True, "object_permission": True}
             )
         else:
-            # Look up the user's team memberships via the reverse-index on
-            # LiteLLM_UserTable.teams (maintained by team_member_add alongside
-            # members_with_roles). This avoids a full scan of all team rows.
             user_record: Final = await _user_table(prisma_client).find_unique(
                 where={"user_id": user_api_key_dict.user_id},
+                include={"organization_memberships": True},
             )
-            user_team_ids: list[str] = user_record.teams if user_record is not None and user_record.teams else []
-
+            user: Final = None if user_record is None else LiteLLM_UserTable.model_validate(user_record.model_dump())
             projects = await _project_table(prisma_client).find_many(
-                where={"team_id": {"in": user_team_ids}},
+                where=_visible_projects_where(user.teams if user is not None else [], org_admin_org_ids(user)),
                 include={"litellm_budget_table": True, "object_permission": True},
             )
 

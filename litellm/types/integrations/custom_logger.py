@@ -1,9 +1,13 @@
+from collections.abc import Mapping
 from typing import Any, Final
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-CHAT_COMPLETION_AGENTIC_SURFACE: Final = "chat_completions"
-RESPONSES_AGENTIC_SURFACE: Final = "responses"
+from litellm.types.litellm_params import AgenticSurface
+from litellm.types.llms.base import LiteLLMBaseModel
+
+CHAT_COMPLETION_AGENTIC_SURFACE: Final[AgenticSurface] = "chat_completions"
+RESPONSES_AGENTIC_SURFACE: Final[AgenticSurface] = "responses"
 CODE_INTERPRETER_INTERCEPTION_PREFIX: Final = "_code_interpreter_interception"
 HEADROOM_INTERCEPTION_PREFIX: Final = "_headroom_interception"
 HEADROOM_CONVERTED_STREAM_KEY: Final = f"{HEADROOM_INTERCEPTION_PREFIX}_converted_stream"
@@ -29,6 +33,13 @@ def is_interception_internal_key(
     return any(key.startswith(prefix) for prefix in prefixes)
 
 
+CONVERTED_STREAM_KEYS: Final = frozenset(f"{prefix}_converted_stream" for prefix in INTERCEPTION_INTERNAL_PREFIXES)
+
+
+def converted_stream_requested(params: Mapping[str, object]) -> bool:
+    return any(bool(params.get(key)) for key in CONVERTED_STREAM_KEYS)
+
+
 class AgenticLoopSafetyError(ValueError):
     """
     Raised when an agentic-loop safety rail refuses a rerun.
@@ -44,7 +55,7 @@ class AgenticLoopSafetyError(ValueError):
     """
 
 
-class StandardCustomLoggerInitParams(BaseModel):
+class StandardCustomLoggerInitParams(LiteLLMBaseModel):
     """
     Params for initializing a CustomLogger.
     """
@@ -52,7 +63,7 @@ class StandardCustomLoggerInitParams(BaseModel):
     turn_off_message_logging: bool | None = False
 
 
-class AgenticLoopRequestPatch(BaseModel):
+class AgenticLoopRequestPatch(LiteLLMBaseModel):
     """
     Patch returned by callbacks to request a follow-up LLM call.
     """
@@ -65,7 +76,7 @@ class AgenticLoopRequestPatch(BaseModel):
     kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
-class AgenticLoopPlan(BaseModel):
+class AgenticLoopPlan(LiteLLMBaseModel):
     """
     Typed callback response for agentic-loop reruns.
     """

@@ -1,6 +1,8 @@
 import aimSecurityLogo from "../../../../../public/assets/logos/aim_security.jpeg";
 import aktoLogo from "../../../../../public/assets/logos/akto.svg";
 import aliceLogo from "../../../../../public/assets/logos/alice.svg";
+import llmShieldProxyLogo from "../../../../../public/assets/logos/llm_shield_proxy.svg";
+import conductLogo from "../../../../../public/assets/logos/conduct.png";
 import aporiaLogo from "../../../../../public/assets/logos/aporia.png";
 import bedrockLogo from "../../../../../public/assets/logos/bedrock.svg";
 import catoNetworksLogo from "../../../../../public/assets/logos/cato_networks.svg";
@@ -12,7 +14,7 @@ import guardrailsAiLogo from "../../../../../public/assets/logos/guardrails_ai.j
 import javelinLogo from "../../../../../public/assets/logos/javelin.png";
 import lakeraAiLogo from "../../../../../public/assets/logos/lakeraai.jpeg";
 import lassoLogo from "../../../../../public/assets/logos/lasso.png";
-import litellmLogo from "../../../../../public/assets/logos/litellm_logo.jpg";
+import litellmLogo from "../../../../../public/assets/logos/litellm_monogram.svg";
 import microsoftAzureLogo from "../../../../../public/assets/logos/microsoft_azure.svg";
 import nomaSecurityLogo from "../../../../../public/assets/logos/noma_security.png";
 import openaiSmallLogo from "../../../../../public/assets/logos/openai_small.svg";
@@ -85,6 +87,8 @@ export const guardrail_provider_map: Record<string, string> = {
   QostodianNexus: "qostodian_nexus",
   Repelloai: "repelloai",
   Alice: "alice",
+  "LLM Shield Proxy": "llm_shield_proxy",
+  Conduct: "conduct",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -110,6 +114,74 @@ export const toModeArray = (raw: unknown): string[] => {
   if (Array.isArray(raw)) return raw.filter((m): m is string => typeof m === "string");
   if (typeof raw === "string") return [raw];
   return [];
+};
+
+export type LoggingOnlyScope = "input" | "output" | "both";
+export type LoggingOnlyScopeChoice = "default" | LoggingOnlyScope;
+export type LoggingOnlyScopeOption = { label: string; value: LoggingOnlyScopeChoice };
+
+export const normalizeLoggingOnlyScopeChoice = (
+  choice: LoggingOnlyScopeChoice,
+  directionalScopeSupported: boolean,
+): LoggingOnlyScopeChoice =>
+  directionalScopeSupported || choice === "default" || choice === "both" ? choice : "default";
+
+const LOGGING_ONLY_SCOPE_OPTIONS: LoggingOnlyScopeOption[] = [
+  { label: "Default (request and response)", value: "default" },
+  { label: "Input only (request)", value: "input" },
+  { label: "Output only (response)", value: "output" },
+  { label: "Both (request and response)", value: "both" },
+];
+
+export const loggingOnlyScopeToChoice = (v: string | null | undefined): LoggingOnlyScopeChoice =>
+  v === "input" || v === "output" || v === "both" ? v : "default";
+
+export const choiceToLoggingOnlyScope = (choice: LoggingOnlyScopeChoice | undefined): LoggingOnlyScope | null =>
+  choice === "input" || choice === "output" || choice === "both" ? choice : null;
+
+export const getLoggingOnlyScopeUpdate = (
+  litellmParams: { logging_only_scope?: string | null } | null | undefined,
+  choice: LoggingOnlyScopeChoice | undefined,
+): { logging_only_scope?: LoggingOnlyScope | null } => {
+  if (choice === undefined || choice === loggingOnlyScopeToChoice(litellmParams?.logging_only_scope)) return {};
+  return { logging_only_scope: choiceToLoggingOnlyScope(choice) };
+};
+
+export const formatLoggingOnlyScope = (v: string | null | undefined): string => {
+  if (v === "input") return "Input only (request)";
+  if (v === "output") return "Output only (response)";
+  if (v === "both") return "Both (request and response)";
+  return "Default (request and response)";
+};
+
+export const modeIncludesLoggingOnly = (raw: unknown): boolean => {
+  if (toModeArray(raw).includes("logging_only")) return true;
+  if (raw === null || typeof raw !== "object") return false;
+
+  const { tags, default: fallback } = raw as { tags?: Record<string, unknown>; default?: unknown };
+  const taggedModes =
+    tags && typeof tags === "object"
+      ? Object.values(tags).some((mode) => toModeArray(mode).includes("logging_only"))
+      : false;
+  return toModeArray(fallback).includes("logging_only") || taggedModes;
+};
+
+export const getLoggingOnlyScopeOptions = (directionalScopeSupported: boolean): LoggingOnlyScopeOption[] =>
+  directionalScopeSupported
+    ? LOGGING_ONLY_SCOPE_OPTIONS
+    : LOGGING_ONLY_SCOPE_OPTIONS.filter((option) => option.value === "default" || option.value === "both");
+
+export const supportsDirectionalLoggingOnlyScope = (
+  settings: { providers_without_directional_logging_only_scope?: string[] } | null,
+  selectedProvider: string | null,
+): boolean => {
+  const providerKey = selectedProvider
+    ? (
+        guardrail_provider_map[selectedProvider] ??
+        Object.values(guardrail_provider_map).find((value) => value.toLowerCase() === selectedProvider.toLowerCase())
+      )?.toLowerCase()
+    : null;
+  return !providerKey || !settings?.providers_without_directional_logging_only_scope?.includes(providerKey);
 };
 
 export const formatGuardrailMode = (raw: unknown): string => {
@@ -208,6 +280,9 @@ export const guardrailLogoMap = {
   "RepelloAI Argus": repelloAiLogo.src,
   Straiker: straikerLogo.src,
   Alice: aliceLogo.src,
+  "Microsoft Agent 365": microsoftAzureLogo.src,
+  "LLM Shield Proxy": llmShieldProxyLogo.src,
+  "Conduct Guard": conductLogo.src,
 } satisfies Record<string, string>;
 
 export const getGuardrailLogo = (displayName: string): string | undefined =>

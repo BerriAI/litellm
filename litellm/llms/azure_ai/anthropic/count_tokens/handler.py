@@ -30,10 +30,10 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         messages: list[dict[str, Any]],
         api_key: str,
         api_base: str,
-        litellm_params: dict[str, Any] | None = None,
+        litellm_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         tools: list[dict[str, Any]] | None = None,
-        system: Any | None = None,
+        system: object = None,
     ) -> dict[str, Any]:
         """
         Handle a CountTokens request using httpx with Azure authentication.

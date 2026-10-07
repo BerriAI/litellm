@@ -19,7 +19,7 @@ import AddProviderForm from "./add_provider_form";
 import ProviderMarginTable from "./provider_margin_table";
 import AddMarginForm from "./add_margin_form";
 import PricingCalculator from "./pricing_calculator/index";
-import { DocsMenu } from "@/components/HelpLink";
+import { DocsMenu } from "@/components/DocsMenu";
 import HowItWorks from "./how_it_works";
 import { useDiscountConfig } from "./use_discount_config";
 import { useMarginConfig } from "./use_margin_config";

@@ -1,9 +1,14 @@
 import re
+from collections.abc import Mapping
 from copy import deepcopy
 from enum import Enum
+from functools import lru_cache
+from types import MappingProxyType
 from typing import Any, Final, Literal, cast, get_type_hints
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -19,6 +24,76 @@ from litellm.types.llms.vertex_ai import (
 )
 from litellm.types.utils import TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
+
+VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS: Final = frozenset(
+    {
+        "audio",
+        "max_retries",
+        "modalities",
+        "prediction",
+        "prompt_cache_key",
+        "prompt_cache_retention",
+        "safety_identifier",
+        "service_tier",
+        "store",
+        "web_search_options",
+    }
+)
+
+
+class VertexAILyriaModelInfo(TypedDict):
+    vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"]]
+    supported_audio_formats: ReadOnly[tuple[Literal["mp3", "wav"], ...]]
+    output_cost_per_image: NotRequired[ReadOnly[float]]
+
+
+_VERTEX_AI_LYRIA_MODEL_INFO_ADAPTER: Final = TypeAdapter(VertexAILyriaModelInfo)
+
+
+def _validate_vertex_ai_lyria_model_info(raw_model_info: object) -> VertexAILyriaModelInfo | None:
+    if raw_model_info is None:
+        return None
+    try:
+        return _VERTEX_AI_LYRIA_MODEL_INFO_ADAPTER.validate_python(raw_model_info)
+    except ValidationError:
+        return None
+
+
+@lru_cache(maxsize=1)
+def _bundled_vertex_ai_lyria_model_infos() -> Mapping[str, VertexAILyriaModelInfo]:
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    return MappingProxyType(
+        {
+            model_key: lyria_model_info
+            for model_key, raw_model_info in GetModelCostMap.load_local_model_cost_map().items()
+            if (lyria_model_info := _validate_vertex_ai_lyria_model_info(raw_model_info)) is not None
+        }
+    )
+
+
+def _vertex_ai_lyria_model_key(model: str) -> str:
+    return model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
+
+
+def _vertex_ai_lyria_generation_cost(model_info: VertexAILyriaModelInfo | None) -> float | None:
+    return None if model_info is None else model_info.get("output_cost_per_image")
+
+
+def get_vertex_ai_lyria_model_info(model: str) -> VertexAILyriaModelInfo | None:
+    model_key: Final = _vertex_ai_lyria_model_key(model)
+    runtime_model_info: Final = _validate_vertex_ai_lyria_model_info(litellm.model_cost.get(model_key))
+    return runtime_model_info or _bundled_vertex_ai_lyria_model_infos().get(model_key)
+
+
+def get_vertex_ai_lyria_generation_cost(model: str) -> float | None:
+    model_key: Final = _vertex_ai_lyria_model_key(model)
+    runtime_cost: Final = _vertex_ai_lyria_generation_cost(
+        _validate_vertex_ai_lyria_model_info(litellm.model_cost.get(model_key))
+    )
+    if runtime_cost is not None:
+        return runtime_cost
+    return _vertex_ai_lyria_generation_cost(_bundled_vertex_ai_lyria_model_infos().get(model_key))
 
 
 class VertexAIError(BaseLLMException):
@@ -217,7 +292,7 @@ def get_supports_system_message(
         supports_system_message = supports_system_messages(model=model, custom_llm_provider=_custom_llm_provider)
 
         # Vertex Models called in the `/gemini` request/response format also support system messages
-        if litellm.VertexGeminiConfig._is_model_gemini_spec_model(model):
+        if litellm.VertexGeminiConfig.is_model_gemini_spec_model(model):
             supports_system_message = True
     except Exception as e:
         verbose_logger.warning(
@@ -310,6 +385,40 @@ def get_vertex_base_model_name(model: str) -> str:
     return model
 
 
+def vertex_model_garden_model_id_in_json_body(model: str) -> bool:
+    """
+    Vertex catalog / publisher models are addressed as publisher/model (e.g.
+    xai/grok-4.1-fast-reasoning) on the shared OpenAPI URL, with the id in the JSON body.
+
+    Deployed Model Garden endpoints are typically a single segment (often numeric)
+    and use .../endpoints/{ENDPOINT_ID}/chat/completions with an empty model field.
+    """
+    return "/" in model
+
+
+def is_vertex_self_deployed_openai_compatible_endpoint(model: str) -> bool:
+    local_model: Final = model.removeprefix("vertex_ai/")
+    route: Final = get_vertex_ai_model_route(local_model)
+    if route == VertexAIModelRoute.GEMMA:
+        return True
+    return route == VertexAIModelRoute.MODEL_GARDEN and not vertex_model_garden_model_id_in_json_body(
+        get_vertex_base_model_name(local_model)
+    )
+
+
+def get_vertex_ai_fine_tuned_endpoint_id(model: str) -> str | None:
+    """
+    Fine-tuned Gemini deployments are addressed by a numeric endpoint id,
+    configured as `vertex_ai/<id>` or `vertex_ai/gemini/<id>`.
+
+    Returns the endpoint id, or None when `model` is a regular publisher model.
+    Mirrors the online chat path in `_get_vertex_url`, which sends numeric
+    models to `endpoints/{id}` instead of `publishers/google/models/{model}`.
+    """
+    candidate: Final = model.split("/")[-1] if "gemini/" in model else model
+    return candidate if candidate.isdigit() else None
+
+
 def validate_vertex_location(vertex_location: str | None) -> str:
     """
     Validate a Vertex AI location before interpolating it into a request host or
@@ -389,7 +498,7 @@ def _get_embedding_url(
     return url, endpoint
 
 
-def _get_vertex_url(
+def get_vertex_url(
     mode: all_gemini_url_modes,
     model: str,
     stream: bool | None,
@@ -447,7 +556,10 @@ def _get_vertex_url(
     return url, endpoint
 
 
-def _get_gemini_url(
+_get_vertex_url = get_vertex_url
+
+
+def get_gemini_url(
     mode: all_gemini_url_modes,
     model: str,
     stream: bool | None,
@@ -463,7 +575,7 @@ def _get_gemini_url(
     )
 
     _gemini_model_name: Final = f"models/{model}"
-    api_version: Final = "v1alpha" if VertexGeminiConfig._is_gemini_3_or_newer(model) else "v1beta"
+    api_version: Final = "v1alpha" if VertexGeminiConfig.is_gemini_3_or_newer(model) else "v1beta"
 
     if mode == "chat":
         endpoint = "generateContent"
@@ -491,7 +603,10 @@ def _get_gemini_url(
     return url, endpoint
 
 
-def _check_text_in_content(parts: list[PartType]) -> bool:
+_get_gemini_url = get_gemini_url
+
+
+def check_text_in_content(parts: list[PartType]) -> bool:
     """
     check that user_content has 'text' parameter.
         - Known Vertex Error: Unable to submit request because it must have a text parameter.
@@ -504,6 +619,9 @@ def _check_text_in_content(parts: list[PartType]) -> bool:
             has_text_param = True
 
     return has_text_param
+
+
+_check_text_in_content = check_text_in_content
 
 
 def _fix_enum_empty_strings(schema, depth=0):
@@ -574,7 +692,7 @@ def _fix_enum_types(schema, depth=0):
                 _fix_enum_types(item, depth=depth + 1)
 
 
-def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
+def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
 
@@ -625,7 +743,10 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     return parameters
 
 
-def _build_json_schema(parameters: dict) -> dict:
+_build_vertex_schema = build_vertex_schema
+
+
+def build_json_schema(parameters: dict) -> dict:
     """
     Build a JSON Schema for use with Gemini's responseJsonSchema parameter.
 
@@ -649,6 +770,9 @@ def _build_json_schema(parameters: dict) -> dict:
     # See: https://blog.google/technology/developers/gemini-api-structured-outputs/
 
     return parameters
+
+
+_build_json_schema = build_json_schema
 
 
 def _filter_anyof_fields(schema_dict: dict[str, object]) -> dict[str, object]:
@@ -860,7 +984,7 @@ def strip_field(schema, field_name: str):
         strip_field(items, field_name)
 
 
-def _convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
+def convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
     """
     Converts a Vertex AI datetime string to an OpenAI datetime integer
 
@@ -873,6 +997,9 @@ def _convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
     dt: Final = datetime.strptime(vertex_datetime, "%Y-%m-%dT%H:%M:%S.%fZ")
     # Convert to Unix timestamp (seconds since epoch)
     return int(dt.timestamp())
+
+
+_convert_vertex_datetime_to_openai_datetime = convert_vertex_datetime_to_openai_datetime
 
 
 def _convert_schema_types(schema, depth=0):
@@ -998,6 +1125,16 @@ def replace_project_and_location_in_route(requested_route: str, vertex_project: 
     return modified_route
 
 
+def _api_version_for_route(requested_route: str) -> Literal["v1", "v1beta1"]:
+    return "v1beta1" if "cachedContent" in requested_route else "v1"
+
+
+def _with_api_version(requested_route: str) -> str:
+    if not requested_route.startswith("/projects/"):
+        return requested_route
+    return f"/{_api_version_for_route(requested_route)}{requested_route}"
+
+
 def construct_target_url(
     base_url: str,
     requested_route: str,
@@ -1017,18 +1154,19 @@ def construct_target_url(
 
     new_base_url: Final = httpx.URL(base_url)
     if "locations" in requested_route:  # contains the target project id + location
-        if vertex_project and vertex_location:
-            requested_route = replace_project_and_location_in_route(requested_route, vertex_project, vertex_location)
-        return new_base_url.copy_with(path=requested_route)
+        targeted_route: Final = (
+            replace_project_and_location_in_route(requested_route, vertex_project, vertex_location)
+            if vertex_project and vertex_location
+            else requested_route
+        )
+        return new_base_url.copy_with(path=_with_api_version(targeted_route))
 
     """
     - Add endpoint version (e.g. v1beta for cachedContent, v1 for rest)
     - Add default project id
     - Add default location
     """
-    vertex_version: Literal["v1", "v1beta1"] = "v1"
-    if "cachedContent" in requested_route:
-        vertex_version = "v1beta1"
+    vertex_version: Literal["v1", "v1beta1"] = _api_version_for_route(requested_route)
 
     # Check if the requested route starts with a version
     # e.g. /v1beta1/publishers/google/models/gemini-3-pro-preview:streamGenerateContent
@@ -1121,6 +1259,9 @@ class VertexAITokenCounter(BaseTokenCounter):
         import copy
 
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+            VertexAIError as PartnerVertexAIError,
+        )
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
             VertexAIPartnerModels,
         )
 
@@ -1149,14 +1290,32 @@ class VertexAITokenCounter(BaseTokenCounter):
                 "vertex_ai_credentials"
             )
 
-            result = await partner_models_handler.count_tokens(
-                model=model_to_use,
-                messages=messages or [],
-                litellm_params=partner_litellm_params,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-                vertex_credentials=vertex_credentials,
-            )
+            try:
+                result = await partner_models_handler.count_tokens(
+                    model=model_to_use,
+                    messages=messages or [],
+                    litellm_params=partner_litellm_params,
+                    vertex_project=vertex_project,
+                    vertex_location=vertex_location,
+                    vertex_credentials=vertex_credentials,
+                    system=system,
+                    tools=tools,
+                )
+            except (PartnerVertexAIError, httpx.HTTPStatusError) as e:
+                status_code: Final = e.response.status_code
+                error_message: Final = e.message if isinstance(e, PartnerVertexAIError) else e.response.text
+                verbose_logger.warning(
+                    "Vertex AI partner CountTokens API error: status=%s, message=%s", status_code, error_message
+                )
+                return TokenCountResponse(
+                    total_tokens=0,
+                    request_model=request_model,
+                    model_used=model_to_use,
+                    tokenizer_type="vertex_ai_partner_models",
+                    error=True,
+                    error_message=error_message,
+                    status_code=status_code,
+                )
 
             if result is not None:
                 return TokenCountResponse(
@@ -1169,15 +1328,11 @@ class VertexAITokenCounter(BaseTokenCounter):
         else:
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
             from litellm.llms.vertex_ai.gemini.transformation import (
-                _gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
+                gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
             )
 
             resolved_contents: Final = (
-                contents
-                if contents is not None
-                else _gemini_convert_messages_with_history(
-                    messages=messages or []  # mutable-ok: fallback for None messages; helper signature requires list
-                )
+                contents if contents is not None else gemini_convert_messages_with_history(messages=messages or [])
             )
 
             count_tokens_params: Final = {
