@@ -828,8 +828,9 @@ class TestBedrockRealtimeSessionEvents:
 
 
 class TestBedrockRealtimeUserEventsAndUsage:
-    """Regression tests for #38346: USER ASR transcripts, speech boundary events,
-    usage propagation, and duplicate response.created"""
+    """Regression tests for #38346 (USER ASR transcripts, speech boundary events,
+    usage propagation, duplicate response.created) and for FINAL assistant text
+    blocks replaying every sentence after the audio turn ended"""
 
     @staticmethod
     def _run(config, messages):
@@ -1130,6 +1131,66 @@ class TestBedrockRealtimeUserEventsAndUsage:
             ],
         )
         assert [e["type"] for e in events] == ["conversation.item.input_audio_transcription.delta"]
+
+    @staticmethod
+    def _assistant_text_block(stage, text, stop_reason):
+        return [
+            {
+                "event": {
+                    "contentStart": {
+                        "role": "ASSISTANT",
+                        "type": "TEXT",
+                        "additionalModelFields": json.dumps({"generationStage": stage}),
+                    }
+                }
+            },
+            {"event": {"textOutput": {"content": text}}},
+            {"event": {"contentEnd": {"stopReason": stop_reason}}},
+        ]
+
+    @staticmethod
+    def _assistant_audio_block(stop_reason):
+        return [
+            {"event": {"contentStart": {"role": "ASSISTANT", "type": "AUDIO"}}},
+            {"event": {"audioOutput": {"content": base64.b64encode(b"\x00\x01" * 8).decode()}}},
+            {"event": {"contentEnd": {"stopReason": stop_reason}}},
+        ]
+
+    def test_final_assistant_text_blocks_do_not_replay_the_spoken_sentences(self):
+        sentences = ["I can't check live weather.", " Try a weather app.", " It will have the forecast."]
+        events = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("SPECULATIVE", sentences[0], "PARTIAL_TURN")
+            + self._assistant_audio_block("PARTIAL_TURN")
+            + self._assistant_text_block("SPECULATIVE", sentences[1], "PARTIAL_TURN")
+            + self._assistant_audio_block("PARTIAL_TURN")
+            + self._assistant_text_block("SPECULATIVE", sentences[2], "PARTIAL_TURN")
+            + self._assistant_audio_block("END_TURN")
+            + self._assistant_text_block("FINAL", sentences[0], "END_TURN")
+            + self._assistant_text_block("FINAL", sentences[1], "PARTIAL_TURN")
+            + self._assistant_text_block("FINAL", sentences[2], "PARTIAL_TURN"),
+        )
+        types = [e["type"] for e in events]
+        assert [e["text"] for e in events if e["type"] == "response.text.done"] == sentences
+        assert types.count("response.created") == 1
+        assert types.count("response.done") == 1
+        assert types[-1] == "response.done"
+        response_ids = {e["response_id"] for e in events if e["type"] == "response.text.delta"}
+        assert response_ids == {events[0]["response"]["id"]}
+
+    def test_final_assistant_text_after_end_turn_opens_no_response(self):
+        events = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("FINAL", "Already spoken.", "END_TURN"),
+        )
+        assert events == []
+
+    def test_speculative_text_after_a_final_block_is_forwarded(self):
+        config = BedrockRealtimeConfig()
+        self._run(config, self._assistant_text_block("FINAL", "Already spoken.", "END_TURN"))
+        events = self._run(config, self._assistant_text_block("SPECULATIVE", "Next turn.", "PARTIAL_TURN"))
+        assert [e["type"] for e in events][:1] == ["response.created"]
+        assert [e["text"] for e in events if e["type"] == "response.text.done"] == ["Next turn."]
 
 
 if __name__ == "__main__":
