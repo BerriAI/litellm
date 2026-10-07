@@ -20,12 +20,18 @@ from .checks import (
 from .containers import Containers, failed, ready, until, waiting
 from .database import COORDINATOR_LOCK, GATE_KEY, Database
 from .startup_models import Migration
+from e2e_metadata import Domain, Subject, meta
 
 pytestmark: Final = [pytest.mark.e2e, pytest.mark.migration_startup]
 
 
 class TestMigrationRecovery:
     @pytest.mark.parametrize("after_commit", (False, True))
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_container_owner_crash(self, containers: Containers, database: Database, after_commit: bool) -> None:
         interrupt_owner(containers, database, after_commit, stop_database_session=False)
         history: Final = database.history()
@@ -42,6 +48,11 @@ class TestMigrationRecovery:
                 assert database.history() == history
 
     @pytest.mark.parametrize("after_commit", (False, True))
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_owner_and_database_session_crash(
         self, containers: Containers, database: Database, after_commit: bool
     ) -> None:
@@ -60,6 +71,11 @@ class TestMigrationRecovery:
             assert database.history() == history
 
     @pytest.mark.parametrize("later_failure", (False, True))
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_remaining_migrations_after_recovery(
         self, containers: Containers, database: Database, later_failure: bool
     ) -> None:
@@ -98,6 +114,11 @@ class TestMigrationRecovery:
                 assert database.query("SELECT id FROM migration_next") == ((2,),)
             assert_original_proof(database, original, True)
 
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_second_crash_during_recovery_is_atomic(self, containers: Containers, database: Database) -> None:
         original: Final = confirmed_history(database)
         pause_completion(database)
@@ -114,6 +135,11 @@ class TestMigrationRecovery:
             ready(start_replicas(stack, containers, database, (COMPLETE,)), database)
         assert_original_proof(database, original, True)
 
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_competing_recovery_rechecks_stale_failures(self, containers: Containers, database: Database) -> None:
         original: Final = confirmed_history(database)
         with ExitStack() as stack:
@@ -131,6 +157,11 @@ class TestMigrationRecovery:
 
     @pytest.mark.parametrize(
         "fault", ("no_steps", "extra_steps", "failure_logs", "checksum", "duplicate_history", "missing_script")
+    )
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
     )
     def test_unproven_history_is_never_repaired(
         self,
@@ -172,6 +203,11 @@ class TestMigrationRecovery:
         assert database.history() == history
         assert database.query("SELECT id FROM migration_effect") == ((1,),)
 
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_coordinator_timeout_preserves_proof(self, containers: Containers, database: Database) -> None:
         original: Final = confirmed_history(database)
         with database.lock(COORDINATOR_LOCK):

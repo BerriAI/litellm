@@ -11,6 +11,8 @@ import psycopg
 from psycopg import sql
 from pydantic import TypeAdapter
 
+from e2e_metadata import step
+
 Scalar = str | int | bool | None
 ROWS: Final = TypeAdapter(tuple[tuple[Scalar, ...], ...])
 GATE_KEY: Final = 39178002
@@ -35,6 +37,7 @@ class Database:
     container_url: str
     schema: str = "public"
 
+    @step("Open a connection to the test database")
     @contextmanager
     def connection(self) -> Generator[psycopg.Connection[tuple[object, ...]]]:
         with psycopg.connect(self.url, autocommit=True, connect_timeout=5) as connection:
@@ -42,19 +45,23 @@ class Database:
             connection.execute("SET statement_timeout = '15s'")
             yield connection
 
+    @step("Run a SQL statement on the test database")
     def execute(self, statement: LiteralString | sql.Composed, params: tuple[Scalar, ...] = ()) -> None:
         with self.connection() as connection:
             connection.execute(statement, params or None)
 
+    @step("Query the test database")
     def query(
         self, statement: LiteralString | sql.Composed, params: tuple[Scalar, ...] = ()
     ) -> tuple[tuple[Scalar, ...], ...]:
         with self.connection() as connection:
             return ROWS.validate_python(connection.execute(statement, params or None).fetchall())
 
+    @step("Check whether {name} exists in the test database")
     def exists(self, name: str) -> bool:
         return self.query("SELECT to_regclass(%s) IS NOT NULL", (name,)) == ((True,),)
 
+    @step("Read the migration history from _prisma_migrations")
     def history(self) -> tuple[tuple[Scalar, ...], ...]:
         if not self.exists("_prisma_migrations"):
             return ()
@@ -63,6 +70,7 @@ class Database:
             "applied_steps_count, logs FROM _prisma_migrations ORDER BY id"
         )
 
+    @step("List the database sessions waiting on an advisory lock")
     def blocked(self, key: int = GATE_KEY) -> tuple[tuple[Scalar, ...], ...]:
         return self.query(
             "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND NOT granted "
@@ -71,6 +79,7 @@ class Database:
             (key >> 32, key & 0xFFFFFFFF),
         )
 
+    @step("Hold an advisory lock on the test database")
     @contextmanager
     def lock(self, key: int = GATE_KEY) -> Generator[None]:
         with self.connection() as connection:
@@ -86,6 +95,7 @@ class Databases:
     admin_url: str
     container_admin_url: str
 
+    @step("Create a test database")
     @contextmanager
     def create(self, template: Database | None = None, schema: str = "public") -> Generator[Database]:
         name: Final = f"litellm_migration_test_{uuid4().hex[:20]}"
@@ -105,6 +115,7 @@ class Databases:
                 connection.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
 
 
+@step("Create a read-only database role on the test database")
 @contextmanager
 def restricted_user(database: Database) -> Generator[Database]:
     role: Final = f"migration_reader_{uuid4().hex[:16]}"

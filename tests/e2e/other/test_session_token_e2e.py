@@ -20,6 +20,7 @@ from e2e_http import UnauthorizedError, unwrap
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, KeyLoggingCallback, KeyLoggingCallbackVars, KeyMetadata
 from other_client import OtherClient
+from e2e_metadata import Domain, Subject, meta
 
 pytestmark = pytest.mark.e2e
 
@@ -47,12 +48,22 @@ def _admin_session_token(expires_at: datetime) -> str:
 
 class TestSessionToken:
     @pytest.mark.covers("other.auth.session_token.valid_allows")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+        )
+    )
     def test_unexpired_session_token_reaches_admin_route(self, client: OtherClient) -> None:
         token: Final = _admin_session_token(datetime.now(timezone.utc) + timedelta(minutes=10))
         listing: Final = unwrap(client.list_users_as(token))
         assert listing.total >= 0, f"an unexpired admin session token did not reach /user/list: {listing}"
 
     @pytest.mark.covers("other.auth.session_token.expired_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+        )
+    )
     def test_expired_session_token_is_denied(self, client: OtherClient) -> None:
         token: Final = _admin_session_token(datetime.now(timezone.utc) - timedelta(minutes=1))
         result: Final = client.list_users_as(token)
@@ -60,6 +71,11 @@ class TestSessionToken:
         assert "expired" in result.body.lower(), f"expected the expired-key error, got {result.body[:300]}"
 
     @pytest.mark.covers("other.auth.session_token.encrypted_value_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+        )
+    )
     def test_encrypted_stored_value_is_not_a_bearer_token(
         self, client: OtherClient, resources: ResourceManager
     ) -> None:

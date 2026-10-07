@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel, ValidationError
 
 from proxy_client import ProxyClient
+from e2e_metadata import step
 from e2e_http import NoBody, StreamingResponse, is_ok, unwrap
 from models import (
     ChatBody,
@@ -59,14 +60,17 @@ def error_envelope(body: str) -> ApiErrorEnvelope | None:
 class AccessControlClient:
     proxy: ProxyClient
 
+    @step("Generate a virtual key that can only call LLM API routes")
     def llm_only_key(self) -> str:
         return self.proxy.generate_key(
             KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"])
         )
 
+    @step("Delete the virtual key")
     def delete_key(self, key: str) -> None:
         self.proxy.delete_key(key)
 
+    @step('Send a /chat/completions request to {model} with the prompt "{content}"')
     def chat_status(
         self, key: str, model: str, content: str, max_completion_tokens: int | None = None
     ) -> StreamingResponse:
@@ -80,6 +84,7 @@ class AccessControlClient:
             ),
         )
 
+    @step("Create the team {team_alias} with models: {models}")
     def create_team(self, team_alias: str, models: list[str]) -> str:
         team_id = unwrap(
             self.proxy.transport.post(
@@ -92,6 +97,7 @@ class AccessControlClient:
         self._await_team(team_id)
         return team_id
 
+    @step("Set the team {team_alias}'s models to {models} through /team/update")
     def set_team_models(self, team_id: str, team_alias: str, models: list[str]) -> None:
         """Replace the team's allow-list. /model/new appends a team-scoped deployment's
         public name to it, so a test that means to grant only an access group has to
@@ -105,6 +111,7 @@ class AccessControlClient:
             )
         )
 
+    @step("Delete the team")
     def delete_team(self, team_id: str) -> None:
         _ = self.proxy.transport.post(
             "/team/delete",
@@ -113,6 +120,7 @@ class AccessControlClient:
             response_type=NoBody,
         )
 
+    @step("List the deployments in the model access group {access_group}")
     def access_group_info(self, access_group: str) -> AccessGroupInfoResponse | None:
         result = self.proxy.transport.get(
             f"/access_group/{access_group}/info",
@@ -122,6 +130,7 @@ class AccessControlClient:
         )
         return unwrap(result) if is_ok(result) else None
 
+    @step("Read the team's models from /team/info")
     def team_models(self, team_id: str) -> list[str] | None:
         result = self.proxy.transport.get(
             "/team/info",
@@ -139,6 +148,7 @@ class AccessControlClient:
             time.sleep(self.proxy.poll_interval)
         raise AssertionError(f"/team/info never resolved team {team_id!r} created by /team/new")
 
+    @step("Add a deployment named {model_name} that calls openai/gpt-4o-mini with the given key")
     def create_model_status(self, key: str, model_name: str) -> StreamingResponse:
         return self.proxy.transport.send(
             "/model/new",
