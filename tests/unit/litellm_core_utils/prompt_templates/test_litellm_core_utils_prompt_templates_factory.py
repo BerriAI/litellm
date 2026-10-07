@@ -51,6 +51,17 @@ def test_function_call_prompt_preserves_append_failure_for_non_string_content() 
         function_call_prompt(messages, [])
 
 
+def test_function_call_prompt_lets_the_model_answer_after_a_function_result() -> None:
+    messages: Final[list[dict[str, object]]] = [{"role": "system", "content": "Be terse."}]
+
+    prompted: Final = function_call_prompt(messages, [{"name": "get_weather"}])
+
+    system: Final = str(prompted[0]["content"])
+    assert "JSON OUTPUT ONLY" not in system
+    assert "reply to the user in plain text instead of calling a function again" in system
+    assert "{'name': 'get_weather'}" in system
+
+
 @pytest.mark.parametrize(
     ("thought_signature", "expected"),
     [
