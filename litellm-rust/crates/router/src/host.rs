@@ -42,10 +42,13 @@ pub struct HopStamp {
 #[derive(Clone, Debug)]
 pub enum Op<E> {
     /// `Router.log_retry(kwargs, error)` against `bucket`, with `kwargs["model"] == model`.
+    /// `original` logs the provider error inside a mid-stream fallback error, as a stream's
+    /// same-group retry does.
     LogRetry {
         bucket: u32,
         model: String,
         error: Raised<E>,
+        original: bool,
     },
     /// A fallback hop's bucket: a shallow copy of `copy_of`, stamped.
     OpenBucket {
@@ -85,6 +88,9 @@ pub struct RetryStamp {
     pub model_group_size: usize,
     pub attempted_retries: u32,
     pub max_retries: u32,
+    /// A same-group retry of a stream that failed before its content, whose failure before
+    /// its own stream opens the host reports as that stream would have failed.
+    pub stream_retry: bool,
 }
 
 #[derive(Clone, Debug)]

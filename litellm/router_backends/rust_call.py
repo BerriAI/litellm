@@ -13,6 +13,7 @@ import asyncio
 import copy
 import time
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
+from types import MappingProxyType
 from typing import Final, Literal, Protocol, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -26,14 +27,18 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.llms.anthropic.pass_through.messages.utils import safeguard_refusal_error
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.router_backends.python_router import (
     PythonRouter,
+    _anthropic_stream_pre_content_error,  # pyright: ignore[reportPrivateUsage]  # the envelope Python's Anthropic retry gives a failure
+    _anthropic_stream_raised_error_status,  # pyright: ignore[reportPrivateUsage]  # the status Python's Anthropic retry reads
     _with_router_resolved_session_model,  # pyright: ignore[reportPrivateUsage]  # the session rewrite the generic helper applies
 )
 from litellm.router_backends.rust_streams import (
+    AnthropicStreamRules,
     StreamFailed,
+    anthropic_frames,
+    anthropic_until_committed,
     chat_until_content,
     chat_until_content_sync,
     responses_until_output,
@@ -112,6 +117,21 @@ class AttemptRouter(Protocol):
         self, model: str, original_generic_function: Callable[..., object], response: object, kwargs: Kwargs
     ) -> bool: ...
 
+    def _anthropic_messages_stream_can_retry(self, kwargs: Mapping[str, object]) -> bool: ...
+
+    def _anthropic_messages_stream_can_fall_back(self, model_group: str, kwargs: Mapping[str, object]) -> bool: ...
+
+    def _refusal_fallback_available(self, model_group: str, kwargs: Mapping[str, object]) -> bool: ...
+
+    def _anthropic_messages_recoverable_frame_error(
+        self,
+        error_event: tuple[str, str, int] | None,
+        chunk: object,
+        has_generated_content: bool,
+        model_group: str,
+        kwargs: Mapping[str, object],
+    ) -> Exception | None: ...
+
     def _set_deployment_num_retries_on_exception(self, exception: Exception, deployment: Kwargs) -> None: ...
 
     def _stamp_failed_deployment_id_with_effective_model_info(
@@ -120,6 +140,14 @@ class AttemptRouter(Protocol):
 
 
 Invoked: TypeAlias = tuple[Literal["ok"], object] | tuple[Literal["error"], BaseException, Mapping[str, object]]
+
+_REQUEST_CONTROLS: Final = (
+    "num_retries",
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+    "disable_fallbacks",
+)
 
 _ROUTER_ONLY_KWARGS: Final = (
     "num_retries",
@@ -172,6 +200,7 @@ class Attempt(BaseModel):
     model_group_size: int
     attempted_retries: int
     max_retries: int
+    stream_retry: bool = False
     ops: tuple[Mapping[str, object], ...]
 
 
@@ -265,6 +294,7 @@ class RoutedCall:
     ) -> None:
         self._normalizer: Final = normalizer
         self._kwargs: Final = {key: value for key, value in kwargs.items() if key not in _ROUTER_ONLY_KWARGS}
+        self._controls: Final = MappingProxyType({key: kwargs[key] for key in _REQUEST_CONTROLS if key in kwargs})
         self._operation: Final = operation
         metadata_key: Final = metadata_key_for(operation)
         self._metadata_key: Final = metadata_key
@@ -300,9 +330,9 @@ class RoutedCall:
         except StreamFailed as failed:
             return self._stream_failed(failed, kwargs)
         except _AttemptFailed as failed:
-            return ("error", failed.error, classify(failed.error, kwargs, callbacks_ran=False))
+            return self._attempt_failed(parsed, failed.error, kwargs, callbacks_ran=False)
         except Exception as error:
-            return ("error", error, classify(error, kwargs, callbacks_ran=True))
+            return self._attempt_failed(parsed, error, kwargs, callbacks_ran=True)
         return ("ok", await self._normalizer.set_response_headers(response, parsed.model_group, kwargs))
 
     def invoke_sync(self, attempt: Mapping[str, object]) -> Invoked:
@@ -341,8 +371,34 @@ class RoutedCall:
     def _stream_failed(self, failed: StreamFailed, kwargs: Mapping[str, object]) -> Invoked:
         if failed.partial_usage is not None:
             self._partial_usage.append(failed.partial_usage)
-        trigger: Final = self._fallback_trigger(failed.error)
-        return ("error", failed.error, {**classify(trigger, kwargs, callbacks_ran=True), "stream_failure": failed.kind})
+        classified: Final = self._enveloped(failed.error, kwargs, failed.callbacks_ran)
+        return ("error", failed.error, {**classified, "stream_failure": failed.kind})
+
+    def _attempt_failed(
+        self, attempt: Attempt, error: BaseException, kwargs: Mapping[str, object], callbacks_ran: bool
+    ) -> Invoked:
+        """A same-group retry of a failed Anthropic stream hands a failure before its own stream opens
+        to the next retry or the fallback chain in the envelope Python's retry loop gives it."""
+        if not attempt.stream_retry or not isinstance(error, Exception):
+            return ("error", error, classify(error, kwargs, callbacks_ran))
+        envelope: Final = _anthropic_stream_pre_content_error(error, attempt.model_group)
+        status: Final = _anthropic_stream_raised_error_status(error)
+        retriable: Final = status is None or litellm._should_retry(status)  # pyright: ignore[reportPrivateUsage]  # the shared retry rule
+        return (
+            "error",
+            envelope,
+            {**self._enveloped(envelope, kwargs, callbacks_ran), "retries_pre_stream": retriable},
+        )
+
+    def _enveloped(
+        self, error: BaseException, kwargs: Mapping[str, object], callbacks_ran: bool
+    ) -> Mapping[str, object]:
+        """A mid-stream fallback error is judged by its fallback trigger; Anthropic's same-group
+        retry judges the provider error inside it."""
+        classified: Final = classify(self._fallback_trigger(error), kwargs, callbacks_ran)
+        if self._operation != "anthropic_messages":
+            return classified
+        return {**classified, "original": classify(unwrapped(error), kwargs, callbacks_ran)}
 
     def _fallback_trigger(self, error: BaseException) -> BaseException:
         """The error a stream's fallback is judged and annotated by: the mid-stream fallback error,
@@ -508,8 +564,12 @@ class RoutedCall:
             if normalizer._should_raise_anthropic_refusal_error(  # pyright: ignore[reportPrivateUsage]  # as above
                 model=attempt.model_group, original_generic_function=handler, response=response, kwargs=kwargs
             ):
+                from litellm.llms.anthropic.pass_through.messages.utils import (  # noqa: PLC0415  # imports the proxy, which imports litellm.Router
+                    safeguard_refusal_error,
+                )
+
                 refusal: Final = cast(Mapping[str, object], response)  # cast-ok: the refusal gate checked its shape
-                stop_details: Final = cast(dict[str, object], refusal["stop_details"])  # cast-ok: as above
+                stop_details: Final = as_mapping(refusal["stop_details"])
                 raise _AttemptFailed(safeguard_refusal_error(model=attempt.model_group, stop_details=stop_details))
             normalizer.success_calls[model_name] += 1
         except _AttemptFailed as failed:
@@ -522,7 +582,26 @@ class RoutedCall:
             return await responses_until_output(
                 response, self._responses_fallback(attempt, hop_kwargs), tuple(self._partial_usage)
             )
+        frames: Final = anthropic_frames(response) if self._operation == "anthropic_messages" else None
+        if kwargs.get("stream") and frames is not None:
+            return await anthropic_until_committed(frames, self._anthropic_rules(attempt, kwargs))
         return response
+
+    def _anthropic_rules(self, attempt: Attempt, kwargs: Mapping[str, object]) -> AnthropicStreamRules:
+        """Answered by `PythonRouter`'s own rules over the request as its stream wrapper sees it:
+        the hop's model group, the request's controls and the attempt's metadata bucket."""
+        normalizer: Final = self._normalizer
+        group: Final = attempt.model_group
+        request: Final = {**kwargs, "model": group, **self._controls}
+        return AnthropicStreamRules(
+            model=group,
+            recoverable=normalizer._anthropic_messages_stream_can_retry(request)  # pyright: ignore[reportPrivateUsage]  # Python's own gate
+            or normalizer._anthropic_messages_stream_can_fall_back(group, request),  # pyright: ignore[reportPrivateUsage]  # as above
+            frame_error=lambda event, chunk, committed: normalizer._anthropic_messages_recoverable_frame_error(  # pyright: ignore[reportPrivateUsage]  # as above
+                event, chunk, committed, group, request
+            ),
+            refusal_recoverable=normalizer._refusal_fallback_available(group, request),  # pyright: ignore[reportPrivateUsage]  # as above
+        )
 
     def _responses_fallback(
         self, attempt: Attempt, hop_kwargs: Kwargs
@@ -654,9 +733,11 @@ class RoutedCall:
         kind: Final = op.get("op")
         if kind == "log_retry":
             bucket_id: Final = _int(op, "bucket")
+            logged: Final = self._exception(op.get("error"))
+            retried: Final = unwrapped(logged) if op.get("original") is True else self._fallback_trigger(logged)
             self._normalizer.log_retry(
                 kwargs={"model": op.get("model"), self._metadata_key: self._buckets[bucket_id]},
-                e=self._as_exception(op.get("error")),
+                e=retried if isinstance(retried, Exception) else Exception(str(retried)),
             )
         elif kind == "open_bucket":
             self._open_bucket(op)
@@ -688,10 +769,6 @@ class RoutedCall:
                     detail,
                 ),
             )
-
-    def _as_exception(self, raised: object) -> Exception:
-        error: Final = self._fallback_trigger(self._exception(raised))
-        return error if isinstance(error, Exception) else Exception(str(error))
 
     def _open_bucket(self, op: Mapping[str, object]) -> None:
         bucket: Final = dict(self._buckets[_int(op, "copy_of")])

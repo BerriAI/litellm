@@ -8,14 +8,18 @@ before then can still go to another deployment. What was read replays ahead of t
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Sequence
+from dataclasses import dataclass
 from typing import Final, Literal, cast
 
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.router_backends.python_router import (
+    FallbackAwareAnthropicMessagesStream,
     FallbackAwareStreamWrapper,
     PythonRouter,
+    _anthropic_stream_commits_now,  # pyright: ignore[reportPrivateUsage]  # the commit rule Python's Anthropic wrapper applies
+    _anthropic_stream_fallback_error_for_raised,  # pyright: ignore[reportPrivateUsage]  # the envelope rule Python's Anthropic wrapper applies
     _responses_stream_holds_event,  # pyright: ignore[reportPrivateUsage]  # the hold rule Python's Responses wrapper applies
     _stream_chunks_have_generated_content,  # pyright: ignore[reportPrivateUsage]  # the content rule Python's stream wrapper applies
 )
@@ -28,15 +32,21 @@ StreamFailureKind = Literal["before_content", "terminal"]
 
 class StreamFailed(Exception):
     """A stream that failed before it committed. `partial_usage` is what the failed Responses
-    stream had used, which Python adds to whatever falls back from it."""
+    stream had used, which Python adds to whatever falls back from it. `callbacks_ran` is false
+    for an error the router detected in a frame litellm passed through."""
 
     def __init__(
-        self, error: BaseException, kind: StreamFailureKind, partial_usage: ResponseAPIUsage | None = None
+        self,
+        error: BaseException,
+        kind: StreamFailureKind,
+        partial_usage: ResponseAPIUsage | None = None,
+        callbacks_ran: bool = True,
     ) -> None:
         super().__init__(str(error))
         self.error: Final = error
         self.kind: Final = kind
         self.partial_usage: Final = partial_usage
+        self.callbacks_ran: Final = callbacks_ran
 
 
 def unwrapped(error: BaseException) -> BaseException:
@@ -202,3 +212,105 @@ def _with_usage(item: object, usage: Sequence[ResponseAPIUsage]) -> object:
     for partial in usage:
         PythonRouter._combine_responses_fallback_usage(item, partial)  # pyright: ignore[reportPrivateUsage, reportArgumentType]  # Python's usage merge, a no-op on events without usage
     return item
+
+
+@dataclass(frozen=True, slots=True)
+class AnthropicStreamRules:
+    """The router's answers an Anthropic stream needs before it commits, from `PythonRouter`'s
+    own rules for the attempt's request: whether a retry or a fallback could take over at all,
+    which error frames they recover from, and whether a safeguard refusal can fall back."""
+
+    model: str
+    recoverable: bool
+    frame_error: Callable[[tuple[str, str, int] | None, object, bool], Exception | None]
+    refusal_recoverable: bool
+
+
+async def anthropic_until_committed(
+    stream: AsyncIterator[object], rules: AnthropicStreamRules
+) -> FallbackAwareAnthropicMessagesStream:
+    """`_aanthropic_messages_streaming_iterator` up to its commit: lifecycle frames are held until
+    the first content delta (or 200 frames), and an error or refusal frame before then fails the
+    attempt when a retry or fallback can take over. Pings, which Python forwards live, replay
+    first."""
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (  # noqa: PLC0415  # imports the proxy, which imports litellm.Router
+        is_anthropic_ping_chunk,
+        parse_anthropic_error_event,
+        parse_anthropic_refusal_stop_details,
+    )
+    from litellm.llms.anthropic.pass_through.messages.utils import (  # noqa: PLC0415  # as above
+        safeguard_refusal_error,
+    )
+
+    if not rules.recoverable:
+        return _anthropic_replay((), stream)
+    live: tuple[object, ...] = ()  # rebind-ok: the pings read before the commit
+    held: tuple[object, ...] = ()  # rebind-ok: the lifecycle frames read before the commit
+    try:
+        async for chunk in stream:
+            if is_anthropic_ping_chunk(chunk):
+                live = (*live, chunk)
+                continue
+            committed = _anthropic_stream_commits_now(chunk, False, len(held))
+            window = (
+                b"".join(part for part in (*held, chunk) if isinstance(part, (bytes, bytearray)))
+                if not committed and isinstance(chunk, (bytes, bytearray))
+                else chunk
+            )
+            error_event = parse_anthropic_error_event(window)
+            frame_error = rules.frame_error(error_event, chunk, committed)
+            refusal = parse_anthropic_refusal_stop_details(window) if not committed and error_event is None else None
+            if refusal is not None and rules.refusal_recoverable:
+                refused = safeguard_refusal_error(model=rules.model, stop_details=refusal)
+                raise StreamFailed(_detected(refused, refused.message, rules.model), "before_content", None, False)
+            if not committed and error_event is None:
+                held = (*held, chunk)
+                continue
+            if frame_error is not None and error_event is not None:
+                raise StreamFailed(_detected(frame_error, error_event[1], rules.model), "before_content", None, False)
+            return _anthropic_replay((*live, *held, chunk), stream)
+    except StreamFailed:
+        raise
+    except Exception as error:
+        raise _anthropic_stream_failed(error, rules.model) from error
+    return _anthropic_replay((*live, *held), stream)
+
+
+def _detected(error: Exception, message: str, model: str) -> MidStreamFallbackError:
+    return MidStreamFallbackError(
+        message=message, model=model, llm_provider="anthropic", original_exception=error, is_pre_first_chunk=True
+    )
+
+
+def _anthropic_stream_failed(error: Exception, model: str) -> StreamFailed:
+    """`_aanthropic_messages_recover_stream_error` before the commit."""
+    if isinstance(error, MidStreamFallbackError):
+        return StreamFailed(error, "before_content" if error.is_pre_first_chunk else "terminal")
+    envelope: Final = _anthropic_stream_fallback_error_for_raised(error, model, False)
+    return StreamFailed(error, "terminal") if envelope is None else StreamFailed(envelope, "before_content")
+
+
+def _anthropic_replay(
+    buffered: Sequence[object], source: AsyncIterator[object]
+) -> FallbackAwareAnthropicMessagesStream:
+    return FallbackAwareAnthropicMessagesStream(_replay_frames(buffered, source), source)
+
+
+async def _replay_frames(buffered: Sequence[object], source: AsyncIterator[object]) -> AsyncGenerator[bytes, None]:
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (  # noqa: PLC0415  # imports the proxy, which imports litellm.Router
+        aclose_if_supported,
+    )
+
+    for chunk in buffered:
+        yield cast(bytes, chunk)  # cast-ok: the frames the source yielded
+    try:
+        async for chunk in source:
+            yield cast(bytes, chunk)  # cast-ok: as above
+    except MidStreamFallbackError as error:
+        raise unwrapped(error) from error
+    finally:
+        await aclose_if_supported(source)
+
+
+def anthropic_frames(response: object) -> AsyncIterator[object] | None:
+    return cast(AsyncIterator[object], response) if hasattr(response, "__aiter__") else None  # cast-ok: checked

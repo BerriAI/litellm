@@ -307,7 +307,7 @@ impl<'a, H: RouterHost> Run<'a, H> {
                 self.snapshot,
                 &self.engine.store,
                 deployment,
-                &failure.classified,
+                failure.classified.retry_trigger(),
             )
             .await;
         }
@@ -364,6 +364,7 @@ impl<'a, H: RouterHost> Run<'a, H> {
                 model_group_size: 0,
                 attempted_retries: 0,
                 max_retries: 0,
+                stream_retry: false,
             },
             ops: std::mem::take(&mut self.ops),
         };
@@ -398,6 +399,7 @@ impl<'a, H: RouterHost> Run<'a, H> {
             model_group_size: group_size,
             attempted_retries: 0,
             max_retries: num_retries,
+            stream_retry: false,
         };
         let first = if hop.depth == 0 && self.call.mock == Some(MockFailure::RateLimit) {
             self.mock(hop, MockFailure::RateLimit).await
@@ -409,7 +411,9 @@ impl<'a, H: RouterHost> Run<'a, H> {
             Err(stop) => failed(stop)?,
         };
         if let Some(kind) = failure.classified.stream_failure {
-            return self.stream_failed(hop, failure, kind).await;
+            return self
+                .stream_failed(hop, failure, kind, stamp, &skipped)
+                .await;
         }
         if failure.classified.guardrail_intervention {
             return Err(Stop::Failed(failure));
@@ -438,7 +442,7 @@ impl<'a, H: RouterHost> Run<'a, H> {
         }
         self.log_retry(hop, &failure);
         add_retry_skip(&mut skipped, &failure);
-        self.sleep(&failure, num_retries, num_retries, healthy, all)
+        self.sleep(&failure.classified, num_retries, num_retries, healthy, all)
             .await
             .map_err(Stop::Host)?;
         let mut latest = failure;
@@ -456,7 +460,9 @@ impl<'a, H: RouterHost> Run<'a, H> {
                 Err(stop) => failed(stop)?,
             };
             if let Some(kind) = failure.classified.stream_failure {
-                return self.stream_failed(hop, failure, kind).await;
+                return self
+                    .stream_failed(hop, failure, kind, stamp, &skipped)
+                    .await;
             }
             self.log_retry(hop, &failure);
             let remaining = num_retries - attempt - 1;
@@ -467,7 +473,7 @@ impl<'a, H: RouterHost> Run<'a, H> {
                 return Err(Stop::Failed(failure));
             }
             add_retry_skip(&mut skipped, &failure);
-            self.sleep(&failure, remaining, num_retries, healthy, all)
+            self.sleep(&failure.classified, remaining, num_retries, healthy, all)
                 .await
                 .map_err(Stop::Host)?;
             latest = failure;
@@ -482,19 +488,117 @@ impl<'a, H: RouterHost> Run<'a, H> {
         Err(Stop::Failed(latest))
     }
 
-    /// `_acompletion_streaming_iterator`: the attempt returned its stream, so the retry and
-    /// fallback layers above it are done. A failure before content goes to this hop's own
-    /// fallback chain without retrying in the group; any other stream error is raised as is.
+    /// The attempt returned its stream, so the retry and fallback layers above it are done. A
+    /// failure before content goes to this hop's own fallback chain, after a same-group retry
+    /// for Anthropic messages; any other stream error is raised as is.
     async fn stream_failed(
         &mut self,
         hop: &Hop,
         failure: Box<Failure<H::Error>>,
         kind: StreamFailure,
+        stamp: RetryStamp,
+        skipped: &[String],
     ) -> Attempted<H::Response, H::Error, H::Fault> {
         match kind {
             StreamFailure::Terminal => Err(Stop::Settled(failure)),
+            StreamFailure::BeforeContent if self.call.operation == Operation::AnthropicMessages => {
+                settle(self.retry_stream(hop, failure, stamp, skipped).await)
+            }
             StreamFailure::BeforeContent => settle(self.fallback(hop, failure).await),
         }
+    }
+
+    /// `_aanthropic_messages_retry_same_group`, then `_aanthropic_messages_fallback_attempt`
+    /// once the budget runs out. A retry whose stream fails before content again carries on
+    /// the same count, as the retry's own stream wrapper does.
+    fn retry_stream<'s>(
+        &'s mut self,
+        hop: &'s Hop,
+        failure: Box<Failure<H::Error>>,
+        stamp: RetryStamp,
+        skipped: &'s [String],
+    ) -> Step<'s, H::Response, H::Error, H::Fault> {
+        Box::pin(async move {
+            let (healthy, all) = self.healthy_counts(&hop.group).await;
+            let (budget, policy_applies) = self.stream_retry_budget(hop, &failure, stamp);
+            let mut last = failure;
+            for attempt in stamp.attempted_retries..budget {
+                let trigger = last.classified.retry_trigger().clone();
+                if !policy_applies && !should_retry(&trigger, &self.retry_context(healthy, all)) {
+                    break;
+                }
+                self.ops.push(Op::LogRetry {
+                    bucket: hop.bucket,
+                    model: hop.group.clone(),
+                    error: last.raised.clone(),
+                    original: true,
+                });
+                self.sleep(&trigger, budget - attempt, budget, healthy, all)
+                    .await
+                    .map_err(Stop::Host)?;
+                let retry = RetryStamp {
+                    attempted_retries: attempt + 1,
+                    max_retries: budget,
+                    stream_retry: true,
+                    ..stamp
+                };
+                match self.attempt(hop, retry, skipped).await {
+                    Ok(mut success) => {
+                        success.outcome.attempted_retries = attempt + 1;
+                        success.outcome.max_retries = Some(budget);
+                        success.outcome.attempted_fallbacks = hop.depth;
+                        return Ok(success);
+                    }
+                    Err(Stop::Failed(failure)) => match failure.classified.stream_failure {
+                        Some(kind) => {
+                            return self.stream_failed(hop, failure, kind, retry, skipped).await;
+                        }
+                        None => {
+                            let retriable = failure.classified.retries_pre_stream != Some(false);
+                            last = failure;
+                            if !retriable {
+                                break;
+                            }
+                        }
+                    },
+                    Err(stop) => return Err(stop),
+                }
+            }
+            self.fallback(hop, last).await
+        })
+    }
+
+    /// `_anthropic_messages_retry_budget`: the budget an earlier retry of this hop committed
+    /// to, else the retry policy's grant for this error, else the request's, the deployment's
+    /// or the router's `num_retries`; and whether a policy governs the retry.
+    fn stream_retry_budget(
+        &self,
+        hop: &Hop,
+        failure: &Failure<H::Error>,
+        stamp: RetryStamp,
+    ) -> (u32, bool) {
+        let trigger = failure.classified.retry_trigger();
+        let policy = (self.call.num_retries != Some(0))
+            .then(|| self.snapshot.settings.retry_policy_for(&hop.group))
+            .flatten()
+            .and_then(|policy| policy.retries_for(&trigger.classes, trigger.status_code));
+        if stamp.attempted_retries > 0 {
+            return (stamp.max_retries, policy.is_some());
+        }
+        if let Some(retries) = policy {
+            return (retries, true);
+        }
+        let deployment_retries = failure
+            .deployment_id
+            .as_deref()
+            .and_then(|id| self.snapshot.by_id(id))
+            .and_then(|deployment| deployment.num_retries);
+        let plain = self
+            .call
+            .num_retries
+            .or(deployment_retries)
+            .unwrap_or(self.snapshot.settings.num_retries);
+        (plain, false)
     }
 
     fn retry_context(&self, healthy: usize, all: usize) -> RetryContext<'a> {
@@ -512,12 +616,13 @@ impl<'a, H: RouterHost> Run<'a, H> {
             bucket: hop.bucket,
             model: hop.group.clone(),
             error: failure.raised.clone(),
+            original: false,
         });
     }
 
     async fn sleep(
         &mut self,
-        failure: &Failure<H::Error>,
+        classified: &Classified,
         remaining: u32,
         num_retries: u32,
         healthy: usize,
@@ -530,7 +635,7 @@ impl<'a, H: RouterHost> Run<'a, H> {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             sleep_before_retry(
-                &failure.classified,
+                classified,
                 Backoff {
                     remaining,
                     num_retries,
@@ -619,8 +724,13 @@ impl<'a, H: RouterHost> Run<'a, H> {
             }
             Invoked::Failure { error, classified } => {
                 if self.run_failure_callbacks(&classified) {
-                    cooldown::record_failure(snapshot, &self.engine.store, deployment, &classified)
-                        .await;
+                    cooldown::record_failure(
+                        snapshot,
+                        &self.engine.store,
+                        deployment,
+                        classified.retry_trigger(),
+                    )
+                    .await;
                 }
                 Err(Stop::Failed(Box::new(Failure::host(
                     error,
@@ -774,6 +884,7 @@ impl<'a, H: RouterHost> Run<'a, H> {
                 bucket,
                 model: model.clone(),
                 error: original.raised.clone(),
+                original: false,
             });
             depth += 1;
             let id = self.next_bucket;
@@ -831,7 +942,7 @@ impl<'a, H: RouterHost> Run<'a, H> {
             self.snapshot,
             &self.engine.store,
             deployment,
-            &failure.classified,
+            failure.classified.retry_trigger(),
         )
         .await;
     }

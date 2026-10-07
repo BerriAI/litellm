@@ -143,6 +143,7 @@ pub(super) fn attempt<'py>(py: Python<'py>, attempt: &Attempt<PyObj>) -> PyResul
     dict.set_item("model_group_size", attempt.retry.model_group_size)?;
     dict.set_item("attempted_retries", attempt.retry.attempted_retries)?;
     dict.set_item("max_retries", attempt.retry.max_retries)?;
+    dict.set_item("stream_retry", attempt.retry.stream_retry)?;
     dict.set_item("ops", ops(py, &attempt.ops)?)?;
     Ok(dict.into_any().unbind())
 }
@@ -172,11 +173,13 @@ fn op<'py>(py: Python<'py>, op: &Op<PyObj>) -> PyResult<Bound<'py, PyDict>> {
             bucket,
             model,
             error,
+            original,
         } => {
             dict.set_item("op", "log_retry")?;
             dict.set_item("bucket", bucket)?;
             dict.set_item("model", model)?;
             dict.set_item("error", raised(py, error)?)?;
+            dict.set_item("original", original)?;
         }
         Op::OpenBucket { id, copy_of, stamp } => {
             dict.set_item("op", "open_bucket")?;

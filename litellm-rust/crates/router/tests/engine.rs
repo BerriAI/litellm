@@ -565,3 +565,49 @@ async fn a_resumed_stream_falls_back_on_its_hops_chain_skipping_attempted_groups
         ("i", 2)
     );
 }
+
+#[rstest]
+#[case::router_budget(None, 2)]
+#[case::request_budget(Some(1), 1)]
+#[case::request_opts_out(Some(0), 0)]
+#[tokio::test]
+async fn an_anthropic_stream_failing_before_content_retries_in_the_group_then_falls_back(
+    #[case] request_retries: Option<u32>,
+    #[case] retries: usize,
+) {
+    let mut settings = settings();
+    settings.fallbacks = Some(vec![chain("g", &["h"])]);
+    let engine = engine(vec![deployment("a", "g"), deployment("c", "h")], settings);
+    let before_content = Scripted::Stream(StreamFailure::BeforeContent);
+    let host = ScriptedHost::default().script("a", &[before_content; 3]);
+    let mut call = RouterCall::new(Operation::AnthropicMessages, "g");
+    call.num_retries = request_retries;
+
+    let routed = engine.route(&host, call).await.ok().unwrap();
+
+    let mut expected = vec!["a"; 1 + retries];
+    expected.push("c");
+    assert_eq!(host.attempts(), expected);
+    assert_eq!(routed.outcome.model_group, "h");
+    assert_eq!(host.sleeps.lock().unwrap().len(), retries);
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_anthropic_stream_retry_that_opens_reports_its_retry_count() {
+    let engine = engine(vec![deployment("a", "g")], settings());
+    let host =
+        ScriptedHost::default().script("a", &[Scripted::Stream(StreamFailure::BeforeContent)]);
+
+    let routed = engine
+        .route(&host, RouterCall::new(Operation::AnthropicMessages, "g"))
+        .await
+        .ok()
+        .unwrap();
+
+    assert_eq!(host.attempts(), ["a", "a"]);
+    assert_eq!(
+        (routed.outcome.attempted_retries, routed.outcome.max_retries),
+        (1, Some(2))
+    );
+}

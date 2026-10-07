@@ -287,8 +287,6 @@ class RustRouter:
     ) -> object:
         """`factory_function`'s wrapper drops its own `custom_llm_provider` and `client`."""
         del custom_llm_provider, client
-        if kwargs.get("stream") is True:
-            raise NotImplementedError("the Rust router backend does not stream Anthropic messages yet")
         return await self._route(self._call("anthropic_messages", _model(kwargs), kwargs), True)
 
     async def _route(self, call: _Call, asynchronous: bool) -> object:

@@ -58,11 +58,24 @@ pub struct Classified {
     pub exact_litellm_type: bool,
     #[serde(default)]
     pub stream_failure: Option<StreamFailure>,
+    /// The provider error inside a mid-stream fallback error, when the stream's same-group
+    /// retry judges that one rather than the envelope the fallback chain is judged by.
+    #[serde(default)]
+    pub original: Option<Box<Classified>>,
+    /// A same-group stream retry that failed before its stream opened: whether the retry
+    /// loop goes on (408, 409, 429, 5xx, or no status) or hands it to the fallback chain.
+    #[serde(default)]
+    pub retries_pre_stream: Option<bool>,
 }
 
 impl Classified {
     pub fn is(&self, class: ExceptionClass) -> bool {
         self.classes.contains(&class)
+    }
+
+    /// What a same-group retry of a failed stream is decided by.
+    pub fn retry_trigger(&self) -> &Classified {
+        self.original.as_deref().unwrap_or(self)
     }
 }
 
