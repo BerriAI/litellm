@@ -504,10 +504,58 @@ def test_skipped_estimation_preserves_paid_cache_without_refreshing_it(reason: s
         retained, (first.model_copy(update={"request_id": "followup", "started_at": 10004.0, "available_at": 10005.0}),)
     )
     assert followup[0].usage is not None and followup[0].usage.prompt_tokens_details.cached_tokens == 8000
+    _, refreshed = advance_baseline_history(
+        retained,
+        (first.model_copy(update={"request_id": "refreshed", "started_at": 11800.0, "available_at": 11801.0}),),
+    )
+    assert refreshed[0].reason == "history_unavailable"
     _, expired = advance_baseline_history(
-        retained, (first.model_copy(update={"request_id": "expired", "started_at": 11800.0, "available_at": 11801.0}),)
+        retained, (first.model_copy(update={"request_id": "expired", "started_at": 13900.0, "available_at": 13901.0}),)
     )
     assert expired[0].usage is not None and expired[0].usage.prompt_tokens_details.cached_tokens == 0
+
+
+@pytest.mark.parametrize(
+    "reason", ("estimation_capacity_exhausted", "baseline_estimation_timeout", "unsupported_cache_request")
+)
+def test_skipped_estimation_does_not_model_followup_from_history_missing_its_writes(reason: str) -> None:
+    def turn(count: int) -> BaselineObservation:
+        messages: Final = [
+            message
+            for index in range(count)
+            for message in (
+                {"role": "user", "content": f"turn {index} {_PROMPT}"},
+                {"role": "assistant", "content": "ok"},
+            )
+        ][:-1]
+        usage: Final = normalize_cache_usage(
+            Usage(prompt_tokens=4000 * count, completion_tokens=20, total_tokens=4000 * count + 20)
+        )
+        captured: Final = estimate_cache_plan(
+            {"messages": messages}, "gpt-6-astra", "openai", _PRICES, usage, lambda model, text: len(text)
+        )
+        assert captured is not None
+        return BaselineObservation(
+            request_id=str(count),
+            started_at=10000.0 + 10 * count,
+            available_at=10001.0 + 10 * count,
+            outcome="complete",
+            baseline_equivalent=False,
+            usage=usage,
+            plan=captured.plan,
+            cache_policy="estimated",
+            cache_write_pricing="standard",
+        )
+
+    complete, skipped = BaselineHistory(), BaselineHistory()
+    for count in (1, 2, 3):
+        observation = turn(count)
+        complete, full = advance_baseline_history(complete, (observation,))
+        skipped, partial = advance_baseline_history(
+            skipped, (observation.model_copy(update={"plan": None, "reason": reason}) if count == 2 else observation,)
+        )
+    assert full[0].usage is not None and full[0].usage.prompt_tokens_details.cached_tokens > 4000
+    assert partial[0].reason == "history_unavailable" and partial[0].usage is None
 
 
 def test_partial_multimodal_cache_replaces_observed_splits_without_double_charging() -> None:

@@ -366,11 +366,12 @@ def advance_baseline_history(
         if all(item.cache_policy == "estimated" for item in simultaneous)
         else max(history.uncertain_before, first)
     )
-    relevant: Final = tuple(
+    skipped: Final = tuple(
         item
         for item in simultaneous
-        if item.outcome != "response_cache" and not (item.cache_policy == "estimated" and item.plan is None)
+        if item.outcome != "response_cache" and item.cache_policy == "estimated" and item.plan is None
     )
+    relevant: Final = tuple(item for item in simultaneous if item.outcome != "response_cache" and item not in skipped)
     equivalent: Final = history.equivalent and all(item.baseline_equivalent for item in relevant)
     before: Final = BaselineHistory(
         first, history.last_at, equivalent, uncertain, history.entries, history.blocked_until
@@ -390,7 +391,9 @@ def advance_baseline_history(
         first_at=first,
         last_at=started,
         equivalent=equivalent,
-        uncertain_before=max(started, blocked) if invalidated or overflow else uncertain,
+        uncertain_before=max(started, blocked)
+        if invalidated or overflow
+        else max((uncertain, *(item.available_at for item in skipped))),
         entries=() if overflow else entries,
         blocked_until=blocked,
     ), estimates

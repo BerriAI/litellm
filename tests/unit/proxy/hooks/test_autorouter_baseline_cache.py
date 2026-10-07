@@ -1278,6 +1278,67 @@ async def test_messages_estimate_keeps_adapted_baseline_extra_body_retention(
     assert {marker.ttl_seconds for marker in captured.observation.plan.breakpoints} == {24 * 60 * 60}
 
 
+@pytest.mark.parametrize("chat_adapter", (False, True))
+async def test_adapted_messages_tier_estimates_native_anthropic_baseline(
+    monkeypatch: pytest.MonkeyPatch, chat_adapter: bool
+) -> None:
+    models: Final = _MESSAGES.validate_python(
+        [
+            _MODELS[0],
+            {
+                "model_name": "sonnet",
+                "model_info": {"id": "selected"},
+                "litellm_params": {
+                    "model": "openai/gpt-6-astra",
+                    "api_key": "test-selected",
+                    "api_base": "https://api.openai.com/v1",
+                },
+            },
+            _MODELS[2],
+        ]
+    )
+    rig: Final = _Rig(monkeypatch, models=models)
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", chat_adapter)
+
+    def openai_response(request: httpx.Request) -> httpx.Response:
+        body: Final = _JSON_OBJECT.validate_json(request.content)
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": "chatcmpl-selected",
+                "object": "chat.completion",
+                "created": 1,
+                "model": body["model"],
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "OK"}}],
+                "usage": {"prompt_tokens": 6000, "completion_tokens": 10, "total_tokens": 6010},
+            }
+            if chat_adapter
+            else {
+                "id": "resp_selected",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": body["model"],
+                "output": [],
+                "usage": {"input_tokens": 6000, "output_tokens": 10, "total_tokens": 6010},
+            },
+        )
+
+    with respx.mock(assert_all_called=False) as transport:
+        anthropic: Final = transport.post("https://api.anthropic.com/v1/messages").mock(side_effect=_upstream)
+        transport.post("https://api.openai.com/v1/" + ("chat/completions" if chat_adapter else "responses")).mock(
+            side_effect=openai_response
+        )
+        log: Final = rig.logging()
+        await _call(rig.router, log)
+        captured: Final = _observation(await rig.capture.payload())
+    assert not anthropic.calls
+    assert log.baseline_cache_context is not None and log.baseline_cache_context.estimated
+    assert captured.observation.cache_policy == "estimated" and captured.observation.outcome == "complete"
+    assert captured.observation.plan is not None and captured.observation.reason is None
+
+
 @pytest.mark.parametrize("passthrough", (False, True))
 async def test_messages_estimate_does_not_flatten_native_baseline_extra_body(
     monkeypatch: pytest.MonkeyPatch, passthrough: bool
@@ -1324,7 +1385,8 @@ async def test_messages_estimate_does_not_flatten_native_baseline_extra_body(
 
 @pytest.mark.parametrize("unresolved_input", (False, True))
 async def test_estimated_baseline_alias_resolves_threshold_and_preserves_usage_for_unsupported_input(
-    monkeypatch: pytest.MonkeyPatch, unresolved_input: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    unresolved_input: bool,
 ) -> None:
     from litellm import utils
     from litellm.proxy.hooks.autorouter_baseline_cache import finalize_baseline_cache
