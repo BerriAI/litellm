@@ -7348,6 +7348,23 @@ async def test_queue_waiter_that_loses_the_race_waits_for_the_next_release():
 
 
 @pytest.mark.asyncio
+async def test_queue_admits_every_waiter_when_several_slots_free_together():
+    handler, cache = _queue_handler(_QueueClock(advance_time=False))
+    key = _queue_key(max_parallel_requests=2)
+    running = [await _admit_in_own_stash(handler, cache, key) for _ in range(2)]
+    waiters = [asyncio.create_task(_admit_in_own_stash(handler, cache, key)) for _ in range(2)]
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    for stash in running:
+        await _finish(handler, key, stash)
+    admitted = await asyncio.wait_for(asyncio.gather(*waiters), timeout=1)
+
+    assert all(stash.parallel_slot is not None for stash in admitted)
+    assert _in_flight(handler, cache, key) == 2
+
+
+@pytest.mark.asyncio
 async def test_queue_release_of_one_key_does_not_wake_waiters_of_another_key():
     clock = _QueueClock(advance_time=False)
     handler, cache = _queue_handler(clock)

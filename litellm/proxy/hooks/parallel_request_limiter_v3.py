@@ -1899,7 +1899,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         slot, when that gauge's scope is in queue mode. The request holds no
         slot while it waits, so a cancelled or timed-out waiter leaves nothing
         to release. Waiters on this worker are served first come, first
-        served: only the oldest one retries. Releases on this worker wake it at once; releases on
+        served: only the oldest one retries, and it hands its turn to the next
+        when it leaves, so releases it absorbed while retrying are not lost.
+        Releases on this worker wake it at once; releases on
         other workers are seen by re-asking Redis every poll interval, and the
         retries skip the local mirror because it does not see those releases.
         """
@@ -1934,7 +1936,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     return attempt
         finally:
             waiters.remove(turn)
-            if not waiters:
+            if waiters:
+                waiters[0].set()
+            else:
                 del self._parallel_queue_waiters[queue_key]
         return self._queue_rejection(rejection, "timeout", self._queue_clock.now() - started_at, policy)
 
