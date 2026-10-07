@@ -48,10 +48,14 @@ def recording_server() -> Generator[RecordingServer]:
 @pytest.fixture
 def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    litellm.get_model_info.cache_clear()
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        litellm.get_model_cost_map(url=""),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # get_model_cost_map is untyped
+    )
+    litellm.get_model_info.cache_clear()  # pyright: ignore[reportAny, reportFunctionMemberAccess]  # lru_cache helpers are not visible to the type checker
     yield
-    litellm.get_model_info.cache_clear()
+    litellm.get_model_info.cache_clear()  # pyright: ignore[reportAny, reportFunctionMemberAccess]  # lru_cache helpers are not visible to the type checker
 
 
 @pytest.fixture

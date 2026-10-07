@@ -3,7 +3,7 @@ from typing import Final
 
 import pytest
 
-from litellm.rust_bridge import _native  # noqa: F401
+from litellm.rust_bridge import _native  # noqa: F401  # pyright: ignore[reportUnusedImport]  # the import itself asserts the extension is compiled
 from tests.integration._support.native.clickhouse import clickhouse_service as clickhouse_service
 from tests.integration._support.native.clickhouse import clickhouse_url as clickhouse_url
 from tests.integration._support.native.fixtures import (
