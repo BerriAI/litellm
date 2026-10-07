@@ -1,0 +1,20 @@
+[
+  {
+    "input": {"model": "synthetic-secret", "messages": [{"role": "user", "content": [{"type": "text", "text": "synthetic-prompt"}]}], "temperature": 0.7},
+    "expected": {"field_paths": ["$['messages']", "$['messages'][*]['content']", "$['messages'][*]['content'][*]['text']", "$['messages'][*]['content'][*]['type']", "$['messages'][*]['role']", "$['model']", "$['temperature']"], "truncated": false}
+  },
+  {
+    "input": {"items": [{"a": 1}, {"b": 2}, {"a": 3}], "empty": {}, "list": []},
+    "expected": {"field_paths": ["$['empty']", "$['items']", "$['items'][*]['a']", "$['items'][*]['b']", "$['list']"], "truncated": false}
+  },
+  {
+    "input": {"metadata": {"person@example.test": {"value": "private"}}, "properties": {"user_field": {"type": "string"}}},
+    "expected": {"field_paths": ["$['metadata']", "$['metadata'][*]", "$['metadata'][*]['value']", "$['properties']", "$['properties'][*]", "$['properties'][*]['type']"], "truncated": false}
+  },
+  {
+    "input": {"a.b": {"quoted'\\key": null}, "line\nbreak": false},
+    "expected": {"field_paths": ["$['a.b']", "$['a.b']['quoted\\'\\\\key']", "$['line\\nbreak']"], "truncated": false}
+  },
+  {"input": [1, 2, {"field": "private"}], "expected": {"field_paths": ["$[*]['field']"], "truncated": false}},
+  {"input": "private", "expected": {"field_paths": [], "truncated": false}}
+]

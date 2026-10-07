@@ -52,3 +52,9 @@ The `posthog` Cargo feature compiles SDK support by default but starts no worker
 The subscriber remains the upstream `tracing_subscriber::Registry` with composable layers and filters. `Sink` is the existing normalized-record adapter used by those layers. Rust hosts may compose `sink_layer(diagnostics.clone())` with standard `fmt` or other layers
 
 Normalized `source.target` and `source.timestamp` fields let exporters consume records without interpreting host-specific attributes. Both adapters redact before enqueueing. Delivery is best effort; flush completion does not prove remote receipt. Queue limits bound records rather than bytes, and per-destination drop counters and distributed span export are not implemented
+
+Payload shape extraction
+
+`PayloadShape::extract` walks a borrowed JSON value and returns sorted, unique JSONPath expressions containing object keys and array wildcards, with no scalar values or array positions. `ShapeLimits` bounds visited nodes, depth, path count, and path bytes. Exceeding a limit discards partial paths and marks the shape truncated
+
+Children of `metadata`, `properties`, `$defs`, `definitions`, and `headers` use wildcards for dynamic key names. Strings containing JSON remain opaque. The shared synthetic fixture covers Python/Rust parity; capture policy and provider boundary wiring belong to the payload-shape feature above this PR

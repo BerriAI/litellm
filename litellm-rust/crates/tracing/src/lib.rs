@@ -22,6 +22,7 @@ mod posthog;
 mod processing;
 mod redaction;
 mod runtime;
+mod shape;
 
 pub use configuration::{DestinationConfig, DiagnosticPolicy, DiagnosticsConfig};
 pub use error::Error;
@@ -32,6 +33,7 @@ pub use posthog::PostHogSink;
 pub use processing::{DiagnosticInput, DiagnosticOutput, Policy, Processor};
 pub use redaction::{REDACTED, SecretRedactor};
 pub use runtime::Diagnostics;
+pub use shape::{PayloadShape, ShapeLimits};
 pub use tracing::{Level, Metadata, debug, error, info, trace, warn};
 
 pub struct ByteChunk<'a>(&'a [u8]);
