@@ -662,7 +662,7 @@ async def test_aresponses_injection_point_marks_input_text_on_gpt_5_6():
             "prompt_cache_breakpoint": {"mode": "explicit"},
         }
         assert body["input"][1] == {"role": "user", "content": "hi"}
-        assert body["prompt_cache_options"] == {"mode": "explicit"}
+        assert body["prompt_cache_options"] == {"mode": "implicit"}
 
 
 def test_responses_injection_point_marks_input_text_on_gpt_5_6():
@@ -683,7 +683,7 @@ def test_responses_injection_point_marks_input_text_on_gpt_5_6():
             "prompt_cache_breakpoint": {"mode": "explicit"},
         }
         assert body["input"][1] == {"role": "user", "content": "hi"}
-        assert body["prompt_cache_options"] == {"mode": "explicit"}
+        assert body["prompt_cache_options"] == {"mode": "implicit"}
 
 
 @pytest.mark.asyncio
@@ -767,7 +767,7 @@ async def test_aresponses_custom_api_base_opts_in_through_prompt_cache_options()
 async def test_aresponses_regional_openai_api_base_marks_input_text():
     body = await _aresponses_body_with_system_point(model="gpt-5.6", api_base="https://eu.api.openai.com/v1")
     assert body["input"][0]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
-    assert body["prompt_cache_options"] == {"mode": "explicit"}
+    assert body["prompt_cache_options"] == {"mode": "implicit"}
 
 
 @pytest.mark.usefixtures("_no_openai_api_base_override")
