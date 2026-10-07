@@ -1345,7 +1345,7 @@ def _vllm_params(api_base: str, api_key: str | None, model_id: str) -> LiteLLMPa
     )
 
 
-HOSTED_VLLM_DEFAULT_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
+HOSTED_VLLM_MODEL: Final = (os.environ.get("HOSTED_VLLM_MODEL") or "Qwen/Qwen2.5-0.5B-Instruct").strip()
 HOSTED_VLLM_BAD_LINE_CUSTOM_ID = "req-bad"
 
 
@@ -1354,9 +1354,8 @@ def _hosted_vllm_deployment(client: BatchClient, resources: ResourceManager) -> 
     if api_base is None:
         pytest.skip("set HOSTED_VLLM_API_BASE (the live vLLM server this deployment targets)")
     api_key = (os.environ.get("HOSTED_VLLM_API_KEY") or "").strip() or None
-    model_id = (os.environ.get("HOSTED_VLLM_MODEL") or HOSTED_VLLM_DEFAULT_MODEL).strip()
     proxy_name = batch_model_name("hosted-vllm-batch")
-    model_row_id = client.create_model(proxy_name, _vllm_params(api_base, api_key, model_id))
+    model_row_id = client.create_model(proxy_name, _vllm_params(api_base, api_key, HOSTED_VLLM_MODEL))
     resources.defer(lambda: client.delete_model(model_row_id))
     return proxy_name
 
@@ -1413,7 +1412,7 @@ class TestHostedVllmBatch:
             domain=Domain.LLM_TRANSLATION,
             route=Route.BATCHES,
             providers=(MetaProvider.HOSTED_VLLM,),
-            models=(HOSTED_VLLM_DEFAULT_MODEL,),
+            models=(HOSTED_VLLM_MODEL,),
             mode=Mode.BATCH,
         )
     )
@@ -1469,7 +1468,7 @@ class TestHostedVllmBatch:
             domain=Domain.LLM_TRANSLATION,
             route=Route.BATCHES,
             providers=(MetaProvider.HOSTED_VLLM,),
-            models=(HOSTED_VLLM_DEFAULT_MODEL,),
+            models=(HOSTED_VLLM_MODEL,),
             mode=Mode.BATCH,
         )
     )

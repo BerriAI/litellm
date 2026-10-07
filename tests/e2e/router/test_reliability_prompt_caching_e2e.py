@@ -47,8 +47,8 @@ class TestReliabilityPromptCachingAffinity:
     @meta(
         Subject(
             domain=Domain.ROUTING,
-            providers=(Provider.ANTHROPIC,),
-            models=(CACHING_MODEL,),
+            providers=(Provider.ANTHROPIC, Provider.OPENAI),
+            models=(CACHING_MODEL, REAL_MODEL),
             capabilities=(Capability.PROMPT_CACHING,),
             mode=Mode.NONSTREAM,
         )
