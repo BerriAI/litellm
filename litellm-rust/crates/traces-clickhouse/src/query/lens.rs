@@ -6,7 +6,8 @@ const SAMPLE_READ_LIMITS: ReadLimits = ReadLimits {
     ..litellm_storage_clickhouse::READ_LIMITS
 };
 
-pub const LENS_QUERIES: [litellm_traces::ReadQuery; 5] = [
+pub const NAMED_READ_QUERIES: [litellm_traces::ReadQuery; 6] = [
+    litellm_traces::ReadQuery::TraceAgents,
     litellm_traces::ReadQuery::Availability,
     litellm_traces::ReadQuery::Agents,
     litellm_traces::ReadQuery::Sample,
