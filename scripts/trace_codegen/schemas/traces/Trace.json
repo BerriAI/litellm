@@ -60,6 +60,22 @@
       ],
       "type": "object"
     },
+    "RunSource": {
+      "description": "Where the run was started, from the `lens.source.url` and `lens.source.title` span attributes.",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "title"
+      ],
+      "type": "object"
+    },
     "Span": {
       "properties": {
         "agent": {
@@ -292,6 +308,17 @@
         },
         "service": {
           "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-python-optional": true
         },
         "span_count": {
           "format": "uint64",
