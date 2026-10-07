@@ -22,6 +22,7 @@ def call_hook(
     request: RequestT,
     args: tuple[object, ...],
     kwargs: Mapping[str, object],
+    _standby: bool,
 ) -> ResultT:
     return hook(request, args, kwargs)
 
@@ -64,7 +65,7 @@ class PublicDispatch(Generic[RequestT]):
         *,
         python: Callable[..., ResultT] | runtime.NoPythonImplementation,
         binding: NativeBinding[NativeT],
-        native: Callable[[NativeT, RequestT, tuple[object, ...], Mapping[str, object]], ResultT],
+        native: Callable[[NativeT, RequestT, tuple[object, ...], Mapping[str, object], bool], ResultT],
         rules: Rules | None = None,
     ) -> ResultT:
         selected_rules: Final = catalog.RULES if rules is None else rules
@@ -73,7 +74,7 @@ class PublicDispatch(Generic[RequestT]):
             return runtime.run(
                 self.context(native_request),
                 binding=binding,
-                native=lambda hook: native(hook, native_request, args, kwargs),
+                native=lambda hook, standby: native(hook, native_request, args, kwargs, standby),
                 python=python,
                 rules=selected_rules,
             )
@@ -85,7 +86,7 @@ class PublicDispatch(Generic[RequestT]):
         return runtime.run(
             self.context(request),
             binding=binding,
-            native=lambda hook: native(hook, request, args, kwargs),
+            native=lambda hook, standby: native(hook, request, args, kwargs, standby),
             python=lambda: python(*args, **kwargs),
             rules=selected_rules,
         )
@@ -97,7 +98,7 @@ class PublicDispatch(Generic[RequestT]):
         *,
         python: Callable[..., Awaitable[ResultT]] | runtime.NoPythonImplementation,
         binding: NativeBinding[NativeT],
-        native: Callable[[NativeT, RequestT, tuple[object, ...], Mapping[str, object]], Awaitable[ResultT]],
+        native: Callable[[NativeT, RequestT, tuple[object, ...], Mapping[str, object], bool], Awaitable[ResultT]],
         rules: Rules | None = None,
     ) -> ResultT:
         selected_rules: Final = catalog.RULES if rules is None else rules
@@ -106,7 +107,7 @@ class PublicDispatch(Generic[RequestT]):
             return await runtime.arun(
                 self.context(native_request),
                 binding=binding,
-                native=lambda hook: native(hook, native_request, args, kwargs),
+                native=lambda hook, standby: native(hook, native_request, args, kwargs, standby),
                 python=python,
                 rules=selected_rules,
             )
@@ -118,7 +119,7 @@ class PublicDispatch(Generic[RequestT]):
         return await runtime.arun(
             self.context(request),
             binding=binding,
-            native=lambda hook: native(hook, request, args, kwargs),
+            native=lambda hook, standby: native(hook, request, args, kwargs, standby),
             python=lambda: python(*args, **kwargs),
             rules=selected_rules,
         )

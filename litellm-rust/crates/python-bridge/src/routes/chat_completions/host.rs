@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
+use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned, Settlement};
 use litellm_inference::call::Failure;
 use litellm_inference_chat::{Error, route::ChatCompletions, types::ChatCompletionsCall};
 use pyo3::{
@@ -33,7 +33,6 @@ pub(super) fn project(
 
 impl PythonBinding for ChatCompletionsPythonHost {
     type Protocol = ChatCompletions;
-    type Failure = PyErr;
 
     fn decode_request(
         &mut self,
@@ -77,7 +76,7 @@ impl PythonBinding for ChatCompletionsPythonHost {
         match chunk {}
     }
 
-    fn map_error(&self, py: Python<'_>, error: Failure<Error>) -> PyResult<PyErr> {
+    fn map_error(&self, py: Python<'_>, error: Failure<Error>) -> PyResult<Settlement> {
         self.0.error(py, error)
     }
     fn host_error(error: &PyErr) -> Error {

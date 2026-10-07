@@ -166,7 +166,7 @@ def success_value(route: str, response: dict[object, object]) -> object:
 
 
 def assert_rate_limit(route: str, error: BaseException) -> None:
-    report: Final = failures.read_report(error)
+    report: Final = failures.report(error)
     if report is None or not isinstance(report.kind, failures.UpstreamKind):
         raise AssertionError(f"{route} raised without an upstream failure report: {error!r}")
     if (report.stage, report.kind.status, report.kind.body) != ("upstream", 429, native_response(429, route).decode()):

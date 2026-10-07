@@ -143,7 +143,7 @@ fn sse_response() -> ResponseTemplate {
 
 async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Failure<Error>> {
     litellm_host_native::in_process::run_hosted(
-        machine(Arc::new(RecordingSecrets::empty()))(host.request().map_err(Failure::host)?),
+        machine(Arc::new(RecordingSecrets::empty()))(host.request().map_err(Failure::prepare)?),
         host.runtime(),
     )
     .await

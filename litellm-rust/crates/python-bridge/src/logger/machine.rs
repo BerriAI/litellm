@@ -32,7 +32,7 @@ impl<M: Machine> Machine for LoggedMachine<M> {
 
     fn interrupt(
         &mut self,
-        failure: HostFailure<litellm_host::failure::Failure<<Self::Protocol as Protocol>::Error>>,
+        failure: HostFailure<<Self::Protocol as Protocol>::Error>,
     ) -> Interrupted<'_, Self> {
         let logger = self.logger.get_or_init(|| Python::attach(super::capture));
         Box::pin(logger.instrument(logger.scope(|| self.machine.interrupt(failure))))

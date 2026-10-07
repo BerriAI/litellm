@@ -1,18 +1,19 @@
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
-use litellm_host_python::{from_py, lookup, to_py};
+use litellm_host_python::{Settlement, from_py, lookup, to_py};
 use litellm_inference::{RouteError, call::Failure};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::{failure_to_pyerr, public_error},
+    errors::settle,
     marshal::{RouteOptions, optional_timeout, python_timeout_seconds},
 };
 
 pub(super) struct InferenceHost {
     pub request: Py<PyAny>,
     module: &'static str,
+    standby: bool,
 }
 
 pub(super) struct ProjectedCall {
@@ -22,8 +23,12 @@ pub(super) struct ProjectedCall {
 }
 
 impl InferenceHost {
-    pub fn new(request: Py<PyAny>, module: &'static str) -> Self {
-        Self { request, module }
+    pub fn new(request: Py<PyAny>, module: &'static str, standby: bool) -> Self {
+        Self {
+            request,
+            module,
+            standby,
+        }
     }
 
     pub fn project(
@@ -121,13 +126,13 @@ impl InferenceHost {
             .map(Bound::unbind)
     }
 
-    pub fn error(&self, py: Python<'_>, failure: Failure<RouteError>) -> PyResult<PyErr> {
+    pub fn error(&self, py: Python<'_>, failure: Failure<RouteError>) -> PyResult<Settlement> {
         if let RouteError::Secret(source) = &failure.error
             && let Some(original) = crate::secrets::python_error(py, source.source_error())
         {
-            return Ok(original);
+            return Ok(Settlement::Fail(original));
         }
-        public_error(py, failure_to_pyerr(failure), self.request.bind(py), None)
+        settle(py, failure, self.standby, self.request.bind(py), None)
     }
 
     /// Why the route host cannot serve this request natively, when it declares a check.

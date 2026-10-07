@@ -2,7 +2,7 @@ use std::{future::Future, ops::ControlFlow};
 
 use litellm_host::{
     call::{HostedCompletion, HostedMachine},
-    failure::{Failure, Stage},
+    failure::Failure,
     interceptors::Interceptors,
     lifecycle::{CallEvent, FailureOrigin, Timing, epoch_seconds},
     machine::{Machine, MachineFault},
@@ -137,7 +137,7 @@ where
         };
         demand = match delivered {
             Ok(demand) => demand,
-            Err(error) => return driver.fail(Failure::at(Stage::Receive, error)).await,
+            Err(error) => return driver.fail(error).await,
         };
     }
 }

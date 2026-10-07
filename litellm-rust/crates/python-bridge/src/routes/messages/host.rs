@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use litellm_host_python::{
-    InvokeError, PythonBinding, PythonHostCalls, PythonOwned, from_py, lookup, to_py,
+    InvokeError, PythonBinding, PythonHostCalls, PythonOwned, Settlement, from_py, lookup, to_py,
 };
 use litellm_inference::call::Failure;
 use litellm_inference_messages::{
@@ -19,7 +19,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     cache::{CacheCall, Cached, PythonCache, Selection},
-    errors::{failure_to_pyerr, public_error},
+    errors::{public_error, settle},
     marshal::{optional_timeout, python_timeout_seconds},
 };
 
@@ -67,13 +67,15 @@ fn merge_headers(
 pub(super) struct MessagesPythonHost {
     request: Py<PyAny>,
     cache: PythonCache,
+    standby: bool,
 }
 
 impl MessagesPythonHost {
-    pub(super) fn new(request: Py<PyAny>, asynchronous: bool) -> Self {
+    pub(super) fn new(request: Py<PyAny>, asynchronous: bool, standby: bool) -> Self {
         Self {
             request,
             cache: PythonCache::new(asynchronous),
+            standby,
         }
     }
 
@@ -206,7 +208,6 @@ impl MessagesPythonHost {
 
 impl PythonBinding for MessagesPythonHost {
     type Protocol = Cached<Messages>;
-    type Failure = PyErr;
 
     fn decode_request(
         &mut self,
@@ -248,13 +249,20 @@ impl PythonBinding for MessagesPythonHost {
         Ok(PyBytes::new(py, &chunk).into_any().unbind())
     }
 
-    fn map_error(&self, py: Python<'_>, failure: Failure<Error>) -> PyResult<PyErr> {
+    fn map_error(&self, py: Python<'_>, failure: Failure<Error>) -> PyResult<Settlement> {
         if let Error::Secret(source) = &failure.error
             && let Some(original) = crate::secrets::python_error(py, source.source_error())
         {
-            return Ok(original);
+            return Ok(Settlement::Fail(original));
         }
-        Ok(self.map_failure(py, failure_to_pyerr(failure)))
+        let provider = self.provider(py);
+        settle(
+            py,
+            failure,
+            self.standby,
+            self.request.bind(py),
+            Some(&provider),
+        )
     }
 
     fn host_error(error: &PyErr) -> Error {

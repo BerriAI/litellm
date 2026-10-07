@@ -65,7 +65,7 @@ async fn perform(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Failu
 
 async fn perform_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Failure<Error>> {
     let result = litellm_host_native::in_process::run_hosted(
-        ocr_route().machine(host.request().map_err(Failure::host)?, None),
+        ocr_route().machine(host.request().map_err(Failure::prepare)?, None),
         host.runtime(),
     )
     .await

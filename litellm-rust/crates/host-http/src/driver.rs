@@ -39,7 +39,7 @@ where
         match driver.advance().await.map_err(Error::Call)? {
             Boundary::Complete(HostedCompletion::Complete(value)) => encoder
                 .encode_response(value)
-                .map_err(|error| Error::Call(Failure::host(error))),
+                .map_err(|error| Error::Call(Failure::receive(error))),
             _ => Err(Error::Protocol),
         }
     })
@@ -90,18 +90,18 @@ where
         Boundary::Complete(HostedCompletion::Complete(value)) => encoder
             .encode_response(value)
             .map(CallOutput::Complete)
-            .map_err(|error| Error::Call(Failure::host(error))),
+            .map_err(|error| Error::Call(Failure::receive(error))),
         Boundary::Open(head) => {
             let head = encoder
                 .encode_stream_head(head)
-                .map_err(|error| Error::Call(Failure::host(error)))?;
+                .map_err(|error| Error::Call(Failure::receive(error)))?;
             let chunks =
                 stream::try_unfold((driver, encoder), |(mut driver, encoder)| async move {
                     match driver.advance().await.map_err(Error::Call)? {
                         Boundary::Chunk(chunk) => {
                             let bytes = encoder
                                 .encode_chunk(chunk)
-                                .map_err(|error| Error::Call(Failure::host(error)))?;
+                                .map_err(|error| Error::Call(Failure::receive(error)))?;
                             Ok(Some((bytes, (driver, encoder))))
                         }
                         Boundary::Complete(HostedCompletion::StreamEnded) => Ok(None),

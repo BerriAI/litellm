@@ -35,49 +35,29 @@ def upstream(status: int, body: str = "slow down", url: str | None = "https://up
 REQUEST: Final = MappingProxyType({"model": "anthropic/claude-sonnet-4-5", "api_base": "https://caller.invalid/v1"})
 
 
-def test_decode_reads_the_report_from_the_native_exception_or_its_cause() -> None:
+def test_report_reads_the_bare_native_exception_only() -> None:
     native: Final = report("prepare", {"kind": "request"}, "top_k is not supported")
     public: Final = ValueError("public")
     public.__cause__ = native
 
-    decoded: Final = failures.decode(public)
+    decoded: Final = failures.report(native)
 
     assert decoded is not None
     assert (decoded.stage, decoded.kind.kind, decoded.message) == ("prepare", "request", "top_k is not supported")
-    assert failures.decode(native) == decoded
-
-
-@pytest.mark.parametrize("error", (ValueError("plain"), RustFailure(), RustFailure({"stage": "nowhere"})))
-def test_decode_returns_nothing_for_other_exceptions_and_malformed_reports(error: BaseException) -> None:
-    assert failures.decode(error) is None
+    assert failures.report(public) is None, "a settled public exception is final, its cause is not re-read"
 
 
 @pytest.mark.parametrize(
-    ("error", "expected"),
+    "error",
     (
-        (report("prepare", {"kind": "request"}), True),
-        (report("prepare", {"kind": "unsupported"}), True),
-        (report("send", {"kind": "connection"}), True),
-        (upstream(400), True),
-        (upstream(404), True),
-        (upstream(422), True),
-        (upstream(408), False),
-        (upstream(429), False),
-        (upstream(500), False),
-        (upstream(503), False),
-        (report("receive", {"kind": "timeout"}), False),
-        (report("receive", {"kind": "response"}), False),
-        (report("post_call", {"kind": "request"}), False),
-        (report("host", {"kind": "request"}), False),
-    ),
-    ids=lambda value: (
-        value if isinstance(value, bool) else str(value.args[0]["stage"]) + ":" + str(value.args[0]["kind"])
+        ValueError("plain"),
+        ValueError({"stage": "prepare", "kind": {"kind": "request"}, "message": "shaped like a report"}),
+        RustFailure(),
+        RustFailure({"stage": "nowhere"}),
     ),
 )
-def test_only_failures_the_provider_never_billed_for_reroute(error: RustFailure, expected: bool) -> None:
-    failure: Final = failures.decode(error)
-    assert failure is not None
-    assert failures.reroutes(failure) is expected
+def test_report_returns_nothing_for_other_exceptions_and_malformed_reports(error: BaseException) -> None:
+    assert failures.report(error) is None
 
 
 def test_upstream_failures_map_through_the_public_status_contract_with_the_provider_answer() -> None:
@@ -139,32 +119,10 @@ def test_each_kind_has_one_public_exception_naming_the_bare_model_and_provider(
     assert public.__cause__ is native
 
 
-@pytest.mark.parametrize(("not_found", "expected"), ((True, FileNotFoundError), (False, OSError)))
-def test_file_failures_keep_the_os_exception_types_naming_the_path(not_found: bool, expected: type[OSError]) -> None:
-    native: Final = report(
-        "prepare", {"kind": "file", "path": "/missing/scan.pdf", "not_found": not_found}, "disk said no"
-    )
-
-    public: Final = failures.public_exception(native, REQUEST, "mistral")
-
-    assert type(public) is expected
-    assert "/missing/scan.pdf" in str(public) if not_found else "disk said no" in str(public)
-
-
 def test_public_exception_leaves_non_native_errors_unchanged() -> None:
     error: Final = RuntimeError("bridge exploded")
 
     assert failures.public_exception(error, REQUEST, "mistral") is error
-
-
-def test_ensure_public_maps_a_bare_native_failure_and_keeps_a_public_one() -> None:
-    native: Final = report("receive", {"kind": "response"}, "bad json")
-
-    public: Final = failures.ensure_public(native, model="bedrock/voxtral", provider="bedrock")
-
-    assert isinstance(public, litellm.APIError)
-    assert public.llm_provider == "bedrock"
-    assert failures.ensure_public(public, model="bedrock/voxtral", provider="bedrock") is public
 
 
 def test_mapper_failure_keeps_the_native_error_as_context(monkeypatch: pytest.MonkeyPatch) -> None:

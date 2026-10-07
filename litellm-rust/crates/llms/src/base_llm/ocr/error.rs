@@ -18,6 +18,8 @@ pub enum Error {
     },
     #[error("OCR document preparation task failed: {0}")]
     DocumentTask(#[source] std::sync::Arc<tokio::task::JoinError>),
+    #[error("OCR host {0}")]
+    Machine(litellm_host::machine::MachineFault),
     #[error("Invalid MIME type: {0}")]
     InvalidMimeType(String),
     #[error(
@@ -116,11 +118,7 @@ pub enum Error {
 
 impl From<litellm_host::machine::MachineFault> for Error {
     fn from(fault: litellm_host::machine::MachineFault) -> Self {
-        use litellm_host::machine::MachineFault;
-        Self::InvalidRequest(match fault {
-            MachineFault::Abandoned => "OCR host driver was abandoned".into(),
-            MachineFault::Protocol(message) => format!("OCR {message}"),
-        })
+        Self::Machine(fault)
     }
 }
 
@@ -141,11 +139,7 @@ impl Classify for Error {
             | Self::MissingAzureAiCredentials
             | Self::MissingAzureDocumentIntelligenceCredentials
             | Self::MissingReductoApiKey => Kind::Auth,
-            Self::Auth(_) => Kind::Request,
-            Self::FileRead { path, source } => Kind::File {
-                path: path.display().to_string(),
-                not_found: source.kind() == std::io::ErrorKind::NotFound,
-            },
+            Self::Auth(_) | Self::FileRead { .. } => Kind::Request,
             Self::Transport(litellm_http::transport::Error::Timeout(_))
             | Self::DocumentDownloadTimeout
             | Self::PollTimeout => Kind::Timeout,
@@ -184,7 +178,7 @@ impl Classify for Error {
             | Self::PollLocation
             | Self::PollOrigin
             | Self::InvalidResponse(_) => Kind::Response,
-            Self::DocumentTask(_) | Self::Secret(_) => Kind::Internal,
+            Self::DocumentTask(_) | Self::Machine(_) | Self::Secret(_) => Kind::Internal,
         }
     }
 }

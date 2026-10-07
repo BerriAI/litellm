@@ -33,6 +33,7 @@ fn run_ocr(
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
+    standby: bool,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     let (arguments, hooks) = crate::routes::call_hooks(
@@ -60,7 +61,7 @@ fn run_ocr(
             let route = litellm_inference_ocr::OcrRoute::new(client);
             Ok(route.machine(request, None))
         },
-        OcrPythonHost::new(request.unbind()),
+        OcrPythonHost::new(request.unbind(), standby),
         hooks,
         asynchronous,
     )
@@ -68,10 +69,7 @@ fn run_ocr(
 
 /// A failure in a helper that never contacts the provider.
 pub(super) fn prepare_failure(error: litellm_llms::base_llm::ocr::error::Error) -> PyErr {
-    crate::errors::failure_to_pyerr(litellm_llms::base_llm::call::Failure::at(
-        litellm_llms::base_llm::call::Stage::Prepare,
-        error,
-    ))
+    crate::errors::failure_to_pyerr(litellm_llms::base_llm::call::Failure::prepare(error))
 }
 
 fn ocr_settings(py: Python<'_>) -> PyResult<OcrSettings> {
@@ -90,13 +88,27 @@ fn project_provider_defaults(snapshot: &Snapshot<'_>) -> PyResult<OcrSettings> {
 #[pyfunction]
 pub(crate) fn ocr(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_ocr(py, call.bound.into_any(), call.args, call.kwargs, false)
+    run_ocr(
+        py,
+        call.bound.into_any(),
+        call.args,
+        call.kwargs,
+        call.standby,
+        false,
+    )
 }
 
 #[pyfunction]
 pub(crate) fn aocr(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_ocr(py, call.bound.into_any(), call.args, call.kwargs, true)
+    run_ocr(
+        py,
+        call.bound.into_any(),
+        call.args,
+        call.kwargs,
+        call.standby,
+        true,
+    )
 }
 
 #[pyfunction]

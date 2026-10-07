@@ -1,3 +1,4 @@
+use litellm_host::failure::Stage;
 use std::{
     convert::Infallible,
     sync::{
@@ -37,6 +38,10 @@ impl Protocol for TestProtocol {
     type Error = TestError;
     type Request = ();
     type HostCall = Infallible;
+
+    fn host_call_stage(call: &Self::HostCall) -> Stage {
+        match *call {}
+    }
     type Chunk = Bytes;
     type StreamHead = ();
 }

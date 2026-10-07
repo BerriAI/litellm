@@ -83,7 +83,7 @@ async fn invalid_pages_features_and_format_are_rejected_before_sending(
         options.clone(),
     )) {
         Ok(request) => perform(request).await,
-        Err(error) => Err(litellm_inference::call::Failure::at(Stage::Prepare, error)),
+        Err(error) => Err(litellm_inference::call::Failure::prepare(error)),
     };
 
     assert!(

@@ -1,3 +1,4 @@
+use litellm_host::failure::Stage;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -51,6 +52,10 @@ impl Protocol for TestProtocol {
     type Error = TestError;
     type Request = &'static str;
     type HostCall = Reply<&'static str>;
+
+    fn host_call_stage(_: &Self::HostCall) -> Stage {
+        Stage::Prepare
+    }
     type Chunk = Bytes;
     type StreamHead = &'static str;
 }
@@ -388,11 +393,7 @@ async fn stream_failure_emits_one_error_frame_and_stops(
     } else {
         "first"
     };
-    let expected = if rejection == Rejection::Chunk {
-        Failure::host(expected)
-    } else {
-        Failure::at(litellm_host::failure::Stage::Receive, expected)
-    };
+    let expected = Failure::receive(expected);
     assert_eq!(
         body,
         format!(
@@ -644,6 +645,10 @@ impl Protocol for UnaryProtocol {
     type Error = TestError;
     type Request = &'static str;
     type HostCall = std::convert::Infallible;
+
+    fn host_call_stage(call: &Self::HostCall) -> Stage {
+        match *call {}
+    }
     type Chunk = std::convert::Infallible;
     type StreamHead = std::convert::Infallible;
 }
@@ -806,6 +811,10 @@ impl Protocol for CustomUnaryProtocol {
     type Error = TestError;
     type Request = &'static str;
     type HostCall = Reply<&'static str>;
+
+    fn host_call_stage(_: &Self::HostCall) -> Stage {
+        Stage::Prepare
+    }
     type Chunk = std::convert::Infallible;
     type StreamHead = std::convert::Infallible;
 }

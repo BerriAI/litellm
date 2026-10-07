@@ -1,14 +1,13 @@
 //! The failure contract every host reads: where a call failed and what went wrong.
 //!
-//! Routes report their own error type; the stage is attached by the shared call steps
-//! ([`prepare`], [`receive`], [`post_call`], the provider send in `litellm_llms`) and by the
-//! machine, never by route code. Hosts decide what to do from the stage and the [`Kind`] alone.
+//! Routes report their own error type and never pick a stage. A stage is attached by the
+//! shared steps ([`prepare`], [`receive`], [`post_call`]), by an [`Exchange`] with the
+//! provider, or by the machine for the op a host was answering. Hosts decide what to do
+//! from the facts on [`Failure`] and [`Report`], never from stage or kind matches.
 
 use std::{fmt, future::Future};
 
 use serde::{Deserialize, Serialize};
-
-use crate::machine::MachineFault;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,13 +19,11 @@ pub enum Stage {
     Send,
     /// The provider answered with a non-success status.
     Upstream,
-    /// The provider accepted the request; reading, streaming or decoding its answer failed.
+    /// The provider accepted the request; reading, streaming, decoding or delivering its
+    /// answer failed.
     Receive,
     /// A hook that runs once the provider has answered failed.
     PostCall,
-    /// The host driving the call failed: a hook raised, a reply was abandoned, or the
-    /// protocol was broken.
-    Host,
 }
 
 /// What went wrong, independent of the route that reports it.
@@ -47,9 +44,7 @@ pub enum Kind {
     Upstream(UpstreamResponse),
     /// The provider's answer could not be read or decoded.
     Response,
-    /// A local file the request named could not be read.
-    File { path: String, not_found: bool },
-    /// Anything else.
+    /// The implementation itself failed.
     Internal,
 }
 
@@ -93,15 +88,31 @@ pub struct Report {
     pub message: String,
 }
 
+/// How an exchange with the provider ended without a success response.
+pub enum Exchange<E> {
+    /// The connection never opened: nothing reached the provider.
+    Unreached(E),
+    /// The provider answered with a non-success status.
+    Rejected(UpstreamResponse),
+    /// The request went out and the answer never fully arrived.
+    Broken(E),
+}
+
 impl<E> Failure<E> {
-    /// A route error at a stage. Only the shared call steps and hosts call this; route code
-    /// reaches a stage through [`prepare`], [`receive`], [`post_call`] and the provider send.
-    pub fn at(stage: Stage, error: E) -> Self {
+    pub(crate) fn at(stage: Stage, error: E) -> Self {
         Self { stage, error }
     }
 
-    pub fn host(error: E) -> Self {
-        Self::at(Stage::Host, error)
+    pub fn prepare(error: E) -> Self {
+        Self::at(Stage::Prepare, error)
+    }
+
+    pub fn receive(error: E) -> Self {
+        Self::at(Stage::Receive, error)
+    }
+
+    pub fn post_call(error: E) -> Self {
+        Self::at(Stage::PostCall, error)
     }
 
     pub fn map<F>(self, map: impl FnOnce(E) -> F) -> Failure<F> {
@@ -128,6 +139,92 @@ impl<E> Failure<E> {
             message: self.to_string(),
         }
     }
+
+    /// Nothing reached the provider.
+    pub fn provider_untouched(&self) -> bool {
+        provider_untouched(self.stage)
+    }
+
+    /// The provider saw the request and turned it down as given.
+    pub fn rejected_by_provider(&self) -> bool
+    where
+        E: Classify,
+    {
+        rejected_by_provider(self.stage, &self.kind())
+    }
+
+    /// The same request may succeed later on the same path.
+    pub fn is_retryable(&self) -> bool
+    where
+        E: Classify,
+    {
+        is_retryable(&self.kind())
+    }
+
+    /// Another implementation of the same request may serve it without the provider
+    /// seeing a duplicate side effect.
+    pub fn is_reroutable(&self) -> bool
+    where
+        E: Classify,
+    {
+        self.provider_untouched() || self.rejected_by_provider()
+    }
+}
+
+impl<E> From<Exchange<E>> for Failure<E>
+where
+    E: From<UpstreamResponse>,
+{
+    fn from(exchange: Exchange<E>) -> Self {
+        match exchange {
+            Exchange::Unreached(error) => Self::at(Stage::Send, error),
+            Exchange::Rejected(response) => Self::at(Stage::Upstream, E::from(response)),
+            Exchange::Broken(error) => Self::at(Stage::Receive, error),
+        }
+    }
+}
+
+impl Report {
+    pub fn provider_untouched(&self) -> bool {
+        provider_untouched(self.stage)
+    }
+
+    pub fn rejected_by_provider(&self) -> bool {
+        rejected_by_provider(self.stage, &self.kind)
+    }
+
+    pub fn is_retryable(&self) -> bool {
+        is_retryable(&self.kind)
+    }
+
+    pub fn is_reroutable(&self) -> bool {
+        self.provider_untouched() || self.rejected_by_provider()
+    }
+}
+
+fn provider_untouched(stage: Stage) -> bool {
+    matches!(stage, Stage::Prepare | Stage::Send)
+}
+
+fn rejected_by_provider(stage: Stage, kind: &Kind) -> bool {
+    match kind {
+        Kind::Upstream(response) if stage == Stage::Upstream => {
+            (400..500).contains(&response.status) && !is_retryable(kind)
+        }
+        _ => false,
+    }
+}
+
+fn is_retryable(kind: &Kind) -> bool {
+    match kind {
+        Kind::Timeout | Kind::Connection => true,
+        Kind::Upstream(response) => matches!(response.status, 408 | 429 | 500..=599),
+        Kind::Request
+        | Kind::Unsupported
+        | Kind::Auth
+        | Kind::Response
+        | Kind::Internal => false,
+    }
 }
 
 impl<E: fmt::Display> fmt::Display for Failure<E> {
@@ -142,25 +239,16 @@ impl<E: std::error::Error + 'static> std::error::Error for Failure<E> {
     }
 }
 
-impl<E: From<MachineFault>> From<MachineFault> for Failure<E> {
-    fn from(fault: MachineFault) -> Self {
-        Self::host(E::from(fault))
-    }
-}
-
 pub async fn prepare<T, E>(step: impl Future<Output = Result<T, E>>) -> Result<T, Failure<E>> {
-    step.await
-        .map_err(|error| Failure::at(Stage::Prepare, error))
+    step.await.map_err(Failure::prepare)
 }
 
 pub async fn receive<T, E>(step: impl Future<Output = Result<T, E>>) -> Result<T, Failure<E>> {
-    step.await
-        .map_err(|error| Failure::at(Stage::Receive, error))
+    step.await.map_err(Failure::receive)
 }
 
 pub async fn post_call<T, E>(step: impl Future<Output = Result<T, E>>) -> Result<T, Failure<E>> {
-    step.await
-        .map_err(|error| Failure::at(Stage::PostCall, error))
+    step.await.map_err(Failure::post_call)
 }
 
 #[cfg(test)]
@@ -174,6 +262,8 @@ mod tests {
         #[error("{0}")]
         Request(&'static str),
         #[error("{0}")]
+        Timeout(&'static str),
+        #[error("{0}")]
         Upstream(UpstreamResponse),
     }
 
@@ -181,14 +271,21 @@ mod tests {
         fn kind(&self) -> Kind {
             match self {
                 Self::Request(_) => Kind::Request,
+                Self::Timeout(_) => Kind::Timeout,
                 Self::Upstream(response) => Kind::Upstream(response.clone()),
             }
         }
     }
 
-    fn upstream() -> UpstreamResponse {
+    impl From<UpstreamResponse> for Plain {
+        fn from(response: UpstreamResponse) -> Self {
+            Self::Upstream(response)
+        }
+    }
+
+    fn upstream(status: u16) -> UpstreamResponse {
         UpstreamResponse {
-            status: 429,
+            status,
             headers: vec![("retry-after".into(), "7".into())],
             body: "slow down".into(),
             url: Some("https://upstream.invalid/v1".into()),
@@ -207,17 +304,17 @@ mod tests {
         assert_eq!(prepared.unwrap_err().stage, Stage::Prepare);
         assert_eq!(received.unwrap_err().stage, Stage::Receive);
         assert_eq!(hooked.unwrap_err().stage, Stage::PostCall);
-        assert_eq!(Failure::host(Plain::Request("x")).stage, Stage::Host);
-        assert_eq!(
-            Failure::<Plain>::from(MachineFault::Abandoned).stage,
-            Stage::Host
-        );
     }
 
-    impl From<MachineFault> for Plain {
-        fn from(_: MachineFault) -> Self {
-            Plain::Request("machine")
-        }
+    #[rstest]
+    #[case::unreached(Exchange::Unreached(Plain::Request("refused")), Stage::Send)]
+    #[case::rejected(Exchange::Rejected(upstream(400)), Stage::Upstream)]
+    #[case::broken(Exchange::Broken(Plain::Timeout("slow")), Stage::Receive)]
+    fn an_exchange_ends_at_the_stage_it_reached(
+        #[case] exchange: Exchange<Plain>,
+        #[case] stage: Stage,
+    ) {
+        assert_eq!(Failure::from(exchange).stage, stage);
     }
 
     #[rstest]
@@ -228,18 +325,54 @@ mod tests {
     }
 
     #[rstest]
+    #[case::rejected_request(Failure::prepare(Plain::Request("top_k")), true, false, false, true)]
+    #[case::unreachable(Failure::from(Exchange::Unreached(Plain::Request("refused"))), true, false, false, true)]
+    #[case::provider_400(Failure::from(Exchange::Rejected(upstream(400))), false, true, false, true)]
+    #[case::provider_404(Failure::from(Exchange::Rejected(upstream(404))), false, true, false, true)]
+    #[case::provider_408(Failure::from(Exchange::Rejected(upstream(408))), false, false, true, false)]
+    #[case::provider_429(Failure::from(Exchange::Rejected(upstream(429))), false, false, true, false)]
+    #[case::provider_500(Failure::from(Exchange::Rejected(upstream(500))), false, false, true, false)]
+    #[case::provider_529(Failure::from(Exchange::Rejected(upstream(529))), false, false, true, false)]
+    #[case::timed_out(Failure::from(Exchange::Broken(Plain::Timeout("slow"))), false, false, true, false)]
+    #[case::undecodable(Failure::receive(Plain::Request("bad json")), false, false, false, false)]
+    #[case::hook_after_answer(Failure::post_call(Plain::Request("rejected")), false, false, false, false)]
+    fn the_facts_follow_the_stage_and_the_kind(
+        #[case] failure: Failure<Plain>,
+        #[case] untouched: bool,
+        #[case] rejected: bool,
+        #[case] retryable: bool,
+        #[case] reroutable: bool,
+    ) {
+        assert_eq!(failure.provider_untouched(), untouched, "untouched");
+        assert_eq!(failure.rejected_by_provider(), rejected, "rejected");
+        assert_eq!(failure.is_retryable(), retryable, "retryable");
+        assert_eq!(failure.is_reroutable(), reroutable, "reroutable");
+        let report = failure.report();
+        assert_eq!(
+            (
+                report.provider_untouched(),
+                report.rejected_by_provider(),
+                report.is_retryable(),
+                report.is_reroutable(),
+            ),
+            (untouched, rejected, retryable, reroutable),
+            "the report answers exactly as the failure does"
+        );
+    }
+
+    #[rstest]
     fn the_report_carries_the_stage_the_kind_and_the_message() {
-        let failure = Failure::at(Stage::Upstream, Plain::Upstream(upstream()));
+        let failure = Failure::from(Exchange::<Plain>::Rejected(upstream(429)));
         assert_eq!(
             failure.report(),
             Report {
                 stage: Stage::Upstream,
-                kind: Kind::Upstream(upstream()),
+                kind: Kind::Upstream(upstream(429)),
                 message: "upstream request failed with status 429: slow down".into(),
             }
         );
 
-        let failure = Failure::at(Stage::Prepare, Plain::Request("top_k"));
+        let failure = Failure::prepare(Plain::Request("top_k"));
         assert_eq!(
             failure.report(),
             Report {
@@ -252,7 +385,7 @@ mod tests {
 
     #[rstest]
     fn the_report_serializes_with_a_tagged_kind() {
-        let report = Failure::at(Stage::Upstream, Plain::Upstream(upstream())).report();
+        let report = Failure::from(Exchange::<Plain>::Rejected(upstream(429))).report();
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["stage"], "upstream");
         assert_eq!(json["kind"]["kind"], "upstream");
@@ -263,15 +396,6 @@ mod tests {
             report,
             "a host decodes the same report it was sent"
         );
-        let file = serde_json::to_value(Kind::File {
-            path: "/scan.pdf".into(),
-            not_found: true,
-        })
-        .unwrap();
-        assert_eq!(
-            file,
-            serde_json::json!({"kind": "file", "path": "/scan.pdf", "not_found": true})
-        );
         assert_eq!(
             serde_json::to_value(Kind::Request).unwrap(),
             serde_json::json!({"kind": "request"})
@@ -280,8 +404,7 @@ mod tests {
 
     #[rstest]
     fn map_keeps_the_stage() {
-        let mapped =
-            Failure::at(Stage::Receive, Plain::Request("x")).map(|error| error.to_string());
-        assert_eq!(mapped, Failure::at(Stage::Receive, "x".to_string()));
+        let mapped = Failure::receive(Plain::Request("x")).map(|error| error.to_string());
+        assert_eq!(mapped, Failure::receive("x".to_string()));
     }
 }

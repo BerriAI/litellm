@@ -368,6 +368,6 @@ async def test_native_cannot_count_shapes_python_prices_differently(
 
     with pytest.raises(Exception) as caught:
         await bridge.native_count(native.TokenCounter, tokenizer, raw)
-    report: Final = failures.read_report(caught.value)
+    report: Final = failures.report(caught.value)
     assert report is not None
     assert (report.stage, report.kind.kind) == ("prepare", "unsupported")

@@ -3,7 +3,7 @@ use std::future::Future;
 use futures_util::{TryStreamExt, stream::BoxStream};
 
 use crate::{
-    failure::{Failure, Stage},
+    failure::Failure,
     machine::{CallMachine, ChannelInterceptors, HostServices, MachineFault},
     observation::ObservationSender,
     protocol::Protocol,
@@ -66,21 +66,17 @@ where
                         .stream
                         .open_stream(head)
                         .await
-                        .map_err(Failure::host)?
+                        .map_err(Failure::receive)?
                         .is_break()
                     {
                         return Ok(HostedCompletion::Detached);
                     }
-                    while let Some(chunk) = chunks
-                        .try_next()
-                        .await
-                        .map_err(|error| Failure::at(Stage::Receive, error))?
-                    {
+                    while let Some(chunk) = chunks.try_next().await.map_err(Failure::receive)? {
                         if host
                             .stream
                             .send_chunk(chunk)
                             .await
-                            .map_err(Failure::host)?
+                            .map_err(Failure::receive)?
                             .is_break()
                         {
                             return Ok(HostedCompletion::Detached);

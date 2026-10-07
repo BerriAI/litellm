@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures_util::{SinkExt, StreamExt};
 use litellm_http::websocket::{UpstreamWebSocket, connect_upstream};
-use litellm_inference::call::{self, Failure, Stage, UpstreamResponse};
+use litellm_inference::call::{self, Exchange, Failure, UpstreamResponse};
 use litellm_llms_types::formats::responses::streaming_websocket::ResponsesWsEventType;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::{
@@ -60,39 +60,38 @@ impl ResponsesWebSocketConnection {
             let connect = connect_upstream(request);
             let result = match timeout {
                 Some(timeout) => tokio::time::timeout(timeout, connect).await.map_err(|_| {
-                    Failure::at(
-                        Stage::Receive,
-                        Error::Transport(litellm_http::transport::Error::Timeout(
+                    Failure::from(Exchange::Broken(Error::Transport(
+                        litellm_http::transport::Error::Timeout(
                             "Responses WebSocket connection timed out".into(),
-                        )),
-                    )
+                        ),
+                    )))
                 })?,
                 None => connect.await,
             };
-            let (socket, _) = result.map_err(|error| match *error {
-                tokio_tungstenite::tungstenite::Error::Http(response) => Failure::at(
-                    Stage::Upstream,
-                    Error::Upstream(UpstreamResponse {
-                        status: response.status().as_u16(),
-                        headers: response
-                            .headers()
-                            .iter()
-                            .filter_map(|(name, value)| {
-                                Some((name.to_string(), value.to_str().ok()?.to_owned()))
-                            })
-                            .collect(),
-                        body: response
-                            .body()
-                            .as_deref()
-                            .map(|body| String::from_utf8_lossy(body).into_owned())
-                            .unwrap_or_default(),
-                        url: Some(url.to_string()),
-                    }),
-                ),
-                other => Failure::at(
-                    Stage::Send,
-                    Error::Transport(litellm_http::transport::Error::Connect(other.to_string())),
-                ),
+            let (socket, _) = result.map_err(|error| {
+                Failure::from(match *error {
+                    tokio_tungstenite::tungstenite::Error::Http(response) => {
+                        Exchange::Rejected(UpstreamResponse {
+                            status: response.status().as_u16(),
+                            headers: response
+                                .headers()
+                                .iter()
+                                .filter_map(|(name, value)| {
+                                    Some((name.to_string(), value.to_str().ok()?.to_owned()))
+                                })
+                                .collect(),
+                            body: response
+                                .body()
+                                .as_deref()
+                                .map(|body| String::from_utf8_lossy(body).into_owned())
+                                .unwrap_or_default(),
+                            url: Some(url.to_string()),
+                        })
+                    }
+                    other => Exchange::Unreached(Error::Transport(
+                        litellm_http::transport::Error::Connect(other.to_string()),
+                    )),
+                })
             })?;
             Ok(Self {
                 socket: Arc::new(Mutex::new(Some(socket))),

@@ -42,15 +42,13 @@ pub enum RouteError {
     Http(#[from] litellm_http::Error),
     #[error(transparent)]
     Secret(#[from] SecretError),
+    #[error("host {0}")]
+    Machine(litellm_host::machine::MachineFault),
 }
 
 impl From<litellm_host::machine::MachineFault> for RouteError {
     fn from(fault: litellm_host::machine::MachineFault) -> Self {
-        use litellm_host::machine::MachineFault;
-        Self::InvalidRequest(match fault {
-            MachineFault::Abandoned => "host driver was abandoned".into(),
-            MachineFault::Protocol(message) => format!("host {message}").into(),
-        })
+        Self::Machine(fault)
     }
 }
 
@@ -70,7 +68,7 @@ impl Classify for RouteError {
             Self::Transport(TransportError::Timeout(_)) => Kind::Timeout,
             Self::Transport(_) => Kind::Connection,
             Self::InvalidResponse(_) => Kind::Response,
-            Self::Secret(_) => Kind::Internal,
+            Self::Secret(_) | Self::Machine(_) => Kind::Internal,
         }
     }
 }

@@ -66,7 +66,7 @@ where
     pub(super) fn resume(
         &mut self,
         py: Python<'_>,
-        interruption: Option<HostFailure<Failure<<M::Protocol as Protocol>::Error>>>,
+        interruption: Option<HostFailure<<M::Protocol as Protocol>::Error>>,
     ) -> PyResult<NativePoll<NativeResult<M>>> {
         let state = Arc::clone(self.state.as_ref().ok_or_else(missing_state)?);
         let future = async move {

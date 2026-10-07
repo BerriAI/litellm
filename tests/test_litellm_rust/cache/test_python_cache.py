@@ -462,7 +462,7 @@ def test_sync_rust_messages_calls_python_cache(recording_server: RecordingServer
         return runtime.run(
             RouteContext(Route.MESSAGES),
             binding=NATIVE_MESSAGES,
-            native=lambda hook: hook(request),
+            native=lambda hook, _standby: hook(request),
             python=runtime.NO_PYTHON,
             rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),),
         )

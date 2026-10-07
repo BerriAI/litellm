@@ -1,6 +1,6 @@
 use litellm_auth::ResolvedCredential;
 use litellm_host_python::{
-    InvokeError, PythonBinding, PythonHostCalls, PythonOwned, missing_state, to_py,
+    InvokeError, PythonBinding, PythonHostCalls, PythonOwned, Settlement, missing_state, to_py,
 };
 use litellm_inference_ocr::route::{Ocr, OcrCall, OcrOp};
 use litellm_llms::base_llm::{call::Failure, ocr::error::Error};
@@ -13,7 +13,7 @@ use pyo3::{
 };
 
 use super::project::{OcrHostHandles, project_request};
-use crate::errors::{failure_to_pyerr, public_error};
+use crate::errors::{public_error, settle};
 
 enum OcrHostData {
     Unprojected,
@@ -27,13 +27,15 @@ enum OcrHostData {
 pub(super) struct OcrPythonHost {
     request: Py<PyAny>,
     data: OcrHostData,
+    standby: bool,
 }
 
 impl OcrPythonHost {
-    pub(super) fn new(request: Py<PyAny>) -> Self {
+    pub(super) fn new(request: Py<PyAny>, standby: bool) -> Self {
         Self {
             request,
             data: OcrHostData::Unprojected,
+            standby,
         }
     }
 
@@ -79,7 +81,6 @@ impl OcrPythonHost {
 
 impl PythonBinding for OcrPythonHost {
     type Protocol = Ocr;
-    type Failure = PyErr;
 
     fn decode_request(
         &mut self,
@@ -117,13 +118,17 @@ impl PythonBinding for OcrPythonHost {
         match chunk {}
     }
 
-    fn map_error(&self, py: Python<'_>, failure: Failure<Error>) -> PyResult<PyErr> {
+    fn map_error(&self, py: Python<'_>, failure: Failure<Error>) -> PyResult<Settlement> {
         if let Error::Secret(source) = &failure.error
             && let Some(original) = crate::secrets::python_error(py, source)
         {
-            return Ok(original);
+            return Ok(Settlement::Fail(original));
         }
-        Ok(self.map_failure(py, failure_to_pyerr(failure)))
+        let provider = match &self.data {
+            OcrHostData::Projected(handles) => Some(handles.provider),
+            _ => None,
+        };
+        settle(py, failure, self.standby, self.request.bind(py), provider)
     }
 
     fn host_error(error: &PyErr) -> Error {
@@ -202,7 +207,7 @@ del provider
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let mut host = OcrPythonHost::new(py.None());
+            let mut host = OcrPythonHost::new(py.None(), false);
             assert!(host.decode_request(py, &kwargs).unwrap().caller_token);
             locals.del_item("kwargs").unwrap();
             drop(kwargs);

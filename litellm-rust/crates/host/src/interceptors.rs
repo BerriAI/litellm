@@ -122,6 +122,10 @@ mod tests {
         type Error = Fault;
         type Request = ();
         type HostCall = Infallible;
+
+        fn host_call_stage(call: &Self::HostCall) -> crate::failure::Stage {
+            match *call {}
+        }
         type Chunk = Infallible;
         type StreamHead = Infallible;
     }

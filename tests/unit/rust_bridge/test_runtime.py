@@ -46,7 +46,7 @@ def native_exceptions(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
 
 
 class NativeFn(Protocol):
-    def __call__(self) -> str: ...
+    def __call__(self, standby: bool = False) -> str: ...
 
 
 CONTEXT: Final = RouteContext(Route.MESSAGES, provider="anthropic", model="model")
@@ -68,9 +68,11 @@ class Recorder:
     def __init__(self, native_effect: BaseException | None = None) -> None:
         self._native_effect: Final = native_effect
         self.calls: tuple[str, ...] = ()
+        self.standby: tuple[bool, ...] = ()
 
-    def rust(self) -> str:
+    def rust(self, standby: bool = False) -> str:
         self.calls = (*self.calls, RUST)
+        self.standby = (*self.standby, standby)
         if self._native_effect is not None:
             raise self._native_effect
         return RUST
@@ -88,10 +90,29 @@ def run(rollout: Rollout, calls: Recorder, *, native_missing: bool = False, cont
     return runtime.run(
         context,
         binding=binding(None if native_missing else calls.rust),
-        native=lambda fn: fn(),
+        native=lambda fn, standby: fn(standby),
         python=calls.python,
         rules=rules(rollout),
     )
+
+
+@pytest.mark.parametrize(
+    ("rollout", "python_available", "expected"),
+    ((Rollout.RUST_OPT_OUT, True, True), (Rollout.RUST_REQUIRED, True, False), (Rollout.RUST_REQUIRED, False, False)),
+    ids=("fallback", "required", "no-python"),
+)
+def test_native_learns_whether_python_stands_by(rollout: Rollout, python_available: bool, expected: bool) -> None:
+    calls: Final = recorder()
+
+    runtime.run(
+        CONTEXT,
+        binding=binding(calls.rust),
+        native=lambda fn, standby: fn(standby),
+        python=calls.python if python_available else runtime.NO_PYTHON,
+        rules=rules(rollout),
+    )
+
+    assert calls.standby == (expected,)
 
 
 @pytest.mark.parametrize(
@@ -181,13 +202,13 @@ async def test_shipped_python_routes_never_load_native(monkeypatch: pytest.Monke
 
     bound: Final = bindings.NativeBinding("_messages", validate=reject_load)
 
-    async def native(fn: NativeFn) -> str:
+    async def native(fn: NativeFn, _standby: bool) -> str:
         return fn()
 
     async def python() -> str:
         return calls.python()
 
-    assert runtime.run(context, binding=bound, native=lambda fn: fn(), python=calls.python) == PYTHON
+    assert runtime.run(context, binding=bound, native=lambda fn, _standby: fn(), python=calls.python) == PYTHON
     assert await runtime.arun(context, binding=bound, native=native, python=python) == PYTHON
     assert calls.calls == (PYTHON, PYTHON)
 
@@ -201,7 +222,7 @@ async def test_shipped_python_routes_never_load_native(monkeypatch: pytest.Monke
     ),
     ids=("prepare", "send", "upstream-4xx"),
 )
-def test_failures_before_the_provider_did_work_reroute_to_python_once(failure: RustFailure) -> None:
+def test_a_bare_native_failure_is_an_attempt_rust_abandoned_for_python(failure: RustFailure) -> None:
     calls: Final = recorder(failure)
 
     assert run(Rollout.RUST_OPT_OUT, calls) == "python"
@@ -213,8 +234,8 @@ def test_rerouted_responses_say_so_in_their_headers() -> None:
 
     result: Final = runtime.run(
         CONTEXT,
-        binding=binding(lambda: (_ for _ in ()).throw(native_failure("prepare", "request", "rejected"))),
-        native=lambda fn: fn(),
+        binding=binding(lambda _standby=False: (_ for _ in ()).throw(native_failure("prepare", "request", "rejected"))),
+        native=lambda fn, _standby: fn(),
         python=lambda: expected,
         rules=rules(Rollout.RUST_OPT_OUT),
     )
@@ -237,12 +258,12 @@ async def test_python_fallback_does_not_claim_rust_execution(missing: bool) -> N
     bound: Final = binding(None if missing else calls.rust)
     expected: Final = OCRResponse(pages=[], model="python")
 
-    def native(fn: NativeFn) -> OCRResponse:
+    def native(fn: NativeFn, _standby: bool) -> OCRResponse:
         fn()
         pytest.fail("native must fail before constructing a response")
 
-    async def anative(fn: NativeFn) -> OCRResponse:
-        return native(fn)
+    async def anative(fn: NativeFn, standby: bool) -> OCRResponse:
+        return native(fn, standby)
 
     async def python() -> OCRResponse:
         return expected
@@ -281,7 +302,7 @@ async def test_native_response_marker_reaches_caller_with_existing_metadata(
     def python() -> object:
         pytest.fail("native success must not fall back")
 
-    async def anative(fn: Callable[[], object]) -> object:
+    async def anative(fn: Callable[[], object], _standby: bool) -> object:
         return fn()
 
     async def apython() -> object:
@@ -291,7 +312,7 @@ async def test_native_response_marker_reaches_caller_with_existing_metadata(
         await runtime.arun(CONTEXT, binding=bound, native=anative, python=apython, rules=rules(Rollout.RUST_REQUIRED))
         if asynchronous
         else runtime.run(
-            CONTEXT, binding=bound, native=lambda fn: fn(), python=python, rules=rules(Rollout.RUST_REQUIRED)
+            CONTEXT, binding=bound, native=lambda fn, _standby: fn(), python=python, rules=rules(Rollout.RUST_REQUIRED)
         )
     )
     assert result is response
@@ -340,7 +361,7 @@ async def test_native_stream_marker_reaches_caller_without_wrapping_or_consuming
     def python() -> object:
         pytest.fail("native success must not fall back")
 
-    async def anative(fn: Callable[[], object]) -> object:
+    async def anative(fn: Callable[[], object], _standby: bool) -> object:
         return fn()
 
     async def apython() -> object:
@@ -350,7 +371,7 @@ async def test_native_stream_marker_reaches_caller_without_wrapping_or_consuming
         await runtime.arun(CONTEXT, binding=bound, native=anative, python=apython, rules=rules(Rollout.RUST_REQUIRED))
         if asynchronous
         else runtime.run(
-            CONTEXT, binding=bound, native=lambda fn: fn(), python=python, rules=rules(Rollout.RUST_REQUIRED)
+            CONTEXT, binding=bound, native=lambda fn, _standby: fn(), python=python, rules=rules(Rollout.RUST_REQUIRED)
         )
     )
     assert result is stream
@@ -362,25 +383,20 @@ async def test_native_stream_marker_reaches_caller_without_wrapping_or_consuming
 
 
 @pytest.mark.parametrize(
-    ("failure", "expected"),
+    "failure",
     (
-        (upstream_failure(429, "rate limited"), litellm.RateLimitError),
-        (upstream_failure(500, "boom"), litellm.InternalServerError),
-        (native_failure("receive", "response", "bad json"), litellm.APIError),
-        (native_failure("post_call", "request", "callback rejected"), litellm.BadRequestError),
+        litellm.RateLimitError(message="rate limited", model="model", llm_provider="anthropic"),
+        litellm.APIError(status_code=500, message="bad json", model="model", llm_provider="anthropic"),
     ),
-    ids=("rate-limit", "5xx", "receive", "post-call"),
+    ids=("rate-limit", "receive"),
 )
-def test_failures_after_the_provider_did_work_raise_the_public_exception_without_fallback(
-    failure: RustFailure, expected: type[Exception]
-) -> None:
+def test_a_public_exception_rust_settled_is_final_even_with_a_standby(failure: Exception) -> None:
     calls: Final = recorder(failure)
 
-    with pytest.raises(expected) as caught:
+    with pytest.raises(type(failure)) as caught:
         run(Rollout.RUST_OPT_OUT, calls)
 
-    assert failure.args[0]["message"] in str(caught.value)
-    assert caught.value.__cause__ is failure
+    assert caught.value is failure
     assert calls.calls == (RUST,)
 
 
@@ -427,7 +443,7 @@ async def test_arun_mirrors_sync_fallback(
 ) -> None:
     calls: Final = recorder(native_effect)
 
-    async def native(fn: NativeFn) -> str:
+    async def native(fn: NativeFn, _standby: bool) -> str:
         return fn()
 
     async def python() -> str:
@@ -454,17 +470,17 @@ async def test_arun_required_route_rejects_unavailable_bridge() -> None:
         await runtime.arun(
             CONTEXT,
             binding=binding(None),
-            native=lambda fn: python(),
+            native=lambda fn, _standby: python(),
             python=python,
             rules=rules(Rollout.RUST_REQUIRED),
         )
 
 
 @pytest.mark.asyncio
-async def test_arun_upstream_error_maps_to_the_public_exception_without_fallback() -> None:
+async def test_arun_required_route_raises_a_bare_failure_as_its_public_exception() -> None:
     calls: Final = recorder(upstream_failure(503, "upstream unavailable"))
 
-    async def native(fn: NativeFn) -> str:
+    async def native(fn: NativeFn, _standby: bool) -> str:
         return fn()
 
     async def python() -> str:
@@ -476,7 +492,7 @@ async def test_arun_upstream_error_maps_to_the_public_exception_without_fallback
             binding=binding(calls.rust),
             native=native,
             python=python,
-            rules=rules(Rollout.RUST_OPT_OUT),
+            rules=rules(Rollout.RUST_REQUIRED),
         )
 
     assert caught.value.status_code == 503
@@ -494,10 +510,10 @@ async def run_without_python(
     bound: Final = binding(None if native_missing else calls.rust)
     if not asynchronous:
         return runtime.run(
-            context, binding=bound, native=lambda fn: fn(), python=runtime.NO_PYTHON, rules=rules(rollout)
+            context, binding=bound, native=lambda fn, _standby: fn(), python=runtime.NO_PYTHON, rules=rules(rollout)
         )
 
-    async def native(fn: NativeFn) -> str:
+    async def native(fn: NativeFn, _standby: bool) -> str:
         return fn()
 
     return await runtime.arun(context, binding=bound, native=native, python=runtime.NO_PYTHON, rules=rules(rollout))

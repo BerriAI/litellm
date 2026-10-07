@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use litellm_host::failure::{Failure, Kind, Stage};
+use litellm_host::failure::{Failure, Kind};
 use litellm_inference::RouteError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use serde_json::{Map, Value, json};
@@ -39,13 +39,13 @@ impl IntoResponse for Error {
 /// A route error the gateway itself raises while projecting the request: nothing was sent.
 impl From<RouteError> for Error {
     fn from(error: RouteError) -> Self {
-        Self::Route(Failure::at(Stage::Prepare, error))
+        Self::Route(Failure::prepare(error))
     }
 }
 
 impl From<OcrError> for Error {
     fn from(error: OcrError) -> Self {
-        Self::Ocr(Failure::at(Stage::Prepare, error))
+        Self::Ocr(Failure::prepare(error))
     }
 }
 
@@ -58,19 +58,15 @@ impl From<litellm_host_http::Error<Failure<RouteError>>> for Error {
     }
 }
 
-/// The HTTP status for a call failure, from where it happened and what it was. A provider's
-/// answer passes through; a host fault is the gateway's own problem whatever the route said.
-fn failure_status(stage: Stage, kind: Kind) -> StatusCode {
-    if stage == Stage::Host {
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
+/// The HTTP status for a call failure. A provider's answer passes through.
+fn failure_status(kind: Kind) -> StatusCode {
     match kind {
         Kind::Upstream(response) => {
             StatusCode::from_u16(response.status).unwrap_or(StatusCode::BAD_GATEWAY)
         }
         Kind::Unsupported => StatusCode::NOT_IMPLEMENTED,
         Kind::Auth => StatusCode::UNAUTHORIZED,
-        Kind::Request | Kind::File { .. } => StatusCode::BAD_REQUEST,
+        Kind::Request => StatusCode::BAD_REQUEST,
         Kind::Timeout => StatusCode::GATEWAY_TIMEOUT,
         Kind::Connection | Kind::Response => StatusCode::BAD_GATEWAY,
         Kind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
@@ -84,8 +80,8 @@ impl Error {
             Self::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel(_) => StatusCode::BAD_REQUEST,
-            Self::Route(failure) => failure_status(failure.stage, failure.kind()),
-            Self::Ocr(failure) => failure_status(failure.stage, failure.kind()),
+            Self::Route(failure) => failure_status(failure.kind()),
+            Self::Ocr(failure) => failure_status(failure.kind()),
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -194,22 +190,19 @@ fn with_request_id(envelope: Map<String, Value>, request_id: Option<&str>) -> Ma
 
 #[cfg(test)]
 mod tests {
-    use litellm_host::failure::UpstreamResponse;
+    use litellm_host::failure::{Exchange, UpstreamResponse};
     use litellm_http::transport::Error as TransportError;
     use rstest::rstest;
 
     use super::*;
 
     fn upstream(status: u16, body: &str) -> Error {
-        Error::Route(Failure::at(
-            Stage::Upstream,
-            RouteError::Upstream(UpstreamResponse {
-                status,
-                headers: Vec::new(),
-                body: body.into(),
-                url: None,
-            }),
-        ))
+        Error::Route(Failure::from(Exchange::Rejected(UpstreamResponse {
+            status,
+            headers: Vec::new(),
+            body: body.into(),
+            url: None,
+        })))
     }
 
     #[rstest]
@@ -257,7 +250,7 @@ mod tests {
     #[rstest]
     #[case::upstream_status(upstream(429, ""), StatusCode::TOO_MANY_REQUESTS)]
     #[case::rejected_request(
-        Error::Route(Failure::at(Stage::Prepare, RouteError::InvalidRequest("top_k".into()))),
+        Error::Route(Failure::prepare(RouteError::InvalidRequest("top_k".into()))),
         StatusCode::BAD_REQUEST,
     )]
     #[case::gateway_projection_is_a_rejected_request(
@@ -265,13 +258,11 @@ mod tests {
         StatusCode::BAD_REQUEST
     )]
     #[case::unsupported_capability(
-        Error::Route(Failure::at(Stage::Prepare, RouteError::Unsupported("streaming"))),
+        Error::Route(Failure::prepare(RouteError::Unsupported("streaming"))),
         StatusCode::NOT_IMPLEMENTED
     )]
     #[case::missing_key(
-        Error::Route(Failure::at(
-            Stage::Prepare,
-            RouteError::Auth(litellm_auth::Error::MissingApiKey {
+        Error::Route(Failure::prepare(RouteError::Auth(litellm_auth::Error::MissingApiKey {
                 provider: "Anthropic",
                 environment_variable: "ANTHROPIC_API_KEY",
             }),
@@ -279,34 +270,31 @@ mod tests {
         StatusCode::UNAUTHORIZED,
     )]
     #[case::unreachable_provider(
-        Error::Route(Failure::at(Stage::Send, RouteError::Transport(TransportError::Connect("refused".into())))),
+        Error::Route(Failure::from(Exchange::Unreached(RouteError::Transport(TransportError::Connect("refused".into()))))),
         StatusCode::BAD_GATEWAY,
     )]
     #[case::lost_connection(
-        Error::Route(Failure::at(Stage::Receive, RouteError::Transport(TransportError::Network("reset".into())))),
+        Error::Route(Failure::receive(RouteError::Transport(TransportError::Network("reset".into())))),
         StatusCode::BAD_GATEWAY,
     )]
     #[case::timeout(
-        Error::Route(Failure::at(Stage::Receive, RouteError::Transport(TransportError::Timeout("slow".into())))),
+        Error::Route(Failure::receive(RouteError::Transport(TransportError::Timeout("slow".into())))),
         StatusCode::GATEWAY_TIMEOUT,
     )]
     #[case::undecodable_answer(
-        Error::Route(Failure::at(Stage::Receive, RouteError::InvalidResponse("bad json".into()))),
+        Error::Route(Failure::receive(RouteError::InvalidResponse("bad json".into()))),
         StatusCode::BAD_GATEWAY,
     )]
     #[case::host_fault_is_never_the_callers_request(
-        Error::Route(Failure::host(RouteError::InvalidRequest("host driver was abandoned".into()))),
+        Error::Route(Failure::receive(RouteError::Machine(litellm_host::machine::MachineFault::Abandoned))),
         StatusCode::INTERNAL_SERVER_ERROR,
     )]
     #[case::ocr_missing_credentials(
-        Error::Ocr(Failure::at(Stage::Prepare, OcrError::MissingReductoApiKey)),
+        Error::Ocr(Failure::prepare(OcrError::MissingReductoApiKey)),
         StatusCode::UNAUTHORIZED
     )]
     #[case::ocr_upstream_status(
-        Error::Ocr(Failure::at(
-            Stage::Upstream,
-            OcrError::Upstream(UpstreamResponse { status: 503, headers: Vec::new(), body: "busy".into(), url: None }),
-        )),
+        Error::Ocr(Failure::from(Exchange::Rejected(UpstreamResponse { status: 503, headers: Vec::new(), body: "busy".into(), url: None }))),
         StatusCode::SERVICE_UNAVAILABLE,
     )]
     fn status_follows_the_stage_and_the_kind(#[case] error: Error, #[case] status: StatusCode) {

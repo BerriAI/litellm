@@ -1,3 +1,4 @@
+use litellm_host::failure::Stage;
 use std::sync::Arc;
 
 use litellm_cache_response::{
@@ -9,7 +10,7 @@ use litellm_host::{
 };
 use pyo3::{prelude::*, types::PyDict};
 
-use super::{native, python};
+use super::{native, python, python::CacheCall};
 
 pub(crate) struct Cached<P>(std::marker::PhantomData<P>);
 
@@ -18,6 +19,13 @@ impl<P: Protocol> Protocol for Cached<P> {
     type Response = P::Response;
     type Error = P::Error;
     type HostCall = python::CacheCall;
+
+    fn host_call_stage(call: &Self::HostCall) -> Stage {
+        match call {
+            CacheCall::Lookup { .. } => Stage::Prepare,
+            CacheCall::Store { .. } => Stage::PostCall,
+        }
+    }
     type Chunk = P::Chunk;
     type StreamHead = P::StreamHead;
 }

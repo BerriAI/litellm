@@ -1,3 +1,4 @@
+use litellm_host::failure::Stage;
 use std::{
     ops::ControlFlow,
     sync::{
@@ -44,6 +45,10 @@ impl Protocol for TestProtocol {
     type Response = String;
     type Error = TestError;
     type HostCall = Reply<&'static str>;
+
+    fn host_call_stage(_: &Self::HostCall) -> Stage {
+        Stage::Prepare
+    }
     type Chunk = usize;
     type StreamHead = &'static str;
 }
@@ -339,7 +344,7 @@ async fn dropping_the_driver_drops_the_call(#[case] chunks_before_drop: usize) {
 
 struct Interruptible {
     inner: TestMachine,
-    interrupted: Arc<Mutex<Vec<HostFailure<litellm_host::failure::Failure<TestError>>>>>,
+    interrupted: Arc<Mutex<Vec<HostFailure<TestError>>>>,
 }
 
 impl Machine for Interruptible {
@@ -350,10 +355,7 @@ impl Machine for Interruptible {
         self.inner.resume()
     }
 
-    fn interrupt(
-        &mut self,
-        failure: HostFailure<litellm_host::failure::Failure<TestError>>,
-    ) -> Interrupted<'_, Self> {
+    fn interrupt(&mut self, failure: HostFailure<TestError>) -> Interrupted<'_, Self> {
         self.interrupted.lock().unwrap().push(failure.clone());
         self.inner.interrupt(failure)
     }
@@ -469,16 +471,16 @@ async fn consumer_failures_interrupt_the_machine(#[case] fail_after: usize) {
         },
     )
     .await;
+    let failure = outcome.unwrap_err();
+    assert_eq!(failure.error, TestError::Consumer);
     assert_eq!(
-        outcome.map_err(|failure| failure.error),
-        Err(TestError::Consumer)
+        failure.stage,
+        Stage::Receive,
+        "a consumer failing at a stream boundary is reported where the call stood"
     );
     assert_eq!(
         *interrupted.lock().unwrap(),
-        [HostFailure::Error(litellm_host::failure::Failure::at(
-            litellm_host::failure::Stage::Receive,
-            TestError::Consumer
-        ))]
+        [HostFailure::Error(TestError::Consumer)]
     );
     assert_eq!(polls.load(Ordering::SeqCst), fail_after);
 }

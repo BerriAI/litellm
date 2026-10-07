@@ -176,16 +176,14 @@ async fn rejected_results_are_not_delivered_or_cached(
                     .try_collect::<Vec<_>>()
                     .await
                     .map(|_| ())
-                    .map_err(|error| Failure::at(Stage::Receive, error)),
+                    .map_err(Failure::receive),
                 Err(error) => Err(error),
             }
         };
         assert_eq!(
             result,
             if reject {
-                Err(Failure::at(
-                    Stage::PostCall,
-                    Error::Unsupported("result rejected"),
+                Err(Failure::post_call(Error::Unsupported("result rejected"),
                 ))
             } else {
                 Ok(())
@@ -203,7 +201,7 @@ async fn rejected_results_are_not_delivered_or_cached(
 
 async fn run_through(host: &RecordingHost) -> Result<MessagesOutput, Failure<Error>> {
     litellm_host_native::in_process::run_hosted(
-        machine(Arc::new(RecordingSecrets::empty()))(host.request().map_err(Failure::host)?),
+        machine(Arc::new(RecordingSecrets::empty()))(host.request().map_err(Failure::prepare)?),
         host.runtime(),
     )
     .await
@@ -284,7 +282,7 @@ async fn response_mode_follows_the_intercepted_request(
         .logger()
         .instrument(async {
             let output = messages_route(no_secrets())
-                .execute(host.request().map_err(Failure::host)?, &host, None)
+                .execute(host.request().map_err(Failure::prepare)?, &host, None)
                 .await?;
             match output {
                 MessagesCallResponse::Stream { chunks, .. } => {
@@ -293,7 +291,7 @@ async fn response_mode_follows_the_intercepted_request(
                         chunks
                             .try_collect::<Vec<_>>()
                             .await
-                            .map_err(|error| Failure::at(Stage::Receive, error))?
+                            .map_err(Failure::receive)?
                             .concat(),
                         sse.as_bytes()
                     );
@@ -346,10 +344,7 @@ async fn a_before_send_failure_never_sends(call: MessagesCall) {
 
     assert_eq!(
         error,
-        Failure::at(
-            Stage::Prepare,
-            Error::InvalidRequest("vetoed by the host".into())
-        )
+        Failure::prepare(Error::InvalidRequest("vetoed by the host".into()))
     );
     assert!(received(&upstream).await.is_empty());
     assert!(host.raw_responses().is_empty());

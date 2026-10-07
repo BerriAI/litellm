@@ -7,7 +7,7 @@ use super::{
     contract::{HostFailure, Interrupted, Machine, MachineStep, Step},
 };
 use crate::{
-    failure::Failure,
+    failure::{Failure, Stage},
     observation::ObservationSender,
     protocol::{HostRequest, Protocol},
 };
@@ -21,6 +21,15 @@ pub enum MachineFault {
     Protocol(ResumeError),
 }
 
+impl std::fmt::Display for MachineFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Abandoned => f.write_str("driver was abandoned"),
+            Self::Protocol(error) => error.fmt(f),
+        }
+    }
+}
+
 pub type ExecuteFuture<R, C = <R as Protocol>::Response> =
     Pin<Box<dyn Future<Output = Result<C, Failure<<R as Protocol>::Error>>> + Send>>;
 
@@ -28,6 +37,8 @@ type CallCoroutine<R, C> = Coroutine<HostRequest<R>, Result<C, Failure<<R as Pro
 
 pub struct CallMachine<R: Protocol, C = <R as Protocol>::Response> {
     coroutine: CallCoroutine<R, C>,
+    /// The stage of the op the host is answering, where a host or machine fault lands.
+    pending: Stage,
 }
 
 impl<R: Protocol, C: Send + 'static> CallMachine<R, C>
@@ -40,6 +51,7 @@ where
     ) -> Self {
         Self {
             coroutine: Coroutine::new(move |co| execute(CallContext::new(co, observers))),
+            pending: Stage::Prepare,
         }
     }
 }
@@ -53,20 +65,21 @@ where
 
     fn resume(&mut self) -> Step<'_, Self> {
         Box::pin(async move {
-            match self
-                .coroutine
-                .resume()
-                .await
-                .map_err(|error| Failure::from(MachineFault::Protocol(error)))?
-            {
-                CoroutineState::Yielded(op) => Ok(MachineStep::Suspended(op)),
+            match self.coroutine.resume().await.map_err(|error| {
+                Failure::at(self.pending, MachineFault::Protocol(error).into())
+            })? {
+                CoroutineState::Yielded(op) => {
+                    self.pending = op.stage();
+                    Ok(MachineStep::Suspended(op))
+                }
                 CoroutineState::Complete(outcome) => outcome.map(MachineStep::Complete),
             }
         })
     }
 
-    fn interrupt(&mut self, failure: HostFailure<Failure<R::Error>>) -> Interrupted<'_, Self> {
+    fn interrupt(&mut self, failure: HostFailure<R::Error>) -> Interrupted<'_, Self> {
         self.coroutine.cancel();
-        Box::pin(async move { Err(failure.into_error()) })
+        let failure = Failure::at(self.pending, failure.into_error());
+        Box::pin(async move { Err(failure) })
     }
 }

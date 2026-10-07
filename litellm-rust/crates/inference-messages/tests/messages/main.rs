@@ -108,7 +108,7 @@ async fn run_with(
 ) -> Result<MessagesOutput, Failure<Error>> {
     let host = LocalMessagesHost::new(call);
     litellm_host_native::in_process::run_hosted(
-        machine(secrets)(host.request().map_err(Failure::host)?),
+        machine(secrets)(host.request().map_err(Failure::prepare)?),
         host.runtime(),
     )
     .await

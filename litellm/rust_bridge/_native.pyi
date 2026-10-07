@@ -13,7 +13,7 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import EmbeddingResponse, ModelResponse
 
 class RustFailure(Exception):
-    """A native call failed; ``args[0]`` is the report ``litellm.rust_bridge.failures.decode`` reads."""
+    """A native call Rust abandoned for Python to serve; ``args[0]`` is the report ``failures.report`` reads."""
 
 class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...

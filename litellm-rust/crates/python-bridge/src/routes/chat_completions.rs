@@ -91,6 +91,7 @@ fn run_public(
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
+    standby: bool,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     use litellm_callbacks_legacy_python::LoggingOperation;
@@ -99,6 +100,7 @@ fn run_public(
     let host = InferenceHost::new(
         request.clone().unbind(),
         "litellm.rust_bridge.chat_completions.route_host",
+        standby,
     );
     let cache_call_type = if asynchronous {
         "acompletion"
@@ -144,11 +146,25 @@ fn run_public(
 #[pyfunction]
 pub(crate) fn completion(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_public(py, call.bound.into_any(), call.args, call.kwargs, false)
+    run_public(
+        py,
+        call.bound.into_any(),
+        call.args,
+        call.kwargs,
+        call.standby,
+        false,
+    )
 }
 
 #[pyfunction]
 pub(crate) fn acompletion(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_public(py, call.bound.into_any(), call.args, call.kwargs, true)
+    run_public(
+        py,
+        call.bound.into_any(),
+        call.args,
+        call.kwargs,
+        call.standby,
+        true,
+    )
 }

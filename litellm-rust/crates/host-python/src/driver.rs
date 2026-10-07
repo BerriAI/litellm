@@ -2,7 +2,7 @@ use std::ops::ControlFlow;
 
 use litellm_host::{
     call::HostedCompletion,
-    failure::{Failure, Stage as CallStage},
+    failure::Failure,
     interceptors::WireRequest,
     lifecycle::{CallEvent, ExecutionEvent, FailureOrigin, Timing, epoch_seconds},
     machine::{HostFailure, Machine, MachineStep},
@@ -17,7 +17,7 @@ use pyo3::{
 };
 
 use crate::{
-    InvokeError, PythonBinding, PythonHostCalls,
+    InvokeError, PythonBinding, PythonHostCalls, Settlement,
     handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle},
     hooks::{HookResume, HookStep, PythonCallEvent, PythonCallHooks},
     missing_state,
@@ -29,7 +29,7 @@ type ErrorOf<H> = <ProtocolOf<H> as Protocol>::Error;
 type ResponseOf<H> = <ProtocolOf<H> as Protocol>::Response;
 type NativeStep<H> = MachineStep<ProtocolOf<H>, HostedCompletion<ResponseOf<H>>>;
 type NativeResult<H> = Result<NativeStep<H>, Failure<ErrorOf<H>>>;
-type Interruption<H> = Option<HostFailure<Failure<ErrorOf<H>>>>;
+type Interruption<H> = Option<HostFailure<ErrorOf<H>>>;
 type StartMachine<P, M> = Box<
     dyn FnOnce(Python<'_>, &Bound<'_, PyDict>, <P as Protocol>::Request) -> PyResult<M>
         + Send
@@ -201,7 +201,7 @@ where
                 self.observe(&started);
                 match self.hooks.on_event(py, started) {
                     Ok(step) => self.on_event(py, step, EventNext::Started),
-                    Err(error) => self.hook_failed(py, error, CallStage::Prepare),
+                    Err(error) => self.hook_failed(py, error),
                 }
             }
             (Some(Pending::Host), Some(result)) => {
@@ -211,20 +211,17 @@ where
                         Ok(ExecutionStep::Await(awaitable))
                     }
                     Ok(None) => self.resume_machine(py, None),
-                    Err(InvokeError::Python(error)) => {
-                        self.interrupt(py, error, CallStage::Prepare)
+                    Err(InvokeError::Python(error)) => self.interrupt(py, error),
+                    Err(InvokeError::Native(error)) => {
+                        self.resume_machine(py, Some(HostFailure::Error(error)))
                     }
-                    Err(InvokeError::Native(error)) => self.resume_machine(
-                        py,
-                        Some(HostFailure::Error(Failure::at(CallStage::Prepare, error))),
-                    ),
                 }
             }
             (Some(Pending::Native), Some(Ok(_))) => {
                 let result = self.native.take_result()?;
                 self.run_steps(py, NativePoll::Ready(result))
             }
-            (Some(Pending::Native), Some(Err(error))) => self.interrupt(py, error, CallStage::Host),
+            (Some(Pending::Native), Some(Err(error))) => self.interrupt(py, error),
             (Some(Pending::Consumer(reply)), Some(read)) => {
                 reply.send(if read.is_ok() {
                     ControlFlow::Continue(())
@@ -237,28 +234,28 @@ where
                 let step = resume(&mut self.hooks, py, result);
                 match step {
                     Ok(step) => self.on_arguments(py, step),
-                    Err(error) => self.hook_failed(py, error, CallStage::Prepare),
+                    Err(error) => self.hook_failed(py, error),
                 }
             }
             (Some(Pending::Wire(resume, reply)), Some(result)) => {
                 let step = resume(&mut self.hooks, py, result);
                 match step {
                     Ok(step) => self.on_wire(py, step, reply),
-                    Err(error) => self.hook_failed(py, error, CallStage::Prepare),
+                    Err(error) => self.hook_failed(py, error),
                 }
             }
             (Some(Pending::Response(resume)), Some(result)) => {
                 let step = resume(&mut self.hooks, py, result);
                 match step {
                     Ok(step) => self.on_response(py, step),
-                    Err(error) => self.hook_failed(py, error, CallStage::PostCall),
+                    Err(error) => self.hook_failed(py, error),
                 }
             }
             (Some(Pending::Event(resume, next)), Some(result)) => {
                 let step = resume(&mut self.hooks, py, result);
                 match step {
                     Ok(step) => self.on_event(py, step, next),
-                    Err(error) => self.hook_failed(py, error, CallStage::PostCall),
+                    Err(error) => self.hook_failed(py, error),
                 }
             }
             _ => Err(missing_state()),
@@ -277,14 +274,14 @@ where
             }
             HookStep::Ready(arguments) => {
                 if let Err(error) = self.hooks.arguments_prepared(py, &arguments) {
-                    return self.hook_failed(py, error, CallStage::Prepare);
+                    return self.hook_failed(py, error);
                 }
                 let decoded = self.binding.decode_request(py, arguments.bind(py));
                 self.arguments = Some(arguments);
                 let request = match decoded {
                     Ok(request) => request,
                     Err(InvokeError::Native(error)) => {
-                        return self.machine_failed(py, Failure::at(CallStage::Prepare, error));
+                        return self.machine_failed(py, Failure::prepare(error));
                     }
                     Err(InvokeError::Python(error)) => {
                         return self.failure(py, error, FailureOrigin::Call);
@@ -377,19 +374,14 @@ where
         let arguments = self.arguments.take().ok_or_else(missing_state)?;
         match self.hooks.prepare_arguments(py, arguments, self.started_at) {
             Ok(step) => self.on_arguments(py, step),
-            Err(error) => self.hook_failed(py, error, CallStage::Prepare),
+            Err(error) => self.hook_failed(py, error),
         }
     }
 
-    fn hook_failed(
-        &mut self,
-        py: Python<'_>,
-        error: PyErr,
-        at: CallStage,
-    ) -> PyResult<ExecutionStep> {
+    fn hook_failed(&mut self, py: Python<'_>, error: PyErr) -> PyResult<ExecutionStep> {
         match self.stage {
             Stage::Begin | Stage::AfterSuccess => self.failure(py, error, FailureOrigin::Host),
-            Stage::Call | Stage::Streaming => self.interrupt(py, error, at),
+            Stage::Call | Stage::Streaming => self.interrupt(py, error),
             Stage::Succeeded(_) | Stage::Failed(_) => Err(error),
         }
     }
@@ -432,32 +424,29 @@ where
             }
             Err(error) => return self.machine_failed(py, error).map(Next::Return),
         };
-        let (at, answered) = match op {
+        let answered = match op {
             HostRequest::HostCall(op) => match self.binding.begin_host_call(py, op) {
                 Ok(Some(awaitable)) => {
                     self.pending = Some(Pending::Host);
                     return Ok(Next::Return(ExecutionStep::Await(awaitable)));
                 }
-                result => (CallStage::Prepare, answered(result.map(|_| ()))),
+                result => answered(result.map(|_| ())),
             },
             HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
                 wire,
                 context,
                 reply,
-            }) => (
-                CallStage::Prepare,
-                match self.hooks.before_provider_request(py, wire, &context) {
-                    Ok(HookStep::Ready(wire)) => {
-                        reply.send(*wire);
-                        Ok(Ok(()))
-                    }
-                    Ok(HookStep::Await(awaitable, resume)) => {
-                        self.pending = Some(Pending::Wire(resume, reply));
-                        return Ok(Next::Return(ExecutionStep::Await(awaitable)));
-                    }
-                    Err(error) => Err(error),
-                },
-            ),
+            }) => match self.hooks.before_provider_request(py, wire, &context) {
+                Ok(HookStep::Ready(wire)) => {
+                    reply.send(*wire);
+                    Ok(Ok(()))
+                }
+                Ok(HookStep::Await(awaitable, resume)) => {
+                    self.pending = Some(Pending::Wire(resume, reply));
+                    return Ok(Next::Return(ExecutionStep::Await(awaitable)));
+                }
+                Err(error) => Err(error),
+            },
             HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
                 return self.opened(py, head, reply).map(Next::Return);
             }
@@ -467,49 +456,43 @@ where
             HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => {
                 let event = PythonCallEvent::Execution(ExecutionEvent::ResultReady { facts });
                 self.observe(&event);
-                (
-                    CallStage::PostCall,
-                    match self.hooks.on_event(py, event) {
-                        Ok(HookStep::Ready(())) => {
-                            reply.send(());
-                            Ok(Ok(()))
-                        }
-                        Ok(HookStep::Await(awaitable, resume)) => {
-                            self.pending = Some(Pending::Event(resume, EventNext::Emitted(reply)));
-                            return Ok(Next::Return(ExecutionStep::Await(awaitable)));
-                        }
-                        Err(error) => Err(error),
-                    },
-                )
+                match self.hooks.on_event(py, event) {
+                    Ok(HookStep::Ready(())) => {
+                        reply.send(());
+                        Ok(Ok(()))
+                    }
+                    Ok(HookStep::Await(awaitable, resume)) => {
+                        self.pending = Some(Pending::Event(resume, EventNext::Emitted(reply)));
+                        return Ok(Next::Return(ExecutionStep::Await(awaitable)));
+                    }
+                    Err(error) => Err(error),
+                }
             }
             HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
                 let event = PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived {
                     raw: &raw,
                 });
                 self.observe(&event);
-                (
-                    CallStage::PostCall,
-                    match self.hooks.on_event(py, event) {
-                        Ok(HookStep::Ready(())) => {
-                            reply.send(());
-                            Ok(Ok(()))
-                        }
-                        Ok(HookStep::Await(awaitable, resume)) => {
-                            self.pending = Some(Pending::Event(resume, EventNext::Emitted(reply)));
-                            return Ok(Next::Return(ExecutionStep::Await(awaitable)));
-                        }
-                        Err(error) => Err(error),
-                    },
-                )
+                match self.hooks.on_event(py, event) {
+                    Ok(HookStep::Ready(())) => {
+                        reply.send(());
+                        Ok(Ok(()))
+                    }
+                    Ok(HookStep::Await(awaitable, resume)) => {
+                        self.pending = Some(Pending::Event(resume, EventNext::Emitted(reply)));
+                        return Ok(Next::Return(ExecutionStep::Await(awaitable)));
+                    }
+                    Err(error) => Err(error),
+                }
             }
         };
         match answered {
             Ok(Ok(())) => self.native.resume(py, None).map(Next::Continue),
             Ok(Err(native)) => self
                 .native
-                .resume(py, Some(HostFailure::Error(Failure::at(at, native))))
+                .resume(py, Some(HostFailure::Error(native)))
                 .map(Next::Continue),
-            Err(error) => self.interrupt(py, error, at).map(Next::Return),
+            Err(error) => self.interrupt(py, error).map(Next::Return),
         }
     }
 
@@ -522,14 +505,14 @@ where
         self.stage = Stage::Streaming;
         let head = match self.binding.encode_stream_head(py, head) {
             Ok(head) => head,
-            Err(error) => return self.interrupt(py, error, CallStage::Receive),
+            Err(error) => return self.interrupt(py, error),
         };
         match self.hooks.on_stream_open(py, &head) {
             Ok(()) => {
                 self.pending = Some(Pending::Consumer(reply));
                 Ok(ExecutionStep::Open(head))
             }
-            Err(error) => self.interrupt(py, error, CallStage::Receive),
+            Err(error) => self.interrupt(py, error),
         }
     }
 
@@ -541,27 +524,20 @@ where
     ) -> PyResult<ExecutionStep> {
         let chunk = match self.binding.encode_chunk(py, chunk) {
             Ok(chunk) => chunk,
-            Err(error) => return self.interrupt(py, error, CallStage::Receive),
+            Err(error) => return self.interrupt(py, error),
         };
         match self.hooks.on_stream_chunk(py, &chunk) {
             Ok(()) => {
                 self.pending = Some(Pending::Consumer(reply));
                 Ok(ExecutionStep::Yield(chunk))
             }
-            Err(error) => self.interrupt(py, error, CallStage::Receive),
+            Err(error) => self.interrupt(py, error),
         }
     }
 
-    /// The host failed while answering the machine; `at` is the stage of the op it was
-    /// answering, so the machine's own view of the failure says where the call stood.
-    fn interrupt(
-        &mut self,
-        py: Python<'_>,
-        error: PyErr,
-        at: CallStage,
-    ) -> PyResult<ExecutionStep> {
+    fn interrupt(&mut self, py: Python<'_>, error: PyErr) -> PyResult<ExecutionStep> {
         let cancelled = is_cancellation(py, &error);
-        let native = Failure::at(at, H::host_error(&error));
+        let native = H::host_error(&error);
         self.interrupted = Some(error.into_value(py));
         let failure = if cancelled {
             HostFailure::Cancelled(native)
@@ -603,23 +579,29 @@ where
         error: Failure<ErrorOf<H>>,
     ) -> PyResult<ExecutionStep> {
         self.ended_at.get_or_insert_with(epoch_seconds);
-        let error = match self.interrupted.take() {
-            Some(retained) => PyErr::from_value(retained.into_bound(py).into_any()),
-            None => self.classified(py, error),
-        };
-        self.failure(py, error, FailureOrigin::Call)
+        if let Some(retained) = self.interrupted.take() {
+            let error = PyErr::from_value(retained.into_bound(py).into_any());
+            return self.failure(py, error, FailureOrigin::Call);
+        }
+        match self.settled(py, error) {
+            Settlement::Fail(error) => self.failure(py, error, FailureOrigin::Call),
+            Settlement::Abandon(error) => {
+                self.stage = Stage::Failed(error.clone_ref(py).into_value(py));
+                Err(error)
+            }
+        }
     }
 
-    /// The route's public exception for a native failure. When classification itself
-    /// fails, that failure is raised with the native error's text as its `__context__`.
-    fn classified(&self, py: Python<'_>, error: Failure<ErrorOf<H>>) -> PyErr {
+    /// What the host does with a native failure. When settling itself fails, that failure
+    /// is raised with the native error's text as its `__context__`.
+    fn settled(&self, py: Python<'_>, error: Failure<ErrorOf<H>>) -> Settlement {
         let native = error.to_string();
-        let classifier_error = match self.binding.map_error(py, error) {
-            Ok(failure) => return failure.into(),
-            Err(classifier_error) => classifier_error,
+        let settle_error = match self.binding.map_error(py, error) {
+            Ok(settlement) => return settlement,
+            Err(settle_error) => settle_error,
         };
-        classifier_error.set_context(py, Some(PyRuntimeError::new_err(native)));
-        classifier_error
+        settle_error.set_context(py, Some(PyRuntimeError::new_err(native)));
+        Settlement::Fail(settle_error)
     }
 
     fn succeeded(&mut self, py: Python<'_>, response: Py<PyAny>) -> PyResult<ExecutionStep> {
@@ -750,6 +732,8 @@ mod tests {
         types::PyDict,
     };
 
+    use litellm_host::failure::Stage as CallStage;
+
     use super::*;
     use crate::{PythonOwned, PythonRuntime};
 
@@ -798,6 +782,10 @@ mod tests {
         type Error = Error;
         type Request = String;
         type HostCall = (&'static str, Reply<String>);
+
+        fn host_call_stage(_: &Self::HostCall) -> CallStage {
+            CallStage::Prepare
+        }
         type Chunk = std::convert::Infallible;
         type StreamHead = std::convert::Infallible;
     }
@@ -878,7 +866,6 @@ mod tests {
 
     impl PythonBinding for SyntheticBinding {
         type Protocol = Synthetic;
-        type Failure = Classified;
 
         fn decode_request(
             &mut self,
@@ -917,12 +904,12 @@ mod tests {
                 .unbind())
         }
 
-        fn map_error(&self, _: Python<'_>, error: Failure<Error>) -> PyResult<Classified> {
+        fn map_error(&self, _: Python<'_>, error: Failure<Error>) -> PyResult<Settlement> {
             self.log.push(format!("classify:{error}"));
             if self.classifier_fails {
                 return Err(pyo3::exceptions::PyTypeError::new_err("classifier failed"));
             }
-            Ok(Classified(error.error.0))
+            Ok(Settlement::Fail(Classified(error.error.0).into()))
         }
 
         fn host_error(error: &PyErr) -> Error {
@@ -1599,6 +1586,10 @@ mod tests {
         type Error = Error;
         type Request = ();
         type HostCall = std::convert::Infallible;
+
+        fn host_call_stage(call: &Self::HostCall) -> CallStage {
+            match *call {}
+        }
         type Chunk = &'static str;
         type StreamHead = Vec<(&'static str, &'static str)>;
     }
@@ -1607,7 +1598,6 @@ mod tests {
 
     impl PythonBinding for StreamingBinding {
         type Protocol = Streaming;
-        type Failure = Classified;
 
         fn decode_request(
             &mut self,
@@ -1639,8 +1629,8 @@ mod tests {
             Ok(py.None())
         }
 
-        fn map_error(&self, _: Python<'_>, error: Failure<Error>) -> PyResult<Classified> {
-            Ok(Classified(error.error.0))
+        fn map_error(&self, _: Python<'_>, error: Failure<Error>) -> PyResult<Settlement> {
+            Ok(Settlement::Fail(Classified(error.error.0).into()))
         }
 
         fn host_error(error: &PyErr) -> Error {
@@ -2311,7 +2301,6 @@ mod tests {
             struct Cancelling(Log);
             impl PythonBinding for Cancelling {
                 type Protocol = Synthetic;
-                type Failure = Classified;
                 fn decode_request(
                     &mut self,
                     _: Python<'_>,
@@ -2338,9 +2327,9 @@ mod tests {
                 fn encode_response(&mut self, _: Python<'_>, _: String) -> PyResult<Py<PyAny>> {
                     Err(missing_state())
                 }
-                fn map_error(&self, _: Python<'_>, error: Failure<Error>) -> PyResult<Classified> {
+                fn map_error(&self, _: Python<'_>, error: Failure<Error>) -> PyResult<Settlement> {
                     self.0.push("classify");
-                    Ok(Classified(error.error.0))
+                    Ok(Settlement::Fail(Classified(error.error.0).into()))
                 }
                 fn host_error(error: &PyErr) -> Error {
                     Error(error.to_string())

@@ -1,3 +1,4 @@
+use litellm_host::failure::Stage;
 use std::{process::Command, task::Poll};
 
 use litellm_host::{
@@ -13,6 +14,10 @@ impl Protocol for DiagnosticMachine {
     type Error = String;
     type Request = ();
     type HostCall = ();
+
+    fn host_call_stage(_: &Self::HostCall) -> Stage {
+        Stage::Prepare
+    }
     type Chunk = ();
     type StreamHead = ();
 }
@@ -32,7 +37,7 @@ impl Machine for DiagnosticMachine {
 
     fn interrupt(
         &mut self,
-        _: HostFailure<litellm_host::failure::Failure<String>>,
+        _: HostFailure<String>,
     ) -> Interrupted<'_, Self> {
         Box::pin(async {
             litellm_tracing::warn!("machine interrupted");
@@ -50,9 +55,7 @@ fn machine_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
             .await
             .map_err(|failure| pyo3::exceptions::PyValueError::new_err(failure.error))?;
         machine
-            .interrupt(HostFailure::Error(litellm_host::failure::Failure::host(
-                "stop".into(),
-            )))
+            .interrupt(HostFailure::Error("stop".into()))
             .await
             .map_err(|failure| pyo3::exceptions::PyValueError::new_err(failure.error))
     });

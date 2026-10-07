@@ -84,13 +84,7 @@ def test_connection_defaults_preserve_openai_precedence(
     ("fields", "expected"),
     (
         ({"model": "gpt-4o", "input": "hi"}, None),
-        ({"model": "openai/gpt-4o", "input": "hi"}, None),
-        ({"model": "gpt-4o", "input": "hi", "custom_llm_provider": "openai"}, None),
-        ({"model": "claude-sonnet-4-5", "input": "hi"}, "native HTTP responses provider"),
-        ({"model": "anthropic/claude-sonnet-4-5", "input": "hi"}, "native HTTP responses provider"),
-        ({"model": "gpt-4o", "input": "hi", "custom_llm_provider": "azure"}, "native HTTP responses provider"),
-        ({"model": "openai/team/gpt-4o", "input": "hi"}, "native HTTP responses provider"),
-        ({"model": "not-a-known-model-xyz", "input": "hi"}, "native Responses could not resolve the provider"),
+        ({"model": "anthropic/claude-sonnet-4-5", "input": "hi"}, None),
         ({"model": "gpt-4o", "input": "hi", "mock_response": "x"}, "native inference does not implement mock_response"),
     ),
 )

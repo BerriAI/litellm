@@ -3,7 +3,8 @@
 
 use bytes::BytesMut;
 pub use litellm_host::failure::{
-    Classify, Failure, Kind, Report, Stage, UpstreamResponse, post_call, prepare, receive,
+    Classify, Exchange, Failure, Kind, Report, Stage, UpstreamResponse, post_call, prepare,
+    receive,
 };
 use litellm_http::{outbound::OutboundRequest, transport};
 
@@ -30,11 +31,13 @@ where
         Ok(response) => response,
         Err(error) => {
             let error = transport::Error::from_reqwest_before_dispatch(error);
-            let stage = match error {
-                transport::Error::Connect(_) => Stage::Send,
-                transport::Error::Network(_) | transport::Error::Timeout(_) => Stage::Receive,
+            let exchange = match error {
+                transport::Error::Connect(_) => Exchange::Unreached(E::from(error)),
+                transport::Error::Network(_) | transport::Error::Timeout(_) => {
+                    Exchange::Broken(E::from(error))
+                }
             };
-            return Err(Failure::at(stage, E::from(error)));
+            return Err(exchange.into());
         }
     };
     tracing::Span::current().record("status", response.status().as_u16());
@@ -42,8 +45,8 @@ where
         return Ok(response);
     }
     match upstream_response(response, UPSTREAM_ERROR_BODY_MAX_BYTES).await {
-        Ok(upstream) => Err(Failure::at(Stage::Upstream, E::from(upstream))),
-        Err(error) => Err(Failure::at(Stage::Receive, E::from(error))),
+        Ok(upstream) => Err(Exchange::Rejected(upstream).into()),
+        Err(error) => Err(Exchange::Broken(E::from(error)).into()),
     }
 }
 

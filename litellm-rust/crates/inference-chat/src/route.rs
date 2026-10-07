@@ -1,3 +1,4 @@
+use litellm_host::failure::Stage;
 use std::convert::Infallible;
 
 use litellm_host::{
@@ -19,6 +20,10 @@ impl Protocol for ChatCompletions {
     type Error = Error;
     type Request = ChatCompletionsCall;
     type HostCall = Infallible;
+
+    fn host_call_stage(call: &Self::HostCall) -> Stage {
+        match *call {}
+    }
     type Chunk = Infallible;
     type StreamHead = Infallible;
 }

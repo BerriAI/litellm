@@ -12,7 +12,7 @@ use litellm_host::{
     protocol::{HostRequest, InterceptRequest},
 };
 use litellm_host_native::services::HostCallHandler;
-use litellm_inference::call::{Failure, Stage};
+use litellm_inference::call::Failure;
 use litellm_inference_ocr::{
     route::{OcrCall, OcrMachine, OcrOp},
     types::OcrDocumentInput,
@@ -27,7 +27,7 @@ use super::*;
 /// which `intercept` answers so a test can fail or cancel exactly there.
 async fn drive_until(
     host: &LocalOcrHost,
-    mut intercept: impl FnMut(WireRequest) -> Result<WireRequest, HostFailure<Failure<Error>>>,
+    mut intercept: impl FnMut(WireRequest) -> Result<WireRequest, HostFailure<Error>>,
 ) -> (
     Result<LiteLLMOcrResponse, Failure<Error>>,
     Vec<&'static str>,
@@ -46,7 +46,7 @@ async fn drive_until(
                 .result_ready(facts)
                 .await
                 .map(|()| reply.send(()))
-                .map_err(|error| HostFailure::Error(Failure::at(Stage::PostCall, error))),
+                .map_err(HostFailure::Error),
             HostRequest::Stream(stream) => match stream {
                 litellm_host::protocol::StreamDelivery::Open(head, _) => match head {},
                 litellm_host::protocol::StreamDelivery::Chunk(chunk, _) => match chunk {},
@@ -57,7 +57,7 @@ async fn drive_until(
                 });
                 host.handle_host_call(op)
                     .await
-                    .map_err(|error| HostFailure::Error(Failure::at(Stage::Prepare, error)))
+                    .map_err(HostFailure::Error)
             }
             HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
                 wire, reply, ..
@@ -70,7 +70,7 @@ async fn drive_until(
                 host.after_provider_response(raw)
                     .await
                     .map(|()| reply.send(()))
-                    .map_err(|error| HostFailure::Error(Failure::at(Stage::PostCall, error)))
+                    .map_err(HostFailure::Error)
             }
         };
         if let Err(failure) = answer {
@@ -159,11 +159,11 @@ async fn a_path_document_is_read_by_core_without_a_host_operation() {
 }
 
 #[rstest]
-#[case::failed(HostFailure::Error(Failure::at(Stage::Prepare, Error::InvalidRequest("before_provider_request failed".into()))), "before_provider_request failed")]
-#[case::cancelled(HostFailure::Cancelled(Failure::at(Stage::Prepare, Error::InvalidRequest("cancelled".into()))), "cancelled")]
+#[case::failed(HostFailure::Error(Error::InvalidRequest("before_provider_request failed".into())), "before_provider_request failed")]
+#[case::cancelled(HostFailure::Cancelled(Error::InvalidRequest("cancelled".into())), "cancelled")]
 #[tokio::test]
 async fn a_before_send_failure_ends_the_call_without_reaching_transport(
-    #[case] failure: HostFailure<Failure<Error>>,
+    #[case] failure: HostFailure<Error>,
     #[case] message: &str,
 ) {
     let upstream = upstream([pages_response()]).await;
@@ -261,10 +261,8 @@ async fn interrupt_drops_provider_captures_before_returning() {
 
     drive_until_notified(&mut machine, &host, &entered).await;
     assert!(!dropped.load(Ordering::SeqCst));
-    let acknowledgement = machine.interrupt(HostFailure::Cancelled(Failure::at(
-        Stage::Prepare,
-        Error::InvalidRequest("cancelled".into()),
-    )));
+    let acknowledgement =
+        machine.interrupt(HostFailure::Cancelled(Error::InvalidRequest("cancelled".into())));
 
     assert!(
         dropped.load(Ordering::SeqCst),
@@ -301,10 +299,7 @@ async fn interrupting_an_in_flight_provider_request_closes_its_connection() {
 
     assert!(
         machine
-            .interrupt(HostFailure::Cancelled(Failure::at(
-                Stage::Prepare,
-                cancelled
-            )))
+            .interrupt(HostFailure::Cancelled(cancelled))
             .await
             .is_err()
     );

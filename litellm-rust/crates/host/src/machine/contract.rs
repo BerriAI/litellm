@@ -54,10 +54,10 @@ pub trait Machine: Send {
 
     fn resume(&mut self) -> Step<'_, Self>;
 
-    /// The host failed to perform the pending op, or the caller cancelled. The host says
-    /// at which stage the op it was answering sits. The call yields no further ops.
+    /// The host failed to perform the pending op, or the caller cancelled. The machine
+    /// reports the failure at the stage of that op. The call yields no further ops.
     fn interrupt(
         &mut self,
-        failure: HostFailure<Failure<<Self::Protocol as Protocol>::Error>>,
+        failure: HostFailure<<Self::Protocol as Protocol>::Error>,
     ) -> Interrupted<'_, Self>;
 }

@@ -3,13 +3,18 @@ use pyo3::{prelude::*, types::PyDict};
 
 use crate::{InvokeError, PythonOwned};
 
+/// What a host does with a native failure.
+pub enum Settlement {
+    /// The caller sees this exception, and the failure hooks run first.
+    Fail(PyErr),
+    /// The attempt is given up without failure hooks because another implementation will
+    /// serve the call; the caller sees this exception.
+    Abandon(PyErr),
+}
+
 /// Converts requests, responses, stream values and errors at the Python boundary.
 pub trait PythonBinding: PythonOwned {
     type Protocol: Protocol<Error: std::fmt::Display>;
-
-    /// The public exception a native failure maps to, kept as a value until the driver
-    /// raises it.
-    type Failure: Into<PyErr>;
 
     /// Decodes the keyword view returned by `prepare_arguments`, including preflight rewrites.
     fn decode_request(
@@ -41,13 +46,13 @@ pub trait PythonBinding: PythonOwned {
         chunk: <Self::Protocol as Protocol>::Chunk,
     ) -> PyResult<Py<PyAny>>;
 
-    /// The public exception for a native failure, built from where the call failed and what
-    /// the route reported.
+    /// What the host does with a native failure, decided from where the call failed and
+    /// what the route reported.
     fn map_error(
         &self,
         py: Python<'_>,
         error: Failure<<Self::Protocol as Protocol>::Error>,
-    ) -> PyResult<Self::Failure>;
+    ) -> PyResult<Settlement>;
 
     fn host_error(error: &PyErr) -> <Self::Protocol as Protocol>::Error;
 }

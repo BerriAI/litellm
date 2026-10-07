@@ -65,7 +65,7 @@ async def invoke(
         return await runtime.arun(
             RouteContext(Route.RESPONSES),
             binding=NATIVE_ARESPONSES,
-            native=lambda hook: hook(request),
+            native=lambda hook, _standby: hook(request),
             python=runtime.NO_PYTHON,
             rules=(RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),),
         )
@@ -82,7 +82,7 @@ async def invoke(
         return await runtime.arun(
             RouteContext(Route.CHAT_COMPLETIONS),
             binding=NATIVE_ACOMPLETION,
-            native=lambda hook: hook(chat),
+            native=lambda hook, _standby: hook(chat),
             python=runtime.NO_PYTHON,
             rules=(RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),),
         )
@@ -105,7 +105,7 @@ async def invoke(
     return await runtime.arun(
         RouteContext(Route.MESSAGES),
         binding=NATIVE_AMESSAGES,
-        native=lambda hook: hook(messages),
+        native=lambda hook, _standby: hook(messages),
         python=runtime.NO_PYTHON,
         rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),),
     )

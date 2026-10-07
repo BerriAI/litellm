@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final, TypeVar, cast  # noqa: TID251  # narrows caller-owned containers without copying them
 
@@ -89,6 +89,8 @@ class NativeCall:
     args: tuple[object, ...]
     kwargs: Mapping[str, object]
     bound: Mapping[str, object]
+    standby: bool = False
+    """Python is waiting to serve the call if Rust fails before the provider acts on it."""
 
 
 def native_call(args: tuple[object, ...], kwargs: Mapping[str, object], fields: Mapping[str, object]) -> NativeCall:
@@ -105,5 +107,6 @@ def native_call_hook(
     call: NativeCall,
     _args: tuple[object, ...],
     _kwargs: Mapping[str, object],
+    standby: bool,
 ) -> NativeResultT:
-    return hook(call)
+    return hook(replace(call, standby=standby))

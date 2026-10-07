@@ -264,7 +264,7 @@ async def test_native_responses_rejects_unsupported_requests_before_the_provider
     with pytest.raises(litellm.BadRequestError) as caught:
         await execute("responses", True, recording_server, {**options, "callbacks": [recorder]})
     assert not recording_server.requests
-    failure: Final = failures.decode(caught.value)
+    failure: Final = failures.report(caught.value.__cause__ or caught.value)
     assert failure is not None
     assert failure.stage == "prepare"
     assert "failure_handler" in recorder.names
@@ -278,7 +278,7 @@ async def test_native_chat_validation_failure_is_terminal(
     recording_server.expected_requests = 0
     with pytest.raises(litellm.BadRequestError, match="chat completions requires at least one message") as caught:
         await execute("chat", asynchronous, recording_server, {"messages": []})
-    assert failures.decode(caught.value) is not None
+    assert failures.report(caught.value.__cause__ or caught.value) is not None
     assert not recording_server.requests
 
 

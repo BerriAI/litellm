@@ -12,6 +12,7 @@ fn run_messages(
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
+    standby: bool,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     let (arguments, hooks) = crate::routes::call_hooks(
@@ -57,7 +58,7 @@ fn run_messages(
                 },
             ))
         },
-        MessagesPythonHost::new(request.unbind(), asynchronous),
+        MessagesPythonHost::new(request.unbind(), asynchronous, standby),
         hooks,
         asynchronous,
     )
@@ -66,11 +67,25 @@ fn run_messages(
 #[pyfunction]
 pub(crate) fn messages(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_messages(py, call.bound.into_any(), call.args, call.kwargs, false)
+    run_messages(
+        py,
+        call.bound.into_any(),
+        call.args,
+        call.kwargs,
+        call.standby,
+        false,
+    )
 }
 
 #[pyfunction]
 pub(crate) fn amessages(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_messages(py, call.bound.into_any(), call.args, call.kwargs, true)
+    run_messages(
+        py,
+        call.bound.into_any(),
+        call.args,
+        call.kwargs,
+        call.standby,
+        true,
+    )
 }

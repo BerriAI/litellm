@@ -39,6 +39,10 @@ impl Protocol for TestRoute {
     type Response = Value;
     type Error = RouteError;
     type HostCall = Infallible;
+
+    fn host_call_stage(call: &Self::HostCall) -> Stage {
+        match *call {}
+    }
     type Chunk = Bytes;
     type StreamHead = ();
 }
@@ -316,10 +320,9 @@ async fn a_provider_failure_never_populates_the_cache(cache: Arc<dyn ResponseCac
         None,
         || async {
             calls.fetch_add(1, Ordering::SeqCst);
-            Err(Failure::at(
-                Stage::Prepare,
-                RouteError::Unsupported("test provider failure"),
-            ))
+            Err(Failure::prepare(RouteError::Unsupported(
+                "test provider failure",
+            )))
         },
     )
     .await;
@@ -561,7 +564,7 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
             Ok(output) => consume(output)
                 .await
                 .map(|bytes| json!(bytes))
-                .map_err(|error| Failure::at(Stage::Receive, error)),
+                .map_err(Failure::receive),
             Err(error) => Err(error),
         }
     } else {
@@ -602,6 +605,10 @@ impl Protocol for UnaryTestRoute {
     type Response = Value;
     type Error = RouteError;
     type HostCall = Infallible;
+
+    fn host_call_stage(call: &Self::HostCall) -> Stage {
+        match *call {}
+    }
     type Chunk = Infallible;
     type StreamHead = Infallible;
 }
