@@ -76,7 +76,7 @@ fn received<T: JsonSchema>() -> Schema {
 
 pub fn schemas() -> BTreeMap<&'static str, Schema> {
     BTreeMap::from([
-        ("ReadQueryName", json!({"$schema": "https://json-schema.org/draft/2020-12/schema", "title": "ReadQueryName", "type": "string", "enum": lens::LENS_QUERIES.map(|query| query.to_string())}).try_into().unwrap()),
+        ("ReadQueryName", json!({"$schema": "https://json-schema.org/draft/2020-12/schema", "title": "ReadQueryName", "type": "string", "enum": lens::NAMED_READ_QUERIES.map(|query| query.to_string())}).try_into().unwrap()),
         ("LensAccessParams", received::<lens::LensAccessParams>()),
         ("LensSampleParams", received::<lens::LensSampleParams>()),
         ("LensContentParams", received::<lens::LensContentParams>()),
@@ -89,6 +89,14 @@ pub fn schemas() -> BTreeMap<&'static str, Schema> {
         ("PartRow", received::<lens::LensContentRow>()),
         ("CountRow", received::<lens::LensEvidenceRow>()),
         ("AgentRow", received::<lens::LensAgentsRow>()),
+        (
+            "TraceAgentsParams",
+            received::<crate::query::named::TraceAgentsParams>(),
+        ),
+        (
+            "TraceAgentRow",
+            received::<crate::query::named::TraceAgentsRow>(),
+        ),
         ("TraceQueryHelp", crate::query::help_schema()),
     ])
 }
