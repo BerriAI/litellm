@@ -6,13 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/http/client";
 
 import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
+import researchTrace from "../__fixtures__/research_trace.json";
 import traceList from "../__fixtures__/trace_list.json";
 import AgentTracesPage from "./AgentTracesPage";
 import { filterRuns } from "./runSearch/runQuery";
 import type { RelativeRangeState } from "@/components/shared/timeRange/useRelativeRange";
 
 import { AgentTracesSection } from "./AgentTracesSection";
-import type { TraceFindingCount, TracePage, TraceSummary } from "../types";
+import type { Trace, TraceFindingCount, TracePage, TraceSummary } from "../types";
 
 vi.mock("../../../networking", () => ({
   apiClient: { get: vi.fn(), post: vi.fn() },
@@ -32,9 +33,10 @@ vi.mock("../detail/run/RunView", () => ({
   ),
 }));
 
-import { agentTraceListCall, apiClient } from "../../../networking";
+import { agentTraceCall, agentTraceListCall, apiClient } from "../../../networking";
 
 const runs = (traceList as TracePage).data as TraceSummary[];
+const research = researchTrace as Trace;
 
 const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
   new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
@@ -484,6 +486,40 @@ describe("AgentTracesSection", () => {
     expect(screen.getByRole("button", { name: "Previous trace (K)" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Next trace (J)" }));
     expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[1].trace_id}`);
+  });
+
+  it("preloads the runs on screen and the next one past an open edge row, a few reads at a time", async () => {
+    const many = Array.from({ length: 80 }, (_, i) => ({ ...runs[0], trace_id: `run-${i}`, trace_ref: `ref-${i}` }));
+    vi.mocked(agentTraceListCall).mockResolvedValue({ data: many, next_cursor: null });
+    const flight = { now: 0, max: 0 };
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall).mockImplementation(async (_token, traceId, traceRef) => {
+      flight.now += 1;
+      flight.max = Math.max(flight.max, flight.now);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      flight.now -= 1;
+      return { ...research, summary: { ...research.summary, trace_id: traceId, trace_ref: traceRef }, spans: [] };
+    });
+    const requested = () => vi.mocked(agentTraceCall).mock.calls.map(([, traceId]) => traceId);
+    const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => `run-${from + i}`);
+    renderSection();
+    const rows = await screen.findAllByTestId("agent-trace-row");
+
+    await waitFor(() => expect(agentTraceCall).toHaveBeenCalledTimes(20));
+    expect(requested()).toEqual(range(0, 20));
+    expect(flight.max).toBe(4);
+    expect(vi.mocked(agentTraceCall).mock.calls[0]).toEqual(["sk-test", "run-0", "ref-0", null]);
+
+    fireEvent.click(rows[19]);
+    await waitFor(() => expect(agentTraceCall).toHaveBeenCalledTimes(21));
+    expect(requested().at(-1)).toBe("run-20");
+
+    const scroller = screen.getByTestId("runs-table");
+    scroller.scrollTop = 36 * 50;
+    fireEvent.scroll(scroller);
+    await waitFor(() => expect(agentTraceCall).toHaveBeenCalledTimes(41));
+    expect(requested().slice(21).sort()).toEqual(range(50, 70).sort());
+    expect(new Set(requested()).size).toBe(41);
   });
 
   it("opens full screen from a shared link and drops it from the URL on close", async () => {
