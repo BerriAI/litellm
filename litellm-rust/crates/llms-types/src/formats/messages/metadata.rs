@@ -16,9 +16,7 @@ pub struct MessagesMetadata {
 pub struct OutputFormat {
     #[serde(rename = "type")]
     pub format_type: OutputFormatType,
-
     pub schema: Option<JsonSchema>,
-
     pub strict: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -35,7 +33,6 @@ pub enum OutputFormatType {
 pub struct MessagesCompaction {
     #[serde(rename = "type")]
     pub compaction_type: CompactionType,
-
     pub instructions: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -52,9 +49,7 @@ pub enum CompactionType {
 #[derive(Default)]
 pub struct MessagesContainer {
     pub id: Option<String>,
-
     pub expires_at: Option<String>,
-
     pub skills: Option<Vec<ContainerSkill>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -65,9 +60,7 @@ pub struct MessagesContainer {
 pub struct ContainerSkill {
     #[serde(rename = "type")]
     pub skill_type: SkillType,
-
     pub skill_id: Option<String>,
-
     pub version: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -85,13 +78,9 @@ pub enum SkillType {
 pub struct McpServer {
     #[serde(rename = "type")]
     pub server_type: McpServerType,
-
     pub url: Option<String>,
-
     pub name: Option<String>,
-
     pub authorization_token: Option<String>,
-
     pub tool_configuration: Option<McpToolConfiguration>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -108,7 +97,6 @@ pub enum McpServerType {
 #[derive(Default)]
 pub struct McpToolConfiguration {
     pub allowed_tools: Option<Vec<String>>,
-
     pub enabled: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -119,9 +107,7 @@ pub struct McpToolConfiguration {
 pub struct StopDetails {
     #[serde(rename = "type")]
     pub detail_type: StopDetailsType,
-
     pub category: Option<String>,
-
     pub explanation: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -148,19 +134,12 @@ pub struct ContextManagementResponse {
 pub struct AppliedEdit {
     #[serde(rename = "type")]
     pub edit_type: Option<String>,
-
     pub cleared_input_tokens: Option<u64>,
-
     pub cleared_tool_uses: Option<u64>,
-
     pub cleared_thinking_turns: Option<u64>,
-
     pub summary_input_tokens: Option<u64>,
-
     pub summary_output_tokens: Option<u64>,
-
     pub error: Option<String>,
-
     pub warnings: Option<Vec<String>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -171,7 +150,6 @@ pub struct AppliedEdit {
 pub struct Safeguard {
     #[serde(rename = "type")]
     pub safeguard_type: String,
-
     pub classifier_context: Option<Map<String, Value>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,

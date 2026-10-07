@@ -72,13 +72,9 @@ pub struct CitationsConfig {
 #[derive(Default)]
 pub struct PageCitation {
     pub cited_text: Option<String>,
-
     pub document_index: Option<u64>,
-
     pub document_title: Option<String>,
-
     pub start_page_number: Option<u64>,
-
     pub end_page_number: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -89,13 +85,9 @@ pub struct PageCitation {
 #[derive(Default)]
 pub struct CharCitation {
     pub cited_text: Option<String>,
-
     pub document_index: Option<u64>,
-
     pub document_title: Option<String>,
-
     pub start_char_index: Option<u64>,
-
     pub end_char_index: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -106,11 +98,8 @@ pub struct CharCitation {
 #[derive(Default)]
 pub struct WebSearchCitation {
     pub cited_text: Option<String>,
-
     pub url: Option<String>,
-
     pub title: Option<String>,
-
     pub encrypted_index: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -138,7 +127,6 @@ pub enum Citations {
 pub struct WebSearchResultError {
     #[serde(rename = "type")]
     pub error_type: WebSearchResultErrorType,
-
     pub error_code: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -170,13 +158,9 @@ pub enum PromptCacheMode {
 #[derive(Default)]
 pub struct ContentBlockCitation {
     pub cited_text: Option<String>,
-
     pub document_index: Option<u64>,
-
     pub document_title: Option<String>,
-
     pub start_block_index: Option<u64>,
-
     pub end_block_index: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -187,15 +171,10 @@ pub struct ContentBlockCitation {
 #[derive(Default)]
 pub struct SearchResultCitation {
     pub cited_text: Option<String>,
-
     pub search_result_index: Option<u64>,
-
     pub title: Option<String>,
-
     pub source: Option<String>,
-
     pub start_block_index: Option<u64>,
-
     pub end_block_index: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,

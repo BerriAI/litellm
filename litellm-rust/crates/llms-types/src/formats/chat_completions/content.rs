@@ -62,9 +62,7 @@ pub enum ChatMediaUrl {
 #[derive(Default)]
 pub struct ChatMediaUrlParameters {
     pub url: Option<String>,
-
     pub detail: Option<String>,
-
     pub format: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -75,7 +73,6 @@ pub struct ChatMediaUrlParameters {
 #[derive(Default)]
 pub struct ChatInputAudio {
     pub data: Option<String>,
-
     pub format: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -86,15 +83,10 @@ pub struct ChatInputAudio {
 #[derive(Default)]
 pub struct ChatFile {
     pub file_data: Option<String>,
-
     pub file_id: Option<String>,
-
     pub filename: Option<String>,
-
     pub format: Option<String>,
-
     pub detail: Option<String>,
-
     pub video_metadata: Option<ChatVideoMetadata>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -105,9 +97,7 @@ pub struct ChatFile {
 #[derive(Default)]
 pub struct ChatVideoMetadata {
     pub fps: Option<serde_json::Number>,
-
     pub start_offset: Option<String>,
-
     pub end_offset: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -118,7 +108,6 @@ pub struct ChatVideoMetadata {
 #[derive(Default)]
 pub struct ChatLogprobs {
     pub content: Option<Vec<ChatTokenLogprob>>,
-
     pub refusal: Option<Vec<ChatTokenLogprob>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -129,11 +118,8 @@ pub struct ChatLogprobs {
 #[derive(Default)]
 pub struct ChatTokenLogprob {
     pub token: Option<String>,
-
     pub logprob: Option<serde_json::Number>,
-
     pub bytes: Option<Vec<u8>>,
-
     pub top_logprobs: Option<Vec<ChatTopLogprob>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -144,9 +130,7 @@ pub struct ChatTokenLogprob {
 #[derive(Default)]
 pub struct ChatTopLogprob {
     pub token: Option<String>,
-
     pub logprob: Option<serde_json::Number>,
-
     pub bytes: Option<Vec<u8>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,

@@ -18,7 +18,6 @@ pub enum MinimaxMessagesContentBlock {
 #[macro_rules_attribute::apply(wire_type)]
 pub struct MinimaxMediaBlock {
     pub source: MinimaxMediaSource,
-
     pub cache_control: Option<CacheControl>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -29,17 +28,11 @@ pub struct MinimaxMediaBlock {
 pub struct MinimaxMediaSource {
     #[serde(rename = "type")]
     pub source_type: MinimaxMediaSourceType,
-
     pub media_type: Option<String>,
-
     pub data: Option<String>,
-
     pub url: Option<String>,
-
     pub detail: Option<MinimaxMediaDetail>,
-
     pub fps: Option<serde_json::Number>,
-
     pub max_long_side_pixel: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,

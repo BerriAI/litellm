@@ -72,13 +72,9 @@ pub enum ResponsesCodeOutput {
 #[derive(Default)]
 pub struct ResponsesMessage {
     pub id: Option<String>,
-
     pub status: Option<String>,
-
     pub role: Option<String>,
-
     pub phase: Option<String>,
-
     pub content: Option<Vec<ResponsesContentPart>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -89,15 +85,10 @@ pub struct ResponsesMessage {
 #[derive(Default)]
 pub struct ResponsesFunctionCall {
     pub id: Option<String>,
-
     pub status: Option<String>,
-
     pub call_id: Option<String>,
-
     pub name: Option<String>,
-
     pub arguments: Option<String>,
-
     pub phase: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -108,13 +99,9 @@ pub struct ResponsesFunctionCall {
 #[derive(Default)]
 pub struct ResponsesCustomToolCall {
     pub id: Option<String>,
-
     pub status: Option<String>,
-
     pub call_id: Option<String>,
-
     pub name: Option<String>,
-
     pub input: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -125,13 +112,9 @@ pub struct ResponsesCustomToolCall {
 #[derive(Default)]
 pub struct ResponsesReasoning {
     pub id: Option<String>,
-
     pub status: Option<String>,
-
     pub summary: Option<Vec<ResponsesContentPart>>,
-
     pub content: Option<Vec<ResponsesContentPart>>,
-
     pub encrypted_content: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -142,9 +125,7 @@ pub struct ResponsesReasoning {
 #[derive(Default)]
 pub struct ResponsesWebSearchCall {
     pub id: Option<String>,
-
     pub status: Option<String>,
-
     pub action: Option<ResponsesWebSearchAction>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -155,11 +136,8 @@ pub struct ResponsesWebSearchCall {
 #[derive(Default)]
 pub struct ResponsesFileSearchCall {
     pub id: Option<String>,
-
     pub status: Option<String>,
-
     pub queries: Option<Vec<String>>,
-
     pub results: Option<Vec<ResponsesFileSearchResult>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -170,13 +148,9 @@ pub struct ResponsesFileSearchCall {
 #[derive(Default)]
 pub struct ResponsesFileSearchResult {
     pub file_id: Option<String>,
-
     pub filename: Option<String>,
-
     pub score: Option<serde_json::Number>,
-
     pub text: Option<String>,
-
     pub attributes: Option<Map<String, Value>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -187,9 +161,7 @@ pub struct ResponsesFileSearchResult {
 #[derive(Default)]
 pub struct ResponsesImageGenerationCall {
     pub id: Option<String>,
-
     pub status: Option<String>,
-
     pub result: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -200,13 +172,9 @@ pub struct ResponsesImageGenerationCall {
 #[derive(Default)]
 pub struct ResponsesCodeInterpreterCall {
     pub id: Option<String>,
-
     pub status: Option<String>,
-
     pub code: Option<String>,
-
     pub container_id: Option<String>,
-
     pub outputs: Option<Vec<ResponsesCodeOutput>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -217,19 +185,12 @@ pub struct ResponsesCodeInterpreterCall {
 #[derive(Default)]
 pub struct ResponsesMcpCall {
     pub id: Option<String>,
-
     pub status: Option<String>,
-
     pub name: Option<String>,
-
     pub server_label: Option<String>,
-
     pub arguments: Option<String>,
-
     pub output: Option<String>,
-
     pub error: Option<String>,
-
     pub approval_request_id: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -240,11 +201,8 @@ pub struct ResponsesMcpCall {
 #[derive(Default)]
 pub struct ResponsesUrlCitation {
     pub url: Option<String>,
-
     pub title: Option<String>,
-
     pub start_index: Option<u64>,
-
     pub end_index: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -255,15 +213,10 @@ pub struct ResponsesUrlCitation {
 #[derive(Default)]
 pub struct ResponsesFileCitation {
     pub file_id: Option<String>,
-
     pub filename: Option<String>,
-
     pub index: Option<u64>,
-
     pub start_index: Option<u64>,
-
     pub end_index: Option<u64>,
-
     pub container_id: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -301,7 +254,6 @@ pub enum ResponsesWebSearchAction {
 pub struct ResponsesWebSearchSource {
     #[serde(rename = "type")]
     pub source_type: Option<String>,
-
     pub url: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,

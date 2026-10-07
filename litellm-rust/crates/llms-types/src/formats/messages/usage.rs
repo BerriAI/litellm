@@ -5,7 +5,6 @@ use serde_json::{Map, Value};
 #[derive(Default)]
 pub struct ServerToolUsage {
     pub web_search_requests: Option<u64>,
-
     pub web_fetch_requests: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -16,9 +15,7 @@ pub struct ServerToolUsage {
 pub struct UsageIteration {
     #[serde(rename = "type")]
     pub iteration_type: UsageIterationType,
-
     pub input_tokens: Option<u64>,
-
     pub output_tokens: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -36,23 +33,14 @@ pub enum UsageIterationType {
 #[derive(Default)]
 pub struct MessagesUsage {
     pub input_tokens: Option<u64>,
-
     pub output_tokens: Option<u64>,
-
     pub cache_creation_input_tokens: Option<u64>,
-
     pub cache_read_input_tokens: Option<u64>,
-
     pub server_tool_use: Option<ServerToolUsage>,
-
     pub cache_creation: Option<CacheCreationUsage>,
-
     pub output_tokens_details: Option<MessagesOutputTokensDetails>,
-
     pub service_tier: Option<String>,
-
     pub speed: Option<super::Speed>,
-
     pub iterations: Option<Vec<UsageIteration>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -63,7 +51,6 @@ pub struct MessagesUsage {
 #[derive(Default)]
 pub struct CacheCreationUsage {
     pub ephemeral_1h_input_tokens: Option<u64>,
-
     pub ephemeral_5m_input_tokens: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
