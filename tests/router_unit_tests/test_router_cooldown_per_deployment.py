@@ -329,7 +329,7 @@ class TestCooldownCacheTTLCorrection:
 class TestFallbackDeploymentCooldown:
     def test_trigger_cooldown_for_failed_deployment_calls_set_cooldown(self):
         """
-        _trigger_cooldown_for_failed_deployment must call _set_cooldown_deployments
+        _trigger_cooldown_for_failed_deployment must call set_cooldown_deployments
         with the deployment ID stamped on the exception.
         """
         mock_router = MagicMock()
@@ -339,7 +339,7 @@ class TestFallbackDeploymentCooldown:
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router,
                 kwargs={},
@@ -354,11 +354,11 @@ class TestFallbackDeploymentCooldown:
     def test_trigger_cooldown_no_op_when_deployment_id_missing(self):
         """
         _trigger_cooldown_for_failed_deployment must not raise and must skip
-        _set_cooldown_deployments when the exception has no failed_deployment_id.
+        set_cooldown_deployments when the exception has no failed_deployment_id.
         """
         mock_router = MagicMock()
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router,
                 kwargs={},
@@ -386,7 +386,7 @@ class TestFallbackDeploymentCooldown:
             }
         }
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router,
                 kwargs=kwargs,
@@ -409,7 +409,7 @@ class TestFallbackDeploymentCooldown:
         exc.failed_deployment_id = "fallback-deployment"
 
         with (
-            patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown,
+            patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown,
             patch(
                 "litellm.router_utils.fallback_event_handlers.increment_deployment_failures_for_current_minute"
             ) as mock_increment,
@@ -433,7 +433,7 @@ class TestFallbackDeploymentCooldown:
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router,
                 kwargs={},
@@ -459,7 +459,7 @@ class TestFallbackDeploymentCooldown:
         exc.failed_deployment_id = "fallback-deployment"
         mark_advisor_orchestration_failure(exc)
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router,
                 kwargs={},
@@ -482,7 +482,7 @@ class TestFallbackDeploymentCooldown:
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router,
                 kwargs={},
@@ -505,7 +505,7 @@ class TestFallbackDeploymentCooldown:
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router,
                 kwargs={},
@@ -645,7 +645,7 @@ class TestDeploymentCallbackOnFailureCooldownTimePrecedence:
             },
         }
 
-        with patch("litellm.router._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router.set_cooldown_deployments") as mock_set_cooldown:
             router.deployment_callback_on_failure(
                 kwargs=kwargs,
                 completion_response=None,
@@ -681,7 +681,7 @@ class TestDeploymentCallbackOnFailureCooldownTimePrecedence:
             },
         }
 
-        with patch("litellm.router._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router.set_cooldown_deployments") as mock_set_cooldown:
             router.deployment_callback_on_failure(
                 kwargs=kwargs,
                 completion_response=None,
@@ -772,6 +772,14 @@ class TestRouterLevelGetAllowedFailsFromPolicy:
         router = self._make_router(NotFoundErrorAllowedFails=1)
         exc = litellm.NotFoundError("404 error", "openai", "gpt-4")
         assert router.get_allowed_fails_from_policy(exc) == 1
+
+    def test_payment_required_error_uses_bad_request_allowed_fails(self):
+        assert (
+            self._make_router(BadRequestErrorAllowedFails=6).get_allowed_fails_from_policy(
+                litellm.PaymentRequiredError("402 error", "openai", "gpt-4")
+            )
+            == 6
+        )
 
     def test_unmatched_exception_returns_none(self):
         router = self._make_router(InternalServerErrorAllowedFails=5)

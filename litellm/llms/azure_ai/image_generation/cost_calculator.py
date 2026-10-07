@@ -3,15 +3,15 @@ from typing import Final
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    _get_cost_per_unit,
     calculate_image_response_cost_from_usage,
+    get_cost_per_unit,
     resolve_image_model_info,
 )
 from litellm.types.utils import ImageResponse, ModelInfo
 
 
 def _input_cost_per_pixel(resolved: ModelInfo) -> float:
-    deployment_price: Final = _get_cost_per_unit(resolved, "input_cost_per_pixel", default_value=None)
+    deployment_price: Final = get_cost_per_unit(resolved, "input_cost_per_pixel", default_value=None)
     if deployment_price is not None:
         return deployment_price
     model_cost_key: Final = resolved.get("key")
