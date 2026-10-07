@@ -67,6 +67,8 @@ class Scheduler:
         - True:
             * If healthy deployments are available
             * OR If request at the top of queue
+            * OR If the queue no longer holds the request (its cache key expired or a concurrent
+              writer erased the entry), since nothing can order it any more
         - False:
             * If no healthy deployments available
             * AND request not at the top of queue
@@ -76,8 +78,9 @@ class Scheduler:
             return True
 
         queue: Final = await self.get_queue(model_name=model_name)
-        if not queue:
-            raise Exception(f"Incorrectly setup. Queue is invalid. Queue={queue}")
+        if all(entry[1] != id for entry in queue):
+            print_verbose(f"queue: {queue} no longer holds id={id}, admitting it")
+            return True
 
         print_verbose(f"queue: {queue}, seeking id={id}")
         if queue[0][1] != id:

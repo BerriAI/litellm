@@ -168,6 +168,46 @@ async def test_poll_during_cooldown_admits_only_the_head_of_the_queue():
     assert await scheduler.get_queue("sched-model") == [(2, "later")]
 
 
+@pytest.mark.asyncio
+async def test_poll_during_cooldown_admits_a_request_a_concurrent_writer_erased():
+    scheduler: Final = Scheduler()
+    await scheduler.add_request(FlowItem(priority=0, request_id="still-queued", model_name="sched-model"))
+
+    assert await scheduler.poll(id="erased-by-concurrent-write", model_name="sched-model", health_deployments=[])
+    assert await scheduler.get_queue("sched-model") == [(0, "still-queued")]
+
+
+class _ExpiringCache:
+    def __init__(self) -> None:
+        self.store: dict[str, object] = {}
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:
+        return self.store.get(key)
+
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.store[key] = value
+
+
+@pytest.mark.asyncio
+async def test_wait_for_turn_during_cooldown_survives_the_queue_key_expiring():
+    cache: Final = _ExpiringCache()
+    scheduler: Final = Scheduler(redis_cache=cache)
+    scheduler.cache.in_memory_cache.cache_dict.clear()
+
+    async def no_healthy_deployments_after_the_key_expired() -> Sequence[object]:
+        cache.store.clear()
+        scheduler.cache.in_memory_cache.cache_dict.clear()
+        return ()
+
+    await scheduler.wait_for_turn(
+        request=FlowItem(priority=1, request_id="sole-waiter", model_name="sched-model"),
+        timeout=5,
+        get_healthy_deployments=no_healthy_deployments_after_the_key_expired,
+    )
+
+    assert await scheduler.get_queue("sched-model") == []
+
+
 
 class _JsonRoundTripRedisCache:
     def __init__(self) -> None:
