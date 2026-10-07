@@ -1650,6 +1650,9 @@ fn session_capture_joins_native_logs_and_traces_across_turns_without_changing_sp
     let first = litellm_traces::decode_otlp_logs(&logs.encode_to_vec(), None).unwrap();
     let second = decode_otlp(&request.encode_to_vec(), None).unwrap();
     assert_eq!(first[0].trace_id, second[0].trace_id);
+    // Lens feedback resolves session ids the same way; keep in sync with
+    // litellm/proxy/lens/feedback_repository.py::session_trace_id.
+    assert_eq!(second[0].trace_id, "5fddf060372c8501dca4f331b9da882b");
     assert_eq!(
         first[0].attributes["lens.original_trace_id"],
         "01".repeat(16)
