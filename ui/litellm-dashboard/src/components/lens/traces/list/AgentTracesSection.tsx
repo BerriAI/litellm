@@ -128,8 +128,8 @@ export function AgentTracesSection({
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
   const [visibleRuns, setVisibleRuns] = useState<readonly TraceRef[]>([]);
-  const prefetch = { runs: runRefs, visible: visibleRuns, open: openTrace, paused: traces.isPlaceholder };
-  useTracePrefetch(accessToken, isActive, prefetch);
+  const prefetch = { runs, visible: visibleRuns, open: openTrace, paused: traces.isPlaceholder };
+  const warmRun = useTracePrefetch(accessToken, isActive, prefetch);
   const findings = useTraceFindings(accessToken, runs, isActive, canViewFindings);
   const signalSetup = useSignalSetup(isActive && canViewFindings !== false);
   const signals = useTraceSignals(accessToken, runs, isActive && signalSetup.on);
@@ -250,6 +250,7 @@ export function AgentTracesSection({
           rangeEmpty={traces.traces.length === 0}
           onSetUpTracing={() => setShowSetup(true)}
           onVisibleRunsChange={setVisibleRuns}
+          onRunIntent={warmRun}
         />
         <TraceFooter runs={runs} hasMore={traces.hasMore} />
       </div>
