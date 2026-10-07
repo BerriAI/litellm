@@ -1166,8 +1166,7 @@ def test_team_member_add_duplication_check_raises_proxy_exception():
     assert exc_info.value.type == ProxyErrorTypes.team_member_already_in_team
     assert exc_info.value.param == "member"
     assert exc_info.value.code == "400"
-    assert "existing-user-id" in str(exc_info.value.message)
-    assert "already in team" in str(exc_info.value.message)
+    assert exc_info.value.message == "existing-user-id is already a member of this team."
 
 
 def _team_with_member_sharing_email() -> MagicMock:
@@ -1178,22 +1177,55 @@ def _team_with_member_sharing_email() -> MagicMock:
 
 
 @pytest.mark.parametrize(
-    "member",
+    ("member", "expected_message"),
     [
-        Member(user_id="dup-user-1", user_email="shared@example.com", role="user"),
-        Member(user_id="dup-user-1", role="user"),
-        Member(user_email="shared@example.com", role="user"),
-        Member(user_id="dup-user-2", user_email="shared@example.com", role="user"),
+        (
+            Member(user_id="dup-user-1", user_email="shared@example.com", role="user"),
+            "dup-user-1 is already a member of this team.",
+        ),
+        (Member(user_id="dup-user-1", role="user"), "dup-user-1 is already a member of this team."),
+        (
+            Member(user_email="shared@example.com", role="user"),
+            "shared@example.com is already used by team member dup-user-1.",
+        ),
+        (
+            Member(user_id="dup-user-2", user_email="shared@example.com", role="user"),
+            "shared@example.com is already used by team member dup-user-1.",
+        ),
     ],
     ids=["id_and_email", "id_only", "email_only", "other_user_same_email"],
 )
-def test_team_member_add_duplication_check_rejects_member_already_in_team(member: Member):
+def test_team_member_add_duplication_check_rejects_member_already_in_team(member: Member, expected_message: str):
     data = TeamMemberAddRequest(team_id="test-team-123", member=member)
 
     with pytest.raises(ProxyException) as exc_info:
         team_member_add_duplication_check(data=data, existing_team_row=_team_with_member_sharing_email())
 
     assert exc_info.value.type == ProxyErrorTypes.team_member_already_in_team
+    assert exc_info.value.message == expected_message
+
+
+def test_team_member_add_duplication_check_names_email_only_member_by_email():
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.members_with_roles = [Member(user_email="invited@example.com", role="user")]
+    data = TeamMemberAddRequest(team_id="test-team-123", member=Member(user_email="invited@example.com", role="user"))
+
+    with pytest.raises(ProxyException) as exc_info:
+        team_member_add_duplication_check(data=data, existing_team_row=team)
+
+    assert exc_info.value.message == "invited@example.com is already a member of this team."
+
+
+def test_team_member_add_duplication_check_bulk_message_omits_roster():
+    data = TeamMemberAddRequest(
+        team_id="test-team-123",
+        member=[Member(user_id="dup-user-1", role="user"), Member(user_email="shared@example.com", role="user")],
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        team_member_add_duplication_check(data=data, existing_team_row=_team_with_member_sharing_email())
+
+    assert exc_info.value.message == "All requested users are already members of this team."
 
 
 def test_team_member_add_duplication_check_allows_new_member():

@@ -132,13 +132,13 @@ describe("teamMemberAddCall error message", () => {
   const member: Networking.Member = { user_id: "dup-user-1", role: "user" };
 
   it.each([
-    ["the proxy error envelope", { error: { message: "User already in team. Member: user_id=dup-user-1" } }],
-    ["an HTTPException detail", { detail: { error: "User already in team. Member: user_id=dup-user-1" } }],
+    ["the proxy error envelope", { error: { message: "dup-user-1 is already a member of this team." } }],
+    ["an HTTPException detail", { detail: { error: "dup-user-1 is already a member of this team." } }],
   ])("surfaces the backend message from %s", async (_shape, body) => {
     rejectWith(JSON.stringify(body));
 
     await expect(Networking.teamMemberAddCall("token", "team-1", member)).rejects.toThrow(
-      "User already in team. Member: user_id=dup-user-1",
+      "dup-user-1 is already a member of this team.",
     );
   });
 

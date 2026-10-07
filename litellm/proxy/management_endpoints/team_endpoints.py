@@ -2747,14 +2747,14 @@ def team_member_add_duplication_check(
 
     if isinstance(data.member, list) and len(invalid_team_members) == len(data.member):
         raise ProxyException(
-            message=f"All users are already in team. Existing members={existing_team_row.members_with_roles}",
+            message="All requested users are already members of this team.",
             type=ProxyErrorTypes.team_member_already_in_team,
             param="member",
             code="400",
         )
-    elif isinstance(data.member, Member) and len(invalid_team_members) == 1:
+    elif isinstance(data.member, Member) and (existing_member := _matching_team_member(data.member, existing_team_row)):
         raise ProxyException(
-            message=f"User already in team. Member: user_id={data.member.user_id}, user_email={data.member.user_email}. Existing members={existing_team_row.members_with_roles}",
+            message=_already_in_team_message(data.member, existing_member),
             type=ProxyErrorTypes.team_member_already_in_team,
             param="member",
             code="400",
@@ -2932,12 +2932,26 @@ def _resolve_member_identity(member: Member, updated_users: Sequence[LiteLLM_Use
     )
 
 
-def _member_already_in_team(member: Member, complete_team_data: LiteLLM_TeamTable) -> bool:
-    return any(
-        (member.user_id is not None and existing_member.user_id == member.user_id)
-        or (member.user_email is not None and existing_member.user_email == member.user_email)
-        for existing_member in complete_team_data.members_with_roles
+def _matching_team_member(member: Member, complete_team_data: LiteLLM_TeamTable) -> Member | None:
+    return next(
+        (
+            existing_member
+            for existing_member in complete_team_data.members_with_roles
+            if (member.user_id is not None and existing_member.user_id == member.user_id)
+            or (member.user_email is not None and existing_member.user_email == member.user_email)
+        ),
+        None,
     )
+
+
+def _member_already_in_team(member: Member, complete_team_data: LiteLLM_TeamTable) -> bool:
+    return _matching_team_member(member, complete_team_data) is not None
+
+
+def _already_in_team_message(member: Member, existing_member: Member) -> str:
+    if existing_member.user_id is None or existing_member.user_id == member.user_id:
+        return f"{member.user_id or member.user_email} is already a member of this team."
+    return f"{member.user_email} is already used by team member {existing_member.user_id}."
 
 
 async def _update_team_members_list(
