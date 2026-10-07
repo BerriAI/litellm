@@ -10,6 +10,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
@@ -21,6 +22,7 @@ from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -251,6 +253,27 @@ class AnthropicPassthroughLoggingHandler:
             response_cost=AnthropicPassthroughLoggingHandler._cost_partial_stream_or_zero(
                 partial_response=partial_response, model=model, logging_obj=litellm_logging_obj
             ),
+        )
+
+    @staticmethod
+    async def log_error_frame_as_failure(
+        litellm_logging_obj: LiteLLMLoggingObj,
+        request_body: Mapping[str, object],
+        all_chunks: Sequence[str | bytes],
+        error_event: tuple[str, str, int],
+    ) -> None:
+        """A stream that ended in the provider's `event: error` frame is one failed attempt of the request:
+        it logs through a copy of the logging object so the usage it consumed never reaches the success log
+        of the attempt the router opens in its place."""
+        error_type, message, status_code = error_event
+        attempt_logging_obj: Final = litellm_logging_obj.attempt_scoped_copy()
+        await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
+            litellm_logging_obj=attempt_logging_obj, request_body=request_body, all_chunks=all_chunks
+        )
+        await attempt_logging_obj.dispatch_failure_handlers(
+            anthropic_error_frame_exception(error_type, message, status_code, str(attempt_logging_obj.model)),
+            "",
+            prefer_async_handlers=True,
         )
 
     @staticmethod

@@ -749,23 +749,49 @@ async def test_chunk_processor_logs_failure_not_success_on_mid_stream_exception(
     assert isinstance(recorder.failure_kwargs[0]["exception"], httpx.ReadTimeout)
 
 
-def _anthropic_message_start_frame() -> bytes:
+def _anthropic_message_start_frame(message_id: str = "msg_1", input_tokens: int = 52) -> bytes:
     return _anthropic_sse(
         "message_start",
         {
             "type": "message_start",
             "message": {
-                "id": "msg_1",
+                "id": message_id,
                 "type": "message",
                 "role": "assistant",
                 "model": "claude-sonnet-5",
                 "content": [],
                 "stop_reason": None,
                 "stop_sequence": None,
-                "usage": {"input_tokens": 52, "output_tokens": 1},
+                "usage": {"input_tokens": input_tokens, "output_tokens": 1},
             },
         },
     )
+
+
+def _anthropic_completed_stream_tail() -> tuple[bytes, ...]:
+    return (
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "pong"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse(
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 3}},
+        ),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    )
+
+
+async def _settle(recorded: list) -> None:
+    for _ in range(300):
+        if recorded:
+            return
+        await asyncio.sleep(0.01)
 
 
 def _anthropic_overloaded_error_frame() -> bytes:
@@ -843,6 +869,53 @@ async def test_chunk_processor_logs_a_provider_error_frame_as_a_failure_when_clo
         assert failure_payload["response_cost"] > 0
     else:
         assert failure_payload["response_cost"] == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_success_log_carries_its_own_usage_after_a_provider_error_frame():
+    """Both attempts of a retried /v1/messages stream log through the request's one logging object. The
+    superseded attempt's failure log must not leave the usage it consumed behind, or the retry's success
+    log bills the failed attempt's tokens instead of its own."""
+    recorder = _EventRecorder()
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="test-retry-own-usage",
+        function_id="test-retry-own-usage",
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+
+    def attempt(frames: tuple[bytes, ...]):
+        return PassThroughStreamingHandler.chunk_processor(
+            response=_anthropic_stream_of(frames),
+            request_body={"model": "claude-sonnet-5", "stream": True},
+            litellm_logging_obj=logging_obj,
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/v1/messages",
+        )
+
+    superseded = attempt((_anthropic_message_start_frame("msg_a1", 52), _anthropic_overloaded_error_frame()))
+    async for chunk in superseded:
+        if b"event: error" in chunk:
+            break
+    await superseded.aclose()
+    await _settle(recorder.failure_kwargs)
+    retry = attempt((_anthropic_message_start_frame("msg_a2", 7), *_anthropic_completed_stream_tail()))
+    async for _ in retry:
+        pass
+    await _settle(recorder.success_kwargs)
+
+    failure_payload = recorder.failure_kwargs[0]["standard_logging_object"]
+    assert failure_payload["prompt_tokens"] == 52
+    success_payload = recorder.success_kwargs[0]["standard_logging_object"]
+    assert success_payload["status"] == "success"
+    assert (success_payload["prompt_tokens"], success_payload["completion_tokens"]) == (7, 3)
 
 
 def _google_sse(prompt_tokens: int, completion_tokens: int, text: str) -> bytes:

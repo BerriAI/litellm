@@ -1,5 +1,5 @@
 import traceback
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, Protocol
@@ -12,7 +12,6 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
@@ -319,10 +318,10 @@ class PassThroughStreamingHandler:
         )
         try:
             if provider_error_event is not None:
-                await PassThroughStreamingHandler._log_anthropic_error_frame_as_failure(
+                await AnthropicPassthroughLoggingHandler.log_error_frame_as_failure(
                     litellm_logging_obj=litellm_logging_obj,
                     request_body=request_body,
-                    raw_bytes=raw_bytes,
+                    all_chunks=raw_bytes,
                     error_event=provider_error_event,
                 )
                 return
@@ -385,22 +384,6 @@ class PassThroughStreamingHandler:
             )
         except Exception as e:
             verbose_proxy_logger.error("Error in _route_streaming_logging_to_handler: %s", e)
-
-    @staticmethod
-    async def _log_anthropic_error_frame_as_failure(
-        litellm_logging_obj: LiteLLMLoggingObj,
-        request_body: Mapping[str, object],
-        raw_bytes: Sequence[bytes],
-        error_event: tuple[str, str, int],
-    ) -> None:
-        error_type, message, status_code = error_event
-        await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
-            litellm_logging_obj=litellm_logging_obj, request_body=request_body, all_chunks=raw_bytes
-        )
-        frame_error: Final = anthropic_error_frame_exception(
-            error_type, message, status_code, str(litellm_logging_obj.model)
-        )
-        await litellm_logging_obj.dispatch_failure_handlers(frame_error, "", prefer_async_handlers=True)
 
     @staticmethod
     def _build_passthrough_logging_result(
