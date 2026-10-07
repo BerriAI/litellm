@@ -3,15 +3,8 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final, Protocol
 
-from litellm.proxy.lens.models import (
-    Feedback,
-    FeedbackInput,
-    Record,
-    Scope,
-    TraceFeedback,
-    TraceFeedbackSummary,
-    TraceIdentity,
-)
+from litellm.proxy.lens.feedback_models import Feedback, FeedbackInput, TraceFeedback, TraceFeedbackSummary
+from litellm.proxy.lens.models import Record, Scope, TraceIdentity
 from litellm.proxy.lens.sources import access_parameters
 from litellm.rust_bridge.trace.generated.models import (
     FeedbackRow,

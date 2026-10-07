@@ -17,8 +17,9 @@ from litellm.proxy.lens.feedback_endpoints import (
     read_feedback,
     submit_feedback,
 )
+from litellm.proxy.lens.feedback_models import TraceFeedbackRequest
 from litellm.proxy.lens.feedback_repository import FEEDBACK_TABLE, ClickHouseFeedbackStore, session_trace_id
-from litellm.proxy.lens.models import TraceFeedbackRequest, TraceIdentity
+from litellm.proxy.lens.models import TraceIdentity
 from litellm.rust_bridge.trace.generated.models import (
     FeedbackRow,
     FeedbackSummaryRow,

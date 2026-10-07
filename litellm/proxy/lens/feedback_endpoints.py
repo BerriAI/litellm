@@ -6,22 +6,20 @@ from pydantic import Field, model_validator
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.lens.endpoints import Auth, user_scope
+from litellm.proxy.lens.feedback_models import (
+    Feedback,
+    FeedbackInput,
+    TraceFeedback,
+    TraceFeedbackRequest,
+    TraceFeedbackSummary,
+)
 from litellm.proxy.lens.feedback_repository import (
     ClickHouseFeedbackStore,
     FeedbackStore,
     FeedbackWrite,
     session_trace_id,
 )
-from litellm.proxy.lens.models import (
-    Feedback,
-    FeedbackInput,
-    Record,
-    Scope,
-    TraceFeedback,
-    TraceFeedbackRequest,
-    TraceFeedbackSummary,
-    TraceIdentity,
-)
+from litellm.proxy.lens.models import Record, Scope, TraceIdentity
 from litellm.proxy.tracing_runtime import provide_storage
 from litellm.rust_bridge.trace.storage import ClickHouseStorage
 
