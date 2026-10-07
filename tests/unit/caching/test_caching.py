@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import uuid
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -9,7 +10,7 @@ import pytest
 import litellm
 import litellm.caching.redis_cache as redis_cache_module
 from litellm._internal_context import current_service_target
-from litellm.caching.caching import Cache, response_cache_phase
+from litellm.caching.caching import Cache, CacheMode, response_cache_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, _RedisTimeoutLogThrottle
@@ -473,3 +474,65 @@ async def test_a_lookup_already_inside_the_phase_does_not_open_a_second_one(v2_s
         await cache.async_get_cache(dynamic_cache_object=backend, **_REQUEST)
     assert backend.seen == [("llm_response", "cache.get llm_response")]
     assert [s.name for s in v2_span_exporter.get_finished_spans()] == ["cache.get llm_response"]
+
+
+_TOOL_TURN_ITEM: Final = {"role": "user", "content": "hi"}
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        pytest.param({"messages": [_TOOL_TURN_ITEM] * 4}, True, id="four-messages-are-cached"),
+        pytest.param({"messages": [_TOOL_TURN_ITEM] * 5}, False, id="five-messages-skip-the-cache"),
+        pytest.param({"input": [_TOOL_TURN_ITEM] * 4}, True, id="four-responses-items-are-cached"),
+        pytest.param({"input": [_TOOL_TURN_ITEM] * 5}, False, id="five-responses-items-skip-the-cache"),
+        pytest.param({"input": "one prompt"}, True, id="string-input-is-one-message"),
+        pytest.param({"input": ["a", "b", "c", "d", "e"]}, True, id="embedding-strings-are-not-messages"),
+    ],
+)
+def test_should_use_cache_stops_past_the_default_max_messages(kwargs: dict[str, object], expected: bool) -> None:
+    assert Cache(type=LiteLLMCacheType.LOCAL).should_use_cache(**kwargs) is expected
+
+
+def test_responses_sdk_items_count_toward_max_messages() -> None:
+    from openai.types.responses import ResponseFunctionToolCall
+
+    call: Final = ResponseFunctionToolCall(type="function_call", call_id="c1", name="ls", arguments="{}")
+
+    assert Cache(type=LiteLLMCacheType.LOCAL).should_use_cache(input=[_TOOL_TURN_ITEM, call, call, call, call]) is False
+
+
+def test_max_messages_is_configurable_and_none_disables_it() -> None:
+    three: Final = [_TOOL_TURN_ITEM] * 3
+
+    assert Cache(type=LiteLLMCacheType.LOCAL, max_messages=2).should_use_cache(messages=three) is False
+    assert Cache(type=LiteLLMCacheType.LOCAL, max_messages=3).should_use_cache(messages=three) is True
+    assert Cache(type=LiteLLMCacheType.LOCAL, max_messages=None).should_use_cache(messages=three * 50) is True
+
+
+def test_max_messages_beats_an_explicit_use_cache_opt_in() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, mode=CacheMode.default_off)
+
+    assert cache.should_use_cache(messages=[_TOOL_TURN_ITEM] * 4, cache={"use-cache": True}) is True
+    assert cache.should_use_cache(messages=[_TOOL_TURN_ITEM] * 5, cache={"use-cache": True}) is False
+
+
+def test_completion_past_max_messages_is_neither_served_from_nor_written_to_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    tag: Final = uuid.uuid4().hex
+    four: Final = [{"role": "user", "content": f"{tag} turn {index}"} for index in range(4)]
+    five: Final = [*four, {"role": "user", "content": f"{tag} turn 4"}]
+
+    def answer(messages: list[dict[str, str]], mock_response: str) -> str:
+        response: Final = litellm.completion(model="gpt-4o-mini", messages=messages, mock_response=mock_response)
+        assert isinstance(response, litellm.ModelResponse), response
+        choice: Final = response.choices[0]
+        assert isinstance(choice, litellm.Choices), choice
+        return str(choice.message.content)
+
+    assert answer(four, "four first") == "four first"
+    assert answer(four, "four second") == "four first", "a 4-message repeat missed the cache"
+    assert answer(five, "five first") == "five first"
+    assert answer(five, "five second") == "five second", "a 5-message repeat was served from the cache"
