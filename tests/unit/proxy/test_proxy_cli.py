@@ -97,23 +97,76 @@ class TestProxyInitializationHelpers:
         )
         mock_client.chat.completions.create.assert_called()
 
-    @patch("openai.OpenAI")
-    @patch("click.echo")
-    @patch("builtins.print")
-    def test_run_test_chat_completion_flag_uses_host_and_port(
-        self, mock_print, mock_echo, mock_openai
-    ):
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
+    def test_run_test_chat_completion_flag_uses_host_and_port(self):
+        import json
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
 
-        ProxyInitializationHelpers._run_test_chat_completion(
-            "127.0.0.1", 4000, "gpt-3.5-turbo", True
-        )
+        seen = []
 
-        mock_openai.assert_called_once_with(
-            api_key="My API Key", base_url="http://127.0.0.1:4000"
-        )
-        assert mock_client.chat.completions.create.call_count == 2
+        class Stub(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                seen.append((self.path, body))
+                if self.path.endswith("/chat/completions") and body.get("stream"):
+                    payload = (
+                        'data: {"id":"c","object":"chat.completion.chunk","created":1,'
+                        '"model":"m","choices":[{"index":0,"delta":{"content":"hi"},'
+                        '"finish_reason":null}]}\n\ndata: [DONE]\n\n'
+                    )
+                    ctype = "text/event-stream"
+                elif self.path.endswith("/chat/completions"):
+                    payload = json.dumps(
+                        {
+                            "id": "c",
+                            "object": "chat.completion",
+                            "created": 1,
+                            "model": "m",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": {"role": "assistant", "content": "hi"},
+                                    "finish_reason": "stop",
+                                }
+                            ],
+                        }
+                    )
+                    ctype = "application/json"
+                else:
+                    payload = json.dumps(
+                        {
+                            "id": "c",
+                            "object": "text_completion",
+                            "created": 1,
+                            "model": "m",
+                            "choices": [{"index": 0, "text": "hi", "finish_reason": "stop"}],
+                        }
+                    )
+                    ctype = "application/json"
+                data = payload.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Stub)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            ProxyInitializationHelpers._run_test_chat_completion(
+                "127.0.0.1", server.server_port, "my-model", True
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        chat = [body for path, body in seen if path.endswith("/chat/completions")]
+        assert [b.get("stream", False) for b in chat] == [False, True]
+        assert all(b["model"] == "my-model" for b in chat)
 
     @patch("openai.OpenAI")
     def test_test_flag_on_cli_sends_request_to_host_and_port(self, mock_openai):
