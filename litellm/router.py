@@ -3713,11 +3713,17 @@ class Router:
                     initial_kwargs["original_function"] = router_self._completion
                     initial_kwargs["messages"] = messages
                     router_self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
-                    fallback_response = router_self.function_with_fallbacks(
-                        **initial_kwargs,
+                    fallback_response = run_async_function(
+                        router_self.async_function_with_fallbacks_common_utils,
+                        e=e,
+                        disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
                         content_policy_fallbacks=content_policy_fallbacks,
+                        model_group=model_group,
+                        args=(),
+                        kwargs=initial_kwargs,
+                        include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
                     )
 
                     if hasattr(fallback_response, "__iter__"):
@@ -14582,17 +14588,21 @@ class Router:
         to the deployment that actually served the request. Every attempt therefore
         writes or clears, never just writes.
         """
+        from litellm.router_utils.baseline_request import capture_baseline_parameters
         from litellm.types.router import BaselineRouteStamp
 
         phase_attributes(routing_decision_attributes(routing_decision))
         baseline_model: Final = routing_decision.get("savings_baseline_model") if routing_decision else None
         baseline_id: Final = routing_decision.get("savings_baseline_deployment_id") if routing_decision else None
         router_name: Final = routing_decision.get("router_model_name") if routing_decision else None
+        caller_parameters: Final = (
+            capture_baseline_parameters(request_kwargs) if router_name and baseline_model else None
+        )
         Router._stamp_or_clear_metadata_key(
             request_kwargs=request_kwargs,
             key="_autorouter_baseline_route",
             value=(
-                BaselineRouteStamp(router_name, baseline_model, baseline_id)
+                BaselineRouteStamp(router_name, baseline_model, baseline_id, caller_parameters)
                 if router_name and baseline_model and baseline_id
                 else None
             ),
